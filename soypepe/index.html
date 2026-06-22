@@ -333,6 +333,8 @@
         <div class="hd">
           <h3>Reporte del día</h3>
           <span class="day" id="todayLbl"></span>
+          <button id="rep-refresh" title="Actualizar" aria-label="Actualizar"
+            style="margin-left:auto;background:none;border:0;color:inherit;font-size:18px;line-height:1;cursor:pointer;opacity:.7;padding:4px">↻</button>
         </div>
         <div class="sub">Resumen operativo de hoy</div>
         <div class="stat-grid">
@@ -494,6 +496,7 @@ const SB_KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const ALTA_FN = SB_URL + '/functions/v1/alta-pepe';
 const NUEVO_FN = SB_URL + '/functions/v1/alta-nuevo-pepe';
 const REPORTE_FN = SB_URL + '/functions/v1/reporte-dia';
+const TOURS_FN = SB_URL + '/functions/v1/tours-dia';
 const sb = createClient(SB_URL, SB_KEY, { auth: { flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } });
 
 const $ = id => document.getElementById(id);
@@ -772,26 +775,48 @@ let DESAY_ALLOWED = false;  // si el rol puede abrir la lista de desayunos
 function repSet(id,val){ const el=$(id); if(!el) return; el.textContent=val; el.classList.remove('dash'); }
 function repPct(id,n){ if(n===null||n===undefined||isNaN(n)){ return; } repSet(id, Math.round(n)+'%'); }
 
-async function loadReporte(){
+let REP_PROP = null;        // property_id del usuario (se resuelve una vez)
+let REP_PROP_OK = false;
+
+async function resolverProp(){
+  if(REP_PROP_OK) return REP_PROP;
+  if(EMP){
+    try{
+      const { data } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
+      if(data && data.property_id) REP_PROP = data.property_id;
+    }catch(e){ /* sin propiedad: la función usa CDMX por default */ }
+  }
+  REP_PROP_OK = true;
+  return REP_PROP;
+}
+
+// "hace 3 min", "ahora mismo", etc.
+function haceTexto(iso){
+  if(!iso) return '';
+  const seg = Math.max(0, Math.round((Date.now() - new Date(iso).getTime())/1000));
+  if(seg < 45) return 'ahora mismo';
+  if(seg < 90) return 'hace 1 min';
+  if(seg < 3600) return 'hace '+Math.round(seg/60)+' min';
+  if(seg < 5400) return 'hace 1 h';
+  return 'hace '+Math.round(seg/3600)+' h';
+}
+
+async function loadReporte(force){
+  const btn=$('rep-refresh');
+  if(btn) btn.style.opacity='.35';
   try{
-    // Resolver la propiedad del usuario (property_id de Supabase) y mandarla en el body.
-    let prop=null;
-    if(EMP){
-      try{
-        const { data } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
-        if(data && data.property_id) prop=data.property_id;
-      }catch(e){ /* sin propiedad: la función usa CDMX por default */ }
-    }
+    const prop = await resolverProp();
+    const body = prop ? { prop } : {};
+    if(force) body.force = true;
     const r = await fetch(REPORTE_FN,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
-      body: JSON.stringify(prop ? { prop } : {})
+      body: JSON.stringify(body)
     });
     const d = await r.json().catch(()=>null);
 
-    // Sede aún no conectada a Cloudbeds: nota corta en lugar de —
+    const note=$('rep-note');
     if(d && d.no_conectado){
-      const note=$('rep-note');
       if(note){ note.innerHTML='🔌 <span>Tu sede aún no está conectada</span>'; }
       return;
     }
@@ -815,15 +840,46 @@ async function loadReporte(){
 
     DESAYUNOS_LISTA = Array.isArray(d.desayunos_lista) ? d.desayunos_lista : [];
 
-    const note=$('rep-note');
     if(note){
-      if(d.cloudbeds_bb_no_detectado){
-        note.innerHTML='🔌 <span>Datos en vivo desde Cloudbeds — <b>desayuno B&B no detectado</b></span>';
-      }else if(d.fecha){
-        note.innerHTML='🔌 <span>Datos en vivo desde Cloudbeds · '+d.fecha+'</span>';
-      }
+      const cuando = d.updated_at ? ' · actualizado '+haceTexto(d.updated_at) : '';
+      let txt = 'Datos en vivo desde Cloudbeds'+cuando;
+      if(d.cloudbeds_bb_no_detectado) txt = 'Cloudbeds'+cuando+' — <b>desayuno B&B no detectado</b>';
+      if(d.stale) txt += ' · <i>actualizando…</i>';
+      note.innerHTML='🔌 <span>'+txt+'</span>';
     }
+
+    // Si venía viejo, la función recalcula en segundo plano: re-consulta a los ~7s para traer lo fresco.
+    if(d.stale && !force){ setTimeout(()=>loadReporte(false), 7000); }
   }catch(e){ /* error de red: deja los — */ }
+  finally{ if(btn) btn.style.opacity='.7'; }
+}
+
+// ===== Salida tours (Turitop) — función aparte, no bloquea el reporte =====
+async function loadTours(){
+  try{
+    const r = await fetch(TOURS_FN,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
+      body: JSON.stringify({})
+    });
+    const d = await r.json().catch(()=>null);
+    const el=$('rep-tours');
+    if(!el) return;
+    if(!d || !d.ok || !d.conectado){ el.textContent='—'; el.classList.add('dash'); el.title='Turitop aún no conectado'; return; }
+    if(!d.total){ el.textContent='0'; el.classList.remove('dash'); el.title='Sin salidas hoy'; return; }
+    el.textContent = d.total;
+    el.classList.remove('dash');
+    el.title = d.resumen || (d.total+' pax');
+  }catch(e){ /* deja — */ }
+}
+
+// Evento Cósmica: aún no existe en Turitop -> placeholder "Próximamente"
+function setEventoPlaceholder(){
+  const card=$('rep-evento');
+  if(!card) return;
+  const v=card.querySelector('.v');
+  if(v){ v.textContent='Próximamente'; v.style.fontSize='13px'; v.classList.remove('dash'); }
+  card.title='Se creará en Turitop más adelante';
 }
 
 /* ===== Desayunos interactivo (modal centrado) ===== */
@@ -1154,7 +1210,11 @@ async function start(){
   loadNotifs();
   setupPayButton();
   loadReporte();
+  loadTours();
+  setEventoPlaceholder();
   setupDesayunos();
+  const rb=$('rep-refresh');
+  if(rb) rb.onclick=()=>{ loadReporte(true); loadTours(); };
 }
 
 $('logout').onclick=async()=>{ await sb.auth.signOut(); location.reload(); };
