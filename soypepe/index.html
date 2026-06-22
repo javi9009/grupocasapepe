@@ -155,6 +155,9 @@
   .desay-row .nm{font-weight:700;font-size:14px}
   .desay-row .mt{font-size:11.5px;color:var(--txt3);margin-top:2px}
   .desay-row .pe{margin-left:auto;text-align:right;font-size:13px;font-weight:800;color:var(--txt2)}
+  .desay-row .serv{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:74px}
+  .desay-row .serv input{width:64px;padding:8px;border:1px solid var(--bd);border-radius:9px;font-size:16px;text-align:center;font-weight:700}
+  .desay-row .serv .cap{font-size:10.5px;color:var(--txt3)}
   .desay-row .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;margin-top:4px}
   .desay-row .tag.priv{color:#1d9e75;background:rgba(29,158,117,.12)}
   .desay-row .tag.bb{color:#C9A227;background:rgba(201,162,39,.14)}
@@ -478,11 +481,11 @@
   <div class="grab"></div>
   <h2>Desayunos de hoy</h2>
   <div class="ssub">Huéspedes con desayuno incluido</div>
-  <div class="desay-total"><b id="desayTotal">0</b><span>personas con desayuno</span></div>
+  <div class="desay-total"><b id="desayTotal">0</b><span>desayunos a servir hoy</span></div>
+  <div class="ssub" style="margin:-6px 0 8px">Anota cuántos serviste en cada reserva (máx. por tipo: privada 2 · B&amp;B 4 · dorm 1)</div>
   <div id="desayList"><div class="ph"><div class="ico">🍳</div><div class="d">Cargando…</div></div></div>
   <div class="desay-serv">
-    <input id="desayServ" type="number" min="0" inputmode="numeric" placeholder="Servidos (personas)">
-    <button id="desaySave">Guardar</button>
+    <button id="desaySave" style="flex:1">Guardar desayunos servidos</button>
   </div>
   <div id="desayMsg" style="display:none;font-size:13px;margin-top:8px;text-align:center;color:#1d9e75;font-weight:700"></div>
 </div></div>
@@ -912,34 +915,97 @@ function tagFor(tipo){
   return tipo?'<span class="tag dorm">'+tipo+'</span>':'';
 }
 
-function openDesayunos(){
+const CDMX_PROP='45e69775-d877-4507-a9e1-a45bd3400dc5';
+let DESAY_ROWS=[];   // metadatos por reserva para guardar
+
+// tope de desayunos por tipo de reserva
+function capTipo(tipo){
+  const t=(tipo||'').toLowerCase();
+  if(/priv/.test(t)) return 2;
+  if(/dorm/.test(t)) return 1;
+  if(/bb|b&b|desay/.test(t)) return 4;
+  return 4;
+}
+function maxReserva(x){
+  const cap=capTipo(x.tipo);
+  const p=Number(x.personas)||0;
+  return p>0 ? Math.min(p,cap) : cap;
+}
+function reservaKey(x){ return (x.nombre||'?')+'|'+(x.checkin||'')+'|'+(x.checkout||''); }
+function ymdMX(){ const d=mxToday(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+function recalcDesayTotal(){
+  let s=0;
+  DESAY_ROWS.forEach((r,i)=>{ const el=$('ds-'+i); if(el){ const v=parseInt(el.value,10); if(!isNaN(v)) s+=v; } });
+  $('desayTotal').textContent=s;
+}
+
+async function openDesayunos(){
   if(!DESAY_ALLOWED) return;
   $('desaySheet').classList.add('show');
   const wrap=$('desayList');
   const list=DESAYUNOS_LISTA||[];
-  const total=list.reduce((s,x)=>s+(Number(x.personas)||0),0);
-  $('desayTotal').textContent=total;
-  if(!list.length){
-    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Sin desayunos registrados para hoy.</div></div>';
-  }else{
-    wrap.innerHTML=list.map(x=>
-      '<div class="desay-row"><div>'
-      +'<div class="nm">'+(x.nombre||'Huésped')+'</div>'
-      +'<div class="mt">Check-in '+(x.checkin||'—')+' · Check-out '+(x.checkout||'—')+'</div>'
-      +tagFor(x.tipo)
-      +'</div><div class="pe">'+(x.personas??'—')+'<div class="mt">pers.</div></div></div>'
-    ).join('');
-  }
   const msg=$('desayMsg'); if(msg) msg.style.display='none';
+
+  if(!list.length){
+    DESAY_ROWS=[];
+    $('desayTotal').textContent='0';
+    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Sin desayunos incluidos para hoy.</div></div>';
+    return;
+  }
+
+  // metadatos por reserva
+  DESAY_ROWS = list.map(x=>({ key:reservaKey(x), nombre:x.nombre||'Huésped', tipo:x.tipo||'', checkin:x.checkin||'', checkout:x.checkout||'', max:maxReserva(x) }));
+
+  // cargar lo ya registrado hoy
+  const prop=(await resolverProp())||CDMX_PROP;
+  const fecha=ymdMX();
+  const saved={};
+  try{
+    const { data } = await sb.from('desayunos_servidos').select('reserva_key,servidos').eq('property_id',prop).eq('fecha',fecha);
+    (data||[]).forEach(r=>{ saved[r.reserva_key]=r.servidos; });
+  }catch(e){ /* sin guardado previo */ }
+
+  wrap.innerHTML=DESAY_ROWS.map((r,i)=>{
+    const val = (saved[r.key]!=null) ? saved[r.key] : r.max;  // por defecto, todos los incluidos
+    return '<div class="desay-row"><div style="flex:1">'
+      +'<div class="nm">'+r.nombre+'</div>'
+      +'<div class="mt">Check-in '+(r.checkin||'—')+' · Check-out '+(r.checkout||'—')+'</div>'
+      +tagFor(r.tipo)
+      +'</div><div class="serv">'
+        +'<input id="ds-'+i+'" type="number" min="0" max="'+r.max+'" inputmode="numeric" value="'+val+'">'
+        +'<span class="cap">de '+r.max+'</span>'
+      +'</div></div>';
+  }).join('');
+
+  // clamp + total en vivo
+  DESAY_ROWS.forEach((r,i)=>{
+    const el=$('ds-'+i);
+    if(el) el.oninput=()=>{ let v=parseInt(el.value,10); if(isNaN(v)){ recalcDesayTotal(); return; } if(v<0)v=0; if(v>r.max)v=r.max; el.value=v; recalcDesayTotal(); };
+  });
+  recalcDesayTotal();
 }
 
 $('desaySheet').onclick=(e)=>{ if(e.target.id==='desaySheet') $('desaySheet').classList.remove('show'); };
-$('desaySave').onclick=()=>{
-  const n=parseInt($('desayServ').value,10);
+
+$('desaySave').onclick=async ()=>{
   const msg=$('desayMsg');
-  if(isNaN(n)||n<0){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='Ingresa un número válido.'; return; }
-  msg.style.display='block'; msg.style.color='#1d9e75'; msg.textContent='Registrado: '+n;
-  // TODO: guardar conciliación en Contabilidad
+  if(!DESAY_ROWS.length){ if(msg){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No hay reservas que registrar.'; } return; }
+  const prop=(await resolverProp())||CDMX_PROP;
+  const fecha=ymdMX();
+  const filas=DESAY_ROWS.map((r,i)=>{
+    let v=parseInt(($('ds-'+i)||{}).value,10); if(isNaN(v))v=0; if(v<0)v=0; if(v>r.max)v=r.max;
+    return { property_id:prop, fecha, reserva_key:r.key, nombre:r.nombre, tipo:r.tipo, max_pers:r.max, servidos:v, emp_id:EMP||null, updated_at:new Date().toISOString() };
+  });
+  const btn=$('desaySave'); if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
+  try{
+    const { error } = await sb.from('desayunos_servidos').upsert(filas,{ onConflict:'property_id,fecha,reserva_key' });
+    if(error) throw error;
+    const tot=filas.reduce((s,f)=>s+f.servidos,0);
+    if(msg){ msg.style.display='block'; msg.style.color='#1d9e75'; msg.textContent='✓ Registrado: '+tot+' desayunos servidos'; }
+  }catch(e){
+    if(msg){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo guardar. Intenta de nuevo.'; }
+  }finally{ if(btn){ btn.disabled=false; btn.textContent='Guardar desayunos servidos'; } }
 };
 
 /* Fecha de hoy (MX) */
