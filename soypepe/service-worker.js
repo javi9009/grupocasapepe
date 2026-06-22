@@ -2,7 +2,7 @@
  * Estrategia: network-first para no servir datos viejos; cae al caché offline.
  * Cachea el cascarón (shell) para que la PWA sea instalable y abra sin conexión.
  */
-const CACHE = 'soypepe-shell-v6';
+const CACHE = 'soypepe-shell-v7';
 const SHELL = [
   './',
   './index.html',
