@@ -158,6 +158,24 @@
   .desay-row .serv{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:74px}
   .desay-row .serv input{width:64px;padding:8px;border:1px solid var(--bd);border-radius:9px;font-size:16px;text-align:center;font-weight:700}
   .desay-row .serv .cap{font-size:10.5px;color:var(--txt3)}
+  /* Checador */
+  .ch-clock{font-size:46px;font-weight:800;letter-spacing:1px;text-align:center;margin:6px 0 2px}
+  .ch-btn{display:block;width:100%;padding:18px;border:none;border-radius:16px;font-size:21px;font-weight:800;color:#fff;background:var(--accent);cursor:pointer;margin-top:8px;transition:transform .08s, background .2s}
+  .ch-btn:active{transform:scale(.99)}
+  .ch-btn.go{background:#1d9e75}
+  .ch-btn.out{background:#C9A227}
+  .ch-btn:disabled{background:var(--bd2);color:var(--txt3);cursor:not-allowed}
+  .ch-hint{text-align:center;font-size:13px;color:var(--txt2);margin-top:10px;min-height:18px}
+  .ch-rows{margin-top:14px}
+  .ch-rec{display:flex;align-items:center;gap:10px;padding:10px 2px;border-top:1px solid var(--bd)}
+  .ch-rec .ic{font-size:18px}
+  .ch-rec .nm{font-weight:700;font-size:14px}
+  .ch-rec .mt{font-size:11.5px;color:var(--txt3)}
+  .ch-rec .vv{margin-left:auto;text-align:right;font-size:13px;font-weight:800}
+  .ch-rec .vv.late{color:#b03434}
+  .ch-rec .vv.ok{color:#1d9e75}
+  .ch-note{margin-top:14px;font-size:12px;color:var(--txt3);text-align:center;line-height:1.5}
+  .ch-rodaje{display:inline-block;background:rgba(201,162,39,.14);color:#C9A227;font-weight:700;font-size:11px;padding:3px 9px;border-radius:20px;margin-top:6px}
   .desay-row .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;margin-top:4px}
   .desay-row .tag.priv{color:#1d9e75;background:rgba(29,158,117,.12)}
   .desay-row .tag.bb{color:#C9A227;background:rgba(201,162,39,.14)}
@@ -419,7 +437,13 @@
     <!-- ===== LLEGUÉ / ME VOY ===== -->
     <section class="view" id="v-checador">
       <div class="card">
-        <div class="ph"><div class="ico">⏱️</div><div class="t">Llegué / Me voy</div><div class="d">Marca tu entrada y salida con geolocalización, igual que en el panel.</div><div style="margin-top:10px"><span class="soon">Próximamente (Etapa 1)</span></div></div>
+        <h3>Llegué / Me voy</h3>
+        <div class="sub" id="ch-turno">Cargando tu turno de hoy…</div>
+        <div class="ch-clock" id="ch-clock">--:--</div>
+        <button id="ch-btn" class="ch-btn" disabled>…</button>
+        <div class="ch-hint" id="ch-hint"></div>
+        <div class="ch-rows" id="ch-rows"></div>
+        <div class="ch-note" id="ch-note"></div>
       </div>
     </section>
 
@@ -705,6 +729,7 @@ function setNav(nav, switchView=true){
   }else{
     tabsEl.style.display='none';
     showView(VIEW_OF_NAV[nav]);
+    if(nav==='checador') chLoad();
   }
 }
 document.querySelectorAll('#bottomNav button').forEach(b=>b.onclick=()=>setNav(b.dataset.nav));
@@ -1007,6 +1032,199 @@ $('desaySave').onclick=async ()=>{
     if(msg){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo guardar. Intenta de nuevo.'; }
   }finally{ if(btn){ btn.disabled=false; btn.textContent='Guardar desayunos servidos'; } }
 };
+
+/* ============================================================
+   CHECADOR — Llegué / Me voy (Etapa 2)
+   Ventanas: "Llegué" desde 30 min antes de la entrada y durante el turno;
+   "Me voy" desde 5 min antes de la salida y hasta 3 h después. Fuera = inactivo.
+   Registra retraso vs turno en la hoja `asistencias` (por quincena).
+   Modo rodaje esta semana: registra geo/teléfono pero NO bloquea.
+   ============================================================ */
+const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false };
+const CH_ANTES_ENT=30, CH_ANTES_SAL=5, CH_DESP_SAL=180; // minutos
+const CH_RODAJE=true; // semana de ajuste de horario: no bloquea por geo/teléfono
+let CH_CFG={lat:19.43033,lng:-99.13449,radio_m:50,tolerancia_min:15};
+let CH_BUSY=false;
+const CH_MSGS=['¡Descansa! Te lo ganaste 😌','Disfruta tu tarde 🌇','Ve por unos buenos tacos 🌮','Gracias por tu energía de hoy 💚','A descansar — mañana, otro gran día ☀️','Disfruta tu tiempo libre 🎉'];
+
+function chDeviceId(){
+  let d=localStorage.getItem('cp_device_id');
+  if(!d){ d=(crypto.randomUUID?crypto.randomUUID():'dev-'+Date.now()+'-'+Math.random().toString(36).slice(2)); localStorage.setItem('cp_device_id',d); }
+  return d;
+}
+function chQuincena(d){ const q=d.getDate()<=15?'Q1':'Q2'; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+q; }
+function hhmm(d){ return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function chTimeToDate(base,t){ const p=String(t||'').split(':'); const x=new Date(base); x.setHours(+p[0]||0,+p[1]||0,0,0); return x; }
+function chHaversine(a,b,c,d){ const R=6371000,toR=x=>x*Math.PI/180; const dLat=toR(c-a),dLng=toR(d-b); const s=Math.sin(dLat/2)**2+Math.cos(toR(a))*Math.cos(toR(c))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+
+async function chLoad(){
+  if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
+  const empId = EMP || HZ.empId;
+  const ds = ymdMX();
+  const today = mxToday();
+  try{ const { data:cfg } = await sb.from('checador_config').select('*').limit(1).maybeSingle(); if(cfg) CH_CFG=cfg; }catch(e){}
+
+  // ¿Está exento de checador? (se marca en Alta -> empleado_login.exento_checador)
+  CH.exento=false;
+  try{
+    const uid=(await sb.auth.getUser()).data.user?.id;
+    let q=sb.from('empleado_login').select('exento_checador').limit(1);
+    q = empId ? q.eq('employee_id',empId) : q.eq('user_id',uid);
+    const { data } = await q.maybeSingle();
+    if(data && data.exento_checador) CH.exento=true;
+  }catch(e){}
+
+  // Turno de hoy (sus propias filas en horarios)
+  CH.shift=null;
+  try{
+    const { data:rows } = await sb.from('horarios')
+      .select('id,hora_inicio,hora_fin,actividad,ubicacion,employee_id,nombre_display')
+      .eq('fecha',ds).not('hora_inicio','is',null);
+    let mine=(rows||[]).filter(r=> (empId&&r.employee_id===empId) || (HZ.nombreDisplay&&r.nombre_display&&r.nombre_display.trim().toLowerCase()===HZ.nombreDisplay.trim().toLowerCase()));
+    mine.sort((a,b)=>String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
+    if(mine.length){
+      const now=today.getTime();
+      CH.shift = mine.find(r=>{ const e=chTimeToDate(today,r.hora_inicio).getTime(); let s=chTimeToDate(today,r.hora_fin).getTime(); if(s<e)s+=864e5; return now>=e-CH_ANTES_ENT*60000 && now<=s+CH_DESP_SAL*60000; }) || mine[0];
+    }
+  }catch(e){}
+
+  // Asistencia de hoy
+  CH.asis=null;
+  if(empId){
+    try{ const { data } = await sb.from('asistencias').select('*').eq('employee_id',empId).eq('fecha',ds).order('created_at',{ascending:false}).limit(1); if(data&&data[0]) CH.asis=data[0]; }catch(e){}
+    try{ const { data } = await sb.from('asistencias').select('device_id,created_at').eq('employee_id',empId).not('device_id','is',null).order('created_at',{ascending:false}).limit(1); CH.prevDevice=(data&&data[0])?data[0].device_id:null; }catch(e){}
+  }
+  CH.loaded=true;
+  chRender();
+  if(!CH.tick) CH.tick=setInterval(()=>{ if($('v-checador').classList.contains('show')) chRender(); }, 30000);
+}
+
+function chRenderRecords(){
+  const rows=$('ch-rows'); if(!rows) return;
+  const a=CH.asis; let h='';
+  if(a && a.check_in){
+    const late=(a.minutos_retraso||0);
+    h+='<div class="ch-rec"><span class="ic">🟢</span><div><div class="nm">Entrada</div><div class="mt">'+hhmm(new Date(a.check_in))+(a.dentro_geocerca===false?' · fuera de zona':'')+(a.device_ok===false?' · otro teléfono':'')+'</div></div>'
+      +'<div class="vv '+(late>(CH_CFG.tolerancia_min||15)?'late':'ok')+'">'+(late>0?('+'+late+' min'):'a tiempo')+'</div></div>';
+  }
+  if(a && a.check_out){
+    const ms=a.min_salida||0;
+    h+='<div class="ch-rec"><span class="ic">🔴</span><div><div class="nm">Salida</div><div class="mt">'+hhmm(new Date(a.check_out))+'</div></div>'
+      +'<div class="vv '+(ms<0?'late':'ok')+'">'+(ms<0?(ms+' min'):(ms>0?('+'+ms+' min'):'puntual'))+'</div></div>';
+  }
+  rows.innerHTML=h;
+}
+
+function chRender(){
+  const clk=$('ch-clock'); if(clk) clk.textContent=hhmm(mxToday());
+  const btn=$('ch-btn'),hint=$('ch-hint'),turno=$('ch-turno'),note=$('ch-note');
+  if(!btn) return;
+  note.innerHTML=(CH_RODAJE?'<span class="ch-rodaje">Semana de ajuste de horario</span><br>':'')+'Tu marca queda registrada para la quincena.';
+
+  // Exento de checador (dirección/gerencia/honorarios): no marca reloj.
+  if(CH.exento){
+    turno.textContent='No estás sujeto a reloj checador.';
+    btn.className='ch-btn'; btn.disabled=true; btn.textContent='Sin checador';
+    hint.textContent='Tu puesto no requiere marcar entrada/salida.';
+    $('ch-rows').innerHTML=''; note.innerHTML='';
+    return;
+  }
+
+  if(!CH.shift){
+    turno.textContent='Hoy no tienes turno asignado.';
+    btn.className='ch-btn'; btn.disabled=true; btn.textContent='Sin turno hoy';
+    hint.textContent='Si crees que es un error, avisa a tu jefe de área.';
+    chRenderRecords(); return;
+  }
+  const today=mxToday(), now=today.getTime();
+  const ent=chTimeToDate(today,CH.shift.hora_inicio);
+  let sal=chTimeToDate(today,CH.shift.hora_fin); if(sal.getTime()<ent.getTime()) sal=new Date(sal.getTime()+864e5);
+  turno.textContent='Turno de hoy: '+hhmm(ent)+' – '+hhmm(sal)+(CH.shift.ubicacion?(' · '+CH.shift.ubicacion):'');
+
+  const yaEntro = CH.asis && CH.asis.check_in;
+  const yaSalio = CH.asis && CH.asis.check_out;
+
+  if(yaSalio){
+    btn.className='ch-btn'; btn.disabled=true; btn.textContent='Listo por hoy 👋';
+    hint.textContent=CH.asis.mensaje_salida||'¡Gracias por tu día!';
+    chRenderRecords(); return;
+  }
+  if(!yaEntro){
+    const abre=ent.getTime()-CH_ANTES_ENT*60000;
+    if(now<abre){
+      btn.className='ch-btn'; btn.disabled=true; btn.textContent='Llegué';
+      hint.textContent='Podrás marcar tu llegada a las '+hhmm(new Date(abre))+'.';
+    }else if(now>sal.getTime()){
+      btn.className='ch-btn'; btn.disabled=true; btn.textContent='Turno terminado';
+      hint.textContent='No se registró tu llegada hoy.';
+    }else{
+      btn.className='ch-btn go'; btn.disabled=false; btn.textContent='Llegué';
+      const tarde=Math.round((now-ent.getTime())/60000);
+      hint.textContent=tarde>(CH_CFG.tolerancia_min||15)?('Vas '+tarde+' min tarde — márcate ya.'):'Marca tu entrada. ¡Buen turno! 💪';
+    }
+  }else{
+    const abreSal=sal.getTime()-CH_ANTES_SAL*60000, cierraSal=sal.getTime()+CH_DESP_SAL*60000;
+    if(now<abreSal){
+      btn.className='ch-btn'; btn.disabled=true; btn.textContent='Me voy';
+      hint.textContent='Podrás marcar tu salida a las '+hhmm(new Date(abreSal))+'.';
+    }else if(now>cierraSal){
+      btn.className='ch-btn'; btn.disabled=true; btn.textContent='Ventana cerrada';
+      hint.textContent='La ventana de salida se cerró. Avisa a tu jefe para ajustar.';
+    }else{
+      btn.className='ch-btn out'; btn.disabled=false; btn.textContent='Me voy';
+      hint.textContent='Marca tu salida cuando termines.';
+    }
+  }
+  chRenderRecords();
+}
+
+async function chMark(){
+  const btn=$('ch-btn');
+  if(CH_BUSY || !btn || btn.disabled || !CH.shift) return;
+  const empId = EMP || HZ.empId;
+  if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
+  const esEntrada = !(CH.asis && CH.asis.check_in);
+  CH_BUSY=true; const prev=btn.textContent; btn.disabled=true; btn.textContent='Marcando…';
+
+  // Geolocalización (si la niega, se registra sin coords; en rodaje no bloquea)
+  let lat=null,lng=null,dist=null,dentro=null;
+  try{
+    const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:8000,maximumAge:0}));
+    lat=pos.coords.latitude; lng=pos.coords.longitude;
+    dist=Math.round(chHaversine(lat,lng,CH_CFG.lat,CH_CFG.lng));
+    dentro=dist<=(CH_CFG.radio_m||50);
+  }catch(e){}
+  const device=chDeviceId();
+  const deviceOk = !CH.prevDevice || CH.prevDevice===device;
+  const today=mxToday(), ds=ymdMX();
+  const propId = HZ.propId || REP_PROP || CDMX_PROP;
+  const ent=chTimeToDate(today,CH.shift.hora_inicio);
+  let sal=chTimeToDate(today,CH.shift.hora_fin); if(sal.getTime()<ent.getTime()) sal=new Date(sal.getTime()+864e5);
+
+  try{
+    if(esEntrada){
+      const retraso=Math.max(0,Math.round((today.getTime()-ent.getTime())/60000));
+      const estatus=retraso>(CH_CFG.tolerancia_min||15)?'retardo':'a_tiempo';
+      const fila={ employee_id:empId, property_id:propId, fecha:ds, nombre_display:(HZ.nombreDisplay||NOMBRE||null),
+        check_in:new Date().toISOString(), hora_turno:CH.shift.hora_inicio, minutos_retraso:retraso, estatus, quincena:chQuincena(today),
+        lat, lng, distancia_m:dist, dentro_geocerca:dentro, device_id:device, device_ok:deviceOk };
+      if(CH.asis && CH.asis.id){ const {error}=await sb.from('asistencias').update(fila).eq('id',CH.asis.id); if(error) throw error; }
+      else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
+    }else{
+      const minSal=Math.round((today.getTime()-sal.getTime())/60000);
+      const msg=CH_MSGS[Math.floor(Math.random()*CH_MSGS.length)];
+      const upd={ check_out:new Date().toISOString(), salida_turno:CH.shift.hora_fin, min_salida:minSal, mensaje_salida:msg };
+      const id=CH.asis&&CH.asis.id;
+      if(id){ const {error}=await sb.from('asistencias').update(upd).eq('id',id); if(error) throw error; Object.assign(CH.asis,upd); }
+    }
+    CH_BUSY=false;
+    await chLoad();
+  }catch(e){
+    CH_BUSY=false; btn.disabled=false; btn.textContent=prev;
+    const hint=$('ch-hint'); if(hint) hint.textContent='No se pudo registrar. Revisa tu conexión e intenta otra vez.';
+  }
+}
+if($('ch-btn')) $('ch-btn').onclick=chMark;
 
 /* Fecha de hoy (MX) */
 function mxToday(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
