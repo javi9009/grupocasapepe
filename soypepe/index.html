@@ -1445,12 +1445,20 @@ function chRender(){
   }
   if(!yaEntro){
     const abre=ent.getTime()-CH_ANTES_ENT*60000;
+    const cierraSal=sal.getTime()+CH_DESP_SAL*60000;
+    btn.dataset.mode='entrada';
     if(now<abre){
       btn.className='ch-btn'; btn.disabled=true; btn.textContent='Llegué';
       hint.textContent='Podrás marcar tu llegada a las '+hhmm(new Date(abre))+'.';
     }else if(now>sal.getTime()){
-      btn.className='ch-btn'; btn.disabled=true; btn.textContent='Turno terminado';
-      hint.textContent='No se registró tu llegada hoy.';
+      // No marcó entrada y el turno terminó: permitir SALIDA SIN ENTRADA (pendiente de validación del jefe)
+      if(now<=cierraSal){
+        btn.className='ch-btn out'; btn.disabled=false; btn.textContent='Marcar salida'; btn.dataset.mode='salida_sin_entrada';
+        hint.textContent='No registraste tu entrada. Marca tu salida; tu jefe de área validará tu hora de llegada.';
+      }else{
+        btn.className='ch-btn'; btn.disabled=true; btn.textContent='Ventana cerrada';
+        hint.textContent='No se registró tu llegada y la ventana cerró. Avisa a tu jefe de área.';
+      }
     }else{
       btn.className='ch-btn go'; btn.disabled=false; btn.textContent='Llegué';
       const tarde=Math.round((now-ent.getTime())/60000);
@@ -1465,7 +1473,7 @@ function chRender(){
       btn.className='ch-btn'; btn.disabled=true; btn.textContent='Ventana cerrada';
       hint.textContent='La ventana de salida se cerró. Avisa a tu jefe para ajustar.';
     }else{
-      btn.className='ch-btn out'; btn.disabled=false; btn.textContent='Me voy';
+      btn.className='ch-btn out'; btn.disabled=false; btn.textContent='Me voy'; btn.dataset.mode='salida';
       hint.textContent='Marca tu salida cuando termines.';
     }
   }
@@ -1478,6 +1486,7 @@ async function chMark(){
   const empId = EMP || HZ.empId;
   if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
   const esEntrada = !(CH.asis && CH.asis.check_in);
+  const chMode = (btn.dataset.mode) || (esEntrada?'entrada':'salida');
   CH_BUSY=true; const prev=btn.textContent; btn.disabled=true; btn.textContent='Marcando…';
 
   // Geolocalización (si la niega, se registra sin coords; en rodaje no bloquea)
@@ -1496,7 +1505,17 @@ async function chMark(){
   let sal=chTimeToDate(today,CH.shift.hora_fin); if(sal.getTime()<ent.getTime()) sal=new Date(sal.getTime()+864e5);
 
   try{
-    if(esEntrada){
+    if(chMode==='salida_sin_entrada'){
+      const minSal=Math.round((today.getTime()-sal.getTime())/60000);
+      const msg=CH_MSGS[Math.floor(Math.random()*CH_MSGS.length)];
+      const fila={ employee_id:empId, property_id:propId, fecha:ds, nombre_display:(HZ.nombreDisplay||NOMBRE||null),
+        hora_turno:CH.shift.hora_inicio, salida_turno:CH.shift.hora_fin, check_out:new Date().toISOString(), min_salida:minSal,
+        estatus:'sin_entrada', requiere_validacion:true, validacion_estatus:'pendiente', entrada_olvidada:true,
+        quincena:chQuincena(today), lat, lng, distancia_m:dist, dentro_geocerca:dentro, device_id:device, device_ok:deviceOk,
+        mensaje_salida:'Salida sin entrada — pendiente de validación de tu jefe de área.' };
+      if(CH.asis && CH.asis.id){ const {error}=await sb.from('asistencias').update(fila).eq('id',CH.asis.id); if(error) throw error; }
+      else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
+    }else if(esEntrada){
       const retraso=Math.max(0,Math.round((today.getTime()-ent.getTime())/60000));
       const estatus=retraso>(CH_CFG.tolerancia_min||15)?'retardo':'a_tiempo';
       const fila={ employee_id:empId, property_id:propId, fecha:ds, nombre_display:(HZ.nombreDisplay||NOMBRE||null),
