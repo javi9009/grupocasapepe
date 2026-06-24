@@ -159,23 +159,35 @@ function calc(){
   const ind=(+($('ind')?.value)||0)/100, mar=(+($('mar')?.value)||0)/100, iva=(+($('iva')?.value)||0)/100;
   let cv=0,cf=0;
   LINES.forEach(l=>{const s=(l.cantidad||0)*(l.costo_unitario||0); if((l.tipo_costo||'variable')==='fijo')cf+=s; else cv+=s;});
-  const cfu=cf/pax;
-  const directo=cv+cfu;
-  const indir=directo*ind;
-  const total=directo+indir;
-  const pvp=mar<1?total/(1-mar):total;
-  const pvpIva=pvp*(1+iva);
+  const cfu=cf/pax, directo=cv+cfu, indir=directo*ind, total=directo+indir;
   const CAPS={walking:{min:150,pvp:75,mon:'MXN'},medio_dia:{min:360,pvp:1500,mon:'MXN'},dia_entero:{min:840,pvp:5000,mon:'MXN'}};
-  let be;
-  if(cf<=0) be='<b class="min">Siempre rentable · sin costos fijos (todo variable)</b>';
-  else if(pvp-cv<=0) be='<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>';
-  else be='<b class="min">'+Math.ceil(cf/(pvp-cv))+' pax</b>';
-  const _tj=T.tipo_jornada,_cap=CAPS[_tj];let capRow='';
-  if(_cap){const over=_cap.mon==='MXN'&&pvpIva>_cap.pvp;const tope=_cap.mon==='USD'?('$'+_cap.pvp+' USD'):mx(_cap.pvp);
-    capRow='<div class="row"><span class="min">Tipo '+_tj.replace('_',' ')+' · tope '+tope+' / '+(Math.round(_cap.min/60*10)/10)+'h</span><b class="min"'+(over?' style="color:var(--red)"':'')+'>'+(over?'\u26a0 excede tope':'\u2713')+'</b></div>';}
+  const tj=T.tipo_jornada,cap=CAPS[tj];
+  if(tj==='walking'){
+    // COSTEO INVERSO: el PVP manda (fijo, editable, con IVA). Default 50.
+    const pvpIva=+(($('pvpFijo')?.value)||(T.pvp!=null?T.pvp:50));
+    const net=pvpIva/(1+iva), bruto=net-total, mpct=net>0?bruto/net*100:0;
+    const beW=cf<=0?'<b class="min">Siempre rentable · sin costos fijos (todo variable)</b>':(net-cv>0?'<b class="min">'+Math.ceil(cf/(net-cv))+' pax</b>':'<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>');
+    const capRow=cap?'<div class="row"><span class="min">Tipo walking · tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(pvpIva>cap.pvp?' style="color:var(--red)"':'')+'>'+(pvpIva>cap.pvp?'\u26a0 excede tope':'\u2713')+'</b></div>':'';
+    $('calc').innerHTML=`
+    <div class="row"><span>Costo variable / cliente</span><b>${mx(cv)}</b></div>
+    <div class="row"><span>Costo fijo / grupo (${mx(cf)} \u00f7 ${pax} pax)</span><b>${mx(cfu)}</b></div>
+    <div class="row"><span>+ Indirectos (${($('ind')?.value||30)}%)</span><b>${mx(indir)}</b></div>
+    <div class="row"><span><b>= Costo total / cliente</b></span><b>${mx(total)}</b></div>
+    <div class="row"><span class="big">PVP fijo con IVA (editable)</span><span class="big">$ <input type="number" id="pvpFijo" value="${pvpIva}" style="width:110px;text-align:right;display:inline-block"></span></div>
+    <div class="row"><span><b>= Margen bruto / cliente</b> · PVP neto ${mx(net)} \u2212 costo ${mx(total)}</span><b style="color:${bruto>=0?'var(--green)':'var(--red)'}">${mx(bruto)} \u00b7 ${mpct.toFixed(1)}%</b></div>
+    <div class="row"><span class="min">Volumen mínimo (breakeven)</span>${beW}</div>${capRow}
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Fijar PVP (${mx(pvpIva)})</button><span class="muted">Edita el PVP arriba si sube o baja; el margen bruto se recalcula.</span></div>`;
+    const pf=$('pvpFijo'); if(pf) pf.onchange=()=>calc();
+    $('updPrice').onclick=async()=>{const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,iva_pct:+$('iva').value}).eq('id',T.id);if(error)return toast('Error: '+error.message,false);T.pvp=Math.round(pvpIva);toast('PVP fijado: '+mx(pvpIva));};
+    return;
+  }
+  // COSTEO DIRECTO (medio dia / dia entero): PVP = costo + margen
+  const pvp=mar<1?total/(1-mar):total, pvpIva=pvp*(1+iva);
+  const be=cf<=0?'<b class="min">Siempre rentable · sin costos fijos (todo variable)</b>':(pvp-cv>0?'<b class="min">'+Math.ceil(cf/(pvp-cv))+' pax</b>':'<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>');
+  let capRow=''; if(cap){const over=pvpIva>cap.pvp; capRow='<div class="row"><span class="min">Tipo '+tj.replace('_',' ')+' · tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(over?' style="color:var(--red)"':'')+'>'+(over?'\u26a0 excede tope':'\u2713')+'</b></div>';}
   $('calc').innerHTML=`
     <div class="row"><span>Costo variable / cliente</span><b>${mx(cv)}</b></div>
-    <div class="row"><span>Costo fijo / grupo (${mx(cf)} ÷ ${pax} pax)</span><b>${mx(cfu)}</b></div>
+    <div class="row"><span>Costo fijo / grupo (${mx(cf)} \u00f7 ${pax} pax)</span><b>${mx(cfu)}</b></div>
     <div class="row"><span>= Costo directo / cliente</span><b>${mx(directo)}</b></div>
     <div class="row"><span>+ Indirectos (${($('ind')?.value||30)}%)</span><b>${mx(indir)}</b></div>
     <div class="row"><span><b>= Costo total / cliente</b></span><b>${mx(total)}</b></div>
