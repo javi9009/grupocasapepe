@@ -71,7 +71,7 @@ const EDITORS=['Alan','Joseph','Víctor','Ana','Deisy','Javi'];
 const $=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let WHO=localStorage.getItem('cpp_who')||'';
-let TOURS=[],REGLAS=[],T=null,V=null,G=null,PAR=[],MOM=[];
+let TOURS=[],REGLAS=[],T=null,V=null,G=null,PAR=[],MOM=[],COSTOS=[],TPVP={};
 let tt;function toast(m,ok=true){const t=$('toast');t.textContent=m;t.style.background=ok?'#23402a':'#3a2a2a';t.style.color=ok?'#bfe6c4':'#e6bfbf';t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),1400);}
 const deb={};function debounce(k,fn){clearTimeout(deb[k]);deb[k]=setTimeout(fn,600);}
 function show(v){['vTours','vVers','vEdit'].forEach(x=>$(x).classList.toggle('hide',x!==v));}
@@ -110,9 +110,10 @@ function renderTours(){
 function openTour(id){
   T=TOURS.find(x=>x.id===id);if(!T)return;V=null;
   $('versTtl').textContent='Versiones · '+T.nombre;
-  $('versGrid').innerHTML=T.versiones.map(v=>`<div class="card" data-v="${v.id}"><div class="cover" ${coverStyle(v.cover_url)}>${esc(v.nombre)}</div><div class="meta">${v.autor?('por '+esc(v.autor)):'—'}</div></div>`).join('')
+  $('versGrid').innerHTML=T.versiones.map(v=>`<div class="card" data-v="${v.id}"><div class="cover" ${coverStyle(v.cover_url)}>${esc(v.nombre)}</div><div class="meta">${v.autor?('por '+esc(v.autor)):'—'}<span class="delv" data-del="${v.id}" title="Borrar versión" style="float:right;color:var(--red);cursor:pointer">🗑</span></div></div>`).join('')
     +`<div class="card add" id="addVer">＋ Nueva versión</div>`;
-  $('versGrid').querySelectorAll('.card[data-v]').forEach(c=>c.onclick=()=>openEditor(c.dataset.v));
+  $('versGrid').querySelectorAll('.card[data-v]').forEach(c=>c.onclick=(e)=>{if(e.target.classList.contains('delv'))return;openEditor(c.dataset.v);});
+  $('versGrid').querySelectorAll('.delv').forEach(d=>d.onclick=async(e)=>{e.stopPropagation();if(!confirm('¿Borrar esta versión y todo su contenido?'))return;const id=d.dataset.del;await sb.from('guia_paradas').delete().eq('version_id',id);await sb.from('guia_momentos').delete().eq('version_id',id);await sb.from('guia_tour').delete().eq('version_id',id);await sb.from('guia_versiones').delete().eq('id',id);toast('Versión borrada');await load();openTour(T.id);});
   $('addVer').onclick=newVersion;
   show('vVers');crumbs();
 }
@@ -153,6 +154,8 @@ async function openEditor(vid){
     sb.from('guia_versiones').select('*').eq('id',vid).single()
   ]);
   PAR=p||[];MOM=m||[];V=vfull.data||vs;
+  COSTOS=((await sb.from('tour_costos').select('concepto,categoria,cantidad,costo_unitario,tipo_costo').eq('tour_id',T.id).order('orden')).data)||[];
+  TPVP=((await sb.from('tours').select('pvp,tipo_jornada').eq('id',T.id).maybeSingle()).data)||{};
   renderEditor();show('vEdit');crumbs();
 }
 function renderEditor(){
@@ -208,23 +211,27 @@ async function saveVer(patch){Object.assign(V,patch);await sb.from('guia_version
 async function saveTour(patch){G=Object.assign(G||{},patch);const {error}=await sb.from('guia_tour').update({...patch,updated_at:new Date().toISOString()}).eq('version_id',V.id);if(error)toast('Error: '+error.message,false);else toast('Guardado');}
 
 function renderParadas(){
-  $('paradas').innerHTML=PAR.map((p,i)=>`<div class="item" data-i="${i}">
-    <div class="hd"><span class="num">${i+1}</span><b>${esc(p.nombre)||'Parada'}</b><span class="x" data-del="${i}">✕</span></div>
+  $('paradas').innerHTML=PAR.map((p,i)=>`<div class="item" data-i="${i}" style="${p.opcional?'opacity:.65;border-style:dashed':''}">
+    <div class="hd"><span class="num">${i+1}</span><b>${esc(p.nombre)||'Parada'}</b><label style="margin-left:auto;font-size:11px;color:var(--muted);text-transform:none;display:flex;align-items:center;gap:4px"><input type="checkbox" data-f="opcional" ${p.opcional?'checked':''} style="width:auto"> no considerar</label><span class="x" data-del="${i}" style="margin-left:8px">✕</span></div>
     <div class="grid2">
       <div class="fg"><label>Nombre de la parada</label><input data-f="nombre" value="${esc(p.nombre)}"></div>
       <div class="fg"><label>Hora aprox. de llegada</label><input data-f="hora_aprox" value="${esc(p.hora_aprox)}" placeholder="ej. 10:30"></div>
-      <div class="fg"><label>Protagonista (1ª persona)</label><input data-f="protagonista" value="${esc(p.protagonista)}"></div>
+      <div class="fg"><label>Protagonista</label><input data-f="protagonista" value="${esc(p.protagonista)}"></div>
       <div class="fg"><label>Link Maps de la parada</label><input data-f="maps_url" value="${esc(p.maps_url)}"></div>
     </div>
-    <div class="fg"><label>Qué contar (descripción)</label><textarea data-f="descripcion">${esc(p.descripcion)}</textarea></div>
-    <div class="fg"><label>Narrativa en 1ª persona del protagonista</label><textarea data-f="narrativa">${esc(p.narrativa)}</textarea></div>
+    <div class="grid2">
+      <div class="fg"><label>Qué contar (ES)</label><textarea data-f="descripcion">${esc(p.descripcion)}</textarea></div>
+      <div class="fg"><label>What to tell (EN)</label><textarea data-f="descripcion_en">${esc(p.descripcion_en)}</textarea></div>
+      <div class="fg"><label>Narrativa / referencia (ES)</label><textarea data-f="narrativa">${esc(p.narrativa)}</textarea></div>
+      <div class="fg"><label>Narrative / reference (EN)</label><textarea data-f="narrativa_en">${esc(p.narrativa_en)}</textarea></div>
+    </div>
   </div>`).join('')||'<div class="muted">Sin paradas. Agrega la primera.</div>';
   $('paradas').querySelectorAll('.item').forEach(it=>{const i=+it.dataset.i;
-    it.querySelectorAll('[data-f]').forEach(el=>el.oninput=()=>{PAR[i][el.dataset.f]=el.value;debounce('par'+i,()=>savePar(i));});
+    it.querySelectorAll('[data-f]').forEach(el=>{const isCk=el.type==='checkbox';el[isCk?'onchange':'oninput']=()=>{PAR[i][el.dataset.f]=isCk?el.checked:el.value;debounce('par'+i,()=>savePar(i));if(el.dataset.f==='opcional')renderParadas();};});
     it.querySelector('[data-del]').onclick=async()=>{const p=PAR[i];if(p.id)await sb.from('guia_paradas').delete().eq('id',p.id);PAR.splice(i,1);renderParadas();};
   });
 }
-async function savePar(i){const p=PAR[i];const row={tour_id:T.id,version_id:V.id,orden:i+1,nombre:p.nombre||'Parada',hora_aprox:p.hora_aprox||null,protagonista:p.protagonista||null,descripcion:p.descripcion||null,narrativa:p.narrativa||null,maps_url:p.maps_url||null};if(p.id){await sb.from('guia_paradas').update(row).eq('id',p.id);}else{const {data}=await sb.from('guia_paradas').insert(row).select().single();if(data)p.id=data.id;}toast('Guardado');}
+async function savePar(i){const p=PAR[i];const row={tour_id:T.id,version_id:V.id,orden:i+1,nombre:p.nombre||'Parada',hora_aprox:p.hora_aprox||null,protagonista:p.protagonista||null,opcional:!!p.opcional,descripcion:p.descripcion||null,descripcion_en:p.descripcion_en||null,narrativa:p.narrativa||null,narrativa_en:p.narrativa_en||null,maps_url:p.maps_url||null};if(p.id){await sb.from('guia_paradas').update(row).eq('id',p.id);}else{const {data}=await sb.from('guia_paradas').insert(row).select().single();if(data)p.id=data.id;}toast('Guardado');}
 $('vEdit').addEventListener('click',e=>{if(e.target&&e.target.id==='addParada'){PAR.push({nombre:'',orden:PAR.length+1});renderParadas();}if(e.target&&e.target.id==='addMomento'){MOM.push({titulo:'',orden:MOM.length+1});renderMomentos();}});
 
 function renderMomentos(){
@@ -252,12 +259,16 @@ function mapsRoute(){
 function buildDoc(){
   const route=mapsRoute();
   const reglas=REGLAS.map(r=>`<li>${esc(r.regla)}</li>`).join('');
-  const paradas=PAR.map((p,i)=>`<div class="stop"><div>${p.hora_aprox?`<span class="hora">${esc(p.hora_aprox)}</span>`:''}<b>${i+1}. ${esc(p.nombre)||'Parada'}</b>${p.protagonista?` — <i>${esc(p.protagonista)}</i>`:''}</div>${p.descripcion?`<div>${esc(p.descripcion)}</div>`:''}${p.narrativa?`<div class="narr">“${esc(p.narrativa)}”</div>`:''}${p.maps_url?`<div><a href="${esc(p.maps_url)}" target="_blank">📍 Maps</a></div>`:''}</div>`).join('');
+  const paradas=PAR.map((p,i)=>`<div class="stop">${p.opcional?'<span style="background:#eee;color:#888;border-radius:4px;padding:0 6px;font-size:11px">opcional · puede no considerarse</span>':''}<div>${p.hora_aprox?`<span class="hora">${esc(p.hora_aprox)}</span>`:''}<b>${i+1}. ${esc(p.nombre)||'Parada'}</b>${p.protagonista?` — <i>${esc(p.protagonista)}</i>`:''}</div>${p.descripcion?`<div>${esc(p.descripcion)}</div>`:''}${p.descripcion_en?`<div style="color:#8a7a55">${esc(p.descripcion_en)}</div>`:''}${p.narrativa?`<div class="narr">“${esc(p.narrativa)}”</div>`:''}${p.narrativa_en?`<div class="narr" style="color:#8a7a55">“${esc(p.narrativa_en)}”</div>`:''}${p.maps_url?`<div><a href="${esc(p.maps_url)}" target="_blank">📍 Maps</a></div>`:''}</div>`).join('');
   const mom=MOM.map((m,i)=>`<li><b>${esc(m.titulo)}</b>${m.descripcion?' — '+esc(m.descripcion):''}</li>`).join('');
+  const cvT=COSTOS.filter(c=>(c.tipo_costo||'variable')==='variable').reduce((s,c)=>s+(c.cantidad||0)*(c.costo_unitario||0),0);
+  const cfT=COSTOS.filter(c=>c.tipo_costo==='fijo').reduce((s,c)=>s+(c.cantidad||0)*(c.costo_unitario||0),0);
+  const costoH=COSTOS.length?`<h3>Costos y PVP (del costeo del tour)</h3><ul>${COSTOS.map(c=>`<li>${esc(c.concepto)} — $${c.costo_unitario} (${esc(c.tipo_costo||'variable')})</li>`).join('')}<li><b>Costo variable/pax ≈ $${cvT}</b>${cfT?` · costo fijo/grupo $${cfT}`:''}${TPVP.pvp?` · <b>PVP propuesto $${TPVP.pvp}</b>`:''}</li></ul>`:'';
   return `<h1>${esc(T.nombre)}</h1><div class="sub">Guía del Guía · versión "${esc(V.nombre)}"${V.autor?(' · por '+esc(V.autor)):''} · tiempo máx ${G.tiempo_max_min||150} min</div>
   ${reglas?`<h3>Reglas base</h3><ul>${reglas}</ul>`:''}
   <h3>Itinerario</h3><p>${esc(G.itinerario)||'—'}</p>
-  ${route?`<p><a href="${route}" target="_blank">🗺️ Abrir ruta completa en Google Maps (${PAR.length} paradas)</a></p>`:(G.maps_url?`<p><a href="${esc(G.maps_url)}" target="_blank">🗺️ Abrir ruta en Maps</a></p>`:'')}
+  ${(G.maps_url||route)?`<p style="background:#f5efdf;border:1px solid #e0c98a;border-radius:8px;padding:8px 12px"><a href="${esc(G.maps_url||route)}" target="_blank">🗺️ Abrir / descargar la ruta en Google Maps</a><br><span style="font-size:11px;color:#888">Ábrela en tu cel y sigue las paradas en orden.</span></p>`:''}
+  ${costoH}
   <h3>Paradas</h3>${paradas||'<p>—</p>'}
   ${mom?`<h3>Momentos WOW</h3><ul>${mom}</ul>`:''}
   ${(G.coord_transportes||G.coord_comidas||G.coord_boletos||G.coord_protagonista||G.coord_tips)?`<h3>Coordinación</h3><ul>${[['Transportes',G.coord_transportes],['Comidas',G.coord_comidas],['Boletos',G.coord_boletos],['Protagonista',G.coord_protagonista],['Tips',G.coord_tips]].filter(x=>x[1]).map(x=>`<li><b>${x[0]}:</b> ${esc(x[1])}</li>`).join('')}</ul>`:''}`;
