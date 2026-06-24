@@ -24,6 +24,10 @@
   #lines input,#lines select{border-color:var(--blue);color:#cfe0f6}
   #lines td.auto{color:var(--gold2);font-weight:600}
   #lines tr.tot td{border-top:1px solid var(--gold);font-weight:700;color:var(--gold2)}
+  .kpis{display:flex;gap:10px;margin:14px 0;flex-wrap:wrap}
+  .kpi{flex:1;min-width:160px;border-radius:10px;padding:12px 14px;text-align:center}
+  .kpi .kl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;opacity:.9}
+  .kpi .kv{font-size:22px;font-weight:800;margin-top:4px}
   label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:4px}
   .params{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
   .params .p{display:flex;flex-direction:column}.params input{width:110px}
@@ -150,7 +154,7 @@ function renderLines(){
     const i=+tr.dataset.i;
     tr.querySelectorAll('[data-f]').forEach(el=>{
       if(el.classList.contains('seg'))el.querySelectorAll('button').forEach(b=>b.onclick=()=>{LINES[i].tipo_costo=b.dataset.v;saveLine(i);renderLines();calc();});
-      else el.onchange=()=>{LINES[i][el.dataset.f]=el.type==='number'?(+el.value||0):el.value;saveLine(i);renderLines();calc();};
+      else {el.oninput=()=>{LINES[i][el.dataset.f]=el.type==='number'?(+el.value||0):el.value;calc();};el.onchange=()=>{LINES[i][el.dataset.f]=el.type==='number'?(+el.value||0):el.value;saveLine(i);renderLines();};}
     });
     tr.querySelector('[data-del]').onclick=async()=>{const l=LINES[i];if(l.id)await sb.from('tour_costos').delete().eq('id',l.id);LINES.splice(i,1);renderLines();calc();};
   });
@@ -164,44 +168,43 @@ $('addLine').onclick=()=>{LINES.push({concepto:'',categoria:'otro',cantidad:1,co
 function calc(){
   const pax=Math.max(1,+($('pax')?.value||T.pax_estimado||10));
   const ind=(+($('ind')?.value)||0)/100, iva=(+($('iva')?.value)||0)/100, comP=(+($('com')?.value)||0)/100;
-  const indL=($('ind')?.value||30), comL=($('com')?.value||10);
+  const indL=($('ind')?.value||30), comL=($('com')?.value||10), ivaL=($('iva')?.value||16);
   let cv=0,cf=0;
   LINES.forEach(l=>{const s=(l.cantidad||0)*(l.costo_unitario||0); if((l.tipo_costo||'variable')==='fijo')cf+=s; else cv+=s;});
-  const pvpIva=(T.pvp!=null?+T.pvp:0);
-  const precioNeto=pvpIva/(1+iva);
-  const ingreso=precioNeto*pax, cvSal=cv*pax, indir=ind*ingreso, comSal=comP*ingreso;
-  const totalSal=cvSal+cf+indir+comSal, costoPax=totalSal/pax, utilSal=ingreso-totalSal, utilPax=utilSal/pax;
-  const mc=precioNeto-cv, margenPct=ingreso>0?utilSal/ingreso*100:0;
-  const contrib=precioNeto*(1-ind-comP)-cv;
-  const grupoMin=cf<=0?'1 pax (sin costos fijos)':(contrib>0?Math.ceil(cf/contrib)+' pax':'PVP insuficiente');
+  const P=(T.pvp!=null?+T.pvp:0);
+  const pNeto=P/(1+iva), ingNeto=pNeto*pax, cvSal=cv*pax;
+  const indir=ind*ingNeto, totSinCom=cvSal+cf+indir, comSal=comP*ingNeto, totNeto=totSinCom+comSal;
+  const ivaVenta=P*pax-ingNeto, totBruto=P*pax;
+  const margenNeto=ingNeto-totNeto, margenPct=ingNeto>0?margenNeto/ingNeto*100:0;
+  const contrib=pNeto*(1-ind-comP)-cv, grupoMin=cf<=0?1:(contrib>0?Math.ceil(cf/contrib):999);
+  // KPI colores
+  let mBg,mFg; if(margenPct<0){mBg='#5a1f1c';mFg='#f0b6ab';}else if(margenPct>=60){mBg='#234d18';mFg='#bfe6c4';}else if(margenPct>=20){mBg='#3a6b2e';mFg='#d6f0c9';}else if(margenPct>=10){mBg='#2a2620';mFg='#f3ead9';}else{mBg='#2a2620';mFg='#d9cdb5';}
+  const g=grupoMin; let gBg,gFg; if(g<2){gBg='#234d18';gFg='#bfe6c4';}else if(g<4){gBg='#3a6b2e';gFg='#d6f0c9';}else if(g<6){gBg='#2a2620';gFg='#f3ead9';}else if(g<10){gBg='#5a3a2e';gFg='#f0c9bd';}else{gBg='#5a1f1c';gFg='#f0b6ab';}
+  const kpis='<div class="kpis"><div class="kpi" style="background:'+mBg+';color:'+mFg+'"><div class="kl">Margen Neto (sin imp)</div><div class="kv">'+margenPct.toFixed(1)+'%</div></div><div class="kpi" style="background:'+gBg+';color:'+gFg+'"><div class="kl">Grupo mínimo</div><div class="kv">'+(cf<=0?'1':g)+' pax</div></div></div>';
   const CAPS={walking:{min:150,pvp:75},medio_dia:{min:360,pvp:1500},dia_entero:{min:840,pvp:5000}};
   const cap=CAPS[T.tipo_jornada]; let capRow='';
-  if(cap){const over=pvpIva>cap.pvp; capRow='<div class="row"><span class="min">Tipo '+T.tipo_jornada.replace('_',' ')+' \u00b7 tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(over?' style="color:var(--red)"':'')+'>'+(over?'\u26a0 excede tope':'\u2713')+'</b></div>';}
-  const neg=v=>v<0?' style="color:var(--red)"':'';
+  if(cap){const over=P>cap.pvp; capRow='<div class="row"><span class="min">Tipo '+T.tipo_jornada.replace('_',' ')+' \u00b7 tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(over?' style="color:var(--red)"':'')+'>'+(over?'\u26a0 excede tope':'\u2713')+'</b></div>';}
+  const negc=v=>v<0?' style="color:var(--red)"':'';
   $('calc').innerHTML=`
-    <div class="row"><span class="big">PVP al cliente (c/IVA \u00b7 editable)</span><span class="big">$ <input type="number" id="pvpFijo" value="${pvpIva}" style="width:120px;text-align:right;display:inline-block"></span></div>
-    <div class="row"><span>Precio neto por pax (sin IVA)</span><b>${mx(precioNeto)}</b></div>
-    <div class="row"><span>Aforo \u00b7 pax promedio por salida</span><b>${pax} pax</b></div>
-    <div class="row"><span>Ingreso neto por salida</span><b>${mx(ingreso)}</b></div>
-    <div class="row"><span>Costo variable por pax</span><b>${mx(cv)}</b></div>
-    <div class="row"><span>Costo variable por salida (${mx(cv)} \u00d7 ${pax})</span><b>${mx(cvSal)}</b></div>
-    <div class="row"><span>Costo fijo por salida</span><b>${mx(cf)}</b></div>
-    <div class="row"><span>Indirectos ${indL}% por salida (s/ ingreso)</span><b>${mx(indir)}</b></div>
-    <div class="row"><span>Comisión revendedor ${comL}% por salida (s/ ingreso)</span><b>${mx(comSal)}</b></div>
-    <div class="row"><span><b>= Costo total por salida</b></span><b>${mx(totalSal)}</b></div>
-    <div class="row"><span>Costo por pax</span><b>${mx(costoPax)}</b></div>
-    <div class="row"><span><b>Utilidad por salida</b></span><b${neg(utilSal)}>${mx(utilSal)}</b></div>
-    <div class="row"><span>Utilidad por pax</span><b${neg(utilPax)}>${mx(utilPax)}</b></div>
-    <div class="row"><span>Margen de contribución por pax</span><b>${mx(mc)}</b></div>
-    <div class="row"><span class="big">Margen % (s/ ingreso neto)</span><span class="big"${neg(margenPct)}>${margenPct.toFixed(1)}%</span></div>
-    <div class="row"><span class="big">Valor total del GRUPO (PVP \u00d7 ${pax} pax)</span><span class="big">${mx(pvpIva*pax)}</span></div>
-    <div class="row"><span class="min">Grupo mínimo / punto de equilibrio (margen bruto $0)</span><b class="min">${grupoMin}</b></div>${capRow}
-    <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Guardar PVP y costeo</button><span class="muted">El PVP es editable arriba; todo se recalcula.</span></div>`;
-  const pf=$('pvpFijo'); if(pf) pf.onchange=()=>{T.pvp=+pf.value||0;calc();};
+    <div class="row"><span class="big">PVP final al cliente (c/IVA \u00b7 editable)</span><span class="big">$ <input type="number" id="pvpFijo" value="${P}" style="width:120px;text-align:right;display:inline-block"></span></div>
+    <div class="row"><span>Aforo \u00b7 pax por salida</span><b>${pax} pax</b></div>
+    <div class="row"><span>Costo variable (grupo \u00b7 ${mx(cv)} \u00d7 ${pax})</span><b>${mx(cvSal)}</b></div>
+    <div class="row"><span>Costo fijo (grupo)</span><b>${mx(cf)}</b></div>
+    <div class="row"><span>Costo indirecto (${indL}% s/ ingreso)</span><b>${mx(indir)}</b></div>
+    <div class="row"><span><b>= Total tour neto sin comisión</b></span><b>${mx(totSinCom)}</b></div>
+    <div class="row"><span>Comisión revendedor (${comL}% s/ ingreso)</span><b>${mx(comSal)}</b></div>
+    <div class="row"><span><b>= TOTAL tour neto</b></span><b>${mx(totNeto)}</b></div>
+    <div class="row"><span>IVA (${ivaL}% sobre la venta)</span><b>${mx(ivaVenta)}</b></div>
+    <div class="row"><span><b>= Total tour bruto (lo que paga el grupo)</b></span><b>${mx(totBruto)}</b></div>
+    <div class="row"><span class="big">PVP (por pax \u00b7 c/IVA)</span><span class="big">${mx(P)}</span></div>
+    <div class="row" style="border-top:1px dashed var(--line);opacity:.8"><span class="muted">— Hasta aquí cierra nuestra cuenta del tour —</span><span></span></div>
+    ${kpis}${capRow}
+    <div style="margin-top:6px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Guardar PVP y costeo</button><span class="muted">Edita el PVP final arriba; de ahí salen márgenes y KPIs.</span></div>`;
+  const pf=$('pvpFijo'); if(pf) pf.oninput=()=>{T.pvp=+pf.value||0;calc();};
   $('updPrice').onclick=async()=>{
-    const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||10)}).eq('id',T.id);
+    const {error}=await sb.from('tours').update({pvp:Math.round(P),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||10)}).eq('id',T.id);
     if(error)return toast('Error: '+error.message,false);
-    T.pvp=Math.round(pvpIva);toast('Guardado · PVP '+mx(pvpIva));
+    toast('Guardado · PVP '+mx(P));
   };
 }
 
