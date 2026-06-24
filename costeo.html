@@ -120,12 +120,13 @@ function renderParams(){
     <div class="p"><label>Indirectos %</label><input type="number" id="ind" value="${T.indirecto_pct!=null?T.indirecto_pct:30}"></div>
     <div class="p"><label>Margen utilidad %</label><input type="number" id="mar" value="${T.margen_pct!=null?T.margen_pct:25}"></div>
     <div class="p"><label>IVA %</label><input type="number" id="iva" value="${T.iva_pct!=null?T.iva_pct:16}"></div>
+    <div class="p"><label>Comisión revendedor %</label><input type="number" id="com" value="${T.comision_3os!=null?T.comision_3os:15}"></div>
     <div class="p" style="justify-content:flex-end"><label>&nbsp;</label><button class="btn ghost sm" id="saveParams">Guardar parámetros</button></div>`;
-  ['pax','ind','mar','iva'].forEach(k=>$(k).oninput=calc);
+  ['pax','ind','mar','iva','com'].forEach(k=>$(k).oninput=calc);
   $('saveParams').onclick=async()=>{
-    const {error}=await sb.from('tours').update({pax_estimado:+$('pax').value,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value}).eq('id',T.id);
+    const {error}=await sb.from('tours').update({pax_estimado:+$('pax').value,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||15)}).eq('id',T.id);
     if(error)return toast('Error: '+error.message,false);
-    Object.assign(T,{pax_estimado:+$('pax').value,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value});toast('Parámetros guardados');
+    Object.assign(T,{pax_estimado:+$('pax').value,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||15)});toast('Parámetros guardados');
   };
 }
 function renderLines(){
@@ -156,47 +157,60 @@ async function saveLine(i){
 $('addLine').onclick=()=>{LINES.push({concepto:'',categoria:'otro',cantidad:1,costo_unitario:0,tipo_costo:'variable'});renderLines();};
 function calc(){
   const pax=Math.max(1,+($('pax')?.value||T.pax_estimado||10));
-  const ind=(+($('ind')?.value)||0)/100, mar=(+($('mar')?.value)||0)/100, iva=(+($('iva')?.value)||0)/100;
+  const ind=(+($('ind')?.value)||0)/100, mar=(+($('mar')?.value)||0)/100, iva=(+($('iva')?.value)||0)/100, comP=(+($('com')?.value)||0)/100;
+  const comL=($('com')?.value||15);
   let cv=0,cf=0;
   LINES.forEach(l=>{const s=(l.cantidad||0)*(l.costo_unitario||0); if((l.tipo_costo||'variable')==='fijo')cf+=s; else cv+=s;});
   const cfu=cf/pax, directo=cv+cfu, indir=directo*ind, total=directo+indir;
   const CAPS={walking:{min:150,pvp:75,mon:'MXN'},medio_dia:{min:360,pvp:1500,mon:'MXN'},dia_entero:{min:840,pvp:5000,mon:'MXN'}};
   const tj=T.tipo_jornada,cap=CAPS[tj];
+  const aforoRow='<div class="row"><span>Volumen promedio por usuario (aforo)</span><b>'+pax+' pax</b></div>';
   if(tj==='walking'){
-    // COSTEO INVERSO: el PVP manda (fijo, editable, con IVA). Default 50.
     const pvpIva=+(($('pvpFijo')?.value)||(T.pvp!=null?T.pvp:50));
-    const net=pvpIva/(1+iva), bruto=net-total, mpct=net>0?bruto/net*100:0;
-    const beW=cf<=0?'<b class="min">Siempre rentable · sin costos fijos (todo variable)</b>':(net-cv>0?'<b class="min">'+Math.ceil(cf/(net-cv))+' pax</b>':'<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>');
+    const net=pvpIva/(1+iva), com=net*comP, neto=net-com, bruto=neto-total, mpct=net>0?bruto/net*100:0, contrib=neto-cv;
+    const be=cf<=0?'<b class="min">Siempre rentable · sin costos fijos</b>':(contrib>0?'<b class="min">'+Math.ceil(cf/contrib)+' ventas</b>':'<b class="min" style="color:var(--red)">PVP no cubre variable</b>');
     const capRow=cap?'<div class="row"><span class="min">Tipo walking · tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(pvpIva>cap.pvp?' style="color:var(--red)"':'')+'>'+(pvpIva>cap.pvp?'\u26a0 excede tope':'\u2713')+'</b></div>':'';
     $('calc').innerHTML=`
+    ${aforoRow}
     <div class="row"><span>Costo variable / cliente</span><b>${mx(cv)}</b></div>
     <div class="row"><span>Costo fijo / grupo (${mx(cf)} \u00f7 ${pax} pax)</span><b>${mx(cfu)}</b></div>
-    <div class="row"><span>+ Indirectos (${($('ind')?.value||30)}%)</span><b>${mx(indir)}</b></div>
     <div class="row"><span><b>= Costo total / cliente</b></span><b>${mx(total)}</b></div>
+    <div class="row"><span class="min">Precio mínimo / cliente para que salga (equilibrio, sin utilidad)</span><b class="min">${mx(total)}</b></div>
     <div class="row"><span class="big">PVP fijo con IVA (editable)</span><span class="big">$ <input type="number" id="pvpFijo" value="${pvpIva}" style="width:110px;text-align:right;display:inline-block"></span></div>
-    <div class="row"><span><b>= Margen bruto / cliente</b> · PVP neto ${mx(net)} \u2212 costo ${mx(total)}</span><b style="color:${bruto>=0?'var(--green)':'var(--red)'}">${mx(bruto)} \u00b7 ${mpct.toFixed(1)}%</b></div>
-    <div class="row"><span class="min">Volumen mínimo (breakeven)</span>${beW}</div>${capRow}
-    <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Fijar PVP (${mx(pvpIva)})</button><span class="muted">Edita el PVP arriba si sube o baja; el margen bruto se recalcula.</span></div>`;
+    <div class="row"><span>\u2212 Comisión revendedor ${comL}%</span><b>${mx(com)}</b></div>
+    <div class="row"><span><b>= Margen bruto / cliente</b> · neto ${mx(neto)} \u2212 costo ${mx(total)}</span><b style="color:${bruto>=0?'var(--green)':'var(--red)'}">${mx(bruto)} \u00b7 ${mpct.toFixed(1)}%</b></div>
+    <div class="row"><span class="big">Valor total del GRUPO (PVP \u00d7 ${pax} pax)</span><span class="big">${mx(pvpIva*pax)}</span></div>
+    <div class="row"><span class="min">Breakeven · ventas para cubrir variables + fijos</span>${be}</div>${capRow}
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Fijar PVP (${mx(pvpIva)})</button><span class="muted">Edita el PVP arriba si sube o baja; todo se recalcula.</span></div>`;
     const pf=$('pvpFijo'); if(pf) pf.onchange=()=>calc();
-    $('updPrice').onclick=async()=>{const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,iva_pct:+$('iva').value}).eq('id',T.id);if(error)return toast('Error: '+error.message,false);T.pvp=Math.round(pvpIva);toast('PVP fijado: '+mx(pvpIva));};
+    $('updPrice').onclick=async()=>{const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||15)}).eq('id',T.id);if(error)return toast('Error: '+error.message,false);T.pvp=Math.round(pvpIva);toast('PVP fijado: '+mx(pvpIva));};
     return;
   }
-  // COSTEO DIRECTO (medio dia / dia entero): PVP = costo + margen
-  const pvp=mar<1?total/(1-mar):total, pvpIva=pvp*(1+iva);
-  const be=cf<=0?'<b class="min">Siempre rentable · sin costos fijos (todo variable)</b>':(pvp-cv>0?'<b class="min">'+Math.ceil(cf/(pvp-cv))+' pax</b>':'<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>');
+  // COSTEO DIRECTO (medio dia / dia entero): costo -> margen -> comisión -> monto final -> IVA
+  const pvp=mar<1?total/(1-mar):total;   // PVP con margen (lo que retiene el negocio)
+  const com=pvp*comP;                    // comisión revendedor (línea antes de impuestos)
+  const monto=pvp+com;                   // monto final sin IVA
+  const pvpIva=monto*(1+iva);            // PVP final con IVA
+  const contrib=pvp-cv;                  // aporte por venta tras variable
+  const be=cf<=0?'<b class="min">Siempre rentable · sin costos fijos</b>':(contrib>0?'<b class="min">'+Math.ceil(cf/contrib)+' ventas</b>':'<b class="min" style="color:var(--red)">PVP no cubre el costo variable</b>');
   let capRow=''; if(cap){const over=pvpIva>cap.pvp; capRow='<div class="row"><span class="min">Tipo '+tj.replace('_',' ')+' · tope '+mx(cap.pvp)+' / '+(Math.round(cap.min/60*10)/10)+'h</span><b class="min"'+(over?' style="color:var(--red)"':'')+'>'+(over?'\u26a0 excede tope':'\u2713')+'</b></div>';}
   $('calc').innerHTML=`
+    ${aforoRow}
     <div class="row"><span>Costo variable / cliente</span><b>${mx(cv)}</b></div>
     <div class="row"><span>Costo fijo / grupo (${mx(cf)} \u00f7 ${pax} pax)</span><b>${mx(cfu)}</b></div>
     <div class="row"><span>= Costo directo / cliente</span><b>${mx(directo)}</b></div>
     <div class="row"><span>+ Indirectos (${($('ind')?.value||30)}%)</span><b>${mx(indir)}</b></div>
     <div class="row"><span><b>= Costo total / cliente</b></span><b>${mx(total)}</b></div>
+    <div class="row"><span class="min">Precio mínimo / cliente para que salga (equilibrio, sin utilidad)</span><b class="min">${mx(total)}</b></div>
     <div class="row"><span>PVP con margen ${($('mar')?.value||25)}% (sin IVA)</span><b>${mx(pvp)}</b></div>
+    <div class="row"><span>+ Comisión revendedor ${comL}% (antes de IVA)</span><b>${mx(com)}</b></div>
+    <div class="row"><span><b>= Monto final (sin IVA)</b></span><b>${mx(monto)}</b></div>
     <div class="row"><span class="big">PVP final (con IVA ${($('iva')?.value||16)}%)</span><span class="big">${mx(pvpIva)}</span></div>
-    <div class="row"><span class="min">Volumen mínimo (breakeven · cubre los costos fijos al PVP actual)</span>${be}</div>${capRow}
+    <div class="row"><span class="big">Valor total del GRUPO (PVP \u00d7 ${pax} pax)</span><span class="big">${mx(pvpIva*pax)}</span></div>
+    <div class="row"><span class="min">Breakeven · ventas para cubrir variables + fijos (al PVP)</span>${be}</div>${capRow}
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="updPrice">Actualizar precio (PVP ${mx(pvpIva)})</button><span class="muted">Fija este PVP como el precio a promover del tour.</span></div>`;
   $('updPrice').onclick=async()=>{
-    const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value}).eq('id',T.id);
+    const {error}=await sb.from('tours').update({pvp:Math.round(pvpIva),costo_variable_persona:Math.round(cv),costo_fijo:Math.round(cf),pax_estimado:pax,indirecto_pct:+$('ind').value,margen_pct:+$('mar').value,iva_pct:+$('iva').value,comision_3os:+($('com').value||15)}).eq('id',T.id);
     if(error)return toast('Error: '+error.message,false);
     T.pvp=Math.round(pvpIva);toast('Precio actualizado: '+mx(pvpIva));
   };
