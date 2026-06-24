@@ -23,6 +23,7 @@
   aside li a.active{background:var(--accent);color:#fff;font-weight:600}
   aside li a.disabled{color:var(--txt3);pointer-events:none}
   aside li a.disabled::after{content:' · próx';font-size:10px}
+  .nbadge{display:inline-block;min-width:16px;text-align:center;background:#e5534b;color:#fff;border-radius:9px;font-size:10px;font-weight:700;padding:0 5px;margin-left:6px;vertical-align:middle}
   main{position:relative;background:var(--bg3)}
   .topbar{height:42px;display:flex;align-items:center;gap:10px;padding:0 16px;background:#fff;border-bottom:1px solid var(--bd)}
   .topbar .crumb{font-size:13px;color:var(--txt2)}
@@ -197,7 +198,7 @@ const ADMIN_VIEWERS=['javi@casapepe.mx','contabilidad@casapepe.mx','administraci
 const DEISY_EMAIL='hola.puebla@casapepe.mx';
 // Ven TODO el dashboard como Javi, pero en modo lectura: Roberto (contabilidad@) y admin Puebla (Claudia)
 const FULL_VIEWERS=['contabilidad@casapepe.mx','administracion.puebla@casapepe.mx'];
-let isGerencia=false, isIncidenciasViewer=false, isSociosViewer=false, isJaviSelf=false, isAdminViewer=false, isDeisy=false, isReadOnly=false, EMP=null, NOMBRE=null, CFG=null, flat=[], DEV_DB=null, USER_ACCESOS=[];
+let isGerencia=false, isIncidenciasViewer=false, isSociosViewer=false, isJaviSelf=false, isAdminViewer=false, isDeisy=false, isReadOnly=false, EMP=null, NOMBRE=null, CFG=null, flat=[], DEV_DB=null, USER_ACCESOS=[], NOTIF_INCID=0;
 
 function mxToday(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);}
 function mxNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
@@ -323,7 +324,7 @@ function buildMenu(){
     ]});
   }
   if(isIncidenciasViewer) M.push({grp:'Control', items:[
-    {t:'⚠ Incidencias', src:'/m/incidencias'},
+    {t:'⚠ Incidencias', src:'/m/incidencias', badge:NOTIF_INCID},
   ]});
   // --- Accesos por usuario (aditivo · configurable desde la consola de Accesos) ---
   const DASHMAP={
@@ -352,7 +353,7 @@ function render(M){
   const a=$('aside');
   a.innerHTML='<div class="brand">Grupo <b>Casa Pepe</b></div>'+M.map(g=>`
     <div class="grp"><div class="h">${g.grp}<span class="chev">▼</span></div>
-      <ul>${g.items.map(it=>`<li><a ${it.disabled?'class="disabled"':''} data-t="${it.t}" ${it.src?`data-src="${it.src}"`:''} ${it.action?`data-action="${it.action}"`:''}>${it.t}</a></li>`).join('')}</ul></div>`).join('');
+      <ul>${g.items.map(it=>`<li><a ${it.disabled?'class="disabled"':''} data-t="${it.t}" ${it.src?`data-src="${it.src}"`:''} ${it.action?`data-action="${it.action}"`:''}>${it.t}${it.badge?` <span class="nbadge">${it.badge}</span>`:''}</a></li>`).join('')}</ul></div>`).join('');
   a.querySelectorAll('.grp > .h').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('collapsed'));
   a.querySelectorAll('li a:not(.disabled)').forEach(el=>el.onclick=e=>{e.preventDefault();
     if(el.dataset.action==='horario'){openHorario();return}
@@ -479,6 +480,22 @@ async function start(){
   $('checsub').textContent='Marca tu llegada estando a ≤'+CFG.radio_m+' m de '+(CFG.lugar||'tu lugar de trabajo')+'.';
   if(isAdminViewer && $('cfgGear')) $('cfgGear').style.display='';
   try{const {data:acc}=await sb.from('accesos').select('pantalla,nivel').eq('email',(session.user.email||'').toLowerCase()).eq('app','dashboard');USER_ACCESOS=acc||[];}catch(e){USER_ACCESOS=[];}
+  if(isIncidenciasViewer){ try{
+    const _em=(session.user.email||'').toLowerCase();
+    const {data:_j}=await sb.from('org_jefes').select('area_key,jefe_email');
+    const _MY=(_j||[]).filter(x=>(x.jefe_email||'').toLowerCase()===_em).map(x=>x.area_key);
+    const _allA=['javi@casapepe.mx','hola.puebla@casapepe.mx'].includes(_em);
+    const _adm=['javi@casapepe.mx','hola.puebla@casapepe.mx','administracion@casapepe.mx','administracion.puebla@casapepe.mx','contabilidad@casapepe.mx'].includes(_em);
+    const {data:_e}=await sb.from('employees').select('id,area,sede'); const _EM={};(_e||[]).forEach(x=>_EM[x.id]=x);
+    const _ak=(a,s)=>{a=(a||'').toLowerCase();s=s||'';if(s==='Puebla')return'puebla';if(s==='Corp/Admin')return(a.includes('contab')||a.includes('tesor'))?'contabilidad':'direccion';if(a.includes('front')||a.includes('segur')||a.includes('prevenc'))return'front_cdmx';if(a.includes('recamar')||a.includes('housekeeping')||a.includes('cuartos')||a.includes('limpieza'))return'limpieza_cdmx';if(a.includes('experien'))return'sincretico';return'operativa';};
+    const _in=e=>(_allA||_adm)?true:_MY.includes(_ak(e.area,e.sede));
+    const _desde=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
+    const {data:_as}=await sb.from('asistencias').select('employee_id,requiere_validacion,validacion_estatus,validado_por,estatus,fecha').gte('fecha',_desde).or('requiere_validacion.eq.true,estatus.eq.retardo');
+    const _nA=(_as||[]).filter(r=>{if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;return _in(_EM[r.employee_id]||{});}).length;
+    const {data:_ic}=await sb.from('incidencias').select('employee_id,tipo,resuelto').eq('resuelto',false);
+    const _nI=(_ic||[]).filter(r=>{if(r.tipo==='validacion_asistencia')return false;if(r.tipo==='alta_colaborador')return _adm;return (_allA||_adm)?true:_in(_EM[r.employee_id]||{});}).length;
+    NOTIF_INCID=_nA+_nI;
+  }catch(e){console.warn('notif',e);} }
   const M=buildMenu(); render(M);
   if(isIncidenciasViewer) select('/m/incidencias','⚠ Incidencias','Control');
   else if(flat[0]&&flat[0].src) select(flat[0].src,flat[0].t,flat[0].grp); else openHorario();
