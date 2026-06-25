@@ -198,7 +198,7 @@ const ADMIN_VIEWERS=['javi@casapepe.mx','contabilidad@casapepe.mx','administraci
 const DEISY_EMAIL='hola.puebla@casapepe.mx';
 // Ven TODO el dashboard como Javi, pero en modo lectura: Roberto (contabilidad@) y admin Puebla (Claudia)
 const FULL_VIEWERS=['contabilidad@casapepe.mx','administracion.puebla@casapepe.mx'];
-let isGerencia=false, isIncidenciasViewer=false, isSociosViewer=false, isJaviSelf=false, isAdminViewer=false, isDeisy=false, isReadOnly=false, EMP=null, NOMBRE=null, CFG=null, flat=[], DEV_DB=null, USER_ACCESOS=[], NOTIF_INCID=0, DCATS=null;
+let isGerencia=false, isIncidenciasViewer=false, isSociosViewer=false, isJaviSelf=false, isAdminViewer=false, isDeisy=false, isReadOnly=false, EMP=null, NOMBRE=null, CFG=null, flat=[], DEV_DB=null, USER_ACCESOS=[], NOTIF_INCID=0, DCATS=null, UDEST='', CORPDEST=false;
 
 function mxToday(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);}
 function mxNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
@@ -486,13 +486,15 @@ async function start(){
   // Rol del usuario -> acceso/categorías de dashboard (roles_catalogo). Si no se resuelve, se mantiene el comportamiento actual.
   try{
     const _em=(session.user.email||'').toLowerCase();
-    const {data:_me}=await sb.from('employees').select('rol').ilike('email',_em).limit(1);
-    const _rol=_me&&_me[0]&&_me[0].rol;
+    const {data:_me}=await sb.from('employees').select('rol,rol_destino').ilike('email',_em).limit(1);
+    const _rol=_me&&_me[0]&&_me[0].rol; UDEST=(_me&&_me[0]&&_me[0].rol_destino)||'';
     if(_rol){
-      const {data:_rc}=await sb.from('roles_catalogo').select('dashboard_acceso,categorias_dashboard').eq('rol',_rol).maybeSingle();
+      const {data:_rc}=await sb.from('roles_catalogo').select('dashboard_acceso,categorias_dashboard,destinos,hereda_subordinados').eq('rol',_rol).maybeSingle();
       if(_rc){
         if(_rc.dashboard_acceso) isGerencia=true;
         DCATS=new Set(String(_rc.categorias_dashboard||'').split(',').map(s=>s.trim()).filter(Boolean));
+        if(DCATS.has('rh')) DCATS.add('horarios');
+        CORPDEST = !!_rc.hereda_subordinados || /^corp/i.test(String(_rc.destinos||''));
       }
     }
   }catch(e){ DCATS=null; }
@@ -514,8 +516,20 @@ async function start(){
   }catch(e){console.warn('notif',e);} }
   let M=buildMenu();
   if(DCATS && DCATS.size>0 && !isJaviSelf){
-    const GC={'Socios':'reporte_socios','RH':'rh','Revenue':'revenue','Experiencias':'experiencias','Control':'corp','Configuración':'corp'};
-    M=M.filter(g=> !GC[g.grp] || DCATS.has(GC[g.grp]));
+    const itemCat=(grp,t)=>{
+      if(grp==='Socios') return {c:'reporte_socios'};
+      if(grp==='RH') return {c:/horario/i.test(t)?'horarios':'rh'};
+      if(grp==='Revenue') return {c:'revenue', d:/puebla/i.test(t)?'Puebla':(/cdmx/i.test(t)?'CDMX':null)};
+      if(grp==='Experiencias') return {c:'experiencias'};
+      if(grp==='Control'||grp==='Configuración') return {c:'corp'};
+      return {c:null};
+    };
+    M=M.map(g=>({grp:g.grp, items:(g.items||[]).filter(it=>{
+      const ic=itemCat(g.grp,it.t);
+      if(ic.c && !DCATS.has(ic.c)) return false;
+      if(ic.d && !CORPDEST && UDEST && ic.d!==UDEST) return false;
+      return true;
+    })})).filter(g=>g.items.length);
   }
   render(M);
   if(isIncidenciasViewer) select('/m/incidencias','⚠ Incidencias','Control');
