@@ -71,6 +71,7 @@
   <div class="brand"><h1>🧮 Costeo de tours</h1><span class="spacer"></span><span class="who">Sesión de <b id="whoLbl">—</b></span></div>
   <div class="tabs">
     <button class="tab on" data-s="costeo">Costeo por tour</button>
+    <button class="tab" data-s="ficha">Ficha de venta</button>
     <button class="tab" data-s="prov">Proveedores</button>
   </div>
 </header>
@@ -82,6 +83,13 @@
     <table id="lines"><thead><tr><th>Concepto</th><th>Categoría</th><th style="width:70px">Cantidad</th><th style="width:90px">Costo unit.</th><th style="width:160px">Tipo</th><th style="width:95px">Total unit.</th><th style="width:105px">Total grupo</th><th></th></tr></thead><tbody></tbody></table>
     <div class="muted" style="margin-top:6px"><b style="color:var(--blue)">Azul = editable</b> · <b style="color:var(--gold2)">dorado = fórmula (auto)</b>. Variable = por cliente · Fijo = por grupo (se reparte entre el aforo). Total unit. = costo por pax · Total grupo = costo de toda la salida.</div>
     <div class="calc" id="calc"></div>
+  </section>
+  <section class="sec" id="sec-ficha">
+    <div class="hd"><div><label>Tour</label><select id="fTourSel"></select></div>
+      <div style="display:flex;gap:6px"><button class="btn ghost sm" id="fShare">🔗 Compartir</button><button class="btn ghost sm" id="fDownload">⬇ Descargar</button></div></div>
+    <div class="muted" style="margin-top:6px">Ficha comercial estilo Airbnb / GetYourGuide / Fever. Cada campo indica <b style="color:var(--gold2)">(Turitop: …)</b> para copiarlo al lugar correcto del panel de Turitop. Edita aquí y se guarda solo. Abajo, la vista de venta.</div>
+    <div id="fichaEdit"></div>
+    <div id="fichaPrev"></div>
   </section>
   <section class="sec" id="sec-prov">
     <div class="hd"><input type="search" id="qprov" placeholder="Buscar proveedor…" style="min-width:220px"><button class="btn sm" id="addProv">+ Proveedor</button></div><div class="muted" style="margin-top:6px">Solo proveedores de touroperación / experiencias. Los contables de Casa Pepe no se muestran aquí.</div>
@@ -104,7 +112,7 @@ let tt;function toast(m,ok=true){const t=$('toast');t.textContent=m;t.style.back
 EDITORS.forEach(n=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>{WHO=n;localStorage.setItem('cpp_who',n);openApp();};$('who').appendChild(b);});
 function openApp(){$('gate').style.display='none';$('whoLbl').textContent=WHO;load();}
 if(WHO)openApp();
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));document.querySelectorAll('.sec').forEach(x=>x.classList.toggle('on',x.id==='sec-'+t.dataset.s));});
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));document.querySelectorAll('.sec').forEach(x=>x.classList.toggle('on',x.id==='sec-'+t.dataset.s));if(t.dataset.s==='ficha')initFicha();});
 
 async function load(){
   const [t,p]=await Promise.all([
@@ -283,6 +291,53 @@ function renderProv(){
 }
 $('qprov').oninput=renderProv;
 $('addProv').onclick=async()=>{const nombre=prompt('Nombre del proveedor:');if(!nombre)return;const {data,error}=await sb.from('proveedores').insert({nombre,categoria:'Touroperación / Experiencias',es_experiencia:true}).select().single();if(error)return toast('Error: '+error.message,false);PROV.unshift(data);renderProv();};
+
+// ---- Ficha de venta ----
+let FT=null;
+const TMAP={nombre:'Nombre del servicio',storytelling:'Descripción / Descripción corta',incluye:'Qué incluye',no_incluye:'Qué NO incluye',duracion_min:'Duración del evento',lugar_inicio:'Punto de encuentro / recogida',personas_max:'Capacidad / asientos (máx)',grupo_minimo:'(grupo mínimo · interno)',pvp:'Tickets / Tarifa',fechas_salida:'Horarios del tour',idiomas:'Idiomas del servicio',politica_cancelacion:'Política de cancelación',info_importante:'Información adicional / Qué llevar',elemento_gastronomico:'(va en Descripción / Incluye)',tangible_souvenir:'(va en Descripción / Incluye)'};
+const FF=[['nombre','Título'],['storytelling','Gancho / descripción'],['incluye','Qué incluye'],['no_incluye','Qué NO incluye'],['duracion_min','Duración (min)','num'],['lugar_inicio','Punto de encuentro'],['personas_max','Capacidad máx','num'],['grupo_minimo','Grupo mínimo','num'],['pvp','Precio PVP','num'],['fechas_salida','Días / horarios de salida'],['idiomas','Idiomas'],['politica_cancelacion','Política de cancelación'],['info_importante','Info importante / qué llevar'],['elemento_gastronomico','Gastronomía'],['tangible_souvenir','Souvenir']];
+const LONG=['storytelling','incluye','no_incluye','info_importante','politica_cancelacion','fechas_salida','lugar_inicio'];
+function initFicha(){
+  $('fTourSel').innerHTML=TOURS.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('');
+  $('fTourSel').onchange=()=>selFicha($('fTourSel').value);
+  const cur=(T&&T.id)||(TOURS[0]&&TOURS[0].id);
+  if(cur){$('fTourSel').value=cur;selFicha(cur);}
+}
+async function selFicha(id){
+  let t=TOURS.find(x=>x.id===id);if(!t)return;
+  if(!t._full){const {data}=await sb.from('tours').select('*').eq('id',id).maybeSingle();if(data)Object.assign(t,data);t._full=true;}
+  FT=t;renderFicha();
+}
+function renderFicha(){
+  const t=FT;if(!t){$('fichaEdit').innerHTML='';$('fichaPrev').innerHTML='';return;}
+  $('fichaEdit').innerHTML='<div class="card">'+FF.map(([k,lbl,typ])=>{
+    const tm=TMAP[k]?` <span style="color:var(--gold2);font-size:10px">· Turitop: ${esc(TMAP[k])}</span>`:'';
+    const inp= typ==='num'?`<input type="number" data-fk="${k}" value="${t[k]??''}">`:(LONG.includes(k)?`<textarea data-fk="${k}" rows="2">${esc(t[k])}</textarea>`:`<input data-fk="${k}" value="${esc(t[k])}">`);
+    return `<div class="fg" style="margin:8px 0"><label>${lbl}${tm}</label>${inp}</div>`;
+  }).join('')+'</div>';
+  $('fichaEdit').querySelectorAll('[data-fk]').forEach(el=>el.onchange=async()=>{const k=el.dataset.fk;const v=el.type==='number'?(el.value===''?null:+el.value):(el.value||null);t[k]=v;const {error}=await sb.from('tours').update({[k]:v}).eq('id',t.id);if(error)toast('Error: '+error.message,false);else toast('Guardado');renderPrev();});
+  renderPrev();
+}
+function renderPrev(){
+  const t=FT;if(!t)return;
+  const dur=t.duracion_min?(Math.round(t.duracion_min/60*10)/10+' h'):'';
+  const li=s=>(s||'').split(/[·\n;]+/).map(x=>x.trim()).filter(Boolean).map(x=>'<li>'+esc(x)+'</li>').join('');
+  $('fichaPrev').innerHTML=`<div class="muted" style="margin:14px 0 4px">Vista de venta</div><div id="ventaCard" style="background:#fff;color:#1a1a1a;border-radius:12px;padding:24px;max-width:760px">
+    <div style="font-size:11px;color:#b8860b;font-weight:700;letter-spacing:1.5px">CASA PEPE · SINCRÉTICO</div>
+    <h2 style="margin:4px 0;color:#7a5a1e;font-size:22px">${esc(t.nombre)}</h2>
+    <p style="color:#444;font-style:italic;margin:4px 0 10px">${esc(t.storytelling)}</p>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;color:#555;font-size:13px;margin:8px 0">${dur?`<span>⏱ ${dur}</span>`:''}${t.lugar_inicio?`<span>📍 ${esc((t.lugar_inicio||'').split('·')[0])}</span>`:''}${t.personas_max?`<span>👥 hasta ${t.personas_max}</span>`:''}${t.idiomas?`<span>🗣 ${esc(t.idiomas)}</span>`:''}</div>
+    ${t.fechas_salida?`<div style="color:#555;font-size:13px;margin:2px 0">📅 ${esc(t.fechas_salida)}</div>`:''}
+    ${t.pvp?`<div style="font-size:21px;font-weight:800;color:#1a7a3a;margin:8px 0">$${t.pvp} MXN <span style="font-size:12px;font-weight:400;color:#777">por persona</span></div>`:''}
+    ${t.incluye?`<h3 style="color:#3a2c12;font-size:14px;margin:14px 0 4px;border-bottom:1px solid #eee;padding-bottom:3px">Qué incluye</h3><ul style="margin:4px 0;padding-left:18px">${li(t.incluye)}</ul>`:''}
+    ${t.no_incluye?`<h3 style="color:#3a2c12;font-size:14px;margin:14px 0 4px;border-bottom:1px solid #eee;padding-bottom:3px">Qué no incluye</h3><ul style="margin:4px 0;padding-left:18px">${li(t.no_incluye)}</ul>`:''}
+    ${t.info_importante?`<h3 style="color:#3a2c12;font-size:14px;margin:14px 0 4px;border-bottom:1px solid #eee;padding-bottom:3px">Información importante</h3><p style="color:#555;margin:4px 0">${esc(t.info_importante)}</p>`:''}
+    ${t.politica_cancelacion?`<h3 style="color:#3a2c12;font-size:14px;margin:14px 0 4px;border-bottom:1px solid #eee;padding-bottom:3px">Cancelación</h3><p style="color:#555;margin:4px 0">${esc(t.politica_cancelacion)}</p>`:''}
+    <div style="margin-top:16px;color:#999;font-size:11px">Reserva en Casa Pepe · Sincrético — How to be a Mexican</div>
+  </div>`;
+}
+$('fShare').onclick=async()=>{const t=FT;if(!t)return;const txt=t.nombre+'\n'+(t.storytelling||'')+(t.pvp?('\n$'+t.pvp+' MXN por persona'):'')+(t.fechas_salida?('\n📅 '+t.fechas_salida):'');try{if(navigator.share){await navigator.share({title:t.nombre,text:txt});}else{await navigator.clipboard.writeText(txt);toast('Ficha copiada al portapapeles');}}catch(e){}};
+$('fDownload').onclick=()=>{const c=$('ventaCard');if(!c||!FT)return;const w=window.open('','_blank');if(!w)return toast('Permite ventanas emergentes para descargar',false);w.document.write('<html><head><meta charset="utf-8"><title>Ficha · '+esc(FT.nombre)+'</title></head><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f0e8;padding:20px">'+c.outerHTML+'</body></html>');w.document.close();w.focus();setTimeout(()=>w.print(),350);};
 </script>
 </body>
 </html>
