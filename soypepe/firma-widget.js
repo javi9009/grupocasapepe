@@ -43,12 +43,31 @@
     return true;
   }
 
+  // Botón "Borrar todas" en el panel de Notificaciones (RLS limita a las propias)
+  function injectNotifDelete(sb){
+    if(document.getElementById('notifDelAll')) return true;
+    var hdr=null, hs=document.querySelectorAll('h1,h2,h3');
+    for(var i=0;i<hs.length;i++){ var t=(hs[i].textContent||'').trim().toLowerCase(); if(t==='notificaciones'&&hs[i].offsetParent!==null){ hdr=hs[i]; break; } }
+    if(!hdr) return false;
+    var b=document.createElement('button');
+    b.id='notifDelAll'; b.type='button'; b.textContent='🗑 Borrar todas';
+    b.style.cssText='margin:8px 0;background:#fff;color:#b03434;border:1px solid #e7c3b6;border-radius:10px;padding:8px 12px;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer';
+    b.onclick=function(){
+      if(!window.confirm('¿Borrar todas tus notificaciones?')) return;
+      b.disabled=true; b.textContent='Borrando…';
+      sb.from('notificaciones').delete().not('id','is',null).then(function(){ location.reload(); }).catch(function(){ b.disabled=false; b.textContent='🗑 Borrar todas'; });
+    };
+    hdr.parentNode.insertBefore(b, hdr.nextSibling);
+    return true;
+  }
   function run(){
     ensureSb(function(){
       if(!window.supabase||!window.supabase.createClient) return;
       var sb=window.supabase.createClient(SBURL,ANON);
       sb.auth.getSession().then(function(r){
         var session=r&&r.data&&r.data.session; if(!session) return;
+        // poller siempre activo para el botón de borrar notificaciones
+        var t2=0, iv2=setInterval(function(){ injectNotifDelete(sb); if(++t2>180) clearInterval(iv2); },1000);
         sb.auth.getUser().then(function(u){
           var uid=u&&u.data&&u.data.user&&u.data.user.id; if(!uid) return;
           sb.from('employees').select('id').eq('user_id',uid).limit(1).then(function(er){
