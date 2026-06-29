@@ -184,6 +184,8 @@ function App() {
   const [mode, setMode] = useState(null);
   const [activeCat, setActiveCat] = useState(null);
   const [opponent, setOpponent] = useState(null);
+  const [activeReto, setActiveReto] = useState(null);
+  const [retos, setRetos] = useState([]);
   const [lastResult, setLastResult] = useState(null);
   // progreso onboarding: { [userId]: { [catId]: {best, estado} } }
   const [progress, setProgress] = useState({});
@@ -260,9 +262,7 @@ function App() {
     setActiveCat(cat);
     setScreen(mode === "gym" ? "gym" : "duelselect");
   };
-  const onOppChosen = (opp) => { setOpponent(opp);
-    try { if (opp && /^[0-9a-f-]{36}$/i.test(opp.id)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: opp.id, titulo: "\u2694\uFE0F Te retaron en PepeQuiz", cuerpo: ((me && me.nombre) || "Alguien") + " te ret\u00f3 en " + ((activeCat && activeCat.nombre) || "PepeQuiz") + ". \u00a1Entra a responder!", icono: "\u2694\uFE0F" }) }); } catch (e) {}
-    setScreen("duel"); };
+  const onOppChosen = (opp) => { setOpponent(opp); setActiveReto(null); setScreen("duel"); };
 
   const finishGym = (earned, correctCount, qs, answers) => {
     updateMe({ walletHist: me.walletHist + earned, walletMes: me.walletMes + earned });
@@ -282,27 +282,50 @@ function App() {
     setScreen("result");
   };
 
-  const finishDuel = (myScore, oppScore) => {
-    const won = myScore > oppScore, tie = myScore === oppScore;
-    const diff = Math.abs(myScore - oppScore); // margen del marcador
-    // Cada quien suma SOLO lo que logró en su test.
-    // Además, el PERDEDOR pierde la diferencia de su cartera. El ganador NO la recibe.
-    let myDelta = myScore;
-    let oppDelta = oppScore;
-    if (won) {
-      oppDelta -= diff;  // el rival (perdedor) pierde la diferencia
-    } else if (!tie) {
-      myDelta -= diff;   // tú (perdedor) pierdes la diferencia
+  const loadRetos = async () => {
+    if (!meId) return;
+    try { const r = await fetch(SBU + "/rest/v1/pq_retos?select=*&usuario_b=eq." + meId + "&estado=eq.esperando_b&order=creado.desc", { headers: SBH }).then(x => x.json()); setRetos(Array.isArray(r) ? r : []); } catch (e) { setRetos([]); }
+  };
+  useEffect(() => { loadRetos(); /* eslint-disable-next-line */ }, [meId]);
+
+  const retoCat = (r) => CATEGORIES.find((c) => c.id === r.categoria_id) || { id: r.categoria_id, name: r.cat_nombre || "Reto", color: "#E9B44C", emoji: "\u2694\uFE0F" };
+  const applyPts = (eid, delta) => {
+    if (!eid || !/^[0-9a-f-]{36}$/i.test(eid)) return;
+    const u = users.find((x) => x.id === eid);
+    const nh = Math.max(0, ((u ? u.walletHist : 0) || 0) + delta);
+    const nm = Math.max(0, ((u ? u.walletMes : 0) || 0) + delta);
+    try { fetch(SBU + "/rest/v1/pq_puntos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ employee_id: eid, pts_hist: nh, pts_mes: nm, updated_at: new Date().toISOString() }) }); } catch (e) {}
+    setUsers((us) => us.map((x) => x.id === eid ? { ...x, walletHist: nh, walletMes: nm } : x));
+  };
+  const notifBoth = (e1, e2, titulo, cuerpo) => {
+    [e1, e2].forEach((eid) => { if (eid && /^[0-9a-f-]{36}$/i.test(eid)) { try { fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: eid, titulo, cuerpo, icono: "\u2694\uFE0F" }) }); } catch (e) {} } });
+  };
+
+  // Una sola pantalla de juego (DuelGame) sirve para A (crear) y B (responder).
+  const finishDuelPlay = async (score, qs, answers) => {
+    if (activeReto) {
+      // B responde el reto con las MISMAS preguntas
+      const r = activeReto;
+      const a = r.score_a || 0, b = score;
+      const diff = Math.abs(a - b);
+      const ganador = b > a ? meId : (a > b ? r.usuario_a : null);
+      let dA = a, dB = b;
+      if (b > a) dA -= diff; else if (a > b) dB -= diff;
+      try { await fetch(SBU + "/rest/v1/pq_retos?id=eq." + r.id, { method: "PATCH", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ score_b: b, ganador, diferencia: diff, estado: "resuelto", resuelto_en: new Date().toISOString() }) }); } catch (e) {}
+      applyPts(r.usuario_a, dA); applyPts(meId, dB);
+      const res = (r.a_nombre || "Rival") + " " + a + "  vs  " + ((me && me.nombre) || "T\u00fa") + " " + b + "  \u00b7  " + (ganador === null ? "empate" : (ganador === meId ? ("gan\u00f3 " + ((me && me.nombre) || "t\u00fa")) : ("gan\u00f3 " + (r.a_nombre || "rival"))));
+      notifBoth(r.usuario_a, meId, "\u2694\uFE0F Resultado de reto", res);
+      setActiveReto(null); loadRetos();
+      alert("Resultado del reto:\n\n" + res);
+      setScreen("home");
+    } else {
+      // A crea el reto con estas preguntas (no se aplican puntos hasta que B responda)
+      const opp = opponent;
+      try { await fetch(SBU + "/rest/v1/pq_retos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ categoria_id: activeCat.id, test: qs, usuario_a: meId, usuario_b: opp && opp.id, score_a: score, estado: "esperando_b", a_nombre: (me && me.nombre) || "T\u00fa", b_nombre: (opp && opp.nombre) || "", cat_nombre: activeCat.name }) }); } catch (e) {}
+      try { if (opp && /^[0-9a-f-]{36}$/i.test(opp.id)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: opp.id, titulo: "\u2694\uFE0F Te retaron en PepeQuiz", cuerpo: ((me && me.nombre) || "Alguien") + " te ret\u00f3 en " + activeCat.name + ". Responde las MISMAS preguntas.", icono: "\u2694\uFE0F" }) }); } catch (e) {}
+      alert("\u00a1Reto enviado a " + ((opp && opp.nombre) || "tu rival") + "! \ud83c\udfc6\nTu marcador: " + score + " pts.\nCuando responda las mismas preguntas, se comparan y se aplican los puntos.");
+      setScreen("home");
     }
-    // Reta PvP: los puntos NO se aplican hasta que el rival responda de verdad. Por ahora la Reta es practica (no acredita puntos).
-    try {
-      const _r = ((me && me.nombre) || "T\u00fa") + " " + myScore + " vs " + ((opponent && opponent.nombre) || "rival") + " " + oppScore + " \u00b7 " + (won ? ("gan\u00f3 " + ((me && me.nombre) || "t\u00fa")) : (tie ? "empate" : ("gan\u00f3 " + ((opponent && opponent.nombre) || "rival"))));
-      const _n = (eid) => { if (eid && /^[0-9a-f-]{36}$/i.test(eid)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: eid, titulo: "\u2694\uFE0F Resultado de reto", cuerpo: _r, icono: "\u2694\uFE0F" }) }); };
-      _n(opponent && opponent.id); _n(meId);
-    } catch (e) {}
-    // (sin cambios de cartera en Reta hasta el flujo PvP real)
-    setLastResult({ mode: "duel", myScore, oppScore, won, tie, diff, myDelta, opp: opponent });
-    setScreen("result");
   };
 
   return (
@@ -313,7 +336,7 @@ function App() {
         <div style={S.body}>
           {(screen === "loading") && <div style={{padding:"48px 20px",textAlign:"center",color:"#a99a82"}}>Cargando tu perfil\u2026</div>}
           {(screen === "noauth") && <div style={{padding:"48px 20px",textAlign:"center",color:"#a99a82"}}>Inicia sesi\u00f3n en SoyPepe para jugar PepeQuiz.</div>}
-          {screen === "home" && <Home me={me} pendientes={pendientes} obligatorios={obligatorios}
+          {screen === "home" && <Home me={me} pendientes={pendientes} obligatorios={obligatorios} retosN={retos.length} onRetos={() => { loadRetos(); setScreen("retospend"); }}
             onGym={startGym} onDuel={startDuel} onRank={() => setScreen("rank")} onPrueba={() => setScreen("prueba")} onAdmin={() => setScreen("admin")} />}
           {screen === "prueba" && <Prueba me={me} obligatorios={obligatorios} prog={myProg}
             onTrain={(catId) => { setMode("gym"); setActiveCat(CATEGORIES.find((c) => c.id === catId)); setScreen("gym"); }} />}
@@ -322,7 +345,8 @@ function App() {
           {screen === "catselect" && <CatSelect mode={mode} obligatorios={obligatorios} prog={myProg} onPick={onCatChosen} />}
           {screen === "gym" && <GymGame cat={activeCat} isObl={obligatorios.includes(activeCat.id)} onFinish={finishGym} />}
           {screen === "duelselect" && <DuelSelect me={me} users={users} onPick={onOppChosen} />}
-          {screen === "duel" && <DuelGame cat={activeCat} opponent={opponent} onFinish={finishDuel} />}
+          {screen === "duel" && <DuelGame cat={activeReto ? retoCat(activeReto) : activeCat} qs={activeReto ? activeReto.test : null} onFinish={finishDuelPlay} />}
+          {screen === "retospend" && <RetosPend retos={retos} onPick={(r) => { setActiveReto(r); setScreen("duel"); }} onBack={() => setScreen("home")} />}
           {screen === "result" && <Result res={lastResult} onAgain={() => setScreen("home")} onReview={() => setScreen("review")} />}
           {screen === "review" && <Review res={lastResult} onBack={() => setScreen("result")} onHome={() => setScreen("home")} />}
         </div>
@@ -377,7 +401,7 @@ function Login({ users, onPick }) {
 }
 
 /* ===================== HOME ===================== */
-function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin }) {
+function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin, retosN, onRetos }) {
   return (
     <div style={S.screen}>
       <div style={S.heroWrap}>
@@ -409,8 +433,19 @@ function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, o
         <div style={S.bigArrow}>→</div>
       </button>
 
+      {retosN > 0 && (
+        <button style={S.pruebaBanner} onClick={onRetos}>
+          <div style={{ fontSize: 22 }}>⚔️</div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <div style={{ fontWeight: 800 }}>Tienes {retosN} reto{retosN > 1 ? "s" : ""} por responder</div>
+            <div style={S.bannerSub}>Responde las mismas preguntas y compite</div>
+          </div>
+          <div style={S.bigArrow}>→</div>
+        </button>
+      )}
       <div style={S.homeRow}>
         <button style={S.smallBtn} onClick={onRank}>🏆 Ranking del mes</button>
+        <button style={S.smallBtn} onClick={onRetos}>⚔️ Retos{retosN > 0 ? ` (${retosN})` : ""}</button>
         <button style={S.smallBtn} onClick={onAdmin}>📊 Equipo</button>
       </div>
     </div>
@@ -564,17 +599,15 @@ function DuelSelect({ me, users, onPick }) {
 }
 
 /* ===================== DUEL GAME ===================== */
-function DuelGame({ cat, opponent, onFinish }) {
-  const [qs] = useState(() => pickQuestions(cat.id, DUEL_QS));
+function DuelGame({ cat, qs: qsProp, onFinish }) {
+  const [qs] = useState(() => (qsProp && qsProp.length) ? qsProp : pickQuestions(cat.id, DUEL_QS));
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [my, setMy] = useState(0);
-  const [opp, setOpp] = useState(0);
   const [tLeft, setTLeft] = useState(DUEL_WINDOW);
   const [pop, setPop] = useState(null);
-  const [oppPop, setOppPop] = useState(null);
   const timer = useRef(null);
-  const skill = BOT_SKILL[opponent.id] ?? 0.78;
+  const answers = useRef([]);
 
   useEffect(() => {
     setTLeft(DUEL_WINDOW);
@@ -591,27 +624,50 @@ function DuelGame({ cat, opponent, onFinish }) {
     const elapsed = elapsedOv !== undefined ? elapsedOv : DUEL_WINDOW - tLeft;
     const ok = choice === qs[idx].a;
     const myPts = ok ? duelPts(elapsed) : 0;
-    const oppOk = Math.random() < skill;
-    const oPts = oppOk ? duelPts(1.5 + Math.random() * 5) : 0;
-    setPicked(choice); setMy((s) => s + myPts); setOpp((s) => s + oPts);
-    setPop(ok ? `+${myPts}` : "✗"); setOppPop(oppOk ? `+${oPts}` : "✗");
+    answers.current[idx] = { picked: choice };
+    setPicked(choice); setMy((s) => s + myPts);
+    setPop(ok ? `+${myPts}` : "\u2717");
     setTimeout(() => {
-      setPop(null); setOppPop(null);
+      setPop(null);
       if (idx + 1 < qs.length) { setIdx(idx + 1); setPicked(null); }
-      else onFinish(my + myPts, opp + oPts);
-    }, 1250);
+      else onFinish(my + myPts, qs, answers.current);
+    }, 1100);
   };
 
   const cur = qs[idx];
   return (
     <div style={S.screen}>
-      <div style={S.versusRow}>
-        <PlayerChip avatar="🙋" name="Tú" score={my} pop={pop} side="left" color={cat.color} />
-        <div style={S.vsCenter}><TimerRing ratio={tLeft / DUEL_WINDOW} color="#E9B44C" label={Math.ceil(tLeft)} /><div style={S.vsTxt}>VS</div></div>
-        <PlayerChip avatar={opponent.avatar} empId={opponent.id} name={opponent.nombre} score={opp} pop={oppPop} side="right" color="#3E7CB1" />
-      </div>
-      <GameHeader cat={cat} idx={idx} total={qs.length} compact />
+      <GameHeader cat={cat} idx={idx} total={qs.length} right={<TimerRing ratio={tLeft / DUEL_WINDOW} color="#E9B44C" label={Math.ceil(tLeft)} />} />
+      <div style={S.oblNote}>\u2694\uFE0F Reto \u00b7 7s por pregunta \u00b7 mismas preguntas para ambos</div>
+      <div style={S.scoreRow}><span style={S.muted}>Tu marcador</span><strong style={{ color: "#E9B44C" }}>{my} pts</strong></div>
       <QuestionCard cur={cur} picked={picked} onPick={(i) => resolve(i)} color={cat.color} />
+      {pop && <Pop txt={pop} good={pop[0] === "+"} />}
+    </div>
+  );
+}
+
+function RetosPend({ retos, onPick, onBack }) {
+  return (
+    <div style={S.screen}>
+      <h2 style={S.h2}>\u2694\uFE0F Retos pendientes</h2>
+      <p style={S.muted}>Responde las MISMAS preguntas con las que te retaron \u2014 as\u00ed se compara el desempe\u00f1o.</p>
+      {(!retos || !retos.length) ? (
+        <div style={{ textAlign: "center", color: "#a99a82", padding: 34 }}>No tienes retos por responder \ud83c\udf89</div>
+      ) : (
+        <div style={S.oppList}>
+          {retos.map((r) => (
+            <button key={r.id} style={S.oppCard} onClick={() => onPick(r)}>
+              <div style={S.oppAvatar}>\u2694\uFE0F</div>
+              <div style={{ flex: 1, textAlign: "left" }}>
+                <div style={S.oppName}>{(r.a_nombre || "Alguien")} te ret\u00f3</div>
+                <div style={S.oppMeta}>{(r.cat_nombre || "")} \u00b7 su marcador: {r.score_a || 0}</div>
+              </div>
+              <div style={S.oppGo}>Responder</div>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 16 }}><button style={S.smallBtn} onClick={onBack}>\u2190 Volver</button></div>
     </div>
   );
 }
