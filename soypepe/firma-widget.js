@@ -43,22 +43,58 @@
     return true;
   }
 
-  // Botón "Borrar todas" en el panel de Notificaciones (RLS limita a las propias)
-  function injectNotifDelete(sb){
-    if(document.getElementById('notifDelAll')) return true;
-    var hdr=null, hs=document.querySelectorAll('h1,h2,h3');
-    for(var i=0;i<hs.length;i++){ var t=(hs[i].textContent||'').trim().toLowerCase(); if(t==='notificaciones'&&hs[i].offsetParent!==null){ hdr=hs[i]; break; } }
-    if(!hdr) return false;
-    var b=document.createElement('button');
-    b.id='notifDelAll'; b.type='button'; b.textContent='🗑 Borrar todas';
-    b.style.cssText='margin:8px 0;background:#fff;color:#b03434;border:1px solid #e7c3b6;border-radius:10px;padding:8px 12px;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer';
-    b.onclick=function(){
-      if(!window.confirm('¿Borrar todas tus notificaciones?')) return;
-      b.disabled=true; b.textContent='Borrando…';
-      sb.from('notificaciones').delete().not('id','is',null).then(function(){ location.reload(); }).catch(function(){ b.disabled=false; b.textContent='🗑 Borrar todas'; });
-    };
-    hdr.parentNode.insertBefore(b, hdr.nextSibling);
+  function esc(s){ return (''+(s==null?'':s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // Renombrar la pestaña "Academia" -> "PepeQuiz" con tipografía Clarendon
+  function renameTab(){
+    var b=document.querySelector('[data-tab="academia"]');
+    if(b && b.textContent.trim().toLowerCase()==='academia'){
+      b.textContent='PepeQuiz';
+      b.style.fontFamily="'Clarendon','Roboto Slab',Georgia,serif";
+    }
+  }
+
+  // Toma el panel de Notificaciones y renderiza la lista propia con borrado por-notificación.
+  function takeoverNotifs(sb){
+    if(document.getElementById('myNotifWrap')) return true;
+    var hs=document.querySelectorAll('h1,h2,h3'), h=null;
+    for(var i=0;i<hs.length;i++){ if((hs[i].textContent||'').trim().toLowerCase()==='notificaciones' && hs[i].offsetParent!==null){ h=hs[i]; break; } }
+    if(!h) return false;
+    // ocultar la lista original del portal (hermanos posteriores al título)
+    var sib=h.nextElementSibling;
+    while(sib){ sib.style.display='none'; sib=sib.nextElementSibling; }
+    var wrap=document.createElement('div'); wrap.id='myNotifWrap'; wrap.style.cssText='margin-top:8px';
+    h.parentNode.insertBefore(wrap, h.nextSibling);
+    renderMyNotifs(sb, wrap);
     return true;
+  }
+  function renderMyNotifs(sb, wrap){
+    wrap.innerHTML='<div style="font-size:12px;color:#9a8c85;margin-bottom:6px">Tus avisos de Casa Pepe</div><div style="text-align:center;color:#9a8c85;padding:12px">Cargando…</div>';
+    sb.from('notificaciones').select('id,titulo,cuerpo,icono,leido,created_at').order('created_at',{ascending:false}).then(function(r){
+      var data=(r&&r.data)||[];
+      var head='<div style="font-size:12px;color:#9a8c85;margin-bottom:6px">Tus avisos de Casa Pepe</div>';
+      if(!data.length){ wrap.innerHTML=head+'<div style="text-align:center;color:#9a8c85;padding:18px">No tienes notificaciones. 🔕</div>'; return; }
+      var html=head;
+      data.forEach(function(n){
+        html+='<div data-nid="'+n.id+'" style="display:flex;gap:10px;align-items:flex-start;padding:10px 2px;border-bottom:1px solid rgba(0,0,0,.08)">'
+          +'<span style="font-size:18px;line-height:1.3">'+(n.icono||'🔔')+'</span>'
+          +'<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px">'+esc(n.titulo||'')+'</div>'
+          +'<div style="font-size:13px;opacity:.8">'+esc(n.cuerpo||'')+'</div>'
+          +'<div style="font-size:11px;opacity:.55;margin-top:2px">'+new Date(n.created_at).toLocaleString('es-MX')+'</div></div>'
+          +'<button data-del="'+n.id+'" title="Borrar" style="background:none;border:none;color:#b03434;font-size:20px;line-height:1;cursor:pointer;padding:0 4px">×</button>'
+        +'</div>';
+      });
+      wrap.innerHTML=html;
+      [].slice.call(wrap.querySelectorAll('[data-del]')).forEach(function(btn){
+        btn.onclick=function(){
+          var id=btn.getAttribute('data-del'); btn.disabled=true; btn.textContent='…';
+          sb.from('notificaciones').delete().eq('id',id).then(function(){
+            var row=wrap.querySelector('[data-nid="'+id+'"]'); if(row) row.parentNode.removeChild(row);
+            if(!wrap.querySelector('[data-nid]')) wrap.innerHTML=head+'<div style="text-align:center;color:#9a8c85;padding:18px">No tienes notificaciones. 🔕</div>';
+          }).catch(function(){ btn.disabled=false; btn.textContent='×'; });
+        };
+      });
+    });
   }
   function run(){
     ensureSb(function(){
@@ -66,8 +102,8 @@
       var sb=window.supabase.createClient(SBURL,ANON);
       sb.auth.getSession().then(function(r){
         var session=r&&r.data&&r.data.session; if(!session) return;
-        // poller siempre activo para el botón de borrar notificaciones
-        var t2=0, iv2=setInterval(function(){ injectNotifDelete(sb); if(++t2>180) clearInterval(iv2); },1000);
+        // poller siempre activo: renombrar pestaña + tomar el panel de notificaciones (borrado por-notificación)
+        var t2=0, iv2=setInterval(function(){ renameTab(); takeoverNotifs(sb); if(++t2>600) clearInterval(iv2); },1000);
         sb.auth.getUser().then(function(u){
           var uid=u&&u.data&&u.data.user&&u.data.user.id; if(!uid) return;
           sb.from('employees').select('id').eq('user_id',uid).limit(1).then(function(er){
