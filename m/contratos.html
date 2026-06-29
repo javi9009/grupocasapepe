@@ -59,10 +59,11 @@ textarea{min-height:54px;resize:vertical}
 <div class="grid">
 <div><label>Colaborador</label><input id="f_nom" readonly></div>
 <div><label>Fecha de inicio de labores *</label><input id="f_inicio" type="date"></div>
-<div><label>Rol / Puesto *</label><input id="f_rol"></div>
+<div><label>Rol / Puesto *</label><select id="f_rol"><option value="">— elige del tabulador —</option></select></div>
 <div><label>Categoría *</label><select id="f_cat" onchange="calcVig()"><option value="operativo">Operativo (prueba 3×1 mes)</option><option value="confianza">Confianza (prueba 2×3 meses)</option></select></div>
 <div><label>Ubicación</label><select id="f_ubic"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
 <div><label>Salario bruto mensual (MXN) *</label><input id="f_sal" type="number" step="0.01"></div>
+<div><label>Edad</label><input id="f_edad" type="number" min="16" max="90"></div>
 <div><label>Bono de puntualidad 10%</label><select id="f_bono"><option value="no">No</option><option value="si">Sí</option></select></div>
 <div class="full"><label>Bonos / complementos adicionales</label><input id="f_bonos" placeholder="Ej. comisión de ventas tours 5%, propinas…"></div>
 <div class="full"><label>Horario</label><input id="f_horario" placeholder="Ej. Lun–Sáb 07:00–15:00, descansa domingo"></div>
@@ -78,7 +79,7 @@ textarea{min-height:54px;resize:vertical}
 </div>
 </div>
 
-<div id="ov"><div class="ovbar"><button class="btn" onclick="window.print()">🖨 Imprimir / PDF</button><button class="btn ghost" onclick="document.getElementById('ov').classList.remove('show')">Cerrar</button></div><div id="doc"></div></div>
+<div id="ov"><div class="ovbar"><span id="ovHint" style="flex:1;align-self:center;font-size:12px;color:#f4ecdd"></span><button class="btn" id="ovPrint" onclick="window.print()">🖨 PDF</button><button class="btn" id="ovFirma" style="display:none" onclick="firmarPatron()">✍️ Firmar (patrón)</button><button class="btn" id="ovSend" style="display:none" onclick="enviarContrato()">📤 Enviar al trabajador</button><button class="btn ghost" onclick="document.getElementById('ov').classList.remove('show')">Cerrar</button></div><div id="doc"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -102,16 +103,16 @@ function fillMachote(e,c){
   const bonosTxt=((c.bonos&&((c.bonos.puntualidad?'Bono de puntualidad del 10%':'')+(c.bonos.otros?((c.bonos.puntualidad?'; ':'')+c.bonos.otros):'')))||'N/A');
   const map={
     trabajador_nombre:e.nombre||'', trabajador_apellido:e.apellido||'',
-    trabajador_nacionalidad:e.nacionalidad||'mexicana', trabajador_edad:edadDe(e.fecha_nacimiento),
+    trabajador_nacionalidad:e.nacionalidad||'mexicana', trabajador_edad:(c.edad||edadDe(e.fecha_nacimiento)),
     trabajador_estado_civil:e.estado_civil||'', trabajador_domicilio:e.direccion||'',
     trabajador_rfc:e.rfc||'', trabajador_curp:e.curp||'', trabajador_nss:e.nss||'',
     trabajador_email:e.email||'', trabajador_afore:e.afore||'',
-    rol:c.rol||'', ubicacion:c.ubicacion||e.sede||'',
+    rol:c.rol||'', ubicacion:((window.PROPDIR&&PROPDIR[e.property_id])||c.ubicacion||e.sede||''),
     salario_bruto:money(c.salario_bruto), salario_letra:'',
     bonos:bonosTxt, vigencia:(c.dias?c.dias+' días':''), fecha_fin:fmtd(c.vigencia_fin),
     jornada:c.jornada||'', dia_descanso:c.dia_descanso||'', horario:c.horario||'',
     otras_consideraciones:c.otros||'N/A',
-    patron_razon:c.patron||'', patron_representante:'ANA CRISTINA MORITA LOPEZ',
+    patron_razon:c.patron||'', patron_representante:'Javier Puente García',
     patron_domicilio:'República de Uruguay 86, Centro Histórico, Ciudad de México',
     fecha_firma:fmtd(c.fecha_inicio), fecha_contrato:fmtd(c.fecha_inicio)
   };
@@ -137,6 +138,8 @@ NAME={};(allE||[]).forEach(e=>{NAME[e.id]=e.nombre;});
 const {data,error}=await sb.from('employees').select(EMPCOLS).eq('estatus','activo').order('nombre');
 if(error){$('pend').innerHTML='⚠ '+error.message;return;}
 EMPS=data||[];
+try{const {data:rs}=await sb.from('rangos_salariales').select('puesto');const ROLES=[...new Set((rs||[]).map(r=>r.puesto).filter(Boolean))].sort();$('f_rol').innerHTML='<option value="">— elige del tabulador —</option>'+ROLES.map(p=>'<option>'+esc(p)+'</option>').join('');}catch(e){}
+try{const {data:props}=await sb.from('properties').select('id,direccion');window.PROPDIR={};(props||[]).forEach(p=>{PROPDIR[p.id]=p.direccion||'';});}catch(e){}
 // contratos (una sola lectura, reutilizada)
 const {data:csAll}=await sb.from('contratos').select('*').order('created_at',{ascending:false});
 // actas / llamadas / reconocimientos pendientes de firma
@@ -202,7 +205,7 @@ $('f_inicio').value=(SEL.fecha_inicio_labores||SEL.fecha_alta||new Date().toISOS
 $('f_rol').value=SEL.puesto||'';
 $('f_cat').value=(SEL.categoria_laboral==='confianza')?'confianza':'operativo';
 $('f_sal').value=SEL.salario_bruto||SEL.sueldo_base||'';
-$('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';
+$('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';$('f_edad').value=edadDe(SEL.fecha_nacimiento)||'';
 $('f_bono').value='no';$('f_bonos').value='';$('f_otros').value='';$('msg').textContent='';
 calcVig();
 $('formCard').scrollIntoView({behavior:'smooth'});
@@ -238,7 +241,7 @@ ${c.otros?('<h3>Sexta · Otros</h3><p>'+esc(c.otros)+'</p>'):''}
 <div class="firma"><div>EL PATRÓN<br>${esc(c.patron)}</div><div>EL EMPLEADO<br>${esc(e.nombre||'')}</div></div>
 <div style="margin-top:18px;font-size:10px;color:#999;text-align:center">Documento generado en la plataforma Casa Pepe · pendiente de firma electrónica</div>`;
 }
-async function verContrato(c){$('doc').innerHTML=c.contrato_html||'';if(c.estatus==='firmado'&&c.firma_acuse){await appendFirma(c.firma_acuse);}$('ov').classList.add('show');window.scrollTo(0,0);}
+async function verContrato(c){$('doc').innerHTML=c.contrato_html||'';$('doc').setAttribute('contenteditable','false');$('doc').style.outline='none';['ovFirma','ovSend'].forEach(id=>{const b=$(id);if(b){b.style.display='none';b.disabled=false;}});if($('ovHint'))$('ovHint').textContent='';if(c.estatus==='firmado'&&c.firma_acuse){await appendFirma(c.firma_acuse);}$('ov').classList.add('show');window.scrollTo(0,0);}
 async function appendFirma(ac){
  try{if(typeof ac==='string')ac=JSON.parse(ac);}catch(e){ac=ac||{};}
  let url='';
@@ -255,6 +258,7 @@ async function appendFirma(ac){
  $('doc').appendChild(blk);
 }
 
+let PENDING=null;
 async function generar(){
 if(!SEL)return;const m=$('msg');m.className='msg';m.textContent='';
 const inicio=$('f_inicio').value, rol=$('f_rol').value.trim(), cat=$('f_cat').value, sal=parseFloat($('f_sal').value);
@@ -264,22 +268,42 @@ const dias=Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1;
 const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:sal,
 bonos:{puntualidad:$('f_bono').value==='si',otros:$('f_bonos').value.trim()||null},
 jornada:'48 horas semanales, de lunes a sábado',dia_descanso:'Domingo',horario:$('f_horario').value.trim()||null,
-fecha_inicio:inicio,vigencia_fin:fin.toISOString().slice(0,10),dias,numero:1,total_contratos:ch.n,tipo:'prueba',ubicacion:($('f_ubic')?$('f_ubic').value:null)||SEL.sede||null,otros:$('f_otros').value.trim()||null};
-const html=fillMachote(SEL,c);
-$('gen').disabled=true;m.textContent='Generando…';
+fecha_inicio:inicio,vigencia_fin:fin.toISOString().slice(0,10),dias,numero:1,total_contratos:ch.n,tipo:'prueba',
+ubicacion:($('f_ubic')?$('f_ubic').value:null)||SEL.sede||null,edad:($('f_edad')?$('f_edad').value:null),otros:$('f_otros').value.trim()||null};
+PENDING={emp:SEL,c,ch};
+$('doc').innerHTML=fillMachote(SEL,c);
+$('doc').setAttribute('contenteditable','true');$('doc').style.outline='2px dashed #1d9e75';
+if($('ovFirma')){$('ovFirma').style.display='';$('ovFirma').disabled=false;$('ovFirma').textContent='✍️ Firmar (patrón)';}
+if($('ovSend'))$('ovSend').style.display='none';
+if($('ovHint'))$('ovHint').textContent='Edita el documento para añadir comentarios finales, luego firma como patrón y envía.';
+$('ov').classList.add('show');window.scrollTo(0,0);
+m.className='msg ok';m.textContent='Borrador generado — revisa, firma y envía.';
+}
+function firmarPatron(){
+if(!PENDING)return;
+const fecha=fmtd(new Date().toISOString().slice(0,10));
+if(!$('doc').querySelector('[data-firma-patron]')){
+ $('doc').insertAdjacentHTML('beforeend','<div data-firma-patron="1" style="margin-top:14px;border-top:2px solid #1d9e75;padding-top:8px;font-size:12px;color:#173404">✍️ <b>Firmado por el patrón:</b> Javier Puente García, en representación de HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V. · '+fecha+' · firma electrónica.</div>');
+}
+PENDING.firmadoPatron=true;
+$('ovFirma').textContent='✓ Patrón firmado';$('ovFirma').disabled=true;$('ovSend').style.display='';
+$('msg').className='msg ok';$('msg').textContent='Firmado por el patrón. Ahora envía al trabajador.';
+}
+async function enviarContrato(){
+if(!PENDING)return;const {emp,c,ch}=PENDING;const m=$('msg');
+const html=$('doc').innerHTML;
+$('ovSend').disabled=true;m.className='msg';m.textContent='Enviando…';
 try{
-const row={employee_id:SEL.id,nombre:SEL.nombre,patron:c.patron,rol,categoria:cat,salario_bruto:sal,bonos:c.bonos,
-jornada:c.jornada,dia_descanso:c.dia_descanso,horario:c.horario,fecha_inicio:inicio,vigencia_fin:c.vigencia_fin,dias,
+const row={employee_id:emp.id,nombre:emp.nombre,patron:c.patron,rol:c.rol,categoria:c.categoria,salario_bruto:c.salario_bruto,bonos:c.bonos,
+jornada:c.jornada,dia_descanso:c.dia_descanso,horario:c.horario,fecha_inicio:c.fecha_inicio,vigencia_fin:c.vigencia_fin,dias:c.dias,
 numero:1,total_contratos:ch.n,tipo:'prueba',otros:c.otros,estatus:'enviado_pendiente_firma',contrato_html:html,created_by:SESSEMAIL};
-const r=await sb.from('contratos').insert(row);
-if(r.error)throw new Error(r.error.message);
-await sb.from('employees').update({fecha_inicio_labores:inicio,contrato_categoria:cat,salario_bruto:sal,
-categoria_laboral:cat,tipo_contrato:'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'}).eq('id',SEL.id);
-try{const _ord=['solicitada','info_recibida','aceptada','activa','notificada','expediente','integrada'];const _ci=_ord.indexOf(SEL.alta_etapa||'solicitada');const _h=Array.isArray(SEL.alta_historial)?SEL.alta_historial:[];const _u={alta_historial:[..._h,{etapa:'contrato_generado',fecha:new Date().toISOString(),por:SESSEMAIL}]};if(_ci>-1&&_ci<_ord.indexOf('activa'))_u.alta_etapa='activa';await sb.from('employees').update(_u).eq('id',SEL.id);}catch(e){}
-m.className='msg ok';m.textContent='✓ Contrato generado y enviado al buzón de firmas (1 de '+ch.n+').';
-closeForm(); verContrato({...row,contrato_html:html}); load();
-}catch(e){m.className='msg err';m.textContent='⚠ '+e.message;}
-finally{$('gen').disabled=false;}
+const r=await sb.from('contratos').insert(row);if(r.error)throw new Error(r.error.message);
+await sb.from('employees').update({fecha_inicio_labores:c.fecha_inicio,contrato_categoria:c.categoria,salario_bruto:c.salario_bruto,categoria_laboral:c.categoria,tipo_contrato:'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'}).eq('id',emp.id);
+try{const _ord=['solicitada','info_recibida','aceptada','activa','notificada','expediente','integrada'];const _ci=_ord.indexOf(emp.alta_etapa||'solicitada');const _h=Array.isArray(emp.alta_historial)?emp.alta_historial:[];const _u={alta_historial:[..._h,{etapa:'contrato_enviado',fecha:new Date().toISOString(),por:SESSEMAIL}]};if(_ci>-1&&_ci<_ord.indexOf('activa'))_u.alta_etapa='activa';await sb.from('employees').update(_u).eq('id',emp.id);}catch(e){}
+try{await sb.from('notificaciones').insert({employee_id:emp.id,titulo:'📄 Tienes un contrato por firmar',cuerpo:'Tu contrato está listo. Revísalo y fírmalo desde SoyPepe.',icono:'📄'});}catch(e){}
+$('doc').setAttribute('contenteditable','false');PENDING=null;$('ov').classList.remove('show');closeForm();
+m.className='msg ok';m.textContent='✓ Contrato enviado al trabajador para firma (1 de '+ch.n+').';load();
+}catch(e){m.className='msg err';m.textContent='⚠ '+e.message;$('ovSend').disabled=false;}
 }
 loadMachote();load();
 </script></body></html>
