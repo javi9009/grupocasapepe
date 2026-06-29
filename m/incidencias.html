@@ -23,6 +23,12 @@
   .pill{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted)}
   .pill.r{color:#e6bfbf;border-color:#5a2f2a}.pill.s{color:#cdb4e0;border-color:#4a3a5a}.pill.g{color:#bfe6c4;border-color:#2f5a35}
   .det{color:var(--muted);font-size:12.5px;margin:6px 0 10px}
+  .apaso{color:var(--muted)}.apaso.done{color:var(--green)}.apaso.cur{color:var(--gold2);font-weight:700}
+  .adet{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;display:none}.adet.show{display:block}
+  .arow{font-size:12.5px;padding:5px 0;color:var(--muted);display:flex;align-items:center;gap:7px;flex-wrap:wrap;border-bottom:1px dashed #2a2014}
+  .arow b{color:var(--txt);font-weight:600}.arow.cur b{color:var(--gold2)}.arow.done .ast{color:var(--green)}
+  .ast{width:16px;text-align:center;font-weight:700}
+  .help2{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#3a2c12;color:var(--gold2);font-size:10px;font-weight:700;cursor:help}
   .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:4px 14px;margin:6px 0 10px;font-size:12.5px}
   .kv span b{color:var(--txt)}
   .acts{display:flex;gap:8px;flex-wrap:wrap}
@@ -149,26 +155,48 @@ async function validar(r,a,it){
   $('c-asis').textContent=Math.max(0,(+$('c-asis').textContent||1)-1);
 }
 
-// ---- 3) ALTAS DE COLABORADORES ----
+// ---- 3) ALTAS DE COLABORADORES (pipeline con etapas, ? y links) ----
+const ALTA_ETAPAS=[['solicitada','Solicitada'],['info_recibida','Info recibida'],['aceptada','Aceptada'],['activa','ID · Activa'],['notificada','Notificada'],['expediente','Expediente'],['integrada','Integrada']];
+const ALTA_PROP={'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','fde2f615-2c65-40fa-9df3-6336b5ab312c':'Corp'};
+const ALTA_HELP={solicitada:'El colaborador (en SoyPepe) o un admin (botón + Alta) inició la solicitud de alta.',info_recibida:'El candidato subió su información personal y documentos (contrato, INE, RFC, NSS, comprobantes).',aceptada:'RH / Contabilidad revisó, editó si hizo falta y aceptó la información del candidato.',activa:'El sistema generó el ID fijo del colaborador y lo marcó como activo.',notificada:'Se envió la notificación de bienvenida al colaborador por SoyPepe.',expediente:'La información se cargó al expediente y demás sábanas (Base, Nómina).',integrada:'El colaborador ya aparece en horarios y queda cableado (login, accesos, PepeQuiz).'};
+const altaIdx=et=>{const i=ALTA_ETAPAS.findIndex(x=>x[0]===et);return i<0?0:i;};
+const altaUbic=e=>(['CDMX','Puebla','Virreyes','Corp'].includes(e.sede)?e.sede:(ALTA_PROP[e.property_id]||e.sede||'—'));
+function altaLink(et,e,docs,notif){
+  if(et==='info_recibida'){const d=Object.entries(docs||{});return d.length?d.map(([k,p])=>`<button class="btn lnk" data-doc="${esc(p)}">📄 ${esc(k)}</button>`).join(' '):'<span class="muted">sin documentos</span>';}
+  if(et==='aceptada'||et==='expediente')return `<a class="btn lnk" href="/m/rh-expediente.html" target="_blank">Abrir expediente →</a>`;
+  if(et==='activa')return e.empleado_id?`<span class="pill">ID: ${esc(e.empleado_id)}</span>`:'<span class="muted">ID al activar</span>';
+  if(et==='notificada')return notif?`<span class="muted">🔔 ${esc(notif)}</span>`:'<span class="muted">se envía al avanzar</span>';
+  if(et==='integrada')return `<a class="btn lnk" href="/m/rh-horario.html" target="_blank">Ver horario →</a>`;
+  return '';
+}
 async function loadAltas(){
   if(!isAdmin){$('c-altas').textContent='0';$('altas').innerHTML='<div class="empty">Solo administración gestiona altas.</div>';return;}
-  const {data}=await sb.from('incidencias').select('*').eq('tipo','alta_colaborador').eq('resuelto',false).order('created_at',{ascending:false});
-  const rows=data||[];$('c-altas').textContent=rows.length;
+  const {data:emps}=await sb.from('employees').select('id,empleado_id,nombre,nombre_display,email,sede,property_id,estatus,alta_etapa,alta_historial,puesto').not('alta_etapa','is',null);
+  const {data:incs}=await sb.from('incidencias').select('metadata').eq('tipo','alta_colaborador');
+  const {data:nots}=await sb.from('notificaciones').select('employee_id,cuerpo,created_at').ilike('titulo','%ienvenid%').order('created_at',{ascending:false});
+  const docsByEmail={};(incs||[]).forEach(r=>{const m=r.metadata||{};if(m.email)docsByEmail[(m.email||'').toLowerCase()]=m.docs||{};});
+  const notByEmp={};(nots||[]).forEach(n=>{if(n.employee_id&&!notByEmp[n.employee_id])notByEmp[n.employee_id]=n.cuerpo;});
+  let rows=(emps||[]).filter(e=>e.alta_etapa!=='integrada').sort((a,b)=>altaIdx(a.alta_etapa)-altaIdx(b.alta_etapa));
+  $('c-altas').textContent=rows.length;
   const c=$('altas');
-  if(!rows.length){c.innerHTML='<div class="empty">Sin altas pendientes 🎉</div>';return;}
-  c.innerHTML=rows.map((r,i)=>{const m=r.metadata||{};const docs=m.docs||{};
-    const kv=[['Nombre',m.nombre],['Correo',m.email],['Tel',m.telefono],['RFC',m.rfc],['CURP',m.curp],['NSS',m.nss],['Dirección',m.direccion],['Contacto',m.contacto_nombre],['Cel contacto',m.contacto_cel]].filter(x=>x[1]);
-    const dbtns=Object.entries(docs).map(([k,p])=>`<button class="btn lnk" data-doc="${esc(p)}">📄 ${esc(k)}</button>`).join('');
-    return `<div class="item" data-i="${i}"><div class="top"><span class="nm">${esc(m.nombre||r.nombre_display||'—')}</span><span class="pill g">alta</span><span class="pill">${esc(r.fecha||'')}</span></div>
-      <div class="kv">${kv.map(x=>`<span><b>${esc(x[0])}:</b> ${esc(x[1])}</span>`).join('')}</div>
-      ${dbtns?`<div class="acts" style="margin-bottom:8px">${dbtns}</div>`:''}
-      <div class="acts"><button class="btn ok" data-a="gestionada">Marcar gestionada</button></div></div>`;
+  if(!rows.length){c.innerHTML='<div class="empty">Sin altas en proceso 🎉</div>';return;}
+  c.innerHTML=rows.map(e=>{const ci=altaIdx(e.alta_etapa);const nxt=ALTA_ETAPAS[ci+1];const docs=docsByEmail[(e.email||'').toLowerCase()]||{};const notif=notByEmp[e.id];
+    const steps=ALTA_ETAPAS.map((x,j)=>`<span class="apaso ${j<ci?'done':(j===ci?'cur':'')}">${j<ci?'✓':'○'} ${x[1]}</span>`).join(' › ');
+    const det=ALTA_ETAPAS.map((x,j)=>{const cls=j<ci?'done':(j===ci?'cur':'');const st=j<ci?'✓':(j===ci?'●':'○');
+      return `<div class="arow ${cls}"><span class="ast">${st}</span><b>${x[1]}</b><span class="help2" title="${esc(ALTA_HELP[x[0]]||'')}">?</span>${altaLink(x[0],e,docs,notif)}</div>`;}).join('');
+    return `<div class="item" data-id="${e.id}">
+      <div class="top"><span class="nm">${esc(e.nombre||e.nombre_display||'—')}</span>
+      <span class="pill g">${esc(altaUbic(e))}</span><span class="pill">${esc(e.empleado_id||'sin ID')}</span>
+      <span class="pill">${esc(e.puesto||'puesto pendiente')}</span></div>
+      <div class="det">${steps}</div>
+      <div class="acts">${nxt?`<button class="btn ok" data-go="${e.id}">Avanzar a: ${nxt[1]} →</button>`:'<span style="color:var(--green);font-weight:700">✓ Integrada</span>'}<button class="btn warn" data-det="${e.id}">Editar etapas / docs ▾</button></div>
+      <div class="adet" id="ad-${e.id}">${det}</div></div>`;
   }).join('');
-  c.querySelectorAll('.item').forEach(it=>{const r=rows[+it.dataset.i];
-    it.querySelectorAll('[data-doc]').forEach(b=>b.onclick=async()=>{const {data,error}=await sb.storage.from('altas-nuevas').createSignedUrl(b.dataset.doc,120);if(error||!data){toast('No se pudo abrir el doc',false);return;}window.open(data.signedUrl,'_blank');});
-    it.querySelector('[data-a]').onclick=async()=>{const {error}=await sb.from('incidencias').update({resuelto:true}).eq('id',r.id);if(error)return toast('Error: '+error.message,false);it.style.opacity=.4;it.querySelectorAll('button').forEach(b=>b.disabled=true);toast('Alta gestionada ✓');$('c-altas').textContent=Math.max(0,(+$('c-altas').textContent||1)-1);};
-  });
+  c.querySelectorAll('[data-det]').forEach(b=>b.onclick=()=>$('ad-'+b.dataset.det).classList.toggle('show'));
+  c.querySelectorAll('[data-doc]').forEach(b=>b.onclick=async()=>{const {data,error}=await sb.storage.from('altas-nuevas').createSignedUrl(b.dataset.doc,120);if(error||!data){toast('No se pudo abrir el doc',false);return;}window.open(data.signedUrl,'_blank');});
+  c.querySelectorAll('[data-go]').forEach(b=>b.onclick=async()=>{b.disabled=true;toast('Avanzando…');const {error}=await sb.rpc('alta_avanzar',{p_id:b.dataset.go});if(error){b.disabled=false;return toast('No se pudo: '+error.message,false);}toast('Etapa avanzada ✓');loadAltas();});
 }
+
 boot();
 </script>
 
