@@ -22,21 +22,24 @@
     document.body.appendChild(a);
   }
 
-  function injectCuentaBtn(){
+  function injectCuentaBtn(n){
     if(document.getElementById('firmaCuentaBtn')) return true;
-    // busca la tarjeta de "Mi cuenta / Tus datos y documentos"
-    var anchor=null, nodes=document.querySelectorAll('h1,h2,h3,.ssub,.stitle,div,section');
+    // Ancla preferida: el botón "Cerrar sesión" de Mi cuenta (texto estable). Insertamos justo antes.
+    var anchor=null, nodes=document.querySelectorAll('button,a,div,span,h1,h2,h3,.ssub,.stitle,section');
     for(var i=0;i<nodes.length;i++){
       var t=(nodes[i].textContent||'').trim().toLowerCase();
-      if(t==='tus datos y documentos' || (t.indexOf('datos y documentos')>=0 && t.length<60)){ anchor=nodes[i]; break; }
+      if(t==='cerrar sesión'||t==='cerrar sesion'){ anchor=nodes[i]; break; }
+      if(t==='tus datos y documentos'||(t.indexOf('datos y documentos')>=0&&t.length<60)){ anchor=nodes[i]; }
     }
     if(!anchor) return false;
-    var host=anchor.closest('.card')||anchor.parentElement;
+    // solo cuando Mi cuenta está visible
+    if(anchor.offsetParent===null) return false;
     var b=document.createElement('a');
     b.id='firmaCuentaBtn'; b.href='firmar.html';
-    b.style.cssText='display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px;background:#1d9e75;color:#fff;text-decoration:none;font:700 15px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:14px;border-radius:12px';
-    b.innerHTML='✍️ Documentos por firmar';
-    host.appendChild(b);
+    b.style.cssText='display:flex;align-items:center;justify-content:center;gap:8px;margin:10px 0;background:#1d9e75;color:#fff;text-decoration:none;font:700 15px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:14px;border-radius:12px';
+    b.innerHTML='✍️ Documentos por firmar'+(n>0?(' <span style="background:#fff;color:#b03434;border-radius:999px;padding:0 8px;margin-left:4px">'+n+'</span>'):'');
+    var host=anchor.parentElement||document.body;
+    host.insertBefore(b,anchor);
     return true;
   }
 
@@ -58,7 +61,7 @@
               // el botón de Mi cuenta lo intentamos siempre (aunque n=0 no lo ponemos para no estorbar)
               if(n>0){
                 injectBanner(n);
-                var tries=0, iv=setInterval(function(){ if(injectCuentaBtn()||++tries>40) clearInterval(iv); },400);
+                var tries=0, iv=setInterval(function(){ injectCuentaBtn(n); if(++tries>60) clearInterval(iv); },500);
               }
             });
           });
