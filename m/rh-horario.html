@@ -40,6 +40,10 @@ thead th.today{background:var(--accent);color:#fff}
 .chip{display:flex;flex-direction:column;background:#eaf6f0;border:1px solid #bfe0d0;border-left:3px solid var(--accent);border-radius:6px;padding:4px 6px;margin-bottom:4px;font-size:12px;cursor:grab}
 .chip.rest{background:#ece7df;border-left-color:var(--rest)}
 .chip.anim{background:#fde9ec;border-left-color:var(--bad)}
+.chip.st-green{border-left-color:#1d9e75}.chip.st-green b{color:#137a59}
+.chip.st-orange{border-left-color:#d98e1a}.chip.st-orange b{color:#b8821a}
+.chip.st-red{border-left-color:#b03434}.chip.st-red b{color:#b03434}
+.chip.st-purple{border-left-color:#7b3fb0}.chip.st-purple b{color:#7b3fb0}
 .chip b{font-weight:700}.chip .t{font-size:10px;color:var(--soft)}
 .chip .x{float:right;color:var(--bad);font-weight:700;cursor:pointer;margin-left:6px}
 .add{color:var(--soft);font-size:11px;opacity:0;text-align:center;padding:3px}
@@ -115,7 +119,7 @@ const TABS=[
 {id:'virreyes',label:'Virreyes / Sincrético',prop:VIR,areas:['Virreyes / Sincrético']},
 ];
 const DOW=['DOM','LUN','MAR','MIÉ','JUE','VIE','SÁB'];
-let tab=TABS[0], weekStart=mondayOf(new Date()), puestos=[], asigs=[], roster=[], modalCtx=null;
+let tab=TABS[0], weekStart=mondayOf(new Date()), puestos=[], asigs=[], roster=[], modalCtx=null, asisMap={};
 
 const $=id=>document.getElementById(id);
 function pad(n){return String(n).padStart(2,'0')}
@@ -141,12 +145,32 @@ puestos=ps.filter(p=>{const m=p.metadata||{};return (!m.desde||m.desde<=d6)&&(!m
 asigs=await sb(`/horarios?select=*&property_id=eq.${tab.prop}&fecha=gte.${d0}&fecha=lte.${d6}`);
 const pids=new Set(puestos.map(p=>p.id));
 asigs=asigs.filter(a=>pids.has(a.puesto_id));
+// Asistencia real de la semana, para colorear el nombre en su turno
+asisMap={};
+try{
+  const asis=await sb(`/asistencias?select=employee_id,fecha,estatus,check_in,requiere_validacion,validacion_estatus&fecha=gte.${d0}&fecha=lte.${d6}`)||[];
+  asis.forEach(a=>{ if(a.employee_id) asisMap[a.employee_id+'|'+a.fecha]=a; });
+}catch(e){ asisMap={}; }
 render(); status('✓ guardado',' ok');
 }
 
 function isRest(p){return /DESCANSO/i.test(p.codigo)}
 function isAnim(p){return /ANIMACION/i.test(p.codigo)}
 function isExp(p){return /EXPERIENCIA|WT|LUCHAS|XOXIMILCO/i.test(p.codigo)}
+
+// Color del nombre según su asistencia real ese día
+function attClass(empId,ds,skip){
+  if(skip||!empId) return '';
+  if(ds > fmt(new Date())) return '';            // turno futuro: sin color
+  const a=asisMap[empId+'|'+ds];
+  if(!a) return 'st-red';                          // no llegó / no checó
+  const st=(a.estatus||'');
+  const pend=a.requiere_validacion||a.validacion_estatus==='pendiente';
+  if(st==='a_tiempo' && !pend) return 'st-green';  // a tiempo
+  if(st==='retardo') return 'st-orange';           // tarde
+  if(st==='falta') return 'st-red';                // falta
+  return 'st-purple';                              // incidencia rara / por validar / sin estatus claro
+}
 
 function render(){
 const dates=weekDates(weekStart), todayStr=fmt(new Date());
@@ -172,7 +196,8 @@ else if(a.hora_inicio) t=a.hora_inicio.slice(0,5)+'–'+(a.hora_fin||'').slice(0
 else if(esDescanso) t='Descanso';
 else t=a.actividad||'— sin hora';
 const cls=esDescanso?'rest':(isAnim(p)?'anim':'');
-inner+=`<div class="chip ${cls}" draggable="true" data-id="${a.id}"><span class="x" data-del="${a.id}">×</span><b>${a.nombre_display||a.actividad||'—'}</b><span class="t">${t}</span></div>`;
+const ac=attClass(a.employee_id,ds,esDescanso||isAnim(p));
+inner+=`<div class="chip ${cls} ${ac}" draggable="true" data-id="${a.id}"><span class="x" data-del="${a.id}">×</span><b>${a.nombre_display||a.actividad||'—'}</b><span class="t">${t}</span></div>`;
 });
 html+=`<td><div class="cell" data-puesto="${p.id}" data-fecha="${ds}">${inner}<div class="add">+ agregar</div></div></td>`;
 });
@@ -181,7 +206,7 @@ html+='</tr>';
 if(!puestos.length) html=`<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--soft)">Sin puestos para esta área en esta semana.</td></tr>`;
 $('tbody').innerHTML=html;
 bindCells(); renderResumen(); renderAlerts();
-$('legend').textContent='✋ Arrastra para reasignar · click en celda para agregar · × para quitar · Todo se guarda al instante en Supabase.';
+$('legend').innerHTML='✋ Arrastra para reasignar · click para agregar · × para quitar. &nbsp;&nbsp; <b style="color:#137a59">●</b> a tiempo &nbsp; <b style="color:#b8821a">●</b> tarde &nbsp; <b style="color:#b03434">●</b> no llegó &nbsp; <b style="color:#7b3fb0">●</b> incidencia rara';
 }
 
 function renderResumen(){
