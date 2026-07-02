@@ -60,15 +60,17 @@
     document.body.appendChild(ov);
   }
   function ensureClasesIntercept(){
-    var all=document.querySelectorAll('a,button,div,span');
-    for(var i=0;i<all.length;i++){
-      var el=all[i]; var t=(el.textContent||'').trim();
-      if((t==='Clases'||t==='📚Clases'||t.replace(/\s/g,'')==='📚Clases') && el.querySelectorAll('*').length<=2){
-        var host=el.closest('a,button')||el;
-        if(host.__clsHooked) continue; host.__clsHooked=true;
-        host.addEventListener('click',function(e){ e.preventDefault(); e.stopImmediatePropagation(); openClasesModal(); }, true);
+    if(window.__clsDocHook) return; window.__clsDocHook=true;
+    document.addEventListener('click',function(e){
+      var n=e.target;
+      for(var k=0;k<5 && n;k++){
+        var t=(n.textContent||'').trim();
+        if(t==='Clases'||t==='📚Clases'||t.replace(/\s/g,'')==='📚Clases'){
+          e.preventDefault(); e.stopImmediatePropagation(); openClasesModal(); return;
+        }
+        n=n.parentElement;
       }
-    }
+    }, true);
   }
 
   // Renombrar la pestaña "Academia" -> "PepeQuiz" con tipografía Clarendon
