@@ -64,10 +64,8 @@
     document.addEventListener('click',function(e){
       var n=e.target;
       for(var k=0;k<5 && n;k++){
-        var t=(n.textContent||'').trim();
-        if(t==='Clases'||t==='📚Clases'||t.replace(/\s/g,'')==='📚Clases'){
-          e.preventDefault(); e.stopImmediatePropagation(); openClasesModal(); return;
-        }
+        var tt=(n.textContent||'').toLowerCase().replace(/[^a-záéíóúñ]/g,'');
+        if(tt==='clases'){ e.preventDefault(); e.stopImmediatePropagation(); openClasesModal(); return; }
         n=n.parentElement;
       }
     }, true);
@@ -152,5 +150,5 @@
       }).catch(function(){});
     });
   }
-  ready(function(){ setTimeout(run,800); });
+  ready(function(){ ensureClasesIntercept(); setTimeout(run,800); });
 })();
