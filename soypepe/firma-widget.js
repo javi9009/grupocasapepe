@@ -45,6 +45,23 @@
 
   function esc(s){ return (''+(s==null?'':s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+  // Tarjeta "Talleres" en la sección "Para ti", junto a Comidas -> abre talleres.html
+  function injectTalleresCard(){
+    if(document.getElementById('tallerCard')) return true;
+    var all=document.querySelectorAll('a,button,div,span');
+    var tile=null;
+    for(var i=0;i<all.length;i++){ var t=(all[i].textContent||'').trim(); if((t==='Comidas'||t==='🍽️Comidas'||t==='🍽️ Comidas'||t.replace(/\s/g,'')==='🍽️Comidas') && all[i].querySelectorAll('a,button,div,span').length<=1){ tile=all[i]; break; } }
+    if(!tile||tile.offsetParent===null) return false;
+    var host=tile.closest('a,button')||tile;
+    var clone=host.cloneNode(true); clone.id='tallerCard';
+    var lbl=clone.querySelector('span,div'); if(lbl){ lbl.textContent='🎓Talleres'; } else { clone.textContent='🎓Talleres'; }
+    clone.removeAttribute('href');
+    clone.style.cursor='pointer';
+    clone.addEventListener('click',function(e){ e.preventDefault(); e.stopPropagation(); location.href='talleres.html'; },true);
+    host.parentNode.insertBefore(clone, host.nextSibling);
+    return true;
+  }
+
   // Renombrar la pestaña "Academia" -> "PepeQuiz" con tipografía Clarendon
   function renameTab(){
     var b=document.querySelector('[data-tab="academia"]');
@@ -103,7 +120,7 @@
       sb.auth.getSession().then(function(r){
         var session=r&&r.data&&r.data.session; if(!session) return;
         // poller siempre activo: renombrar pestaña + tomar el panel de notificaciones (borrado por-notificación)
-        var t2=0, iv2=setInterval(function(){ renameTab(); takeoverNotifs(sb); if(++t2>600) clearInterval(iv2); },1000);
+        var t2=0, iv2=setInterval(function(){ renameTab(); injectTalleresCard(); takeoverNotifs(sb); if(++t2>600) clearInterval(iv2); },1000);
         sb.auth.getUser().then(function(u){
           var uid=u&&u.data&&u.data.user&&u.data.user.id; if(!uid) return;
           sb.from('employees').select('id').eq('user_id',uid).limit(1).then(function(er){
