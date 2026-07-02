@@ -45,21 +45,30 @@
 
   function esc(s){ return (''+(s==null?'':s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  // Tarjeta "Talleres" en la sección "Para ti", junto a Comidas -> abre talleres.html
-  function injectTalleresCard(){
-    if(document.getElementById('tallerCard')) return true;
+  // La tarjeta "Clases" abre un POP-UP (como el de comidas), no una página nueva
+  function openClasesModal(){
+    if(document.getElementById('clsOv')) return;
+    var ov=document.createElement('div'); ov.id='clsOv';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99998;display:flex;align-items:center;justify-content:center;padding:12px';
+    var card=document.createElement('div'); card.style.cssText='width:520px;max-width:96vw;height:84vh;background:#f4ecdd;border-radius:20px;overflow:hidden;box-shadow:0 14px 50px rgba(0,0,0,.45);position:relative';
+    var fr=document.createElement('iframe'); fr.src='clases.html?embed=1'; fr.style.cssText='width:100%;height:100%;border:0;display:block';
+    var cl=document.createElement('button'); cl.textContent='✕'; cl.setAttribute('aria-label','Cerrar');
+    cl.style.cssText='position:absolute;top:10px;right:12px;z-index:2;background:#fff;border:1px solid #eadfce;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.15)';
+    cl.onclick=function(){ ov.remove(); };
+    card.appendChild(fr); card.appendChild(cl); ov.appendChild(card);
+    ov.addEventListener('click',function(e){ if(e.target===ov) ov.remove(); });
+    document.body.appendChild(ov);
+  }
+  function ensureClasesIntercept(){
     var all=document.querySelectorAll('a,button,div,span');
-    var tile=null;
-    for(var i=0;i<all.length;i++){ var t=(all[i].textContent||'').trim(); if((t==='Comidas'||t==='🍽️Comidas'||t==='🍽️ Comidas'||t.replace(/\s/g,'')==='🍽️Comidas') && all[i].querySelectorAll('a,button,div,span').length<=1){ tile=all[i]; break; } }
-    if(!tile||tile.offsetParent===null) return false;
-    var host=tile.closest('a,button')||tile;
-    var clone=host.cloneNode(true); clone.id='tallerCard';
-    var lbl=clone.querySelector('span,div'); if(lbl){ lbl.textContent='🎓Talleres'; } else { clone.textContent='🎓Talleres'; }
-    clone.removeAttribute('href');
-    clone.style.cursor='pointer';
-    clone.addEventListener('click',function(e){ e.preventDefault(); e.stopPropagation(); location.href='talleres.html'; },true);
-    host.parentNode.insertBefore(clone, host.nextSibling);
-    return true;
+    for(var i=0;i<all.length;i++){
+      var el=all[i]; var t=(el.textContent||'').trim();
+      if((t==='Clases'||t==='📚Clases'||t.replace(/\s/g,'')==='📚Clases') && el.querySelectorAll('*').length<=2){
+        var host=el.closest('a,button')||el;
+        if(host.__clsHooked) continue; host.__clsHooked=true;
+        host.addEventListener('click',function(e){ e.preventDefault(); e.stopImmediatePropagation(); openClasesModal(); }, true);
+      }
+    }
   }
 
   // Renombrar la pestaña "Academia" -> "PepeQuiz" con tipografía Clarendon
@@ -120,7 +129,7 @@
       sb.auth.getSession().then(function(r){
         var session=r&&r.data&&r.data.session; if(!session) return;
         // poller siempre activo: renombrar pestaña + tomar el panel de notificaciones (borrado por-notificación)
-        var t2=0, iv2=setInterval(function(){ renameTab(); injectTalleresCard(); takeoverNotifs(sb); if(++t2>600) clearInterval(iv2); },1000);
+        var t2=0, iv2=setInterval(function(){ renameTab(); ensureClasesIntercept(); takeoverNotifs(sb); if(++t2>600) clearInterval(iv2); },1000);
         sb.auth.getUser().then(function(u){
           var uid=u&&u.data&&u.data.user&&u.data.user.id; if(!uid) return;
           sb.from('employees').select('id').eq('user_id',uid).limit(1).then(function(er){
