@@ -9,8 +9,11 @@ html,body{margin:0;height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:#fff}
 .layout{display:grid;grid-template-columns:248px 1fr;height:100vh}
 aside{background:var(--bg2);border-right:1px solid var(--bd);overflow-y:auto;padding:1rem .75rem}
-aside .brand{font-weight:600;font-size:14px;margin:.25rem .4rem 1rem;color:var(--txt)}
+aside .brand{font-weight:600;font-size:14px;margin:.25rem .4rem .5rem;color:var(--txt)}
 aside .brand b{color:var(--gold)}
+.projsel{margin:0 .4rem .9rem}
+.projsel select{width:100%;padding:8px 9px;border:1px solid var(--bd);border-radius:9px;background:#fff;color:var(--txt);font-size:13px;font-weight:600;cursor:pointer}
+.projsel .one{display:block;padding:8px 9px;border:1px solid var(--bd);border-radius:9px;background:#fff;font-size:13px;font-weight:600}
 aside .grp{margin-top:.5rem}
 aside .grp>.h{display:flex;align-items:center;gap:6px;font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--txt3);font-weight:600;padding:7px 8px;cursor:pointer;border-radius:6px;user-select:none}
 aside .grp>.h:hover{background:var(--bg3)}
@@ -200,6 +203,8 @@ const DEISY_EMAIL='hola.puebla@casapepe.mx';
 // Ven TODO el dashboard como Javi, pero en modo lectura: Roberto (contabilidad@) y admin Puebla (Claudia)
 const FULL_VIEWERS=['contabilidad@casapepe.mx','administracion.puebla@casapepe.mx'];
 let isGerencia=false, isIncidenciasViewer=false, isSociosViewer=false, isJaviSelf=false, isAdminViewer=false, isDeisy=false, isReadOnly=false, EMP=null, NOMBRE=null, CFG=null, flat=[], DEV_DB=null, USER_ACCESOS=[], NOTIF_INCID=0, DCATS=null, UDEST='', CORPDEST=false, USEREMAIL='';
+// §1 Selector de proyecto (arriba-izquierda). Ámbito por usuario en usuario_proyectos.
+let PROJS=[], PROJ='';
 
 function mxToday(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);}
 function mxNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
@@ -282,6 +287,53 @@ location.reload();
 }catch(e){$('a-go').disabled=false;$('a-go').textContent='Crear cuenta y entrar';$('a-err2').textContent='Error de red: '+e.message;$('a-err2').className='err show';}
 };
 
+// ---------- ÁMBITO / SELECTOR DE PROYECTO (§1) ----------
+async function loadAmbito(){
+let pcat=[];
+try{const {data}=await sb.from('proyectos_catalogo').select('proyecto,nombre,emoji,orden').order('orden');pcat=data||[];}catch(e){pcat=[];}
+if(!pcat.length){PROJS=[];PROJ='';return;}
+let mine=[];
+try{
+let empId=EMP;
+if(!empId){const {data:e2}=await sb.from('employees').select('id').ilike('email',USEREMAIL).limit(1);if(e2&&e2[0])empId=e2[0].id;}
+if(empId){const {data:up}=await sb.from('usuario_proyectos').select('proyecto').eq('employee_id',empId);mine=(up||[]).map(x=>x.proyecto);}
+}catch(e){mine=[];}
+const isSuper=isJaviSelf||FULL_VIEWERS.includes(USEREMAIL)||ADMIN_VIEWERS.includes(USEREMAIL);
+if(isSuper&&!mine.length) mine=pcat.map(p=>p.proyecto);
+PROJS=pcat.filter(p=>mine.includes(p.proyecto));
+const saved=localStorage.getItem('cpp_proyecto');
+PROJ=PROJS.some(p=>p.proyecto===saved)?saved:(PROJS[0]?PROJS[0].proyecto:'');
+}
+function projLabel(p){return (p.emoji?p.emoji+' ':'')+p.nombre;}
+function renderProjSel(){
+const holder=document.getElementById('projHolder');
+if(!holder)return;
+if(!PROJS.length){holder.innerHTML='';return;}
+if(PROJS.length===1){holder.innerHTML='<span class="one">'+projLabel(PROJS[0])+'</span>';return;}
+holder.innerHTML='<select id="projSel">'+PROJS.map(p=>`<option value="${p.proyecto}" ${p.proyecto===PROJ?'selected':''}>${projLabel(p)}</option>`).join('')+'</select>';
+document.getElementById('projSel').onchange=e=>{
+PROJ=e.target.value;localStorage.setItem('cpp_proyecto',PROJ);
+rebuildMenu();
+};
+}
+function withProj(src){
+if(!src||!PROJ)return src;
+if(src.startsWith('http'))return src; // externos: no se les pasa proyecto
+return src+(src.includes('?')?'&':'?')+'proyecto='+PROJ;
+}
+// Filtra grupos/ítems del menú según el proyecto elegido (nunca mezclar datos)
+function filterByProj(M){
+if(!PROJ)return M;
+return M.map(g=>{
+let items=g.items;
+if(g.grp==='Revenue') items=items.filter(it=>(PROJ==='cdmx'&&/cdmx/i.test(it.t))||(PROJ==='puebla'&&/puebla/i.test(it.t))||(PROJ==='corp'));
+if(g.grp==='Experiencias'&&!(PROJ==='sincretico'||PROJ==='corp')) items=[];
+if(g.grp==='Ateneo'&&!(PROJ==='virreyes'||PROJ==='corp')) items=[];
+if(g.grp==='Socios'&&PROJ!=='corp') items=[];
+return {grp:g.grp,items};
+}).filter(g=>g.items.length);
+}
+
 // ---------- MENÚ ----------
 function buildMenu(){
 const M=[];
@@ -362,9 +414,10 @@ return M;
 function render(M){
 flat=[]; M.forEach(g=>g.items.forEach(it=>flat.push({...it,grp:g.grp})));
 const a=$('aside');
-a.innerHTML='<div class="brand">Grupo <b>Casa Pepe</b></div>'+M.map(g=>`
+a.innerHTML='<div class="brand">Grupo <b>Casa Pepe</b></div><div class="projsel" id="projHolder"></div>'+M.map(g=>`
 <div class="grp"><div class="h">${g.grp}<span class="chev">▼</span></div>
 <ul>${g.items.map(it=>`<li><a ${it.disabled?'class="disabled"':''} data-t="${it.t}" ${it.src?`data-src="${it.src}"`:''} ${it.action?`data-action="${it.action}"`:''}>${it.t}${it.badge?` <span class="nbadge">${it.badge}</span>`:''}</a></li>`).join('')}</ul></div>`).join('');
+renderProjSel();
 a.querySelectorAll('.grp > .h').forEach(h=>h.onclick=()=>h.parentElement.classList.toggle('collapsed'));
 a.querySelectorAll('li a:not(.disabled)').forEach(el=>el.onclick=e=>{e.preventDefault();
 if(el.dataset.action==='horario'){openHorario();return}
@@ -372,9 +425,14 @@ if(el.dataset.action==='incidencias'){openIncidencias();return}
 select(el.dataset.src,el.dataset.t,el.closest('.grp').querySelector('.h').textContent);
 });
 }
+function rebuildMenu(){
+const M=filterByProj(applyCats(buildMenu()));
+render(M);
+if(flat[0]&&flat[0].src) select(flat[0].src,flat[0].t,flat[0].grp);
+}
 function select(src,t,grp){
 $('aside').querySelectorAll('li a').forEach(x=>x.classList.toggle('active',x.dataset.src===src));
-$('frame').src=src;
+$('frame').src=withProj(src);
 if(src&&src.indexOf('ateneoturistico.org')>-1){ $('frame').onload=async()=>{ try{ const {data:{session}}=await sb.auth.getSession(); if(session&&$('frame').contentWindow) $('frame').contentWindow.postMessage({type:'cpp-session',access_token:session.access_token,refresh_token:session.refresh_token},'https://ateneoturistico.org'); }catch(e){} }; } else { $('frame').onload=null; }
 $('crumb').innerHTML=grp.replace('▼','').trim()+' · <b>'+t+'</b>';
 { const _oe=$('openExt'); if(_oe) _oe.href=src.startsWith('http')?src:location.origin+src; }
@@ -466,6 +524,26 @@ msg($('checmsg'),estatus==='a_tiempo'?'✅ ¡Llegada a tiempo!':(estatus==='tard
 // ---------- SESIÓN / ARRANQUE ----------
 const IS_RECOVERY = location.hash.includes('type=recovery') || location.search.includes('type=recovery');
 sb.auth.onAuthStateChange((ev)=>{ if(ev==='PASSWORD_RECOVERY'){$('login').style.display='flex';$('shell').style.display='none';showStep('s-reset');} });
+// Filtro por categorías de rol (roles_catalogo) — se aplica también al reconstruir por cambio de proyecto
+function applyCats(M){
+if(DCATS && DCATS.size>0 && !isJaviSelf){
+const itemCat=(grp,t)=>{
+if(grp==='Socios') return {c:'reporte_socios'};
+if(grp==='RH') return {c:/horario/i.test(t)?'horarios':'rh'};
+if(grp==='Revenue') return {c:'revenue', d:/puebla/i.test(t)?'Puebla':(/cdmx/i.test(t)?'CDMX':null)};
+if(grp==='Experiencias') return {c:'experiencias'};
+if(grp==='Control'||grp==='Configuración') return {c:'corp'};
+return {c:null};
+};
+return M.map(g=>({grp:g.grp, items:(g.items||[]).filter(it=>{
+const ic=itemCat(g.grp,it.t);
+if(ic.c && !DCATS.has(ic.c)) return false;
+if(ic.d && !CORPDEST && UDEST && ic.d!==UDEST) return false;
+return true;
+})})).filter(g=>g.items.length);
+}
+return M;
+}
 async function start(){
 if(IS_RECOVERY){$('login').style.display='flex';$('shell').style.display='none';showStep('s-reset');return}
 const {data:{session}}=await sb.auth.getSession();
@@ -488,7 +566,15 @@ NOMBRE=link?link.nombre_display:null;
 DEV_DB=link?link.device_id:null;
 let nombre=(link&&(link.nickname||link.nombre_completo))||session.user.email;
 $('who').textContent=nombre+(isGerencia?' · gerencia':' · colaborador');
-const {data:cfg}=await sb.from('checador_config').select('*').eq('id',1).maybeSingle();
+// Checador: configuración según el proyecto/propiedad del empleado (multi-sede)
+let cfg=null;
+try{
+if(EMP){
+const {data:me}=await sb.from('employees').select('property_id').eq('id',EMP).maybeSingle();
+if(me&&me.property_id){const {data:c1}=await sb.from('checador_config').select('*').eq('property_id',me.property_id).maybeSingle();cfg=c1||null;}
+}
+}catch(e){cfg=null;}
+if(!cfg){const {data:c0}=await sb.from('checador_config').select('*').order('id').limit(1).maybeSingle();cfg=c0||null;}
 CFG=cfg||{lat:19.43033,lng:-99.13449,radio_m:50,tolerancia_min:15,lugar:'tu lugar de trabajo'};
 $('checsub').textContent='Marca tu llegada estando a ≤'+CFG.radio_m+' m de '+(CFG.lugar||'tu lugar de trabajo')+'.';
 if(isAdminViewer && $('cfgGear')) $('cfgGear').style.display='';
@@ -524,23 +610,8 @@ const {data:_ic}=await sb.from('incidencias').select('employee_id,tipo,resuelto'
 const _nI=(_ic||[]).filter(r=>{if(r.tipo==='validacion_asistencia')return false;if(r.tipo==='alta_colaborador')return _adm;return (_allA||_adm)?true:_in(_EM[r.employee_id]||{});}).length;
 NOTIF_INCID=_nA+_nI;
 }catch(e){console.warn('notif',e);} }
-let M=buildMenu();
-if(DCATS && DCATS.size>0 && !isJaviSelf){
-const itemCat=(grp,t)=>{
-if(grp==='Socios') return {c:'reporte_socios'};
-if(grp==='RH') return {c:/horario/i.test(t)?'horarios':'rh'};
-if(grp==='Revenue') return {c:'revenue', d:/puebla/i.test(t)?'Puebla':(/cdmx/i.test(t)?'CDMX':null)};
-if(grp==='Experiencias') return {c:'experiencias'};
-if(grp==='Control'||grp==='Configuración') return {c:'corp'};
-return {c:null};
-};
-M=M.map(g=>({grp:g.grp, items:(g.items||[]).filter(it=>{
-const ic=itemCat(g.grp,it.t);
-if(ic.c && !DCATS.has(ic.c)) return false;
-if(ic.d && !CORPDEST && UDEST && ic.d!==UDEST) return false;
-return true;
-})})).filter(g=>g.items.length);
-}
+await loadAmbito();
+let M=filterByProj(applyCats(buildMenu()));
 render(M);
 if(isIncidenciasViewer) select('/m/incidencias','⚠ Incidencias','Control');
 else if(flat[0]&&flat[0].src) select(flat[0].src,flat[0].t,flat[0].grp); else openHorario();
@@ -556,4 +627,14 @@ $('l-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('l-go').click()}
 $('logout').onclick=async()=>{await sb.auth.signOut();location.reload();};
 start();
 </script>
-<script>/*BF-XLS-EXPORT*/(function(){if(window.__bfxls)return;window.__bfxls=1;var NL=String.fromCharCode(13)+String.fromCharCode(10);var BOM=String.fromCharCode(65279);function esc(v){v=(v==null?"":String(v));return chr+v.replace(rxq,chr+chr)+chr;}var chr=String.fromCharCode(34);var rxq=new RegExp(chr,"g");function cv(td){var i=td.querySelector("input,select,textarea");if(i){if(i.type==="checkbox")return i.checked?"Si":"";return i.value;}var t=(td.textContent||"").trim();if(t.charAt(t.length-1)==="?")t=t.slice(0,-1).trim();return t;}function t2c(t){var rows=[];var trs=t.querySelectorAll("tr");for(var k=0;k<trs.length;k++){var cs=trs[k].children;var arr=[];for(var j=0;j<cs.length;j++)arr.push(cv(cs[j]));if(arr.join("").length)rows.push(arr.map(esc).join(","));}return rows.join(NL);}function gd(){var f=document.getElementById("frame")||document.querySelector("iframe");try{return f&&f.contentDocument?f.contentDocument:null;}catch(e){return null;}}function bt(d){var ts=[].slice.call(d.querySelectorAll("table"));if(!ts.length)return null;ts.sort(function(a,b){return b.querySelectorAll("td,th").length-a.querySelectorAll("td,th").length;});return ts[0];}function fn(d){var t=(d&&d.title)||"tabla";t=t.split(String.fromCharCode(183))[0].trim().toLowerCase().replace(new RegExp("[^a-z0-9]+","g"),"_").replace(new RegExp("^_|_$","g"),"");var q="";var m=(d.body.textContent||"").match(new RegExp("20[0-9][0-9]-[0-9][0-9]-Q[0-9]"));if(m)q="_"+m[0];return (t||"tabla")+q+".csv";}function go(){var d=gd();if(!d){alert("Abre un modulo con tabla.");return;}var t=bt(d);if(!t){alert("Este modulo no tiene tabla para exportar.");return;}var csv=t2c(t);var blob=new Blob([BOM+csv],{type:"text/csv;charset=utf-8"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=fn(d);document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},600);}var b=document.createElement("button");b.textContent="⬇ Excel";b.title="Exportar la tabla a Excel (CSV)";b.setAttribute("style","position:fixed;right:18px;bottom:
+<script>/*BF-XLS-EXPORT v2*/(function(){if(window.__bfxls)return;window.__bfxls=1;
+function cv(td){var i=td.querySelector('input,select,textarea');if(i){if(i.type==='checkbox')return i.checked?'Si':'';return i.value;}return (td.textContent||'').trim();}
+function go(){var f=document.getElementById('frame');var d=null;try{d=f&&f.contentDocument}catch(e){}
+if(!d){alert('Abre un módulo con tabla.');return;}
+var ts=[].slice.call(d.querySelectorAll('table'));if(!ts.length){alert('Este módulo no tiene tabla para exportar.');return;}
+ts.sort(function(a,b){return b.querySelectorAll('td,th').length-a.querySelectorAll('td,th').length;});
+var rows=[].slice.call(ts[0].querySelectorAll('tr')).map(function(tr){return [].slice.call(tr.children).map(function(td){return '"'+cv(td).replace(/"/g,'""')+'"';}).join(',');}).filter(Boolean);
+var blob=new Blob(['﻿'+rows.join('\r\n')],{type:'text/csv;charset=utf-8'});
+var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(((d.title||'tabla').split('·')[0]||'tabla').trim().toLowerCase().replace(/[^a-z0-9]+/g,'_')||'tabla')+'.csv';document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},600);}
+var b=document.createElement('button');b.textContent='⬇ Excel';b.title='Exportar la tabla a CSV';b.style.cssText='position:fixed;right:18px;bottom:18px;z-index:40;background:#1d9e75;color:#fff;border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.2)';b.onclick=go;document.body.appendChild(b);})();</script>
+</body></html>
