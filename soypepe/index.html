@@ -1448,6 +1448,8 @@ function chRender(){
   }
 
   const today=mxToday(), now=today.getTime();
+  // Guardia anti-día-viejo: si el registro cacheado no es de HOY (zona MX), se descarta y se recarga.
+  if(CH.asis && CH.asis.fecha && CH.asis.fecha!==ymdMX()){ CH.asis=null; if(!CH_BUSY) chLoad(); }
   const yaEntro = CH.asis && CH.asis.check_in;
   const yaSalio = CH.asis && CH.asis.check_out;
 
@@ -1493,9 +1495,17 @@ async function chMark(){
   if(CH_BUSY || !btn || btn.disabled) return;
   const empId = EMP || HZ.empId;
   if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
-  const esEntrada = !(CH.asis && CH.asis.check_in);
-  const chMode = (btn.dataset.mode) || (esEntrada?'entrada':'salida');
   CH_BUSY=true; const prev=btn.textContent; btn.disabled=true; btn.textContent='Marcando…';
+  // Estado FRESCO desde la BBDD justo antes de decidir (evita "salidas fantasma" por pantalla vieja o doble tap)
+  const dsNow=ymdMX();
+  try{ const { data:fr } = await sb.from('asistencias').select('*').eq('employee_id',empId).eq('fecha',dsNow).order('created_at',{ascending:false}).limit(1); CH.asis=(fr&&fr[0])||null; }catch(e){}
+  if(CH.asis && CH.asis.check_out){ CH_BUSY=false; await chLoad(); return; }
+  const esEntrada = !(CH.asis && CH.asis.check_in);
+  const chMode = esEntrada?'entrada':'salida';
+  if(!esEntrada){
+    const minsIn=Math.round((Date.now()-new Date(CH.asis.check_in).getTime())/60000);
+    if(minsIn<30 && !confirm('Marcaste tu ENTRADA hace '+(minsIn<1?'menos de 1':minsIn)+' min. \u00bfSeguro que ya te vas?')){ CH_BUSY=false; btn.disabled=false; btn.textContent=prev; chRender(); return; }
+  }
 
   // Geolocalización (si la niega, se registra sin coords; en rodaje no bloquea)
   let lat=null,lng=null,dist=null,dentro=null;
@@ -1543,6 +1553,7 @@ async function chMark(){
     }
     CH_BUSY=false;
     await chLoad();
+    if(chMode==='entrada'){ const b2=$('ch-btn'); if(b2){ b2.disabled=true; setTimeout(()=>{ b2.disabled=false; chRender(); }, 5000); } }
   }catch(e){
     CH_BUSY=false; btn.disabled=false; btn.textContent=prev;
     const hint=$('ch-hint'); if(hint) hint.textContent='No se pudo registrar. Revisa tu conexión e intenta otra vez.';
