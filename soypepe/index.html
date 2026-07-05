@@ -225,6 +225,7 @@
   .vc-d.past{opacity:.25}
   .vc-leg{display:flex;gap:10px;font-size:10.5px;color:var(--txt3);margin:6px 0 2px;flex-wrap:wrap}
   .vc-leg i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:3px}
+  .hz-shift.vac{border:1.5px dashed #d9a441;background:rgba(217,164,65,.08)}
   .vac-meta{font-size:12px;color:var(--txt3);margin:4px 0 12px;line-height:1.5}
   .vac-meta a{color:var(--accent)}
   .vac-form{background:var(--bg2);border:1px solid var(--bd);border-radius:13px;padding:13px;margin-bottom:12px}
@@ -1161,8 +1162,7 @@ async function loadReporte(force){
   const btn=$('rep-refresh');
   if(btn) btn.style.opacity='.35';
   try{
-    let prop = await resolverProp();
-    prop = sedeOvrProp() || propNorm(prop || CDMX_PROP);
+    const prop = await resolverProp();
     const body = prop ? { prop } : {};
     if(force) body.force = true;
     const r = await fetch(REPORTE_FN,{
@@ -1277,9 +1277,6 @@ const SEDE_CORP_EMAILS=['javi@casapepe.mx','hola.puebla@casapepe.mx'];
 let SEDE_CORP=false;
 let SEDE_OVR=localStorage.getItem('cp_sede_ovr')||'cdmx';
 function sedeOvrProp(){ return SEDE_CORP ? (SEDE_OVR==='puebla'?PUEBLA_PROP:CDMX_PROP) : null; }
-function propNorm(p){ return p===PUEBLA_PROP ? PUEBLA_PROP : CDMX_PROP; } /* contenido: solo CDMX o Puebla; el resto ve CDMX */
-function propContenidoSync(){ try{ return sedeOvrProp() || propNorm(((typeof HZ!=='undefined'&&HZ.propId)||REP_PROP||CDMX_PROP)); }catch(e){ return CDMX_PROP; } }
-try{ window.__sedeContenido = propContenidoSync; window.__clasesCount = async function(proyecto){ try{ const {count,error} = await sb.from('clases').select('id',{count:'exact',head:true}).eq('activa',true).eq('proyecto',proyecto); if(error) return -1; return count||0; }catch(e){ return -1; } }; }catch(e){}
 function sedeChipInit(email){
   SEDE_CORP = SEDE_CORP_EMAILS.indexOf((email||'').toLowerCase())>=0;
   if(!SEDE_CORP) return;
@@ -1390,7 +1387,7 @@ $('desaySave').onclick=async ()=>{
    Registra retraso vs turno en la hoja `asistencias` (por quincena).
    Modo rodaje esta semana: registra geo/teléfono pero NO bloquea.
    ============================================================ */
-const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false };
+const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false, devac:false };
 const CH_ANTES_ENT=30, CH_ANTES_SAL=5, CH_DESP_SAL=180; // minutos
 const CH_RODAJE=false; // fin de prueba: geocerca y dispositivo se auditan en silencio
 const CH_ABIERTO=true; // MODO ABIERTO: todos pueden checar siempre (sin ventanas ni dependencia de turno). El jefe valida después.
@@ -1439,6 +1436,9 @@ async function chLoad(){
     }
   }catch(e){}
 
+  // ¿Está de vacaciones hoy? (fila 'Vacaciones' en horarios) -> no puede checar
+  CH.devac=false;
+  if(empId){ try{ const {data:vv}=await sb.from('horarios').select('id').eq('employee_id',empId).eq('fecha',ds).ilike('actividad','%vacacion%').limit(1); CH.devac=!!(vv&&vv.length); }catch(e){} }
   // Asistencia de hoy
   CH.asis=null;
   if(empId){
@@ -1482,6 +1482,12 @@ function chRender(){
     return;
   }
 
+  if(CH.devac){
+    if(turno) turno.textContent='Estás de vacaciones 🌴';
+    btn.className='ch-btn'; btn.disabled=true; btn.textContent='Vacaciones 🌴';
+    if(hint) hint.textContent='Disfruta tus días — no necesitas checar.';
+    if($('ch-rows')) $('ch-rows').innerHTML=''; return;
+  }
   const today=mxToday(), now=today.getTime();
   // Guardia anti-día-viejo: si el registro cacheado no es de HOY (zona MX), se descarta y se recarga.
   if(CH.asis && CH.asis.fecha && CH.asis.fecha!==ymdMX()){ CH.asis=null; if(!CH_BUSY) chLoad(); }
@@ -1527,6 +1533,7 @@ function chRender(){
 
 async function chMark(){
   const btn=$('ch-btn');
+  if(CH.devac) return; // de vacaciones: no se marca
   if(CH_BUSY || !btn || btn.disabled) return;
   const empId = EMP || HZ.empId;
   if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
@@ -1624,7 +1631,7 @@ const CM_CUTOFF_H = 12;
 async function openComidas(){
   $('comidaSheet').classList.add('show');
   if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
-  CM.propId = propContenidoSync();
+  CM.propId = sedeOvrProp() || HZ.propId || REP_PROP || CDMX_PROP;
   try{
     const { data } = await sb.from('v_empleados_publico').select('area,puesto').eq('id',EMP||HZ.empId).maybeSingle();
     const ap=((data&&data.area||'')+' '+(data&&data.puesto||'')).toLowerCase();
@@ -1720,14 +1727,7 @@ function vaCard(titulo,serie,color){
 }
 function openValoraciones(){
   $('valoraSheet').classList.add('show');
-  const prop=sedeOvrProp()||((typeof HZ!=='undefined'&&HZ.propId)||REP_PROP)||CDMX_PROP;
-  if(prop!==CDMX_PROP){
-    $('va-body').innerHTML = prop===PUEBLA_PROP
-      ? '<div class="ph"><div class="ico">⏳</div><div class="d">Valoraciones de Puebla · pendientes de integrar (Hostelworld y Booking).</div></div>'
-      : '<div class="ph"><div class="ico">⭐</div><div class="d">Esta sede aún no tiene valoraciones asignadas.</div></div>';
-    return;
-  }
-  const d=VA_DATA[CDMX_PROP];
+  const prop=sedeOvrProp()||REP_PROP||CDMX_PROP; const d=VA_DATA[prop]||VA_DATA[CDMX_PROP];
   const body=$('va-body');
   body.innerHTML =
     '<div class="ssub" style="margin:-4px 0 10px">'+d.nombre+' · scores 2026 (Ene–May)</div>'
@@ -2048,7 +2048,7 @@ function bitTick(){ const now=Date.now(); document.querySelectorAll('.bit-timer.
 async function loadBitacora(){
   const wrap=$('bitList'); if(!wrap) return;
   let rows=[];
-  try{ const _bp=propContenidoSync(); let q=sb.from('bitacora').select('*').order('resuelto',{ascending:true}).order('created_at',{ascending:false}); q=(_bp===PUEBLA_PROP)?q.eq('property_id',_bp):q.or('property_id.eq.'+_bp+',property_id.is.null'); const {data}=await q; rows=data||[]; }catch(e){}
+  try{ const {data}=await sb.from('bitacora').select('*').order('resuelto',{ascending:true}).order('created_at',{ascending:false}); rows=data||[]; }catch(e){}
   if(!rows.length){ wrap.innerHTML='<div class="ph"><div class="ico">✅</div><div class="d">Sin incidencias abiertas. ¡Todo en orden!</div></div>'; if(BIT_TIMER){clearInterval(BIT_TIMER);BIT_TIMER=null;} return; }
   wrap.innerHTML=rows.map(r=>{
     const col=bitColor(r.area);
@@ -2096,7 +2096,7 @@ async function saveBit(){
   let hn=null; if(BIT_TIPO==='cloudbeds') hn=$('bit-huesped').value||null; else if(BIT_TIPO==='externo') hn=$('bit-externo').value.trim()||null;
   const fila={ property_id:(await resolverProp())||CDMX_PROP, huesped_tipo:BIT_TIPO, huesped_nombre:hn, area:$('bit-area').value||null, descripcion:desc, solucion:$('bit-sol').value.trim()||null, creado_por:(EMP||HZ.empId||null), creado_por_nombre:(HZ.nombreDisplay||NOMBRE||null) };
   btn.disabled=true; const t=btn.textContent; btn.textContent='Guardando…';
-  try{ fila.property_id=propContenidoSync(); const {error}=await sb.from('bitacora').insert(fila); if(error) throw error; $('bitSheet').classList.remove('show'); loadBitacora(); }
+  try{ const {error}=await sb.from('bitacora').insert(fila); if(error) throw error; $('bitSheet').classList.remove('show'); loadBitacora(); }
   catch(e){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo guardar.'; }
   finally{ btn.disabled=false; btn.textContent=t; }
 }
@@ -2126,13 +2126,10 @@ async function renderRankings(){
   const card=$('rankCard'); if(!card) return;
   try{
     const [pr,er]=await Promise.all([
-      sb.from('pq_puntos').select('employee_id,pts_mes').order('pts_mes',{ascending:false}).limit(60),
-      sb.from('employees').select('id,nombre,property_id')
+      sb.from('pq_puntos').select('employee_id,pts_mes').order('pts_mes',{ascending:false}).limit(10),
+      sb.from('employees').select('id,nombre')
     ]);
-    let pp=(pr&&pr.data)||[]; const emps=(er&&er.data)||[];
-    const _rp=propContenidoSync();
-    const _ok=new Set(emps.filter(e=> _rp===PUEBLA_PROP ? e.property_id===PUEBLA_PROP : e.property_id!==PUEBLA_PROP).map(e=>e.id));
-    pp=pp.filter(r=>_ok.has(r.employee_id)).slice(0,10);
+    const pp=(pr&&pr.data)||[], emps=(er&&er.data)||[];
     if(pp.length){ const nmx={}; emps.forEach(e=>{nmx[e.id]=e.nombre;}); RANKS['Academia']=pp.map(r=>[ nmx[r.employee_id]||'Pepe', r.pts_mes||0 ]); }
   }catch(e){}
   const tabs=Object.keys(RANKS);
@@ -2253,13 +2250,13 @@ async function hzLoadWeek(){
   const d0=hzFmt(dates[0]), d6=hzFmt(dates[6]);
   try{
     const { data:rows, error } = await sb.from('horarios')
-      .select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas,property_id')
+      .select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas')
       .eq('property_id',HZ.propId).gte('fecha',d0).lte('fecha',d6);
     if(error) throw error;
     // Turnos PROPIOS en cualquier otra propiedad (ej. hotel + Virreyes/Sincrético la misma semana)
     let propios=[];
     try{
-      let qm=sb.from('horarios').select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas,property_id').gte('fecha',d0).lte('fecha',d6);
+      let qm=sb.from('horarios').select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas').gte('fecha',d0).lte('fecha',d6);
       qm = HZ.empId ? qm.eq('employee_id',HZ.empId) : qm.eq('nombre_display',HZ.nombreDisplay||'');
       const { data:mias } = await qm; propios=mias||[];
     }catch(e){}
@@ -2316,16 +2313,17 @@ function hzRender(){
       html+='<div class="hz-empty">Sin turnos del equipo este día.</div>';
     }else{
       day.forEach(r=>{
-        const mine=hzIsMine(r), rest=hzIsRestRow(r);
-        const _pn=(HZ.puestos[r.puesto_id]||{}).nombre||''; const _dnd=(r.property_id&&HZ.propId&&r.property_id!==HZ.propId)?({'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes/Sincrético','fde2f615-2c65-40fa-9df3-6336b5ab312c':'Corp'}[r.property_id]||'otra sede'):''; const pu=_pn+(_dnd?' · 📍 '+_dnd:'');
+        const mine=hzIsMine(r), rest=hzIsRestRow(r), vac=(!r.hora_inicio&&(r.actividad||'').toLowerCase().includes('vacacion'));
+        const pu=(HZ.puestos[r.puesto_id]||{}).nombre||'';
         let tm;
-        if(rest) tm='<span class="rest-t">Descanso</span>';
+        if(vac) tm='<span class="rest-t">🌴 Vacaciones</span>';
+        else if(rest) tm='<span class="rest-t">Descanso</span>';
         else if(r.hora_inicio) tm='<span class="rng">'+hzHHMM(r.hora_inicio)+(r.hora_fin?'–'+hzHHMM(r.hora_fin):'')+'</span>';
         else if(r.notas && /\d/.test(r.notas)) tm='<span class="rng">'+r.notas+'</span>';
         else tm='<span class="rest-t">Horario abierto</span>';
         const nm=(r.nombre_display||r.actividad||'—');
-        const sub=[r.actividad&&!rest?r.actividad:'', pu].filter(Boolean).join(' · ');
-        html+='<div class="hz-shift'+(mine?' mine':'')+(rest?' rest':'')+'">'
+        const sub=[r.actividad&&!rest&&!vac?r.actividad:'', pu].filter(Boolean).join(' · ');
+        html+='<div class="hz-shift'+(mine?' mine':'')+(rest?' rest':'')+(vac?' vac':'')+'">'
             + '<div class="tm">'+tm+'</div>'
             + '<div class="info"><div class="nm">'+hzEsc(nm)+'</div>'+(sub?'<div class="pu">'+hzEsc(sub)+'</div>':'')+'</div>'
             + (mine?'<span class="youtag">Tú</span>':'')
@@ -2690,22 +2688,6 @@ function resolver(asisId,accion,wrap){wrap.style.opacity='0.5';fetch(SB+'/rest/v
 document.addEventListener('click',function(ev){var b=ev.target;if(b&&b.getAttribute&&b.getAttribute('data-a')&&b.parentNode&&b.parentNode.className==='bf-asis-btns'){ev.preventDefault();ev.stopPropagation();resolver(b.getAttribute('data-asis'),b.getAttribute('data-a'),b.parentNode);}},true);
 function tick(){actionables().then(enhance);}
 setInterval(tick,2500);setTimeout(tick,1500);
-})();</script>
-<script>/*BF-CLASES-SEDE*/(function(){
-if(window.__bfclsede)return;window.__bfclsede=1;
-var SB='https://rehophywchakfapivsbh.supabase.co/rest/v1';
-var PK='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-function chk(){
-  var f=window.__sedeContenido; if(!f){ setTimeout(chk,1500); return; }
-  var prop=''; try{ prop=f(); }catch(e){}
-  var proyecto = prop==='febfbef6-7fd1-4b45-84d9-13533e8dcb72' ? 'puebla' : 'cdmx';
-  try{ localStorage.setItem('cp_sede_contenido', proyecto); }catch(e){}
-  var cf=window.__clasesCount; if(!cf) return;
-  cf(proyecto).then(function(n){
-    [].slice.call(document.querySelectorAll('button.circle')).forEach(function(b){ if(/Clases/i.test(b.textContent)) b.style.display = (n===0?'none':''); });
-  }).catch(function(){});
-}
-setTimeout(chk,2500); setTimeout(chk,6000);
 })();</script>
 </body></html>
 <script src="firma-widget.js"></script>
