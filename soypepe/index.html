@@ -1161,7 +1161,8 @@ async function loadReporte(force){
   const btn=$('rep-refresh');
   if(btn) btn.style.opacity='.35';
   try{
-    const prop = await resolverProp();
+    let prop = await resolverProp();
+    prop = sedeOvrProp() || propNorm(prop || CDMX_PROP);
     const body = prop ? { prop } : {};
     if(force) body.force = true;
     const r = await fetch(REPORTE_FN,{
@@ -1276,6 +1277,9 @@ const SEDE_CORP_EMAILS=['javi@casapepe.mx','hola.puebla@casapepe.mx'];
 let SEDE_CORP=false;
 let SEDE_OVR=localStorage.getItem('cp_sede_ovr')||'cdmx';
 function sedeOvrProp(){ return SEDE_CORP ? (SEDE_OVR==='puebla'?PUEBLA_PROP:CDMX_PROP) : null; }
+function propNorm(p){ return p===PUEBLA_PROP ? PUEBLA_PROP : CDMX_PROP; } /* contenido: solo CDMX o Puebla; el resto ve CDMX */
+function propContenidoSync(){ try{ return sedeOvrProp() || propNorm(((typeof HZ!=='undefined'&&HZ.propId)||REP_PROP||CDMX_PROP)); }catch(e){ return CDMX_PROP; } }
+try{ window.__sedeContenido = propContenidoSync; }catch(e){}
 function sedeChipInit(email){
   SEDE_CORP = SEDE_CORP_EMAILS.indexOf((email||'').toLowerCase())>=0;
   if(!SEDE_CORP) return;
@@ -1620,7 +1624,7 @@ const CM_CUTOFF_H = 12;
 async function openComidas(){
   $('comidaSheet').classList.add('show');
   if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
-  CM.propId = sedeOvrProp() || HZ.propId || REP_PROP || CDMX_PROP;
+  CM.propId = propContenidoSync();
   try{
     const { data } = await sb.from('v_empleados_publico').select('area,puesto').eq('id',EMP||HZ.empId).maybeSingle();
     const ap=((data&&data.area||'')+' '+(data&&data.puesto||'')).toLowerCase();
@@ -1716,7 +1720,14 @@ function vaCard(titulo,serie,color){
 }
 function openValoraciones(){
   $('valoraSheet').classList.add('show');
-  const prop=sedeOvrProp()||REP_PROP||CDMX_PROP; const d=VA_DATA[prop]||VA_DATA[CDMX_PROP];
+  const prop=sedeOvrProp()||((typeof HZ!=='undefined'&&HZ.propId)||REP_PROP)||CDMX_PROP;
+  if(prop!==CDMX_PROP){
+    $('va-body').innerHTML = prop===PUEBLA_PROP
+      ? '<div class="ph"><div class="ico">⏳</div><div class="d">Valoraciones de Puebla · pendientes de integrar (Hostelworld y Booking).</div></div>'
+      : '<div class="ph"><div class="ico">⭐</div><div class="d">Esta sede aún no tiene valoraciones asignadas.</div></div>';
+    return;
+  }
+  const d=VA_DATA[CDMX_PROP];
   const body=$('va-body');
   body.innerHTML =
     '<div class="ssub" style="margin:-4px 0 10px">'+d.nombre+' · scores 2026 (Ene–May)</div>'
@@ -2037,7 +2048,7 @@ function bitTick(){ const now=Date.now(); document.querySelectorAll('.bit-timer.
 async function loadBitacora(){
   const wrap=$('bitList'); if(!wrap) return;
   let rows=[];
-  try{ const {data}=await sb.from('bitacora').select('*').order('resuelto',{ascending:true}).order('created_at',{ascending:false}); rows=data||[]; }catch(e){}
+  try{ const _bp=propContenidoSync(); let q=sb.from('bitacora').select('*').order('resuelto',{ascending:true}).order('created_at',{ascending:false}); q=(_bp===PUEBLA_PROP)?q.eq('property_id',_bp):q.or('property_id.eq.'+_bp+',property_id.is.null'); const {data}=await q; rows=data||[]; }catch(e){}
   if(!rows.length){ wrap.innerHTML='<div class="ph"><div class="ico">✅</div><div class="d">Sin incidencias abiertas. ¡Todo en orden!</div></div>'; if(BIT_TIMER){clearInterval(BIT_TIMER);BIT_TIMER=null;} return; }
   wrap.innerHTML=rows.map(r=>{
     const col=bitColor(r.area);
@@ -2085,7 +2096,7 @@ async function saveBit(){
   let hn=null; if(BIT_TIPO==='cloudbeds') hn=$('bit-huesped').value||null; else if(BIT_TIPO==='externo') hn=$('bit-externo').value.trim()||null;
   const fila={ property_id:(await resolverProp())||CDMX_PROP, huesped_tipo:BIT_TIPO, huesped_nombre:hn, area:$('bit-area').value||null, descripcion:desc, solucion:$('bit-sol').value.trim()||null, creado_por:(EMP||HZ.empId||null), creado_por_nombre:(HZ.nombreDisplay||NOMBRE||null) };
   btn.disabled=true; const t=btn.textContent; btn.textContent='Guardando…';
-  try{ const {error}=await sb.from('bitacora').insert(fila); if(error) throw error; $('bitSheet').classList.remove('show'); loadBitacora(); }
+  try{ fila.property_id=propContenidoSync(); const {error}=await sb.from('bitacora').insert(fila); if(error) throw error; $('bitSheet').classList.remove('show'); loadBitacora(); }
   catch(e){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo guardar.'; }
   finally{ btn.disabled=false; btn.textContent=t; }
 }
@@ -2115,10 +2126,13 @@ async function renderRankings(){
   const card=$('rankCard'); if(!card) return;
   try{
     const [pr,er]=await Promise.all([
-      sb.from('pq_puntos').select('employee_id,pts_mes').order('pts_mes',{ascending:false}).limit(10),
-      sb.from('employees').select('id,nombre')
+      sb.from('pq_puntos').select('employee_id,pts_mes').order('pts_mes',{ascending:false}).limit(60),
+      sb.from('employees').select('id,nombre,property_id')
     ]);
-    const pp=(pr&&pr.data)||[], emps=(er&&er.data)||[];
+    let pp=(pr&&pr.data)||[]; const emps=(er&&er.data)||[];
+    const _rp=propContenidoSync();
+    const _ok=new Set(emps.filter(e=> _rp===PUEBLA_PROP ? e.property_id===PUEBLA_PROP : e.property_id!==PUEBLA_PROP).map(e=>e.id));
+    pp=pp.filter(r=>_ok.has(r.employee_id)).slice(0,10);
     if(pp.length){ const nmx={}; emps.forEach(e=>{nmx[e.id]=e.nombre;}); RANKS['Academia']=pp.map(r=>[ nmx[r.employee_id]||'Pepe', r.pts_mes||0 ]); }
   }catch(e){}
   const tabs=Object.keys(RANKS);
@@ -2239,13 +2253,13 @@ async function hzLoadWeek(){
   const d0=hzFmt(dates[0]), d6=hzFmt(dates[6]);
   try{
     const { data:rows, error } = await sb.from('horarios')
-      .select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas')
+      .select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas,property_id')
       .eq('property_id',HZ.propId).gte('fecha',d0).lte('fecha',d6);
     if(error) throw error;
     // Turnos PROPIOS en cualquier otra propiedad (ej. hotel + Virreyes/Sincrético la misma semana)
     let propios=[];
     try{
-      let qm=sb.from('horarios').select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas').gte('fecha',d0).lte('fecha',d6);
+      let qm=sb.from('horarios').select('id,puesto_id,employee_id,nombre_display,fecha,hora_inicio,hora_fin,actividad,ubicacion,notas,property_id').gte('fecha',d0).lte('fecha',d6);
       qm = HZ.empId ? qm.eq('employee_id',HZ.empId) : qm.eq('nombre_display',HZ.nombreDisplay||'');
       const { data:mias } = await qm; propios=mias||[];
     }catch(e){}
@@ -2303,7 +2317,7 @@ function hzRender(){
     }else{
       day.forEach(r=>{
         const mine=hzIsMine(r), rest=hzIsRestRow(r);
-        const pu=(HZ.puestos[r.puesto_id]||{}).nombre||'';
+        const _pn=(HZ.puestos[r.puesto_id]||{}).nombre||''; const _dnd=(r.property_id&&HZ.propId&&r.property_id!==HZ.propId)?({'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes/Sincrético','fde2f615-2c65-40fa-9df3-6336b5ab312c':'Corp'}[r.property_id]||'otra sede'):''; const pu=_pn+(_dnd?' · 📍 '+_dnd:'');
         let tm;
         if(rest) tm='<span class="rest-t">Descanso</span>';
         else if(r.hora_inicio) tm='<span class="rng">'+hzHHMM(r.hora_inicio)+(r.hora_fin?'–'+hzHHMM(r.hora_fin):'')+'</span>';
@@ -2676,6 +2690,24 @@ function resolver(asisId,accion,wrap){wrap.style.opacity='0.5';fetch(SB+'/rest/v
 document.addEventListener('click',function(ev){var b=ev.target;if(b&&b.getAttribute&&b.getAttribute('data-a')&&b.parentNode&&b.parentNode.className==='bf-asis-btns'){ev.preventDefault();ev.stopPropagation();resolver(b.getAttribute('data-asis'),b.getAttribute('data-a'),b.parentNode);}},true);
 function tick(){actionables().then(enhance);}
 setInterval(tick,2500);setTimeout(tick,1500);
+})();</script>
+<script>/*BF-CLASES-SEDE*/(function(){
+if(window.__bfclsede)return;window.__bfclsede=1;
+var SB='https://rehophywchakfapivsbh.supabase.co/rest/v1';
+var PK='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+function chk(){
+  var f=window.__sedeContenido; if(!f){ setTimeout(chk,1500); return; }
+  var prop=''; try{ prop=f(); }catch(e){}
+  var proyecto = prop==='febfbef6-7fd1-4b45-84d9-13533e8dcb72' ? 'puebla' : 'cdmx';
+  try{ localStorage.setItem('cp_sede_contenido', proyecto); }catch(e){}
+  fetch(SB+'/clases?select=id&activa=eq.true&proyecto=eq.'+proyecto,{headers:{apikey:PK,Authorization:'Bearer '+PK}})
+  .then(function(r){return r.json();}).then(function(rows){
+    if(Array.isArray(rows)&&rows.length===0){
+      [].slice.call(document.querySelectorAll('button.circle')).forEach(function(b){ if(/Clases/i.test(b.textContent)) b.style.display='none'; });
+    }
+  }).catch(function(){});
+}
+setTimeout(chk,2500); setTimeout(chk,6000);
 })();</script>
 </body></html>
 <script src="firma-widget.js"></script>
