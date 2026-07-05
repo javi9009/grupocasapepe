@@ -68,6 +68,7 @@ thead th.today{background:var(--accent);color:#fff}
 .card .ok{background:var(--accent);color:#fff}.card .cancel{background:#eee;color:var(--txt)}
 .card .restbtn{background:var(--rest);color:#fff;width:100%;padding:9px;border:none;border-radius:8px;font-weight:600;cursor:pointer;margin-top:8px}
 @media print{header,.tabs,.bar,.add,.legend,#alerts{display:none!important}.wrap{overflow:visible}.cell{cursor:default}body{background:#fff}}
+.ro-banner{margin:0 16px 8px;font-size:12.5px;background:#fff4e0;border-left:3px solid var(--warn);padding:8px 12px;border-radius:6px;color:#8a5a00;font-weight:600}
 </style></head><body>
 <script>if(window.self!==window.top){document.addEventListener('DOMContentLoaded',function(){var h=document.querySelector('header');if(h)h.style.display='none';});}</script>
 <header>
@@ -95,6 +96,7 @@ thead th.today{background:var(--accent);color:#fff}
 <input type="file" id="importfile" accept=".json" style="display:none">
 <span class="status" id="status"></span>
 </div>
+<div id="ro-banner-holder"></div>
 <div id="alerts"></div>
 <div class="legend" id="legend"></div>
 <div class="wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
@@ -147,6 +149,10 @@ corp:[
 const TABS=ALLTABS[PROJ]||ALLTABS.cdmx;
 const DOW=['DOM','LUN','MAR','MIÉ','JUE','VIE','SÁB'];
 let tab=TABS[0], weekStart=mondayOf(new Date()), puestos=[], asigs=[], roster=[], modalCtx=null, asisMap={}, projEmpIds=null;
+// §perm — Edición de horarios acotada a jefes de área + Director/Socio + admin. El resto entra en solo-lectura.
+let READONLY=false, MYEMAIL='', MYROL='';
+const HOR_ADMIN_EMAILS=['javi@casapepe.mx','contabilidad@casapepe.mx','administracion@casapepe.mx','administracion.puebla@casapepe.mx','hola.puebla@casapepe.mx'];
+const HOR_EDIT_ROLES=['Gerente Operativo','Gerente Administrativo','Jefe de Front','Ama de llaves','Director','Socio','Socio Principal'];
 
 const $=id=>document.getElementById(id);
 function pad(n){return String(n).padStart(2,'0')}
@@ -158,6 +164,39 @@ function lbl(d){return d.getDate()+' '+['ene','feb','mar','abr','may','jun','jul
 function durH(ini,fin){if(!ini||!fin)return 0;const[a,b]=ini.split(':').map(Number),[c,d]=fin.split(':').map(Number);let m=(c*60+d)-(a*60+b);if(m<=0)m+=1440;return m/60}
 function status(t,cls){const s=$('status');s.textContent=t||'';s.className='status'+(cls?' '+cls:'')}
 async function sb(path,opts){const r=await fetch(SB+path,{headers:H,...opts});if(!r.ok){let t='';try{t=await r.text()}catch(_){}status('⚠ error',' err');console.warn('sb '+r.status,path,t);throw new Error((()=>{try{return JSON.parse(t).message||t}catch(_){return t||('HTTP '+r.status)}})())}const ct=await r.text();if(!ct)return null;try{return JSON.parse(ct)}catch(_){return null}}
+
+// §perm — Resuelve el correo/rol del usuario logueado (sesión Supabase en localStorage, misma-origin que el panel)
+//         y decide si puede editar. Si no logra resolver la identidad, NO bloquea (fail-open) para no dejar sin editar a un gerente por un error transitorio.
+async function resolvePerms(){
+try{
+let email='';
+try{
+for(let i=0;i<localStorage.length;i++){
+const k=localStorage.key(i);
+if(!/sb-.*-auth-token/.test(k)) continue;
+let o=null; try{o=JSON.parse(localStorage.getItem(k))}catch(_){}
+if(!o) continue;
+const tok=o.access_token||(o.currentSession&&o.currentSession.access_token);
+if(tok){try{const p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(p&&p.email)email=String(p.email).toLowerCase();}catch(_){}}
+if(!email){const u=o.user||(o.currentSession&&o.currentSession.user);if(u&&u.email)email=String(u.email).toLowerCase();}
+if(email) break;
+}
+}catch(_){}
+MYEMAIL=email;
+if(!email){ READONLY=false; return; } // no se pudo identificar: no bloquear
+if(HOR_ADMIN_EMAILS.includes(email)){ READONLY=false; return; }
+let rol='';
+try{const r=await sb('/employees?select=rol&email=ilike.'+encodeURIComponent(email)+'&limit=1'); if(r&&r[0])rol=r[0].rol||'';}catch(_){}
+MYROL=rol;
+READONLY = !HOR_EDIT_ROLES.includes(rol);
+}catch(e){ READONLY=false; }
+}
+function applyReadonlyChrome(){
+if(!READONLY) return;
+['copy','newweek','clearweek','import'].forEach(id=>{const b=$(id); if(b)b.style.display='none';});
+const h=$('ro-banner-holder');
+if(h) h.innerHTML='<div class="ro-banner">👁 Solo lectura · no tienes permisos para editar horarios. Para cambios, contacta a tu jefe de área.</div>';
+}
 
 function tabFromUrl(){const p=new URLSearchParams(location.search).get('tab');return TABS.find(t=>t.id===p)||TABS[0]}
 
@@ -276,6 +315,13 @@ $('alerts').innerHTML=al.join('');
 }
 
 function bindCells(){
+if(READONLY){
+document.querySelectorAll('[data-del]').forEach(x=>x.style.display='none');
+document.querySelectorAll('.add').forEach(x=>x.style.display='none');
+document.querySelectorAll('.chip').forEach(c=>{c.setAttribute('draggable','false');c.style.cursor='default';});
+document.querySelectorAll('.cell').forEach(c=>{c.style.cursor='default';});
+return;
+}
 document.querySelectorAll('[data-del]').forEach(x=>x.onclick=async e=>{e.stopPropagation();if(!confirm('¿Quitar?'))return;status('guardando…');await sb('/horarios?id=eq.'+x.dataset.del,{method:'DELETE',headers:{...H,Prefer:'return=minimal'}});loadData()});
 document.querySelectorAll('.cell').forEach(c=>{
 c.onclick=e=>{if(e.target.closest('.chip'))return;openAdd(c.dataset.puesto,c.dataset.fecha)};
@@ -317,6 +363,7 @@ $('m-rest').style.display=isRest(p)?'none':'block';
 $('m-vac').style.display=isRest(p)?'none':'block';
 }
 function openAdd(puestoId,fecha){
+if(READONLY)return;
 const p=puestos.find(x=>x.id===puestoId);modalCtx={p,fecha,editId:null};
 const d=new Date(fecha+'T00:00:00');
 $('m-title').textContent='Agregar a '+p.nombre;$('m-sub').textContent=DOW[d.getDay()]+' '+lbl(d);
@@ -329,6 +376,7 @@ $('m-ini').value=ini;$('m-fin').value=fin;$('m-concept').value=isExp(p)?(p.nombr
 $('modal').classList.add('show');setTimeout(()=>$('m-emp').focus(),50);
 }
 function openEdit(a){
+if(READONLY)return;
 const p=puestos.find(x=>x.id===a.puesto_id);modalCtx={p,fecha:a.fecha,editId:a.id};
 const d=new Date(a.fecha+'T00:00:00');
 $('m-title').textContent='Editar · '+p.nombre;$('m-sub').textContent=DOW[d.getDay()]+' '+lbl(d);
@@ -340,6 +388,7 @@ else {$('m-ini').value=a.hora_inicio?a.hora_inicio.slice(0,5):'';$('m-fin').valu
 $('modal').classList.add('show');
 }
 async function saveAdd(rest){
+if(READONLY)return;
 const p=modalCtx.p, empOpt=$('m-emp').value;
 const _emp=empOpt?roster.find(r=>r.id===empOpt):null;
 const name=_emp?(_emp.nombre||''):'';
@@ -362,6 +411,7 @@ $('modal').classList.remove('show');loadData();
 }
 
 async function copyPrev(){
+if(READONLY)return;
 const p0=fmt(addDays(weekStart,-7)), p6=fmt(addDays(weekStart,-1));
 if(asigs.length && !confirm('Esta semana ya tiene '+asigs.length+' asignaciones. ¿Copiar la anterior encima?'))return;
 const prev=await sb(`/horarios?select=*&proyecto=eq.${tab.proyecto}&fecha=gte.${p0}&fecha=lte.${p6}`);
@@ -374,6 +424,7 @@ await sb('/horarios',{method:'POST',headers:{...H,Prefer:'return=minimal'},body:
 
 // ＋ Nueva semana: salta a la siguiente semana sin datos de esta área (grilla en blanco lista para armar)
 async function newWeek(){
+if(READONLY)return;
 let w=addDays(weekStart,7);
 for(let i=0;i<26;i++){
 const d0=fmt(w), d6=fmt(addDays(w,6));
@@ -385,6 +436,7 @@ alert('Las próximas 26 semanas ya tienen datos. Navega con ▶ a la semana que 
 }
 // 🧹 Vaciar semana: borra las asignaciones de la semana visible SOLO de esta área/proyecto
 async function clearWeek(){
+if(READONLY)return;
 if(!asigs.length){alert('Esta semana ya está vacía para esta área.');return}
 if(!confirm('Vas a borrar '+asigs.length+' asignaciones de "'+tab.label+'" ('+PROJ_LBL[PROJ]+') de la semana visible. ¿Seguro?'))return;
 if(!confirm('Última confirmación: esta acción no se puede deshacer. ¿Borrar?'))return;
@@ -401,6 +453,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=
 
 // Importa el formato del módulo viejo {property,semana,horario:{CODE:{fecha:[{apodo,actividad,notas}]}},conceptos} y lo migra a Supabase
 async function importJSON(file){
+if(READONLY)return;
 const txt=await file.text(); let j; try{j=JSON.parse(txt)}catch(e){alert('JSON inválido');return}
 const codeMap={};puestos.forEach(p=>codeMap[p.codigo]=p.id);
 // refrescar puestos de todo el proyecto para mapear códigos de otras áreas
@@ -433,7 +486,7 @@ if(!rows.length){alert('No hay turnos para descargar en esta semana/área.');ret
 const head=['Persona','Fecha','Día','Área','Puesto','Entrada','Salida','Horas','Actividad'];
 const esc=v=>'"'+String(v).replace(/"/g,'""')+'"';
 const csv=[head.join(',')].concat(rows.map(r=>[r.persona,r.fecha,r.dia,r.area,r.puesto,r.ini,r.fin,r.hh,r.act].map(esc).join(','))).join('\n');
-const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
+const blob=new Blob([' '+csv],{type:'text/csv;charset=utf-8'});
 const link=document.createElement('a');link.href=URL.createObjectURL(blob);
 link.download='turnos_'+PROJ+'_'+tab.id+'_'+fmt(weekDates(weekStart)[0])+'.csv';link.click();
 }
@@ -457,23 +510,24 @@ $('importfile').onchange=e=>{if(e.target.files[0])importJSON(e.target.files[0]);
 $('m-ok').onclick=()=>saveAdd(false);
 $('m-rest').onclick=()=>saveAdd(true);
 $('m-vac').onclick=async()=>{
-  const empOpt=$('m-emp').value; if(!empOpt){alert('Elige a la persona del catálogo.');return}
-  let fin=prompt('Vacaciones desde '+modalCtx.fecha+'. ¿Hasta qué fecha? (AAAA-MM-DD, vacío = solo este día)',modalCtx.fecha);
-  if(fin===null) return; fin=(fin||'').trim()||modalCtx.fecha;
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(fin)||fin<modalCtx.fecha){alert('Fecha fin inválida.');return}
-  if(!confirm('Asignar VACACIONES del '+modalCtx.fecha+' al '+fin+'.\nSe descuentan del saldo automáticamente y esos días NO podrá checar. ¿Confirmas?'))return;
-  status('asignando vacaciones…');
-  try{
-    const r=await fetch(SB.replace('/rest/v1','')+'/functions/v1/vac-asignar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:'cpp-vac-asigna-2026',employee_id:empOpt,fecha_inicio:modalCtx.fecha,fecha_fin:fin})});
-    const jx=await r.json(); if(!r.ok||jx.error) throw new Error(jx.error||('HTTP '+r.status));
-    alert('🌴 Vacaciones de '+(jx.nombre||'')+': '+jx.dias+' día(s) descontados ('+jx.naturales+' naturales).'+(jx.sin_saldo?' ⚠ Sin saldo cargado — no se descontó.':(jx.saldo_insuficiente?' ⚠ OJO: saldo en negativo.':' Saldo restante: '+jx.saldo_restante+'.')));
-  }catch(e){ alert('No se pudo asignar: '+e.message); }
-  $('modal').classList.remove('show'); loadData();
+if(READONLY)return;
+const empOpt=$('m-emp').value; if(!empOpt){alert('Elige a la persona del catálogo.');return}
+let fin=prompt('Vacaciones desde '+modalCtx.fecha+'. ¿Hasta qué fecha? (AAAA-MM-DD, vacío = solo este día)',modalCtx.fecha);
+if(fin===null) return; fin=(fin||'').trim()||modalCtx.fecha;
+if(!/^\d{4}-\d{2}-\d{2}$/.test(fin)||fin<modalCtx.fecha){alert('Fecha fin inválida.');return}
+if(!confirm('Asignar VACACIONES del '+modalCtx.fecha+' al '+fin+'.\nSe descuentan del saldo automáticamente y esos días NO podrá checar. ¿Confirmas?'))return;
+status('asignando vacaciones…');
+try{
+const r=await fetch(SB.replace('/rest/v1','')+'/functions/v1/vac-asignar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:'cpp-vac-asigna-2026',employee_id:empOpt,fecha_inicio:modalCtx.fecha,fecha_fin:fin})});
+const jx=await r.json(); if(!r.ok||jx.error) throw new Error(jx.error||('HTTP '+r.status));
+alert('🌴 Vacaciones de '+(jx.nombre||'')+': '+jx.dias+' día(s) descontados ('+jx.naturales+' naturales).'+(jx.sin_saldo?' ⚠ Sin saldo cargado — no se descontó.':(jx.saldo_insuficiente?' ⚠ OJO: saldo en negativo.':' Saldo restante: '+jx.saldo_restante+'.')));
+}catch(e){ alert('No se pudo asignar: '+e.message); }
+$('modal').classList.remove('show'); loadData();
 };
 $('m-cubre').onclick=()=>{rosterAll=!rosterAll;const h=$('m-cubre-hint');if(h)h.style.display=rosterAll?'block':'none';$('m-cubre').textContent=rosterAll?'↩ Solo este proyecto':'+ Cubre (listado general)';fillRoster($('m-emp').value||null);};
 $('m-cancel').onclick=()=>$('modal').classList.remove('show');
 $('modal').onclick=e=>{if(e.target.id==='modal')$('modal').classList.remove('show')};
 
-(async()=>{tab=tabFromUrl();renderTabs();await loadRoster();await loadData();})();
+(async()=>{tab=tabFromUrl();renderTabs();await resolvePerms();applyReadonlyChrome();await loadRoster();await loadData();})();
 </script><script src="/m/tablekit.js" defer></script>
 </body></html>
