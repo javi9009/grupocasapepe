@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Autorizar altas · Casa Pepe</title>
+<style>
+:root{--bg:#14110d;--card:#1c1813;--line:#3a3228;--txt:#f4ecdd;--mut:#b6a888;--gold:#d9a441;--ok:#4caf7d;--warn:#e0a94b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:15px}
+.wrap{max-width:900px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--mut);margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.nm{font-weight:700;font-size:16px}.meta{color:var(--mut);font-size:13px}
+.badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
+.b-sol{background:#3a2f16;color:var(--warn)}.b-aut{background:#16321f;color:var(--ok)}.b-int{background:#2a2118;color:var(--mut)}
+.faltan{margin-top:10px;font-size:13px;color:var(--warn)}
+.faltan b{color:var(--txt)}
+.ok-contrato{margin-top:10px;color:var(--ok);font-weight:600}
+button{border:0;border-radius:10px;padding:10px 15px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+.primary{background:var(--gold);color:#241a09}.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+.link{color:var(--gold);text-decoration:none;font-weight:600}
+.empty{color:var(--mut);text-align:center;padding:40px}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;z-index:9}
+.ov.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;max-width:520px;width:100%}
+.modal h3{margin:0 0 4px}.modal .sub2{color:var(--mut);font-size:13px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;background:#16130f;color:var(--txt);font-size:15px;font-family:inherit}
+.err{color:#e57373;font-size:13px;margin-top:10px;min-height:16px}
+.modal-actions{display:flex;gap:10px;margin-top:16px}
+</style></head>
+<body><div class="wrap">
+<h1>Autorizar altas</h1>
+<div class="sub">Solicitudes pendientes de autorizar y fichas incompletas para contrato.</div>
+<div id="auth-msg" class="empty" style="display:none"></div>
+<div id="list"></div>
+</div>
+
+<div class="ov" id="ov"><div class="modal">
+  <h3 id="m-title">Completar datos para contrato</h3>
+  <div class="sub2" id="m-sub"></div>
+  <div id="m-fields"></div>
+  <div class="err" id="m-err"></div>
+  <div class="modal-actions">
+    <button class="primary" id="m-save">Guardar</button>
+    <button class="ghost" id="m-cancel">Cancelar</button>
+  </div>
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+const SB_URL='https://rehophywchakfapivsbh.supabase.co';
+const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+const AUTORIZA_FN=SB_URL+'/functions/v1/autorizar-alta';
+const sb=supabase.createClient(SB_URL,SB_KEY);
+const $=id=>document.getElementById(id);
+const PROPS={'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes','fde2f615-2c65-40fa-9df3-6336b5ab312c':'Corporativo'};
+const FDEF={
+ 'Nombre':{col:'nombre',t:'text'},'Apellidos':{col:'apellido',t:'text'},
+ 'RFC':{col:'rfc',t:'text'},'CURP':{col:'curp',t:'text'},
+ 'Fecha nacimiento':{col:'fecha_nacimiento',t:'date'},'Nacionalidad':{col:'nacionalidad',t:'text'},
+ 'Estado civil':{col:'estado_civil',t:'select',opts:['Soltero(a)','Casado(a)','Union libre','Otro']},
+ 'Domicilio':{col:'direccion',t:'text'},'Telefono':{col:'telefono',t:'text'},'Correo':{col:'email',t:'text'},
+ 'Ubicacion':{col:'property_id',t:'select',opts:Object.entries(PROPS).map(function(p){return {v:p[0],l:p[1]};})},
+ 'Area':{col:'area',t:'text'},'Rol':{col:'rol',t:'text'},
+ 'Salario bruto':{col:'salario_bruto',t:'number'},
+ 'Prueba/Planta':{col:'prueba_planta',t:'select',opts:['prueba','planta']},
+ 'Fecha de entrada':{col:'fecha_inicio_labores',t:'date'},
+ 'Salario desde':{col:'salario_desde',t:'date'}
+};
+let CUR=null;
+
+async function load(){
+  const s = await sb.auth.getSession();
+  if(!s.data || !s.data.session){ $('auth-msg').style.display='block'; $('auth-msg').textContent='Inicia sesion en el dashboard para autorizar altas.'; return; }
+  const { data, error } = await sb.from('employees')
+    .select('id,empleado_id,nombre,apellido,nombre_display,email,property_id,area,rol,estatus,alta_etapa,fecha_inicio_labores')
+    .in('alta_etapa',['solicitado','autorizado','datos_contrato','integrada'])
+    .order('estatus',{ascending:true});
+  if(error){ $('auth-msg').style.display='block'; $('auth-msg').textContent='No se pudo cargar (¿tu rol tiene permiso de admin?): '+error.message; return; }
+  const rows=[];
+  for(const e of (data||[])){
+    let faltan=[];
+    try{ const r=await sb.rpc('alta_faltantes_contrato',{p_id:e.id}); faltan=r.data||[]; }catch(_){}
+    if(e.alta_etapa==='integrada' && faltan.length===0) continue;
+    e.faltan=faltan; rows.push(e);
+  }
+  render(rows);
+}
+
+function render(rows){
+  const L=$('list');
+  if(!rows.length){ L.innerHTML='<div class="empty">No hay altas pendientes ni fichas incompletas. 🎉</div>'; return; }
+  L.innerHTML='';
+  for(const e of rows){
+    const nom=((e.nombre||'')+' '+(e.apellido||'')).trim()||e.nombre_display||'(sin nombre)';
+    const prop=PROPS[e.property_id]||'—';
+    const et=e.alta_etapa;
+    const badge = et==='solicitado'?'<span class="badge b-sol">Solicitado</span>'
+      : et==='autorizado'?'<span class="badge b-aut">Autorizado</span>'
+      : '<span class="badge b-int">'+(et||'')+'</span>';
+    const idm = e.empleado_id? ' · ID '+e.empleado_id : ' · sin ID maestro';
+    let acc='';
+    if(!e.empleado_id){ acc+='<button class="primary" onclick="autorizar(\''+e.id+'\')">Autorizar (generar ID)</button> '; }
+    if(e.faltan.length){ acc+='<button class="ghost" onclick=\'completar('+JSON.stringify(e).replace(/'/g,"&#39;")+')\'>Completar datos ('+e.faltan.length+')</button>'; }
+    let estado = e.faltan.length
+      ? '<div class="faltan">Faltan para contrato: <b>'+e.faltan.join(', ')+'</b></div>'
+      : '<div class="ok-contrato">✓ Lista para generar contrato</div>';
+    if(!e.faltan.length && e.empleado_id) acc='<a class="link" href="/m/contratos.html?emp='+e.id+'">Generar contrato →</a>';
+    L.innerHTML+='<div class="card"><div class="row"><div><div class="nm">'+nom+'</div>'
+      +'<div class="meta">'+prop+idm+' · '+(e.rol||'sin rol')+'</div></div>'
+      +'<div>'+badge+'</div></div>'+estado
+      +'<div style="margin-top:12px">'+acc+'</div></div>';
+  }
+}
+
+async function autorizar(id){
+  if(!confirm('¿Autorizar esta alta y generar su ID maestro?')) return;
+  const s = await sb.auth.getSession();
+  const por = (s.data && s.data.session && s.data.session.user && s.data.session.user.email) || null;
+  try{
+    const r=await fetch(AUTORIZA_FN,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},body:JSON.stringify({employee_id:id,autorizado_por:por})});
+    const o=await r.json();
+    if(!o.ok){ alert('Error: '+(o.error||'desconocido')); return; }
+    alert('Alta autorizada. ID maestro: '+o.empleado_id);
+    load();
+  }catch(err){ alert('Error de red: '+err); }
+}
+
+function completar(e){
+  CUR=e; $('m-err').textContent='';
+  const nom=((e.nombre||'')+' '+(e.apellido||'')).trim()||e.nombre_display||'';
+  $('m-title').textContent='Completar datos · '+nom;
+  $('m-sub').textContent='Estos campos faltan para poder generar el contrato.';
+  const F=$('m-fields'); F.innerHTML='';
+  for(const lab of e.faltan){
+    const d=FDEF[lab]; if(!d) continue;
+    let ctrl='';
+    if(d.t==='select'){
+      const opts=(d.opts||[]).map(function(o){ return (typeof o==='object')? '<option value="'+o.v+'">'+o.l+'</option>' : '<option value="'+o+'">'+o+'</option>'; }).join('');
+      ctrl='<select id="f-'+d.col+'"><option value="">—</option>'+opts+'</select>';
+    } else {
+      ctrl='<input id="f-'+d.col+'" type="'+d.t+'">';
+    }
+    F.innerHTML+='<label>'+lab+'</label>'+ctrl;
+  }
+  $('ov').classList.add('show');
+}
+$('m-cancel').onclick=function(){ $('ov').classList.remove('show'); CUR=null; };
+
+$('m-save').onclick=async function(){
+  if(!CUR) return;
+  $('m-err').textContent='';
+  const upd={};
+  for(const lab of CUR.faltan){
+    const d=FDEF[lab]; if(!d) continue;
+    const el=$('f-'+d.col); if(!el) continue;
+    let v=el.value; if(v==='') continue;
+    if(d.t==='number') v=parseFloat(v);
+    upd[d.col]=v;
+  }
+  if(upd.salario_bruto && !upd.salario_desde){ upd.salario_desde = upd.fecha_inicio_labores || CUR.fecha_inicio_labores || new Date().toISOString().slice(0,10); }
+  if(upd.rol && !upd.puesto) upd.puesto=upd.rol;
+  if(!Object.keys(upd).length){ $('m-err').textContent='No capturaste ningun dato.'; return; }
+  $('m-save').disabled=true; $('m-save').textContent='Guardando…';
+  const { error } = await sb.from('employees').update(upd).eq('id',CUR.id);
+  $('m-save').disabled=false; $('m-save').textContent='Guardar';
+  if(error){ $('m-err').textContent='Error: '+error.message; return; }
+  $('ov').classList.remove('show'); CUR=null; load();
+};
+window.autorizar=autorizar; window.completar=completar;
+load();
+</script>
+</body></html>
