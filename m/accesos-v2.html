@@ -34,20 +34,34 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
 .ulist{background:#16130f;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;max-height:180px;overflow:auto;margin:10px 0}
 .mact{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .empty{color:var(--mut);text-align:center;padding:30px}
+.urow{display:flex;align-items:center;gap:10px;padding:10px 4px;border-top:1px solid var(--line);flex-wrap:wrap}
+.uinfo{flex:1;min-width:170px}
+.sedes{display:flex;gap:5px;flex-wrap:wrap}
+.sede{border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:600}
+.sede.seon{background:var(--gold);color:#241a09;border-color:var(--gold)}
+.sede.todas.seon{background:var(--ok);color:#06170f;border-color:var(--ok)}
+.fbtn{padding:7px 12px;font-size:12.5px}
+.lfilter{width:100%;margin-bottom:10px}
 </style></head>
 <body><div class="wrap">
 <h1>Accesos · v2</h1>
-<div class="sub">Permisos por página, en dos capas: por rol (bloque) y por usuario (excepción). Fail-closed.</div>
+<div class="sub">Personas: asigna sede(s) y funciones por persona. Permisos por página en dos capas: por rol (bloque) y por usuario (excepción). Fail-closed.</div>
 <div id="authmsg" class="empty" style="display:none"></div>
 
 <div id="newbanner" class="newbanner"></div>
 
 <div class="tabs">
-  <button class="tab on" id="tab-rol" onclick="setTab('rol')">Por rol</button>
+  <button class="tab on" id="tab-lista" onclick="setTab('lista')">Personas</button>
+  <button class="tab" id="tab-rol" onclick="setTab('rol')">Por rol</button>
   <button class="tab" id="tab-user" onclick="setTab('user')">Por usuario</button>
 </div>
 
-<div id="pane-rol">
+<div id="pane-lista">
+  <input id="listaFilter" class="lfilter" placeholder="Buscar nombre, correo o rol…" oninput="renderLista()">
+  <div id="listaGrid"></div>
+</div>
+
+<div id="pane-rol" style="display:none">
   <label>Rol: </label>
   <select id="rolSel" onchange="loadRol()"></select>
   <div id="rolGrid"></div>
@@ -84,18 +98,20 @@ const SB_URL='https://rehophywchakfapivsbh.supabase.co';
 const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=supabase.createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
-let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[];
-let TAB='rol', curRol=null, curUser=null, draft={};
+let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], AMBITO={};
+const SEDES=['CDMX','Puebla','Virreyes','Corp'];
+let TAB='lista', curRol=null, curUser=null, draft={};
 
 async function boot(){
   const s=await sb.auth.getSession();
   if(!s.data||!s.data.session){ $('authmsg').style.display='block'; $('authmsg').textContent='Inicia sesión en el dashboard para gestionar accesos.'; return; }
-  const [pg,rp,up,rc,emp]=await Promise.all([
+  const [pg,rp,up,rc,emp,am]=await Promise.all([
     sb.from('paginas').select('*').eq('activo',true).order('app').order('area_orden').order('orden'),
     sb.from('rol_permisos').select('rol,pagina_codigo,nivel'),
     sb.from('usuario_permisos').select('email,pagina_codigo,nivel'),
     sb.from('roles_catalogo').select('rol'),
-    sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol').not('email','is',null)
+    sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol').not('email','is',null),
+    sb.from('usuario_ambito').select('email,sedes')
   ]);
   if(pg.error){ $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
   PAG=pg.data||[];
@@ -106,8 +122,39 @@ async function boot(){
   USERS=(emp.data||[]).sort((a,b)=>((a.nombre_display||a.nombre||'')+'').localeCompare(b.nombre_display||b.nombre||''));
   $('rolSel').innerHTML='<option value="">Elige rol…</option>'+ROLES.map(r=>'<option>'+r+'</option>').join('');
   $('userSel').innerHTML='<option value="">Elige usuario…</option>'+USERS.map(u=>'<option value="'+u.id+'">'+((u.nombre_display||u.nombre||'')+' · '+(u.rol||'sin rol'))+'</option>').join('');
-  banner();
+  AMBITO={}; (am.data||[]).forEach(r=>{ AMBITO[(r.email||'').toLowerCase()]=r.sedes||[]; });
+  banner(); renderLista();
 }
+
+function renderLista(){
+  const q=($('listaFilter').value||'').toLowerCase();
+  const rows=USERS.filter(u=>(((u.nombre_display||u.nombre||'')+' '+(u.email||'')+' '+(u.rol||'')).toLowerCase()).includes(q));
+  let h='';
+  rows.forEach(u=>{
+    const em=(u.email||'').toLowerCase();
+    const cur=AMBITO[em]||[];
+    const chips=['Todas'].concat(SEDES).map(s=>{
+      const on=cur.includes(s);
+      const cls='sede'+(s==='Todas'?' todas':'')+(on?' seon':'');
+      return '<button class="'+cls+'" onclick="toggleSede(\''+em+'\',\''+s+'\')">'+s+'</button>';
+    }).join('');
+    h+='<div class="urow"><div class="uinfo"><div class="pname">'+(u.nombre_display||u.nombre||'—')
+      +'<small>'+(u.rol||'sin rol')+' · '+em+'</small></div></div>'
+      +'<div class="sedes">'+chips+'</div>'
+      +'<button class="btn ghost fbtn" onclick="verFunciones(\''+u.id+'\')">Funciones ▸</button></div>';
+  });
+  $('listaGrid').innerHTML=h||'<div class="empty">Sin personas.</div>';
+}
+async function toggleSede(email, sede){
+  let cur=(AMBITO[email]||[]).slice();
+  if(sede==='Todas'){ cur = cur.includes('Todas')? [] : ['Todas']; }
+  else { cur=cur.filter(s=>s!=='Todas'); cur = cur.includes(sede)? cur.filter(s=>s!==sede) : cur.concat([sede]); }
+  AMBITO[email]=cur; renderLista();
+  const admin=(await sb.auth.getSession()).data.session.user.email;
+  const { error }=await sb.from('usuario_ambito').upsert({email:email,sedes:cur,updated_by:admin,updated_at:new Date().toISOString()},{onConflict:'email'});
+  if(error){ alert('No se pudo guardar la sede: '+error.message); }
+}
+function verFunciones(id){ setTab('user'); $('userSel').value=id; loadUser(); }
 
 function banner(){
   // páginas sin ningún permiso asignado en ningún rol (nuevas / sin configurar)
@@ -117,8 +164,16 @@ function banner(){
   else $('newbanner').style.display='none';
 }
 
-function setTab(t){ TAB=t; $('tab-rol').classList.toggle('on',t==='rol'); $('tab-user').classList.toggle('on',t==='user');
-  $('pane-rol').style.display=t==='rol'?'':'none'; $('pane-user').style.display=t==='user'?'':'none'; $('bar').style.display='none'; }
+function setTab(t){ TAB=t;
+  $('tab-lista').classList.toggle('on',t==='lista');
+  $('tab-rol').classList.toggle('on',t==='rol');
+  $('tab-user').classList.toggle('on',t==='user');
+  $('pane-lista').style.display=t==='lista'?'':'none';
+  $('pane-rol').style.display=t==='rol'?'':'none';
+  $('pane-user').style.display=t==='user'?'':'none';
+  $('bar').style.display='none';
+  if(t==='lista') renderLista();
+}
 
 function grpRender(container, getNivel, opts){
   let h=''; let lastArea='';
