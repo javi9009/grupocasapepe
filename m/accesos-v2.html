@@ -41,7 +41,9 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
 .sede.seon{background:var(--gold);color:#241a09;border-color:var(--gold)}
 .sede.todas.seon{background:var(--ok);color:#06170f;border-color:var(--ok)}
 .fbtn{padding:7px 12px;font-size:12.5px}
-.lfilter{width:100%;margin-bottom:10px}
+.lfilter{flex:1;min-width:180px}
+.fbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.fbar select{min-width:150px}
 </style></head>
 <body><div class="wrap">
 <h1>Accesos · v2</h1>
@@ -56,8 +58,13 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <button class="tab" id="tab-user" onclick="setTab('user')">Por usuario</button>
 </div>
 
+<div class="fbar">
+  <input id="fq" class="lfilter" placeholder="Buscar nombre, correo o rol…" oninput="onFilter()">
+  <select id="fubic" onchange="onFilter()"></select>
+  <select id="farea" onchange="onFilter()"></select>
+</div>
+
 <div id="pane-lista">
-  <input id="listaFilter" class="lfilter" placeholder="Buscar nombre, correo o rol…" oninput="renderLista()">
   <div id="listaGrid"></div>
 </div>
 
@@ -98,9 +105,10 @@ const SB_URL='https://rehophywchakfapivsbh.supabase.co';
 const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=supabase.createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
-let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], PROJMAP={};
+let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], PROJMAP={}, AREAS=[];
 const PROJS_DEF=[['cdmx','CDMX'],['puebla','Puebla'],['virreyes','Virreyes'],['sincretico','Sincrético'],['corp','Corp']];
 let TAB='lista', curRol=null, curUser=null, draft={};
+let FQ='', FUBIC='', FAREA='';
 
 async function boot(){
   const s=await sb.auth.getSession();
@@ -110,7 +118,7 @@ async function boot(){
     sb.from('rol_permisos').select('rol,pagina_codigo,nivel'),
     sb.from('usuario_permisos').select('email,pagina_codigo,nivel'),
     sb.from('roles_catalogo').select('rol'),
-    sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol').not('email','is',null),
+    sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol,area').not('email','is',null),
     sb.from('usuario_proyectos').select('employee_id,proyecto')
   ]);
   if(pg.error){ $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
@@ -120,15 +128,36 @@ async function boot(){
   const set=new Set((rc.data||[]).map(x=>x.rol)); (emp.data||[]).forEach(e=>{ if(e.rol) set.add(e.rol); });
   ROLES=[...set].sort();
   USERS=(emp.data||[]).sort((a,b)=>((a.nombre_display||a.nombre||'')+'').localeCompare(b.nombre_display||b.nombre||''));
-  $('rolSel').innerHTML='<option value="">Elige rol…</option>'+ROLES.map(r=>'<option>'+r+'</option>').join('');
-  $('userSel').innerHTML='<option value="">Elige usuario…</option>'+USERS.map(u=>'<option value="'+u.id+'">'+((u.nombre_display||u.nombre||'')+' · '+(u.rol||'sin rol'))+'</option>').join('');
+  AREAS=[...new Set(USERS.map(u=>u.area).filter(Boolean))].sort();
   PROJMAP={}; (am.data||[]).forEach(r=>{ (PROJMAP[r.employee_id]=PROJMAP[r.employee_id]||[]).push(r.proyecto); });
+  $('fubic').innerHTML='<option value="">Todas las ubicaciones</option>'+PROJS_DEF.map(p=>'<option value="'+p[0]+'">'+p[1]+'</option>').join('');
+  $('farea').innerHTML='<option value="">Todas las áreas</option>'+AREAS.map(a=>'<option value="'+a.replace(/"/g,'&quot;')+'">'+a+'</option>').join('');
+  fillRolSel(); fillUserSel();
   banner(); renderLista();
 }
 
+// ---- Filtros compartidos (nombre + ubicación/proyecto + área) ----
+function ubicMatch(u){ return !FUBIC || (PROJMAP[u.id]||[]).includes(FUBIC); }
+function areaMatch(u){ return !FAREA || (u.area||'')===FAREA; }
+function txtMatch(u){ if(!FQ) return true; return (((u.nombre_display||u.nombre||'')+' '+(u.email||'')+' '+(u.rol||'')).toLowerCase()).includes(FQ); }
+function userMatches(u){ return txtMatch(u)&&ubicMatch(u)&&areaMatch(u); }
+function rolesFiltered(){
+  let roles=ROLES.slice();
+  if(FQ) roles=roles.filter(r=>r.toLowerCase().includes(FQ));
+  if(FUBIC||FAREA){ const set=new Set(USERS.filter(u=>ubicMatch(u)&&areaMatch(u)).map(u=>u.rol).filter(Boolean)); roles=roles.filter(r=>set.has(r)); }
+  return roles;
+}
+function fillRolSel(){ const keep=$('rolSel').value; const rs=rolesFiltered();
+  $('rolSel').innerHTML='<option value="">Elige rol…</option>'+rs.map(r=>'<option'+(r===keep?' selected':'')+'>'+r+'</option>').join('');
+  if(keep && !rs.includes(keep)){ curRol=null; $('rolGrid').innerHTML=''; $('bar').style.display='none'; } }
+function fillUserSel(){ const keep=$('userSel').value; const us=USERS.filter(userMatches);
+  $('userSel').innerHTML='<option value="">Elige usuario…</option>'+us.map(u=>'<option value="'+u.id+'"'+(u.id===keep?' selected':'')+'>'+((u.nombre_display||u.nombre||'')+' · '+(u.rol||'sin rol'))+'</option>').join('');
+  if(keep && !us.some(u=>u.id===keep)){ curUser=null; $('userGrid').innerHTML=''; $('bar').style.display='none'; } }
+function onFilter(){ FQ=($('fq').value||'').toLowerCase().trim(); FUBIC=$('fubic').value; FAREA=$('farea').value;
+  if(TAB==='lista') renderLista(); else if(TAB==='rol') fillRolSel(); else fillUserSel(); }
+
 function renderLista(){
-  const q=($('listaFilter').value||'').toLowerCase();
-  const rows=USERS.filter(u=>(((u.nombre_display||u.nombre||'')+' '+(u.email||'')+' '+(u.rol||'')).toLowerCase()).includes(q));
+  const rows=USERS.filter(userMatches);
   let h='';
   rows.forEach(u=>{
     const cur=PROJMAP[u.id]||[];
@@ -183,7 +212,7 @@ function setTab(t){ TAB=t;
   $('pane-rol').style.display=t==='rol'?'':'none';
   $('pane-user').style.display=t==='user'?'':'none';
   $('bar').style.display='none';
-  if(t==='lista') renderLista();
+  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else fillUserSel();
 }
 
 function grpRender(container, getNivel, opts){
