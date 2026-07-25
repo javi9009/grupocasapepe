@@ -529,6 +529,7 @@
   <main>
     <!-- ===== MI TRABAJO (Inicio) ===== -->
     <section class="view show" id="v-trabajo">
+      <div id="docsFirmaCard"></div>
       <div class="card report">
         <div class="hd">
           <h3>Reporte del día</h3>
@@ -682,6 +683,21 @@
     <button data-nav="cuenta"><span class="ic">👤</span>Mi cuenta</button>
   </nav>
 </div>
+
+<!-- Hoja Firmar documento -->
+<div class="sheet" id="firmaSheet"><div class="box" style="max-width:540px;max-height:92vh;overflow:auto">
+  <div class="grab"></div>
+  <h2 id="fd-title">Documento por firmar</h2>
+  <div class="ssub">Léelo completo y fírmalo con tu dedo abajo. Se registra hora, ubicación y dispositivo.</div>
+  <div id="fd-doc" style="border:1px solid var(--bd);border-radius:12px;padding:12px;max-height:44vh;overflow:auto;background:#fff;color:#111;font-size:12px;margin:8px 0"></div>
+  <div style="font-size:12px;font-weight:800;margin-top:8px">Tu firma:</div>
+  <canvas id="fd-canvas" style="width:100%;height:150px;border:1px dashed var(--bd);border-radius:12px;background:#fff;touch-action:none;margin-top:4px"></canvas>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button id="fd-clear" class="bit-add" style="flex:0 0 auto;width:auto;padding:10px 14px">Limpiar</button>
+    <button id="fd-sign" class="bit-add" style="flex:1;background:var(--accent);color:#fff;font-weight:800;border-style:solid">Firmar contrato</button>
+  </div>
+  <div id="fd-msg" class="ssub" style="margin-top:8px;min-height:16px"></div>
+</div></div>
 
 <!-- Hoja Comidas -->
 <div class="sheet" id="comidaSheet"><div class="box">
@@ -1075,6 +1091,55 @@ $('soonSheet').onclick=(e)=>{ if(e.target.id==='soonSheet') $('soonSheet').class
 
 /* ===== Notificaciones ===== */
 let NOTIFS=[];
+let FD_CONTRATO=null, FD_CTX=null, FD_DRAW=false, FD_DREW=false;
+async function loadDocsPorFirmar(){
+  var card=document.getElementById('docsFirmaCard'); if(!card) return;
+  if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
+  var empId=EMP||HZ.empId; if(!empId){ card.innerHTML=''; return; }
+  var rows=[];
+  try{ const {data}=await sb.from('contratos').select('id,nombre,rol,numero,total_contratos,contrato_html,created_at').eq('employee_id',empId).eq('estatus','enviado_pendiente_firma').order('created_at',{ascending:false}); rows=data||[]; }catch(e){ rows=[]; }
+  if(!rows.length){ card.innerHTML=''; return; }
+  window._FD_ROWS=rows;
+  card.innerHTML='<div class="card" style="border:1px solid var(--gold)"><div class="hd"><h3>\u270D\uFE0F Documentos por firmar</h3><span class="day">'+rows.length+'</span></div><div class="sub">Tienes '+rows.length+' documento(s) esperando tu firma.</div>'+rows.map(function(r){return '<button class="bit-add" style="margin-top:8px;text-align:left;justify-content:flex-start" data-fd="'+r.id+'">\uD83D\uDCC4 '+((r.rol||'Contrato'))+' \u00B7 contrato '+(r.numero||1)+'/'+(r.total_contratos||1)+' \u2014 Ver y firmar \u2192</button>';}).join('')+'</div>';
+  card.querySelectorAll('[data-fd]').forEach(function(b){ b.onclick=function(){ var r=(window._FD_ROWS||[]).find(function(x){return x.id===b.dataset.fd;}); if(r) openFirmaDoc(r); }; });
+}
+function openFirmaDoc(c){
+  FD_CONTRATO=c; FD_DREW=false;
+  document.getElementById('fd-title').textContent=(c.rol||'Contrato')+' \u00B7 '+(c.numero||1)+'/'+(c.total_contratos||1);
+  document.getElementById('fd-doc').innerHTML=c.contrato_html||'<i>Documento no disponible</i>';
+  document.getElementById('fd-msg').textContent='';
+  var sh=document.getElementById('firmaSheet'); sh.classList.add('show');
+  sh.onclick=function(e){ if(e.target.id==='firmaSheet') sh.classList.remove('show'); };
+  document.getElementById('fd-clear').onclick=function(){ var cv=document.getElementById('fd-canvas'); if(FD_CTX) FD_CTX.clearRect(0,0,cv.width,cv.height); FD_DREW=false; };
+  document.getElementById('fd-sign').onclick=fdFirmar;
+  setTimeout(fdInitCanvas,60);
+}
+function fdInitCanvas(){
+  var cv=document.getElementById('fd-canvas'); if(!cv) return;
+  var rect=cv.getBoundingClientRect(); cv.width=Math.max(1,rect.width*2); cv.height=Math.max(1,rect.height*2);
+  FD_CTX=cv.getContext('2d'); FD_CTX.scale(2,2); FD_CTX.lineWidth=2.2; FD_CTX.lineCap='round'; FD_CTX.lineJoin='round'; FD_CTX.strokeStyle='#111';
+  function pos(e){ var r=cv.getBoundingClientRect(); var t=(e.touches&&e.touches[0])||e; return {x:t.clientX-r.left,y:t.clientY-r.top}; }
+  function down(e){ e.preventDefault(); FD_DRAW=true; FD_DREW=true; var p=pos(e); FD_CTX.beginPath(); FD_CTX.moveTo(p.x,p.y); }
+  function move(e){ if(!FD_DRAW)return; e.preventDefault(); var p=pos(e); FD_CTX.lineTo(p.x,p.y); FD_CTX.stroke(); }
+  function up(){ FD_DRAW=false; }
+  cv.onmousedown=down; cv.onmousemove=move; cv.onmouseup=up; cv.onmouseleave=up;
+  cv.ontouchstart=down; cv.ontouchmove=move; cv.ontouchend=up;
+}
+async function fdFirmar(){
+  if(!FD_CONTRATO) return;
+  var msg=document.getElementById('fd-msg');
+  if(!FD_DREW){ msg.textContent='Dibuja tu firma primero.'; return; }
+  var btn=document.getElementById('fd-sign'); btn.disabled=true; msg.textContent='Firmando\u2026';
+  var firma=''; try{ firma=document.getElementById('fd-canvas').toDataURL('image/png'); }catch(e){}
+  var acuse={ firmado_por:(HZ.nombreDisplay||NOMBRE||''), firma:firma, device:navigator.userAgent, at:new Date().toISOString(), lat:null, lng:null };
+  try{ var p=await new Promise(function(res){ if(!navigator.geolocation){res(null);return;} navigator.geolocation.getCurrentPosition(function(x){res(x);},function(){res(null);},{timeout:6000,maximumAge:60000}); }); if(p){ acuse.lat=p.coords.latitude; acuse.lng=p.coords.longitude; } }catch(e){}
+  try{
+    const {error}=await sb.from('contratos').update({ estatus:'firmado', firmado_at:new Date().toISOString(), firma_acuse:acuse }).eq('id',FD_CONTRATO.id);
+    if(error) throw error;
+    msg.textContent='\u2713 \u00A1Contrato firmado! Gracias.';
+    setTimeout(function(){ document.getElementById('firmaSheet').classList.remove('show'); loadDocsPorFirmar(); try{loadNotifs();}catch(e){} }, 1300);
+  }catch(e){ msg.textContent='No se pudo firmar. Intenta de nuevo.'; btn.disabled=false; }
+}
 async function loadNotifs(){
   try{
     const { data } = await sb.from('notificaciones').select('id,titulo,cuerpo,icono,leido,created_at').order('created_at',{ascending:false}).limit(50);
@@ -2314,6 +2379,7 @@ async function start(){
     setupDesayunos();
     loadBitacora();
     renderRankings();
+    loadDocsPorFirmar();
     const rb=$('rep-refresh');
     if(rb) rb.onclick=()=>{ loadReporte(true); loadTours(); };
   }catch(e){ /* el shell ya se mostro; si un loader falla, no rompemos la app */ }
