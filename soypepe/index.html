@@ -1142,24 +1142,48 @@ async function fdFirmar(){
 }
 async function loadNotifs(){
   try{
-    const { data } = await sb.from('notificaciones').select('id,titulo,cuerpo,icono,leido,created_at').order('created_at',{ascending:false}).limit(50);
+    const { data } = await sb.from('notificaciones').select('id,titulo,cuerpo,icono,leido,created_at,accion').order('created_at',{ascending:false}).limit(50);
     NOTIFS=data||[];
   }catch(e){ NOTIFS=[]; }
   const unread=NOTIFS.filter(n=>!n.leido).length;
   const b=$('notifBadge'); if(b){ if(unread){ b.textContent=unread; b.style.display='inline-block'; } else b.style.display='none'; }
 }
 function fmtNotif(iso){ try{ return new Date(iso).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
+function notifCTA(n){
+  var a=n.accion||null;
+  var txt=((n.titulo||'')+' '+(n.cuerpo||'')).toLowerCase();
+  var st='border:none;background:var(--gold,#C9A227);color:#2b2017;font-weight:800;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer;text-decoration:none;display:inline-block';
+  if((a&&(a.tipo==='firma'||a.type==='firma'))||/firmar|por firmar|pendiente de firma|documento.*firm/.test(txt)){
+    var cid=(a&&(a.contrato_id||a.id))||'';
+    return '<button class="notif-cta" data-firma="'+cid+'" style="'+st+'">✍️ Ver y firmar →</button>';
+  }
+  if(a&&a.url&&/^\//.test(a.url)){ return '<a class="notif-cta" href="'+a.url+'" style="'+st+'">Ver más →</a>'; }
+  if(a&&(a.tab||a.pagina)){ return '<button class="notif-cta" data-navtab="'+(a.tab||a.pagina)+'" style="'+st+'">Abrir →</button>'; }
+  return '';
+}
+async function abrirFirmaDesdeNotif(cid){
+  var empId=(typeof EMP!=='undefined'&&EMP)||HZ.empId;
+  if(!empId){ if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} } empId=HZ.empId; }
+  if(!empId){ try{ alert('No encontramos tu ficha. Avisa a RH.'); }catch(e){} return; }
+  var rows=[];
+  try{ const {data}=await sb.from('contratos').select('id,nombre,rol,numero,total_contratos,contrato_html,created_at').eq('employee_id',empId).eq('estatus','enviado_pendiente_firma').order('created_at',{ascending:false}); rows=data||[]; }catch(e){ rows=[]; }
+  var c=null; if(cid){ for(var i=0;i<rows.length;i++){ if(rows[i].id===cid){ c=rows[i]; break; } } } if(!c) c=rows[0];
+  if(!c){ try{ alert('Este documento ya fue firmado o ya no está pendiente de firma.'); }catch(e){} return; }
+  try{ document.getElementById('notifSheet').classList.remove('show'); }catch(e){}
+  openFirmaDoc(c);
+}
 async function openNotifs(){
   $('notifSheet').classList.add('show');
   const wrap=$('notifList');
   if(!NOTIFS.length){ wrap.innerHTML='<div class="ph"><div class="ico">🔕</div><div class="d">No tienes notificaciones todavía.</div></div>'; }
   else{
-    wrap.innerHTML=NOTIFS.map(n=>'<div style="display:flex;gap:10px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.08)">'
+    wrap.innerHTML=NOTIFS.map(n=>{var _cta=notifCTA(n);return '<div style="display:flex;gap:10px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.08)">'
       +'<div style="font-size:22px;line-height:1">'+(n.icono||'🔔')+'</div>'
       +'<div style="flex:1"><div style="font-weight:700">'+(n.titulo||'')+'</div>'
       +(n.cuerpo?'<div style="font-size:13px;color:#666;margin-top:2px">'+n.cuerpo+'</div>':'')
-      +'<div style="font-size:11px;color:#999;margin-top:4px">'+fmtNotif(n.created_at)+'</div></div></div>').join('');
+      +'<div style="font-size:11px;color:#999;margin-top:4px">'+fmtNotif(n.created_at)+'</div>'+(_cta?'<div style="margin-top:8px">'+_cta+'</div>':'')+'</div></div>';}).join('');
   }
+  try{ wrap.querySelectorAll('[data-firma]').forEach(function(b){ b.onclick=function(){ abrirFirmaDesdeNotif(b.getAttribute('data-firma')||null); }; }); wrap.querySelectorAll('[data-navtab]').forEach(function(b){ b.onclick=function(){ try{ document.getElementById('notifSheet').classList.remove('show'); var t=document.querySelector('[data-tab="'+b.getAttribute('data-navtab')+'"]'); if(t) t.click(); }catch(e){} }; }); }catch(e){}
   const ids=NOTIFS.filter(n=>!n.leido).map(n=>n.id);
   if(ids.length){ try{ await sb.from('notificaciones').update({leido:true}).in('id',ids); NOTIFS.forEach(n=>n.leido=true); }catch(e){} const b=$('notifBadge'); if(b)b.style.display='none'; }
 }
