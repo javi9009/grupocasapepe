@@ -108,14 +108,15 @@ async function boot(){
 }
 $('lbtn').onclick=async()=>{$('lerr').textContent='';const {error}=await sb.auth.signInWithPassword({email:$('lemail').value.trim(),password:$('lpass').value});if(error){$('lerr').textContent=error.message;return;}boot();};
 
-async function loadEmployees(){const {data}=await sb.from('employees').select('id,nombre,apellido,puesto,area,sede');(data||[]).forEach(e=>EMP[e.id]=e);}
+async function loadEmployees(){const {data}=await sb.from('employees').select('id,nombre,apellido,puesto,area,sede,estatus');(data||[]).forEach(e=>EMP[e.id]=e);}
 const persona=r=>{const e=EMP[r.employee_id]||{};return (e.nombre||r.nombre_display||'—')+(e.apellido?(' '+e.apellido):'');};
 const areaDe=r=>{const e=EMP[r.employee_id]||{};return (e.area||'')+(e.sede?(' · '+e.sede):'');};
+const esBaja=id=>{const e=EMP[id];return !!(e&&e.estatus==='baja');};
 
 // ---- 1) SOLICITUDES (vacaciones y otras) ----
 async function loadSolic(){
   const {data}=await sb.from('incidencias').select('*').eq('resuelto',false).not('tipo','in','(alta_colaborador,validacion_asistencia)').order('created_at',{ascending:false});
-  let rows=(data||[]).filter(r=>{const e=EMP[r.employee_id]||{};return (allAsis||isAdmin)?true:inScope(e);});
+  let rows=(data||[]).filter(r=>{if(esBaja(r.employee_id))return false;const e=EMP[r.employee_id]||{};return (allAsis||isAdmin)?true:inScope(e);});
   {const _cs=$('c-solic');if(_cs)_cs.textContent=rows.length;}
   const c=$('solic'); if(!c)return;
   if(!rows.length){c.innerHTML='<div class="empty">Sin solicitudes pendientes 🎉</div>';return;}
@@ -157,7 +158,7 @@ async function loadAsis(){
   // Solo quien llegó tarde (retardo) o no checó a su hora (falta) — no listamos a quien checó bien.
   const {data,error}=await sb.from('asistencias').select('*').gte('fecha',desde).in('estatus',['retardo','falta']).order('fecha',{ascending:false});
   if(error){const _ae=$('asis');if(_ae)_ae.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
-  let rows=(data||[]).filter(r=>{if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;const e=EMP[r.employee_id]||{};return inScope(e);});
+  let rows=(data||[]).filter(r=>{if(esBaja(r.employee_id))return false;if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;const e=EMP[r.employee_id]||{};return inScope(e);});
   {const _cs=$('c-asis');if(_cs)_cs.textContent=rows.length;}
   const c=$('asis'); if(!c)return;
   if(!rows.length){c.innerHTML='<div class="empty">Sin retrasos ni faltas por validar 🎉</div>';return;}
@@ -206,7 +207,7 @@ async function loadAltas(){
   const {data:nots}=await sb.from('notificaciones').select('employee_id,cuerpo,created_at').ilike('titulo','%ienvenid%').order('created_at',{ascending:false});
   const docsByEmail={};(incs||[]).forEach(r=>{const m=r.metadata||{};if(m.email)docsByEmail[(m.email||'').toLowerCase()]=m.docs||{};});
   const notByEmp={};(nots||[]).forEach(n=>{if(n.employee_id&&!notByEmp[n.employee_id])notByEmp[n.employee_id]=n.cuerpo;});
-  let rows=(emps||[]).filter(e=>e.alta_etapa!=='integrada'&&(isAdmin||inScope({area:e.area||'',sede:e.sede}))).sort((a,b)=>altaIdx(a.alta_etapa)-altaIdx(b.alta_etapa));
+  let rows=(emps||[]).filter(e=>e.alta_etapa!=='integrada'&&e.estatus!=='baja'&&(isAdmin||inScope({area:e.area||'',sede:e.sede}))).sort((a,b)=>altaIdx(a.alta_etapa)-altaIdx(b.alta_etapa));
   {const _cs=$('c-altas');if(_cs)_cs.textContent=rows.length;}
   const c=$('altas'); if(!c)return;
   if(!rows.length){c.innerHTML='<div class="empty">Sin altas en proceso 🎉</div>';return;}
@@ -236,7 +237,7 @@ async function loadVacEstado(){
   let saldos=[],sols=[];
   try{ const r=await sb.from('vacaciones_saldo').select('*'); saldos=r.data||[]; }catch(e){}
   try{ const r=await sb.from('vacaciones_solicitudes').select('*').eq('estado','aprobada').gte('fecha_fin',hoy).order('fecha_inicio',{ascending:true}); sols=r.data||[]; }catch(e){}
-  const vis=id=>isAdmin||allAsis||inScope(EMP[id]||{});
+  const vis=id=>!esBaja(id)&&(isAdmin||allAsis||inScope(EMP[id]||{}));
   saldos=saldos.filter(x=>vis(x.employee_id));
   sols=sols.filter(x=>vis(x.employee_id));
   const dEntre=d=>{try{return Math.ceil((new Date(d)-new Date(hoy))/864e5);}catch(_){return 999;}};
@@ -254,7 +255,7 @@ async function loadRetrasosQuincena(){
   let data=[];
   try{ const r=await sb.from('asistencias').select('employee_id,estatus,fecha,minutos_retraso').eq('quincena',quincena).in('estatus',['retardo','falta']); data=r.data||[]; }catch(e){}
   const agg={};
-  data.forEach(r=>{ if(!(isAdmin||allAsis||inScope(EMP[r.employee_id]||{})))return; const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,fal:0,min:0,faltas:[]}); if(r.estatus==='retardo'){a.ret++;a.min+=(r.minutos_retraso||0);} else {a.fal++;a.faltas.push(r.fecha);} });
+  data.forEach(r=>{ if(esBaja(r.employee_id))return; if(!(isAdmin||allAsis||inScope(EMP[r.employee_id]||{})))return; const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,fal:0,min:0,faltas:[]}); if(r.estatus==='retardo'){a.ret++;a.min+=(r.minutos_retraso||0);} else {a.fal++;a.faltas.push(r.fecha);} });
   let rows=Object.keys(agg).map(id=>Object.assign({employee_id:id},agg[id])).sort((a,b)=>(b.ret+b.fal)-(a.ret+a.fal)||b.ret-a.ret);
   const tabla=rows.length?('<table class="tbl"><thead><tr><th>Colaborador</th><th>Área</th><th>Retardos</th><th>Min. acum.</th><th>Faltas</th></tr></thead><tbody>'+rows.map(r=>{const cls=r.ret>=3?'bad':(r.ret>0?'warn3':'');return `<tr class="${cls}"><td>${esc(persona(r))}</td><td>${esc(areaDe(r))}</td><td><b>${r.ret}</b>${r.ret>=3?' 🚩':''}</td><td>${r.min}</td><td>${r.fal?('<b>'+r.fal+'</b>'):'0'}</td></tr>`;}).join('')+'</tbody></table>'):'<div class="empty">Sin retardos ni faltas en la quincena 🎉</div>';
   const faltasList=rows.filter(r=>r.fal>0).map(r=>`<div class="arow"><b>${esc(persona(r))}</b> · ${r.faltas.map(esc).join(', ')}</div>`).join('');
@@ -264,14 +265,23 @@ async function loadRetrasosQuincena(){
 }
 async function loadContratosEmitir(){
   const c=$('contEmitir'); if(!c)return;
+  const hoy=new Date(); const hoyS=hoy.toISOString().slice(0,10); const limS=new Date(Date.now()+60*864e5).toISOString().slice(0,10);
   let emps=[],cons=[];
-  try{ const r=await sb.from('employees').select('id,empleado_id,nombre,nombre_display,area,sede,property_id,alta_etapa,puesto').in('alta_etapa',['activa','aceptada']); emps=r.data||[]; }catch(e){}
-  try{ const r=await sb.from('contratos').select('employee_id,estatus'); cons=r.data||[]; }catch(e){}
-  const firmado={}; cons.forEach(k=>{ if(k.estatus==='firmado') firmado[k.employee_id]=true; });
-  let rows=(emps||[]).filter(e=>!firmado[e.id] && (isAdmin||inScope({area:e.area||'',sede:e.sede})));
-  if(!rows.length){c.innerHTML='<div class="empty">No hay contratos próximos por emitir 🎉</div>';return;}
-  c.innerHTML='<div class="det" style="margin-bottom:8px">Colaboradores con ID activo cuyo contrato aún no está firmado. El botón abre <b>Contratos & Aceptación</b> (la misma página) para editar y enviar — sin funciones duplicadas.</div>'+rows.map(e=>{const et=(e.alta_etapa==='aceptada'?'En contrato':'Listo para contrato');
-    return `<div class="item"><div class="top"><span class="nm">${esc(e.nombre||e.nombre_display||'—')}</span><span class="pill g">${esc(altaUbic(e))}</span><span class="pill">${esc(e.empleado_id||'sin ID')}</span><span class="pill">${esc(e.puesto||'')}</span><span class="pill s">${et}</span></div><div class="acts"><a class="btn lnk" href="/m/contratos.html?emp=${e.id}">→ Editar / emitir contrato</a></div></div>`;}).join('');
+  try{ const r=await sb.from('employees').select('id,empleado_id,nombre,nombre_display,area,sede,property_id,alta_etapa,puesto,estatus'); emps=r.data||[]; }catch(e){}
+  try{ const r=await sb.from('contratos').select('employee_id,estatus,vigencia_fin'); cons=r.data||[]; }catch(e){}
+  const empById={}; emps.forEach(e=>empById[e.id]=e);
+  const maxVig={},tieneFirmado={};
+  cons.forEach(k=>{ if(k.estatus==='firmado'){ tieneFirmado[k.employee_id]=true; if(k.vigencia_fin&&(!maxVig[k.employee_id]||k.vigencia_fin>maxVig[k.employee_id])) maxVig[k.employee_id]=k.vigencia_fin; } });
+  const rows=[];
+  // 1) renovaciones: contrato firmado cuyo último vencimiento cae dentro de 60 días (o ya venció)
+  Object.keys(maxVig).forEach(id=>{ const e=empById[id]; if(!e)return; if(e.estatus&&e.estatus!=='activo'&&e.estatus!=='pendiente_alta')return; if(maxVig[id]<=limS) rows.push({e:e,tipo:'renovar',fecha:maxVig[id]}); });
+  // 2) primer contrato: alta activa/aceptada sin ningún contrato firmado
+  emps.forEach(e=>{ if(['activa','aceptada'].indexOf(e.alta_etapa)>=0 && !tieneFirmado[e.id] && e.estatus!=='baja') rows.push({e:e,tipo:'nuevo',fecha:hoyS}); });
+  let vis=rows.filter(r=>isAdmin||inScope({area:r.e.area||'',sede:r.e.sede}));
+  vis.sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  if(!vis.length){c.innerHTML='<div class="empty">No hay contratos por emitir en los próximos 60 días 🎉</div>';return;}
+  c.innerHTML='<div class="det" style="margin-bottom:8px">Contratos que deben emitirse en los próximos <b>60 días</b>: renovaciones por vencimiento y altas nuevas sin contrato. El botón abre <b>Contratos & Aceptación</b> (la misma página) para editar y enviar — sin funciones duplicadas.</div>'+vis.map(r=>{const e=r.e;const dd=Math.ceil((new Date(r.fecha)-hoy)/864e5);const venc=r.tipo==='renovar';const etq=venc?(dd<0?('Vencido hace '+(-dd)+' d'):('Vence en '+dd+' d')):'Nuevo · sin contrato';const bc=dd<0?'border-color:#5a2f2a':(dd<=15?'border-color:#5a431f':'');
+    return `<div class="item" style="${bc}"><div class="top"><span class="nm">${esc(e.nombre||e.nombre_display||'—')}</span><span class="pill g">${esc(altaUbic(e))}</span><span class="pill">${esc(e.empleado_id||'sin ID')}</span><span class="pill">${esc(e.puesto||'')}</span><span class="pill ${venc?'r':'s'}">${etq}${venc?(' · '+esc(r.fecha)):''}</span></div><div class="acts"><a class="btn lnk" href="/m/contratos.html?emp=${e.id}">→ Editar / emitir contrato</a></div></div>`;}).join('');
 }
 
 boot();
