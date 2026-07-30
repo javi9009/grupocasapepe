@@ -44,7 +44,9 @@
   .tbl{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
   .tbl th{text-align:left;padding:8px;border-bottom:1px solid var(--line);color:var(--gold2);font-weight:600;white-space:nowrap}
   .tbl td{padding:8px;border-bottom:1px solid #2a2014;vertical-align:top}
-  .tbl tr.warn3 td{background:#3a2c1226}.tbl tr.bad td{background:#3a2a2a33}
+  .tbl tr.warn3 td{background:#3a2c1226}.tbl tr.bad td{background:#3a2a2a33}.tbl tr.rneg td{background:#00000055}
+  .tj{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;display:inline-block}
+  .tj-ama{background:#3a2c12;color:#f0c674;border:1px solid #5a431f}.tj-roj{background:#3a2a2a;color:#e6bfbf;border:1px solid #5a2f2a}.tj-neg{background:#0c0c0c;color:#f3ead9;border:1px solid #555}.tj-ok{color:var(--muted)}
   .gate{position:fixed;inset:0;background:#0f0d0a;display:flex;align-items:center;justify-content:center;z-index:50}
   .gate .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:320px;width:90%;text-align:center}
   .gate h2{color:var(--gold2);margin:0 0 10px}.gate input{width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:14px;margin-bottom:10px}
@@ -250,17 +252,20 @@ async function loadVacEstado(){
 }
 async function loadRetrasosQuincena(){
   const c=$('retQuin'); if(!c)return;
-  const now=new Date(); const y=now.getFullYear(); const m=String(now.getMonth()+1).padStart(2,'0'); const q=now.getDate()<=15?'Q1':'Q2';
-  const quincena=y+'-'+m+'-'+q;
+  const dLim=new Date(Date.now()-60*864e5).toISOString().slice(0,10);
+  const d15=new Date(Date.now()-15*864e5).toISOString().slice(0,10);
+  const d30=new Date(Date.now()-30*864e5).toISOString().slice(0,10);
   let data=[];
-  try{ const r=await sb.from('asistencias').select('employee_id,estatus,fecha,minutos_retraso').eq('quincena',quincena).in('estatus',['retardo','falta']); data=r.data||[]; }catch(e){}
-  const agg={};
-  data.forEach(r=>{ if(esBaja(r.employee_id))return; if(!(isAdmin||allAsis||inScope(EMP[r.employee_id]||{})))return; const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,fal:0,min:0,faltas:[]}); if(r.estatus==='retardo'){a.ret++;a.min+=(r.minutos_retraso||0);} else {a.fal++;a.faltas.push(r.fecha);} });
-  let rows=Object.keys(agg).map(id=>Object.assign({employee_id:id},agg[id])).sort((a,b)=>(b.ret+b.fal)-(a.ret+a.fal)||b.ret-a.ret);
-  const tabla=rows.length?('<table class="tbl"><thead><tr><th>Colaborador</th><th>Área</th><th>Retardos</th><th>Min. acum.</th><th>Faltas</th></tr></thead><tbody>'+rows.map(r=>{const cls=r.ret>=3?'bad':(r.ret>0?'warn3':'');return `<tr class="${cls}"><td>${esc(persona(r))}</td><td>${esc(areaDe(r))}</td><td><b>${r.ret}</b>${r.ret>=3?' 🚩':''}</td><td>${r.min}</td><td>${r.fal?('<b>'+r.fal+'</b>'):'0'}</td></tr>`;}).join('')+'</tbody></table>'):'<div class="empty">Sin retardos ni faltas en la quincena 🎉</div>';
-  const faltasList=rows.filter(r=>r.fal>0).map(r=>`<div class="arow"><b>${esc(persona(r))}</b> · ${r.faltas.map(esc).join(', ')}</div>`).join('');
-  c.innerHTML='<div class="item"><div class="top"><span class="nm">⏱️ Retardos y faltas · quincena '+esc(quincena)+'</span></div><div class="det">Regla: máximo <b>3 retardos</b> por quincena. 🚩 = alcanzó o superó el límite. Clic en un encabezado para ordenar de más a menos.</div>'+tabla+'</div>'
-    +(faltasList?('<div class="item"><div class="nm">🚫 Faltas de la quincena</div>'+faltasList+'</div>'):'');
+  try{ const r=await sb.from('asistencias').select('employee_id,estatus,fecha').gte('fecha',dLim).in('estatus',['retardo','falta']); data=r.data||[]; }catch(e){}
+  const A={};
+  data.forEach(r=>{ if(esBaja(r.employee_id))return; if(!(isAdmin||allAsis||inScope(EMP[r.employee_id]||{})))return; const a=A[r.employee_id]||(A[r.employee_id]={r15:0,f15:0,r30:0,f30:0,r60:0,f60:0,faltas:[]}); if(r.estatus==='falta'){a.f60++;if(r.fecha>=d30)a.f30++;if(r.fecha>=d15)a.f15++;a.faltas.push(r.fecha);} else {a.r60++;if(r.fecha>=d30)a.r30++;if(r.fecha>=d15)a.r15++;} });
+  function tj(a){ if(a.f60>5||a.r60>10) return {rank:3,cls:'tj-neg',rc:'rneg',txt:'⚫ Negra · acta admin.'}; if(a.r15>5||a.f15>1||a.f30>3) return {rank:2,cls:'tj-roj',rc:'bad',txt:'🔴 Roja'}; if((a.r15>=3&&a.r15<=5)||a.f15===1) return {rank:1,cls:'tj-ama',rc:'warn3',txt:'🟡 Amarilla'}; return {rank:0,cls:'tj-ok',rc:'',txt:'—'}; }
+  let rows=Object.keys(A).map(id=>{const a=Object.assign({employee_id:id},A[id]);a.card=tj(a);return a;}).sort((x,y)=>y.card.rank-x.card.rank||(y.r60+y.f60)-(x.r60+x.f60));
+  const tabla=rows.length?('<table class="tbl"><thead><tr><th>Colaborador</th><th>Área</th><th>Ret. 15d</th><th>Faltas 15d</th><th>Ret. 60d</th><th>Faltas 60d</th><th>Tarjeta</th></tr></thead><tbody>'+rows.map(a=>`<tr class="${a.card.rc}"><td>${esc(persona(a))}</td><td>${esc(areaDe(a))}</td><td>${a.r15||0}</td><td>${a.f15||0}</td><td><b>${a.r60||0}</b></td><td><b>${a.f60||0}</b></td><td><span class="tj ${a.card.cls}">${a.card.txt}</span></td></tr>`).join('')+'</tbody></table>'):'<div class="empty">Sin retardos ni faltas en los últimos 60 días 🎉</div>';
+  const faltasList=rows.filter(a=>a.f60>0).map(a=>`<div class="arow"><b>${esc(persona(a))}</b> · ${a.faltas.slice().sort().map(esc).join(', ')}</div>`).join('');
+  c.innerHTML='<div class="item"><div class="top"><span class="nm">⏱️ Retardos y faltas · últimos 60 días</span></div>'
+    +'<div class="det">Tarjetas: <b style="color:#f0c674">🟡 Amarilla</b> = 3–5 retardos/15d o 1 falta/15d · <b style="color:#e6bfbf">🔴 Roja</b> = +5 retardos/15d, +1 falta/15d o +3 faltas/mes · <b>⚫ Negra</b> (acta administrativa) = +5 faltas/60d o +10 retardos/60d. Las columnas de 60d muestran el recorrido de los últimos 2 meses. Clic en un encabezado para ordenar.</div>'+tabla+'</div>'
+    +(faltasList?('<div class="item"><div class="nm">🚫 Faltas (últimos 60 días)</div>'+faltasList+'</div>'):'');
   if(window.tablekit)window.tablekit();
 }
 async function loadContratosEmitir(){
