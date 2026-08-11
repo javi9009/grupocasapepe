@@ -53,6 +53,16 @@
   .gate h2{color:var(--gold2);margin:0 0 10px}.gate input{width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:14px;margin-bottom:10px}
   .gate .err{color:var(--red);font-size:12px;min-height:14px}.gate button{width:100%;background:var(--gold);color:#1a1206;border:0;border-radius:9px;padding:10px;font-weight:600;cursor:pointer}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#23402a;color:#bfe6c4;border:1px solid #3f6043;padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.2s;z-index:60}.toast.show{opacity:1}
+
+  .rq{background:var(--panel2,#221d16);border:1px solid var(--line,#34291c);border-radius:12px;padding:12px 14px;margin:0 0 14px}
+  .rqh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .rqh b{font-size:14px;color:var(--txt,#f3ead9)}
+  .rq .mut{color:var(--muted,#a99a82);font-size:12px;font-weight:400}
+  .rqt{width:100%;border-collapse:collapse;font-size:12.5px}
+  .rqt th{text-align:left;color:var(--muted,#a99a82);font-weight:600;padding:4px 8px;border-bottom:1px solid var(--line,#34291c);white-space:nowrap}
+  .rqt td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.05)}
+  .rqt td.ar{color:var(--muted,#a99a82);font-size:11.5px}
+  .rqt td.n{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
 </style>
 </head>
 <body>
@@ -156,6 +166,19 @@ async function resolverSolic(r,a,it){
 }
 
 // ---- 2) RETRASOS / FALTAS (validaciones de asistencia) ----
+function qBounds(){const d=new Date();const p=n=>(n<10?'0':'')+n;const y=d.getFullYear(),mo=d.getMonth(),dd=d.getDate();const ini=y+'-'+p(mo+1)+'-'+(dd<=15?'01':'16');const fin=dd<=15?(y+'-'+p(mo+1)+'-15'):(y+'-'+p(mo+1)+'-'+p(new Date(y,mo+1,0).getDate()));return {ini,fin};}
+async function resumenQuincena(){try{
+  const b=qBounds();
+  const {data}=await sb.from('asistencias').select('employee_id,estatus,minutos_retraso').gte('fecha',b.ini).lte('fecha',b.fin);
+  const agg={};(data||[]).forEach(r=>{const e=EMP[r.employee_id]||{};if(!inScope(e))return;const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,min:0,sinT:0,falta:0});if(r.estatus==='retardo'){a.ret++;a.min+=(r.minutos_retraso||0);}else if(r.estatus==='sin_turno')a.sinT++;else if(r.estatus==='falta')a.falta++;});
+  let arr=Object.keys(agg).map(k=>Object.assign({id:k},agg[k])).filter(a=>a.ret||a.sinT||a.falta);
+  arr.sort((x,y)=>y.ret-x.ret||y.min-x.min);
+  const hd='<div class="rqh"><b>Resumen de la quincena</b> <span class="mut">'+b.ini+' \u2192 '+b.fin+' \u00b7 desde el checador</span></div>';
+  if(!arr.length)return '<div class="rq">'+hd+'<div class="mut">Sin retardos ni faltas esta quincena \ud83c\udf89</div></div>';
+  const tr=arr.map(a=>{const e=EMP[a.id]||{};const nom=(e.nombre||'\u2014')+(e.apellido?(' '+e.apellido):'');return '<tr><td>'+esc(nom)+'</td><td class="ar">'+esc(e.area||'')+'</td><td class="n">'+(a.ret||'')+'</td><td class="n">'+(a.min||'')+'</td><td class="n">'+(a.sinT||'')+'</td><td class="n">'+(a.falta||'')+'</td></tr>';}).join('');
+  return '<div class="rq">'+hd+'<div style="overflow-x:auto"><table class="rqt"><tr><th>Colaborador</th><th>\u00c1rea</th><th>Ret.</th><th>Min</th><th>S/turno</th><th>Faltas</th></tr>'+tr+'</table></div></div>';
+}catch(e){return '';}}
+
 async function loadAsis(){
   const desde=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
   // Solo quien llegó tarde (retardo) o no checó a su hora (falta) — no listamos a quien checó bien.
@@ -163,9 +186,9 @@ async function loadAsis(){
   if(error){const _ae=$('asis');if(_ae)_ae.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
   let rows=(data||[]).filter(r=>{if(esBaja(r.employee_id))return false;if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;const e=EMP[r.employee_id]||{};return inScope(e);});
   {const _cs=$('c-asis');if(_cs)_cs.textContent=rows.length;}
-  const c=$('asis'); if(!c)return;
-  if(!rows.length){c.innerHTML='<div class="empty">Sin retrasos ni faltas por validar 🎉</div>';return;}
-  c.innerHTML=rows.map((r,i)=>{const esFalta=(r.estatus==='falta')||!r.check_in;
+  const c=$('asis');const resumenHTML=await resumenQuincena(); if(!c)return;
+  if(!rows.length){c.innerHTML=resumenHTML+'<div class="empty">Sin retrasos ni faltas por validar 🎉</div>';return;}
+  c.innerHTML=resumenHTML+rows.map((r,i)=>{const esFalta=(r.estatus==='falta')||!r.check_in;
     const etq=esFalta?'No checó / falta':('Retardo '+(r.minutos_retraso||0)+' min');
     return `<div class="item" data-i="${i}"><div class="top"><span class="nm">${esc(persona(r))}</span>
       <span class="pill ${esFalta?'s':'r'}">${etq}</span>
