@@ -174,6 +174,8 @@
   .ch-rec .vv{margin-left:auto;text-align:right;font-size:13px;font-weight:800}
   .ch-rec .vv.late{color:#b03434}
   .ch-rec .vv.ok{color:#1d9e75}
+  .ch-hist{margin-top:16px}
+  .ch-histh{font-size:12px;font-weight:800;color:var(--txt3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
   .ch-note{margin-top:14px;font-size:12px;color:var(--txt3);text-align:center;line-height:1.5}
   .ch-rodaje{display:inline-block;background:rgba(201,162,39,.14);color:#C9A227;font-weight:700;font-size:11px;padding:3px 9px;border-radius:20px;margin-top:6px}
   /* Comidas */
@@ -624,6 +626,7 @@
         <button id="ch-btn" class="ch-btn" disabled>…</button>
         <div class="ch-hint" id="ch-hint"></div>
         <div class="ch-rows" id="ch-rows"></div>
+        <div class="ch-hist" id="ch-hist"></div>
         <div class="ch-note" id="ch-note"></div>
       </div>
     </section>
@@ -1360,6 +1363,7 @@ function tagFor(tipo){
 }
 
 const CDMX_PROP='45e69775-d877-4507-a9e1-a45bd3400dc5';
+const ATENEO_PROP='3e10a9ea-4913-4f7c-86ef-0c829caa851d'; // Ateneo Virreyes: su personal come en CDMX
 let DESAY_ROWS=[];   // metadatos por reserva para guardar
 
 // tope de desayunos por tipo de reserva
@@ -1514,8 +1518,21 @@ async function chLoad(){
     try{ const { data } = await sb.from('asistencias').select('*').eq('employee_id',empId).eq('fecha',ds).order('created_at',{ascending:false}).limit(1); if(data&&data[0]) CH.asis=data[0]; }catch(e){}
     try{ const { data } = await sb.from('asistencias').select('device_id,created_at').eq('employee_id',empId).not('device_id','is',null).order('created_at',{ascending:false}).limit(1); CH.prevDevice=(data&&data[0])?data[0].device_id:null; }catch(e){}
   }
+
+  // FIX 3 — Últimas llegadas del empleado (por employee_id). Fuente real: `asistencias`
+  // (la tabla `checadas` está vacía y sin política de INSERT en el cliente).
+  CH.hist=[];
+  if(empId){
+    try{ const { data } = await sb.from('asistencias')
+           .select('fecha,check_in,check_out,estatus,minutos_retraso')
+           .eq('employee_id',empId).not('check_in','is',null)
+           .order('check_in',{ascending:false}).limit(8);
+         CH.hist=data||[]; }catch(e){}
+  }
+
   CH.loaded=true;
   chRender();
+  chRenderHist();
   if(!CH.tick) CH.tick=setInterval(()=>{ if($('v-checador').classList.contains('show')) chRender(); }, 30000);
 }
 
@@ -1533,6 +1550,31 @@ function chRenderRecords(){
       +'<div class="vv '+(ms<0?'late':'ok')+'">'+(ms<0?(ms+' min'):(ms>0?('+'+ms+' min'):'puntual'))+'</div></div>';
   }
   rows.innerHTML=h;
+}
+
+// FIX 3 — Lista "Mis últimas llegadas" (histórico corto por employee_id, desde `asistencias`).
+function chRenderHist(){
+  const box=$('ch-hist'); if(!box) return;
+  if(CH.exento){ box.innerHTML=''; return; }
+  const hs=CH.hist||[];
+  if(!hs.length){ box.innerHTML=''; return; }
+  const DOW=['dom','lun','mar','mié','jue','vie','sáb'];
+  const tol=(CH_CFG.tolerancia_min||15);
+  let h='<div class="ch-histh">Mis últimas llegadas</div>';
+  h+=hs.map(function(r){
+    const ci=r.check_in?new Date(r.check_in):null;
+    const co=r.check_out?new Date(r.check_out):null;
+    const d=r.fecha?new Date(r.fecha+'T00:00:00'):(ci||new Date());
+    const lbl=DOW[d.getDay()]+' '+d.getDate()+' '+HZ_MON[d.getMonth()];
+    const late=(r.minutos_retraso||0);
+    const sinT=(r.estatus==='sin_turno');
+    const badge=sinT?'sin turno':(late>tol?('+'+late+' min'):'a tiempo');
+    const cls=sinT?'':(late>tol?'late':'ok');
+    return '<div class="ch-rec"><span class="ic">🟢</span><div><div class="nm">'+lbl+'</div>'
+      +'<div class="mt">Entrada '+(ci?hhmm(ci):'—')+(co?(' · Salida '+hhmm(co)):'')+'</div></div>'
+      +'<div class="vv '+cls+'">'+badge+'</div></div>';
+  }).join('');
+  box.innerHTML=h;
 }
 
 function chRender(){
@@ -1665,6 +1707,8 @@ async function openComidas(){
   $('comidaSheet').classList.add('show');
   if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
   CM.propId = HZ.propId || REP_PROP || CDMX_PROP;
+  // FIX 2 — El personal de Ateneo Virreyes come en CDMX: su comida se arma bajo la propiedad CDMX.
+  if(CM.propId===ATENEO_PROP) CM.propId = CDMX_PROP;
   try{
     const { data } = await sb.from('v_empleados_publico').select('area,puesto').eq('id',EMP||HZ.empId).maybeSingle();
     const ap=((data&&data.area||'')+' '+(data&&data.puesto||'')).toLowerCase();
@@ -1683,8 +1727,14 @@ async function cmLoadWeek(){
 
   let menu={}, work={}, counts={}, mine={}, quien={};
   try{ const {data}=await sb.from('comidas_menu').select('fecha,platillo').eq('property_id',CM.propId).gte('fecha',d0).lte('fecha',d6); (data||[]).forEach(m=>menu[m.fecha]=m.platillo||''); }catch(e){}
-  try{ const {data}=await sb.from('horarios').select('fecha,hora_inicio,actividad,employee_id,nombre_display').gte('fecha',d0).lte('fecha',d6);
-       (data||[]).forEach(r=>{ if(hzIsMine(r)&&r.hora_inicio&&!hzIsRestRow(r)) work[r.fecha]=true; }); }catch(e){}
+  // FIX 1 — Cruce del turno por employee_id (NO por texto del nombre). Si la ficha tiene employee_id,
+  // filtramos los horarios por ese id: así "trabaja" es robusto aunque el nombre_display del horario
+  // no coincida con el del perfil (p.ej. "Jimena" vs "Jime"). Solo si la cuenta no tiene employee_id
+  // ligado se recurre al nombre como último recurso.
+  try{ let hq=sb.from('horarios').select('fecha,hora_inicio,actividad,employee_id,nombre_display').gte('fecha',d0).lte('fecha',d6);
+       if(empId) hq=hq.eq('employee_id',empId); else if(HZ.nombreDisplay) hq=hq.eq('nombre_display',HZ.nombreDisplay);
+       const {data}=await hq;
+       (data||[]).forEach(r=>{ if(r.hora_inicio&&!hzIsRestRow(r)) work[r.fecha]=true; }); }catch(e){}
   try{ const {data}=await sb.from('comida_inscripciones').select('id,fecha,employee_id,apuntado,nombre_display').eq('property_id',CM.propId).gte('fecha',d0).lte('fecha',d6);
        (data||[]).forEach(r=>{ if(r.apuntado){ counts[r.fecha]=(counts[r.fecha]||0)+1; (quien[r.fecha]=quien[r.fecha]||[]).push({n:r.nombre_display||'Pepe',ext:!r.employee_id,id:r.id}); } if(r.employee_id===empId) mine[r.fecha]=!!r.apuntado; }); }catch(e){}
 
