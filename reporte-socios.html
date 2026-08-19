@@ -988,7 +988,7 @@
         <span style="color:var(--bad);font-weight:600;"><em>($ ppto)</em></span> en rojo entre paréntesis = no se pudo pagar. <span style="color:var(--text-muted);">Junio: IMSS, convenios Sayulita y liquidaciones confirmados desde el flujo; renta CDMX/Puebla y convenios CDMX/Pue sin desglose de concepto este mes (—). <strong>Julio (cerrado):</strong> pagos agregados del mes — proveedores $1.09M, impuestos $212K, nómina $508K, deuda $182K; desglose por concepto crítico pendiente de extraer del flujo.</span>
       </div>
       <div style="overflow-x:auto;">
-        <table class="kpi" style="font-size:11px;min-width:780px;">
+        <table class="kpi" id="pagosCriticosTabla" data-pending="7" style="font-size:11px;min-width:780px;">
           <thead>
             <tr>
               <th style="text-align:left;">Concepto</th>
@@ -1212,6 +1212,185 @@
           </tbody>
         </table>
       </div>
+
+      <!-- Motor Pagado/Presupuestado de Pagos críticos: siembra data-pag/data-ppto,
+           re-render de celda al formato normal y recálculo de filas derivadas.
+           Corre SIEMPRE (vista normal recalcula saldos/acumulados). El bloque de
+           edición ?edit=1 lo llama vía window.__pc al Editar/Guardar. -->
+      <script>
+      (function(){
+        var TID = 'pagosCriticosTabla';
+        function tbl(){ return document.getElementById(TID); }
+        function pendingSet(){
+          var t=tbl(), s={};
+          if(t){ (t.getAttribute('data-pending')||'').split(',').forEach(function(x){ x=x.trim(); if(x) s[+x]=1; }); }
+          return s;
+        }
+        function fmt(n){ return Math.round(n).toLocaleString('en-US'); }
+        function parseNum(s){
+          if(s==null) return NaN;
+          s=(''+s).replace(/[$,\s]/g,'');
+          if(s==='') return NaN;
+          var v=parseFloat(s); return isNaN(v)?NaN:v;
+        }
+        // Parsea el texto ACTUAL de una celda de concepto -> {pag, ppto} (NaN = sin dato)
+        function parseCell(td){
+          var txt=(td.textContent||'').replace(/ /g,' ').trim();
+          if(txt===''||txt==='—') return {pag:NaN, ppto:NaN};
+          var m;
+          m=txt.match(/^\$?([\d,]+(?:\.\d+)?)\s*\(\s*\$?([\d,]+(?:\.\d+)?)\s*\)$/); // "300,000 (456,301)"
+          if(m) return {pag:parseNum(m[1]), ppto:parseNum(m[2])};
+          m=txt.match(/^\(\s*\$?([\d,]+(?:\.\d+)?)\s*\)$/);                          // "(21,700)"
+          if(m) return {pag:0, ppto:parseNum(m[1])};
+          m=txt.match(/^\$?([\d,]+(?:\.\d+)?)$/);                                    // "266,000"
+          if(m){ var v=parseNum(m[1]); return {pag:v, ppto:v}; }
+          return {pag:NaN, ppto:NaN};
+        }
+        function getPP(td){
+          var pa=td.getAttribute('data-pag'), pp=td.getAttribute('data-ppto');
+          return {
+            pag:  (pa==null||pa==='')?NaN:parseNum(pa),
+            ppto: (pp==null||pp==='')?NaN:parseNum(pp)
+          };
+        }
+        function setPP(td,pag,ppto){
+          td.setAttribute('data-pag',  (isNaN(pag)?'':String(pag)));
+          td.setAttribute('data-ppto', (isNaN(ppto)?'':String(ppto)));
+        }
+        // Render de una celda de concepto al formato NORMAL (idéntico look actual)
+        function renderCell(td){
+          var pp=getPP(td), P=pp.pag, B=pp.ppto;
+          if(isNaN(P) && isNaN(B)){
+            td.setAttribute('style','text-align:right;color:var(--text-muted);');
+            td.innerHTML='—'; return;
+          }
+          P=isNaN(P)?0:P; B=isNaN(B)?0:B;
+          if(P>0 && P>=B){
+            td.setAttribute('style','text-align:right;color:var(--ok);font-variant-numeric:tabular-nums;font-weight:600;');
+            td.innerHTML=fmt(P);
+          } else if(P<=0 && B>0){
+            td.setAttribute('style','text-align:right;color:var(--bad);font-variant-numeric:tabular-nums;font-weight:600;');
+            td.innerHTML='<em>('+fmt(B)+')</em>';
+          } else if(P>0 && P<B){
+            td.setAttribute('style','text-align:right;color:var(--warn);font-variant-numeric:tabular-nums;font-weight:600;');
+            td.innerHTML=fmt(P)+' <em style="font-weight:400;">('+fmt(B)+')</em>';
+          } else {
+            td.setAttribute('style','text-align:right;color:var(--text-muted);');
+            td.innerHTML='—';
+          }
+        }
+        // Clasifica filas: encabezados de grupo, filas de concepto (con grupo) y filas calculadas
+        function scan(){
+          var t=tbl(); if(!t) return null;
+          var group=null, concepts=[], calc={};
+          t.querySelectorAll('tbody tr').forEach(function(r){
+            var head=r.querySelector('td[colspan]');
+            if(head){
+              var h=head.textContent.toLowerCase();
+              if(h.indexOf('altos')>=0) group='altos';
+              else if(h.indexOf('moderados')>=0) group='moderados';
+              return;
+            }
+            var c0=r.cells[0]; if(!c0) return;
+            var lab=(c0.textContent||'').toLowerCase();
+            var K=function(k){ return lab.indexOf(k)>=0; };
+            if(K('saldo impagado') && K('altos'))     { calc.saldoAltos=r; return; }
+            if(K('saldo impagado') && K('moderados')) { calc.saldoModerados=r; return; }
+            if(K('acumulado') && K('altos'))          { calc.acumAltos=r; return; }
+            if(K('acumulado') && K('moderados'))      { calc.acumModerados=r; return; }
+            if(K('acumulado total'))                  { calc.acumTotal=r; return; }
+            if(K('cantidad pagada'))                  { calc.cantidadPagada=r; return; }
+            if(K('total impagado'))                   { calc.totalImpagado=r; return; }
+            concepts.push({row:r, group:group});
+          });
+          return {concepts:concepts, calc:calc};
+        }
+        function conceptCells(){
+          var s=scan(); if(!s) return [];
+          var out=[];
+          s.concepts.forEach(function(cc){ for(var m=1;m<=7;m++){ var td=cc.row.cells[m]; if(td) out.push(td); } });
+          return out;
+        }
+        function seedAll(){
+          var s=scan(); if(!s) return;
+          s.concepts.forEach(function(cc){
+            for(var m=1;m<=7;m++){
+              var td=cc.row.cells[m]; if(!td) continue;
+              if(td.hasAttribute('data-pag')||td.hasAttribute('data-ppto')) continue; // idempotente
+              var pp=parseCell(td); setPP(td, pp.pag, pp.ppto);
+            }
+          });
+        }
+        function setCalcCell(row, m, value, pend){
+          if(!row || pend[m]) return; // mes pendiente: dejar '—' intacto (conserva tooltip)
+          var td=row.cells[m]; if(td) td.textContent='$'+fmt(value);
+        }
+        function recalc(){
+          var s=scan(); if(!s) return; var pend=pendingSet();
+          var accA=0, accM=0, accT=0;
+          for(var m=1;m<=7;m++){
+            if(pend[m]) continue;
+            var saldoA=0, saldoM=0, pagados=0;
+            s.concepts.forEach(function(cc){
+              var td=cc.row.cells[m]; if(!td) return;
+              var pp=getPP(td);
+              var pag=isNaN(pp.pag)?0:pp.pag, ppto=isNaN(pp.ppto)?0:pp.ppto;
+              pagados+=pag;
+              var impg=ppto-pag;
+              if(cc.group==='altos') saldoA+=impg;
+              else if(cc.group==='moderados') saldoM+=impg;
+            });
+            accA+=saldoA; accM+=saldoM; var total=saldoA+saldoM; accT+=total;
+            setCalcCell(s.calc.saldoAltos,     m, saldoA,  pend);
+            setCalcCell(s.calc.acumAltos,      m, accA,    pend);
+            setCalcCell(s.calc.saldoModerados, m, saldoM,  pend);
+            setCalcCell(s.calc.acumModerados,  m, accM,    pend);
+            setCalcCell(s.calc.cantidadPagada, m, pagados, pend);
+            setCalcCell(s.calc.totalImpagado,  m, total,   pend);
+            setCalcCell(s.calc.acumTotal,      m, accT,    pend);
+          }
+        }
+        // ---- edición: dos inputs (PAG / PPTO) por celda de concepto ----
+        var IST='width:80px;box-sizing:border-box;padding:2px 4px;font-size:10px;text-align:right;'
+              +'border:1px solid var(--border);border-radius:4px;font-variant-numeric:tabular-nums;';
+        function setEditing(on){
+          var cells=conceptCells();
+          if(on){
+            cells.forEach(function(td){
+              if(td.querySelector('.pc-in-pag')) return;
+              var pp=getPP(td);
+              var vp=isNaN(pp.pag)?'':pp.pag, vb=isNaN(pp.ppto)?'':pp.ppto;
+              td.setAttribute('style','text-align:right;padding:3px 5px;');
+              td.innerHTML=''
+                +'<div style="display:flex;flex-direction:column;gap:2px;align-items:flex-end;">'
+                +'<label style="display:flex;align-items:center;gap:3px;font-size:8px;color:var(--ok);font-weight:700;">PAG'
+                +'<input type="number" class="pc-in-pag" value="'+vp+'" step="1" style="'+IST+'"></label>'
+                +'<label style="display:flex;align-items:center;gap:3px;font-size:8px;color:var(--bad);font-weight:700;">PPTO'
+                +'<input type="number" class="pc-in-ppto" value="'+vb+'" step="1" style="'+IST+'"></label>'
+                +'</div>';
+            });
+          } else {
+            cells.forEach(function(td){
+              var ip=td.querySelector('.pc-in-pag'), ib=td.querySelector('.pc-in-ppto');
+              if(ip||ib){
+                var sp=ip?ip.value.trim():'', sb=ib?ib.value.trim():'';
+                if(sp===''&&sb==='') setPP(td, NaN, NaN);
+                else {
+                  var pag=parseNum(sp); if(isNaN(pag)) pag=0;
+                  var ppto=parseNum(sb); if(isNaN(ppto)) ppto=0;
+                  setPP(td, pag, ppto);
+                }
+              }
+              renderCell(td);
+            });
+          }
+        }
+        window.__pc = { recalc:recalc, setEditing:setEditing, seedAll:seedAll, renderCell:renderCell };
+        function boot(){ seedAll(); recalc(); }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+      })();
+      </script>
 
       <!-- Lectura estratégica del flujo -->
       <div style="margin-top:16px;padding:14px 16px;background:var(--ok-soft);border-left:3px solid var(--ok);border-radius:var(--radius-sm);font-size:13px;line-height:1.55;color:var(--text);">
@@ -5540,6 +5719,8 @@ function addMsg(role, text) {
     var cells = [];
     region.querySelectorAll('table td').forEach(function(td){
       if (td.closest('.cpp-ec')) return;
+      // Pagos críticos usa su propio editor de doble input (window.__pc), no texto libre
+      if (td.closest('#pagosCriticosTabla')) return;
       // omitir celdas con contenido interactivo/anidado (inputs, checkboxes, gráficas, subtablas)
       if (td.querySelector('table,input,button,select,textarea,svg,canvas,iframe')) return;
       cells.push(td);
@@ -5561,6 +5742,11 @@ function addMsg(role, text) {
         el.removeAttribute('spellcheck');
       }
     });
+    // Tabla Pagos críticos: editor de doble input (PAG/PPTO) + recálculo al guardar
+    if (window.__pc && region.querySelector('#pagosCriticosTabla')){
+      window.__pc.setEditing(on);
+      if (!on) window.__pc.recalc();
+    }
     return els;
   }
   function attachTextEditor(region){
