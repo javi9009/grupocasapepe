@@ -1719,8 +1719,126 @@
             }
           }
         }
-        window.__cf={ recalc:recalc, setEditing:setEditing, seedAll:seedAll, renderData:renderData };
+        // --- Accesores para persistencia Supabase (window.__cfDB) ---
+        // Mapa rubro(data-row) -> bloque, según los encabezados de grupo A/B/D.
+        function bloqueMap(){
+          var t=tbl(); var out={}; if(!t) return out; var cur=null;
+          t.querySelectorAll('tbody tr').forEach(function(r){
+            if(r.classList && r.classList.contains('cf-group')){
+              var h=(r.textContent||'').toLowerCase();
+              if(h.indexOf('operaci')>=0) cur='operacion';
+              else if(h.indexOf('financiamiento')>=0) cur='financiamiento';
+              else if(h.indexOf('conciliaci')>=0) cur='conciliacion';
+              return;
+            }
+            var k=r.getAttribute('data-row'); if(k) out[k]=cur;
+          });
+          return out;
+        }
+        // Filas de DATOS (con data-row y al menos una celda cf-data): {rubro, bloque, row}.
+        function dataRows(){
+          var t=tbl(); if(!t) return []; var bl=bloqueMap(), out=[];
+          t.querySelectorAll('tbody tr[data-row]').forEach(function(r){
+            if(!r.querySelector('td.cf-data')) return; // omite filas 100% calculadas
+            var k=r.getAttribute('data-row');
+            out.push({ rubro:k, bloque:bl[k]||null, row:r });
+          });
+          return out;
+        }
+        function isDataCell(td){ return !!(td && td.classList && td.classList.contains('cf-data')); }
+        function getCellV(td){ if(!td) return NaN; var v=td.getAttribute('data-v'); return (v==null||v==='')?NaN:parseNum(v); }
+        function setCellV(td,n){ if(!td) return; td.setAttribute('data-v', (n==null||isNaN(n))?'':String(n)); renderData(td); }
+        window.__cf={ recalc:recalc, setEditing:setEditing, seedAll:seedAll, renderData:renderData,
+                      bloqueMap:bloqueMap, dataRows:dataRows, isDataCell:isDataCell,
+                      getCellV:getCellV, setCellV:setCellV };
         function boot(){ seedAll(); recalc(); }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+      })();
+      </script>
+
+      <!-- Persistencia Supabase de Flujo de efectivo: la BASE MANDA al cargar; el botón
+           Guardar hace UPSERT a fin_flujo (anio 2026). SOLO celdas de DATOS (no calculadas).
+           Sin sesión/permiso: fallback al HTML, no rompe la vista. -->
+      <script>
+      (function(){
+        var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+        var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+        var ANIO=2026;
+        var _cli=null;
+        function getClient(){
+          if(_cli) return _cli;
+          _cli=import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')
+            .then(function(m){ return m.createClient(SB_URL, SB_KEY); });
+          return _cli;
+        }
+        // Aviso discreto (toast) no bloqueante
+        function notify(msg, ok){
+          try{
+            var d=document.createElement('div');
+            d.textContent=msg;
+            d.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99999;'
+              +'padding:9px 16px;border-radius:8px;font:600 12.5px/1.3 -apple-system,system-ui,sans-serif;'
+              +'max-width:86vw;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.28);'
+              +(ok?'background:#2e7d4f;color:#fff;':'background:#8a3b2e;color:#fff;');
+            document.body.appendChild(d);
+            setTimeout(function(){ d.style.transition='opacity .4s'; d.style.opacity='0';
+              setTimeout(function(){ d.remove(); }, 420); }, 3400);
+          }catch(e){}
+        }
+        // PASO 2 — leer de Supabase y rellenar celdas de datos (la base manda). Fallback: HTML.
+        // getSession() ANTES del select para que RLS (authenticated) no bloquee la lectura.
+        function loadFromDB(){
+          if(!window.__cf) return;
+          getClient().then(function(sb){
+            return sb.auth.getSession().then(function(){
+              return sb.from('fin_flujo')
+                .select('bloque,rubro,mes,valor').eq('anio',ANIO);
+            });
+          }).then(function(r){
+            if(!r || r.error || !r.data || !r.data.length) return; // fallback: deja HTML
+            var rows=window.__cf.dataRows(), byKey={};
+            rows.forEach(function(rr){ byKey[rr.rubro]=rr.row; });
+            r.data.forEach(function(rec){
+              var row=byKey[rec.rubro]; if(!row) return;
+              var m=+rec.mes; if(!(m>=1 && m<=7)) return;
+              var td=row.cells[m]; if(!td) return;
+              if(!window.__cf.isDataCell(td)) return; // solo celdas de DATOS, no calculadas
+              window.__cf.setCellV(td, rec.valor==null?NaN:+rec.valor);
+            });
+            window.__cf.recalc();
+          }).catch(function(){ /* fallback silencioso: deja HTML */ });
+        }
+        // PASO 3 — UPSERT de las celdas de DATOS al Guardar (no filas calculadas).
+        function saveAll(){
+          if(!window.__cf) return;
+          getClient().then(function(sb){
+            return sb.auth.getUser().then(function(u){
+              var email=(u && u.data && u.data.user && u.data.user.email) || '';
+              var rows=window.__cf.dataRows(), recs=[], counters={}, nowIso=new Date().toISOString();
+              rows.forEach(function(rr){
+                var b=rr.bloque||''; counters[b]=(counters[b]||0)+1; var orden=counters[b];
+                for(var m=1;m<=7;m++){
+                  var td=rr.row.cells[m]; if(!td) continue;
+                  if(!window.__cf.isDataCell(td)) continue; // solo DATOS
+                  var v=window.__cf.getCellV(td);
+                  recs.push({
+                    anio:ANIO, mes:m, bloque:rr.bloque, rubro:rr.rubro, orden:orden,
+                    valor:isNaN(v)?0:v, updated_by:email, updated_at:nowIso
+                  });
+                }
+              });
+              return sb.from('fin_flujo').upsert(recs,{onConflict:'anio,mes,bloque,rubro'});
+            });
+          }).then(function(r){
+            if(r && r.error) notify('No se pudo guardar en la base — ¿tienes permiso?', false);
+            else notify('Guardado ✓', true);
+          }).catch(function(){
+            notify('No se pudo guardar en la base — ¿tienes permiso?', false);
+          });
+        }
+        window.__cfDB={ loadFromDB:loadFromDB, saveAll:saveAll };
+        function boot(){ loadFromDB(); }
         if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
         else boot();
       })();
@@ -6067,8 +6185,15 @@ function addMsg(role, text) {
     // Tabla Flujo de efectivo: editor de dato único + recálculo en cadena al guardar
     if (window.__cf && region.querySelector('#flujoEfectivoTabla')){
       window.__cf.setEditing(on);
-      if (!on) window.__cf.recalc();
+      if (!on){
+        window.__cf.recalc();
+        // Persistir en Supabase (fin_flujo). Falla suave si no hay permiso.
+        if (window.__cfDB) window.__cfDB.saveAll();
+      }
     }
+    // Capa GENERAL de overrides (textos editoriales + celdas de OTRAS tablas).
+    // Mismo punto de guardado por tarjeta. Falla suave. NO toca Pagos/Flujo/QuickBooks.
+    if (!on && window.__ovDB){ try { window.__ovDB.saveCard(region); } catch(e){} }
     return els;
   }
   function attachTextEditor(region){
@@ -6250,6 +6375,175 @@ function addMsg(role, text) {
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
+})();
+</script>
+
+<!-- ============================================================= -->
+<!-- CAPA GENERAL DE PERSISTENCIA (window.__ovDB) · Supabase        -->
+<!-- Persiste TODO lo editable del reporte que NO cubren __pcDB     -->
+<!-- (Pagos criticos) ni __cfDB (Flujo): textos editoriales +      -->
+<!-- celdas de datos de OTRAS tablas operativas.                   -->
+<!-- Excluye: Pagos/Flujo (via propia), QuickBooks (P&L/Resultados/ -->
+<!-- TOTAL/ccrr), iframes, chat, SVG/canvas y la UI de edicion.     -->
+<!-- IDs deterministas en runtime (data-cpp-eid), no horneados.     -->
+<!-- Base manda al cargar (getSession ANTES del select).            -->
+<!-- ============================================================= -->
+<script>
+(function(){
+  var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+  var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  var _cli=null;
+  function getClient(){
+    if(_cli) return _cli;
+    _cli=import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')
+      .then(function(m){ return m.createClient(SB_URL, SB_KEY); });
+    return _cli;
+  }
+  // Aviso discreto (mismo estilo que __pcDB/__cfDB)
+  function notify(msg, ok){
+    try{
+      var d=document.createElement('div');
+      d.textContent=msg;
+      d.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99999;'
+        +'padding:9px 16px;border-radius:8px;font:600 12.5px/1.3 -apple-system,system-ui,sans-serif;'
+        +'max-width:86vw;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.28);'
+        +(ok?'background:#2e7d4f;color:#fff;':'background:#8a3b2e;color:#fff;');
+      document.body.appendChild(d);
+      setTimeout(function(){ d.style.transition='opacity .4s'; d.style.opacity='0';
+        setTimeout(function(){ d.remove(); }, 420); }, 3400);
+    }catch(e){}
+  }
+
+  /* ---- Seleccion de editables: MISMA logica que el modo edicion ----
+     (replicada aqui porque aquel vive en un IIFE gateado por ?edit=1). */
+  var EXCLUDE = '#cpp-chat-panel, #cpp-chat-fab, table, .cpp-ec, [data-noedit], textarea, form, input, button, select';
+  function markEditable(set, el){
+    if (!el) return;
+    if (el.closest(EXCLUDE)) return;
+    set.add(el);
+  }
+  function isProseDiv(d){
+    if (d.querySelector('div,ul,ol,table,input,button,select,svg,textarea,form')) return false;
+    return (d.textContent || '').trim().length > 25;
+  }
+  function collectRegionProse(region){
+    var set = new Set();
+    region.querySelectorAll('h1,h2,h3,h4').forEach(function(el){ markEditable(set, el); });
+    region.querySelectorAll('p').forEach(function(el){ markEditable(set, el); });
+    region.querySelectorAll('ol > li, ul > li').forEach(function(el){ markEditable(set, el); });
+    region.querySelectorAll('div').forEach(function(d){ if (isProseDiv(d)) markEditable(set, d); });
+    if (set.size === 0 && !region.querySelector('svg,canvas,iframe,table')) markEditable(set, region);
+    return set;
+  }
+  // Celdas QuickBooks (P&L / Resultados financieros) que NO deben ser eid ni persistir.
+  function isQbCell(td){
+    var t = td.closest('table'); if(!t) return false;
+    if (t.querySelector('#resumen-tabla-body')) return true; // Resultados financieros (margenes QB, filtrable)
+    var card = td.closest('.card');
+    if (card){
+      var h = card.querySelector('h2');
+      if (h && /Resumen\s*P&L|cuentas\s*maestras/i.test(h.textContent||'')) return true; // Resumen P&L cuentas maestras
+    }
+    return false;
+  }
+  function collectRegionCells(region){
+    var cells = [];
+    region.querySelectorAll('table td').forEach(function(td){
+      if (td.closest('.cpp-ec')) return;
+      if (td.closest('#pagosCriticosTabla')) return;   // via __pcDB
+      if (td.closest('#flujoEfectivoTabla')) return;   // via __cfDB
+      if (td.querySelector('table,input,button,select,textarea,svg,canvas,iframe')) return; // celdas interactivas/anidadas
+      if (isQbCell(td)) return;                          // QuickBooks: NO editable, NO persistir
+      cells.push(td);
+    });
+    return cells;
+  }
+  // Recorre las MISMAS tarjetas que enableTextEditing y asigna data-cpp-eid deterministas:
+  //   data-cpp-eid = seccion + ':' + tipo + ':' + indice   (indice estable por seccion y tipo)
+  function assignEids(){
+    document.querySelectorAll('section[data-section]').forEach(function(section){
+      var seccion = section.getAttribute('data-section');
+      var tIdx = 0, cIdx = 0;
+      section.querySelectorAll('.card').forEach(function(card){
+        if (card.id === 'ccrrFrameCard') return;      // iframe Cuenta de Resultados (QuickBooks)
+        if (card.querySelector('iframe')) return;      // cualquier tarjeta-iframe
+        if (card.closest('#cpp-chat-panel')) return;   // chat
+        if (card.closest('.cpp-ec')) return;           // UI de edicion
+        collectRegionProse(card).forEach(function(el){
+          el.setAttribute('data-cpp-eid', seccion + ':texto:' + tIdx); tIdx++;
+        });
+        collectRegionCells(card).forEach(function(td){
+          td.setAttribute('data-cpp-eid', seccion + ':celda:' + cIdx); cIdx++;
+        });
+      });
+    });
+  }
+
+  // innerHTML sin la UI de edicion (por si un elemento-region incluye botones .cpp-ec)
+  function cleanInner(el){
+    if (!el.querySelector('.cpp-ec') && !el.querySelector('[data-cpp-editable]')) return el.innerHTML;
+    var c = el.cloneNode(true);
+    c.querySelectorAll('.cpp-ec').forEach(function(n){ n.remove(); });
+    c.querySelectorAll('[contenteditable]').forEach(function(n){ n.removeAttribute('contenteditable'); });
+    c.querySelectorAll('[data-cpp-editable]').forEach(function(n){ n.removeAttribute('data-cpp-editable'); });
+    c.querySelectorAll('[spellcheck]').forEach(function(n){ n.removeAttribute('spellcheck'); });
+    return c.innerHTML;
+  }
+
+  /* ---- CARGAR: la BASE MANDA. getSession ANTES del select (RLS). ---- */
+  function loadFromDB(){
+    assignEids(); // primero los ids, para que existan al aplicar overrides
+    getClient().then(function(sb){
+      return sb.auth.getSession().then(function(){   // <-- imprescindible ANTES del select
+        return sb.from('fin_socios_overrides').select('elem_id,tipo,contenido');
+      });
+    }).then(function(r){
+      if(!r || r.error || !r.data || !r.data.length) return; // fallback: deja HTML
+      r.data.forEach(function(rec){
+        if(!rec || !rec.elem_id) return;
+        var el = document.querySelector('[data-cpp-eid="' + rec.elem_id + '"]');
+        if(!el) return;
+        if(rec.tipo === 'texto'){
+          el.innerHTML = rec.contenido == null ? '' : rec.contenido;
+        } else { // 'celda'
+          el.textContent = rec.contenido == null ? '' : rec.contenido;
+          // Las tablas persistidas aqui no exponen motor global de recalculo
+          // (los unicos, __pc/__cf, quedan excluidos por via propia).
+        }
+      });
+    }).catch(function(){ /* fallback silencioso: deja HTML */ });
+  }
+
+  /* ---- GUARDAR (UPSERT) los eid de UNA tarjeta al Guardar en modo edicion ---- */
+  function saveCard(region){
+    if(!region) return;
+    assignEids(); // idempotente: garantiza eids antes de leerlos
+    getClient().then(function(sb){
+      return sb.auth.getUser().then(function(u){
+        var email=(u && u.data && u.data.user && u.data.user.email) || '';
+        var now=new Date().toISOString(), recs=[];
+        region.querySelectorAll('[data-cpp-eid]').forEach(function(el){
+          var eid=el.getAttribute('data-cpp-eid');
+          var parts=eid.split(':'), seccion=parts[0], tipo=parts[1];
+          var contenido = (tipo === 'texto') ? cleanInner(el) : (el.textContent||'');
+          recs.push({ elem_id:eid, seccion:seccion, tipo:tipo, contenido:contenido,
+                      updated_by:email, updated_at:now });
+        });
+        if(!recs.length) return null;
+        return sb.from('fin_socios_overrides').upsert(recs,{onConflict:'elem_id'});
+      });
+    }).then(function(r){
+      if(r && r.error) notify('No se pudo guardar en la base — ¿tienes permiso de edición?', false);
+      else if(r) notify('Guardado ✓', true);
+    }).catch(function(){
+      notify('No se pudo guardar en la base — ¿tienes permiso de edición?', false);
+    });
+  }
+
+  window.__ovDB={ loadFromDB:loadFromDB, saveCard:saveCard, assignEids:assignEids };
+  function boot(){ loadFromDB(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
 })();
 </script>
 
