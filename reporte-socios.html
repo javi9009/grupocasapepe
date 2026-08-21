@@ -1385,8 +1385,106 @@
             });
           }
         }
-        window.__pc = { recalc:recalc, setEditing:setEditing, seedAll:seedAll, renderCell:renderCell };
+        // Lista de filas de concepto (concepto + grupo + <tr>), en orden del DOM.
+        function conceptList(){
+          var s=scan(); if(!s) return [];
+          return s.concepts.map(function(cc){
+            return { row:cc.row, group:cc.group, concepto:(cc.row.cells[0].textContent||'').trim() };
+          });
+        }
+        window.__pc = { recalc:recalc, setEditing:setEditing, seedAll:seedAll, renderCell:renderCell,
+                        conceptList:conceptList, getPP:getPP, setPP:setPP };
         function boot(){ seedAll(); recalc(); }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+      })();
+      </script>
+
+      <!-- Persistencia Supabase de Pagos críticos: la BASE MANDA al cargar; el botón
+           Guardar hace UPSERT a fin_pagos_criticos (anio 2026). SOLO esta tabla.
+           Sin sesión/permiso: fallback al HTML, no rompe la vista. -->
+      <script>
+      (function(){
+        var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+        var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+        var ANIO=2026;
+        var _cli=null;
+        function getClient(){
+          if(_cli) return _cli;
+          _cli=import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')
+            .then(function(m){ return m.createClient(SB_URL, SB_KEY); });
+          return _cli;
+        }
+        // Aviso discreto (toast) no bloqueante
+        function notify(msg, ok){
+          try{
+            var d=document.createElement('div');
+            d.textContent=msg;
+            d.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99999;'
+              +'padding:9px 16px;border-radius:8px;font:600 12.5px/1.3 -apple-system,system-ui,sans-serif;'
+              +'max-width:86vw;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.28);'
+              +(ok?'background:#2e7d4f;color:#fff;':'background:#8a3b2e;color:#fff;');
+            document.body.appendChild(d);
+            setTimeout(function(){ d.style.transition='opacity .4s'; d.style.opacity='0';
+              setTimeout(function(){ d.remove(); }, 420); }, 3400);
+          }catch(e){}
+        }
+        // PASO 2 — leer de Supabase y rellenar celdas (la base manda). Fallback: HTML.
+        function loadFromDB(){
+          if(!window.__pc) return;
+          getClient().then(function(sb){
+            return sb.from('fin_pagos_criticos')
+              .select('concepto,mes,grupo,pagado,presupuestado').eq('anio',ANIO);
+          }).then(function(r){
+            if(!r || r.error || !r.data || !r.data.length) return; // fallback: deja HTML
+            var list=window.__pc.conceptList(), byKey={};
+            list.forEach(function(c){
+              byKey[(c.group||'')+'|'+c.concepto]=c.row;
+              byKey['*|'+c.concepto]=c.row; // respaldo por concepto si el grupo difiere
+            });
+            r.data.forEach(function(rec){
+              var row=byKey[(rec.grupo||'')+'|'+rec.concepto] || byKey['*|'+rec.concepto];
+              if(!row) return;
+              var m=+rec.mes; if(!(m>=1 && m<=7)) return;
+              var td=row.cells[m]; if(!td) return;
+              window.__pc.setPP(td,
+                rec.pagado==null?NaN:+rec.pagado,
+                rec.presupuestado==null?NaN:+rec.presupuestado);
+              window.__pc.renderCell(td);
+            });
+            window.__pc.recalc();
+          }).catch(function(){ /* fallback silencioso: deja HTML */ });
+        }
+        // PASO 3 — UPSERT de las celdas de datos al Guardar (solo conceptos, no calculadas).
+        function saveAll(){
+          if(!window.__pc) return;
+          getClient().then(function(sb){
+            return sb.auth.getUser().then(function(u){
+              var email=(u && u.data && u.data.user && u.data.user.email) || '';
+              var list=window.__pc.conceptList(), recs=[], counters={}, nowIso=new Date().toISOString();
+              list.forEach(function(c){
+                var g=c.group||''; counters[g]=(counters[g]||0)+1; var orden=counters[g];
+                for(var m=1;m<=7;m++){
+                  var td=c.row.cells[m]; if(!td) continue;
+                  var pp=window.__pc.getPP(td);
+                  recs.push({
+                    anio:ANIO, mes:m, grupo:c.group, concepto:c.concepto, orden:orden,
+                    pagado:isNaN(pp.pag)?0:pp.pag, presupuestado:isNaN(pp.ppto)?0:pp.ppto,
+                    updated_by:email, updated_at:nowIso
+                  });
+                }
+              });
+              return sb.from('fin_pagos_criticos').upsert(recs,{onConflict:'anio,mes,concepto'});
+            });
+          }).then(function(r){
+            if(r && r.error) notify('No se pudo guardar en la base — ¿tienes permiso de edición?', false);
+            else notify('Pagos críticos guardados en la base ✓', true);
+          }).catch(function(){
+            notify('No se pudo guardar en la base — ¿tienes permiso de edición?', false);
+          });
+        }
+        window.__pcDB={ loadFromDB:loadFromDB, saveAll:saveAll };
+        function boot(){ loadFromDB(); }
         if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
         else boot();
       })();
@@ -3144,12 +3242,12 @@
     tour:       [118376, 85197,  97259,  170418, 90775, 191163, 210696, null, null, null, null, null, null]
   };
   const CDMX_BU_PLAN_2026 = {
-    hospedaje:  [1137642, 1062955, 1336259, 1223877, 1010682, 1466605, 1723496, 910940, 886932, 1372553, 1540252, 1161718],
+    hospedaje:  [1137642, 1062955, 1336259, 1223877, 1010682, 1466605, 1723496, 1385000, 929000, 1477000, 1681000, 1159000],
     ayb:        [289050,  377931,  401206,  376636,  377815,  489470,  522574,  563171, 514129, 291135,  510819,  467144],
     tour:       [218178,  274955,  155707,  142969,  170284,  173921,  325512,  223616, 119118, 188511,  213682,  114561]
   };
   const CDMX_BU_REAL_2025 = {
-    hospedaje:  [1063217, 993416, 1248840, 1143810, 944562, 733303, 1214500, 855000, 824000, 1238000, 1425000, 1135000],
+    hospedaje:  [1063217, 993416, 1248840, 1143810, 944562, 733303, 861748, 855000, 824000, 1238000, 1425000, 1135000],
     ayb:        [251348,  328636, 348875,  327510,  328535,  244735,  339500,  314280,  273540, 291000,  289060,  269767],
     tour:       [203905,  256967, 145521,  133616,  159144,  86961,  183750,  170100,  148050, 157500,  156450,  146008]
   };
@@ -5958,7 +6056,11 @@ function addMsg(role, text) {
     // Tabla Pagos críticos: editor de doble input (PAG/PPTO) + recálculo al guardar
     if (window.__pc && region.querySelector('#pagosCriticosTabla')){
       window.__pc.setEditing(on);
-      if (!on) window.__pc.recalc();
+      if (!on){
+        window.__pc.recalc();
+        // Persistir en Supabase (fin_pagos_criticos). Falla suave si no hay permiso.
+        if (window.__pcDB) window.__pcDB.saveAll();
+      }
     }
     // Tabla Flujo de efectivo: editor de dato único + recálculo en cadena al guardar
     if (window.__cf && region.querySelector('#flujoEfectivoTabla')){
