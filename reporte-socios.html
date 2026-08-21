@@ -769,6 +769,16 @@
 
   <!-- DEUDA -->
   <section class="section" data-section="deuda">
+    <style>
+    /* Socios muestra SOLO resúmenes de lectura. Las tablas de captura completas
+       viven en el módulo Finanzas; aquí se OCULTAN (no se borran) para no romper
+       los motores JS (__pc / __cf / __pcDB / __cfDB / __ovDB), que las siguen
+       encontrando en el DOM por id. El simulador interactivo del plan también
+       se resume aquí y su versión editable vive en Finanzas. */
+    [data-section="deuda"] #pagosCriticosTabla,
+    [data-section="deuda"] #flujoEfectivoTabla,
+    [data-section="deuda"] #plan-deuda-tabla{display:none !important;}
+    </style>
     <div class="card">
       <h2>Deuda CP por categoría<span class="data-tag real" id="deuda-tag">snapshot 31-jul-26</span></h2>
       <div class="hint" id="deuda-hint">Reporte de antigüedad de Cuentas por Pagar al 31 julio 2026 · Total $21,271,392 MXN · Categorías según clasificación del usuario.</div>
@@ -807,8 +817,149 @@
       </div>
     </div>
 
+    <!-- BLOQUE 2 · FLUJO DE CAJA MENSUAL — RESUMEN (mes cerrado más reciente; lee Supabase) -->
+    <div class="card" id="flujo-caja-resumen">
+      <h2>Flujo de caja mensual · Resumen<span class="data-tag real" id="fcrTag">cierre —</span></h2>
+      <div class="hint">Resumen del <strong>mes cerrado más reciente</strong>. La captura mes a mes (entradas/salidas, plan vs real) vive en el módulo <strong>Finanzas</strong>. Fuente: Supabase <code>fin_flujo</code> + <code>fin_deuda_saldo</code>.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:14px;">
+        <div style="background:var(--surface-2);border-left:3px solid var(--text-soft);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Plan del mes</div>
+          <div id="fcrPlan" style="font-size:22px;font-weight:600;color:var(--text-muted);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:var(--text-soft);">Flujo Plan · pendiente (Finanzas)</div>
+        </div>
+        <div style="background:var(--surface-2);border-left:3px solid var(--text);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Flujo Real</div>
+          <div id="fcrReal" style="font-size:22px;font-weight:600;color:var(--text-muted);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:var(--text-soft);">D = A − B + Δdeuda · pendiente</div>
+        </div>
+        <div style="background:#FAEEDA;border-left:3px solid var(--warn);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Deuda CP · cierre del mes</div>
+          <div id="fcrDeuda" style="font-size:22px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:var(--text-soft);">Total fin_deuda_saldo</div>
+        </div>
+        <div style="background:var(--surface-2);border-left:3px solid var(--text-soft);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Δ Deuda vs mes anterior</div>
+          <div id="fcrDelta" style="font-size:22px;font-weight:600;color:var(--text-muted);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div id="fcrDeltaSub" style="font-size:11px;color:var(--text-soft);">—</div>
+        </div>
+      </div>
+      <script>
+      (function(){
+        var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+        var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+        var ANIO=2026;
+        var MESES=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        function fmt(n){ return '$'+Math.round(Math.abs(n)).toLocaleString('en-US'); }
+        function client(){ return import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function(m){ return m.createClient(SB_URL,SB_KEY); }); }
+        function boot(){
+          client().then(function(sb){
+            // getSession() ANTES del select para que RLS (authenticated) no bloquee la lectura.
+            return sb.auth.getSession().then(function(){
+              return Promise.all([
+                sb.from('fin_deuda_saldo').select('mes,saldo').eq('anio',ANIO),
+                sb.from('fin_flujo').select('mes,rubro,valor').eq('anio',ANIO)
+              ]);
+            });
+          }).then(function(res){
+            var deu=res[0], flj=res[1];
+            if(!deu || deu.error || !deu.data || !deu.data.length) return; // fallback: deja '—'
+            var tot={};
+            deu.data.forEach(function(r){ var m=+r.mes; tot[m]=(tot[m]||0)+(+r.saldo||0); });
+            var meses=Object.keys(tot).map(Number).sort(function(a,b){return a-b;});
+            var last=meses[meses.length-1];
+            var prev=(meses.length>=2)?meses[meses.length-2]:null;
+            var tag=document.getElementById('fcrTag'); if(tag) tag.textContent='cierre '+(MESES[last]||last).toLowerCase()+' '+ANIO;
+            var dEl=document.getElementById('fcrDeuda'); if(dEl){ dEl.textContent=fmt(tot[last]); dEl.style.color='var(--text)'; }
+            var delta=document.getElementById('fcrDelta'), dsub=document.getElementById('fcrDeltaSub');
+            if(prev!=null && delta){
+              var d=tot[last]-tot[prev];
+              delta.textContent=(d>=0?'+':'−')+fmt(d);
+              delta.style.color=(d>0?'var(--bad)':(d<0?'var(--ok)':'var(--text)'));
+              if(dsub) dsub.textContent='vs '+(MESES[prev]||prev).toLowerCase()+' ('+fmt(tot[prev])+')';
+            }
+            // Flujo Real: espeja el motor del Flujo de efectivo (A operación − B financiamiento).
+            if(flj && !flj.error && flj.data){
+              var ING=['cobrado_hospedaje','cobrado_ayb','cobrado_tours','otros_ingresos'];
+              var EGR=['pagado_costo_ventas','pagado_nomina','pagado_operacion','pagado_gya','pagado_renta','pagado_impuestos'];
+              var FIN=['prestamos_bbva','proveedores','rentas_atrasadas','impuestos_atrasados'];
+              var a=0,b=0,cnt=0;
+              flj.data.forEach(function(r){ if(+r.mes!==last) return; var v=+r.valor||0; var k=r.rubro;
+                if(ING.indexOf(k)>=0){ a+=v; if(v!==0)cnt++; }
+                else if(EGR.indexOf(k)>=0){ a-=v; if(v!==0)cnt++; }
+                else if(FIN.indexOf(k)>=0){ b+=v; if(v!==0)cnt++; }
+              });
+              if(cnt>0){
+                var real=a-b, rEl=document.getElementById('fcrReal');
+                if(rEl){ rEl.textContent=(real>=0?'+':'−')+fmt(real); rEl.style.color=(real>=0?'var(--ok)':'var(--bad)'); }
+                var rsub=rEl?rEl.nextElementSibling:null; if(rsub) rsub.textContent='D = A − B + Δdeuda';
+              }
+            }
+          }).catch(function(){ /* fallback silencioso: deja '—' */ });
+        }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+      })();
+      </script>
+    </div>
+
+    <!-- BLOQUE 3 · PAGOS CRÍTICOS — RESUMEN (mes cerrado más reciente; lee Supabase) -->
+    <div class="card" id="pagos-criticos-resumen">
+      <h2>Pagos críticos · Resumen<span class="data-tag real" id="pcrTag">cierre —</span></h2>
+      <div class="hint">Resumen del <strong>mes cerrado más reciente</strong>. El detalle por concepto × mes vive en el módulo <strong>Finanzas</strong>. Fuente: Supabase <code>fin_pagos_criticos</code>.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:14px;">
+        <div style="background:var(--bad-soft);border-left:3px solid var(--bad);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Saldo impagado del mes</div>
+          <div id="pcrSaldo" style="font-size:22px;font-weight:600;color:var(--text-muted);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:var(--text-soft);">Presupuestado − pagado</div>
+        </div>
+        <div style="background:#2c2c2a;color:#fff;border-left:3px solid var(--bad);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Acumulado impagado</div>
+          <div id="pcrAcum" style="font-size:22px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.7);">Ene → mes de cierre</div>
+        </div>
+        <div style="background:var(--ok-soft);border-left:3px solid var(--ok);padding:12px 14px;border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Cantidad pagada del mes</div>
+          <div id="pcrPagado" style="font-size:22px;font-weight:600;color:var(--text-muted);font-variant-numeric:tabular-nums;margin-top:4px;">—</div>
+          <div style="font-size:11px;color:var(--text-soft);">Suma de pagos aplicados</div>
+        </div>
+      </div>
+      <script>
+      (function(){
+        var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+        var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+        var ANIO=2026;
+        var MESES=['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        function fmt(n){ return '$'+Math.round(Math.abs(n)).toLocaleString('en-US'); }
+        function client(){ return import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function(m){ return m.createClient(SB_URL,SB_KEY); }); }
+        function boot(){
+          client().then(function(sb){
+            // getSession() ANTES del select (RLS authenticated).
+            return sb.auth.getSession().then(function(){
+              return sb.from('fin_pagos_criticos').select('mes,pagado,presupuestado').eq('anio',ANIO);
+            });
+          }).then(function(r){
+            if(!r || r.error || !r.data || !r.data.length) return; // fallback: deja '—'
+            var byM={};
+            r.data.forEach(function(x){ var m=+x.mes; if(!byM[m]) byM[m]={pag:0,imp:0};
+              byM[m].pag+=(+x.pagado||0); byM[m].imp+=((+x.presupuestado||0)-(+x.pagado||0)); });
+            var meses=Object.keys(byM).map(Number).sort(function(a,b){return a-b;});
+            var last=meses[meses.length-1];
+            var acum=0; meses.forEach(function(m){ if(m<=last) acum+=byM[m].imp; });
+            var tag=document.getElementById('pcrTag'); if(tag) tag.textContent='cierre '+(MESES[last]||last).toLowerCase()+' '+ANIO;
+            var s=document.getElementById('pcrSaldo'); if(s){ s.textContent=fmt(byM[last].imp); s.style.color=(byM[last].imp>0?'var(--bad)':'var(--ok)'); }
+            var a=document.getElementById('pcrAcum'); if(a){ a.textContent=fmt(acum); }
+            var p=document.getElementById('pcrPagado'); if(p){ p.textContent=fmt(byM[last].pag); p.style.color='var(--ok)'; }
+          }).catch(function(){ /* fallback silencioso: deja '—' */ });
+        }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+      })();
+      </script>
+    </div>
+
     <!-- FLUJO MENSUAL · Estimado vs Real · Pagos críticos + Evolución deuda -->
-    <div class="card">
+    <!-- OCULTO en Socios: es captura completa; vive en el módulo Finanzas. Se conserva en el DOM (display:none) para no romper __pc/__pcDB. -->
+    <div class="card" style="display:none;" data-hidden="finanzas">
       <h2>Flujo de caja mensual · Estimado vs Real<span style="background:#6B4D11;color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:700;letter-spacing:0.04em;margin-left:8px;vertical-align:middle;">FLUJO</span></h2>
       <div class="hint">Datos del archivo "flujo casa pepe 2026" (Roberto, actualizado ago-26). Ene-Jul cerrados · Ago-Dic pendientes de actualizar.</div>
 
@@ -1518,7 +1669,8 @@
 
 
     <!-- FLUJO DE EFECTIVO MENSUAL · tabla editable (Roberto · ?edit=1) -->
-    <div class="card">
+    <!-- OCULTO en Socios: es captura completa; vive en el módulo Finanzas. Se conserva en el DOM (display:none) para no romper __cf/__cfDB. -->
+    <div class="card" style="display:none;" data-hidden="finanzas">
       <h2>Flujo de efectivo mensual<span style="background:#2c5a7a;color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:700;letter-spacing:0.04em;margin-left:8px;vertical-align:middle;">CAJA</span></h2>
       <div class="hint">Estructura de caja mes a mes: operación, financiamiento, flujo neto y conciliación de deuda. Las celdas de datos las llena Roberto en modo edición (<code>?edit=1</code>); las filas <strong>= en mayúsculas</strong> se calculan solas al Guardar. Sembrada vacía hasta cargar cifras reales del flujo.</div>
       <div style="margin-top:14px;overflow-x:auto;">
@@ -1853,7 +2005,7 @@
       <!-- Objetivos -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:14px;">
         <div style="background:var(--bad-soft);border-left:3px solid var(--bad);padding:12px 14px;border-radius:var(--radius-sm);">
-          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Hoy · 30 Jun 2026</div>
+          <div style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">Hoy · 31 Jul 2026</div>
           <div style="font-size:24px;font-weight:600;color:var(--bad);font-variant-numeric:tabular-nums;margin-top:4px;">$21.27M</div>
           <div style="font-size:11px;color:var(--text-soft);">Saldo total CP</div>
         </div>
@@ -1869,8 +2021,23 @@
         </div>
       </div>
 
-      <!-- Tabla INTERACTIVA de palancas con selector de año -->
-      <div style="margin-top:18px;font-size:11px;color:var(--text-soft);">📍 <em>Para QUITAS escribe el % de negociación que esperas lograr · Para APORTACIÓN/UTILIDAD escribe el monto en millones · Marca las casillas 2026/2027 según el año en que aplique. Las cifras en gris itálica son la recomendación basada en plan + forecast.</em></div>
+      <!-- BLOQUE 4 · Resumen de puntos clave del plan (el simulador editable vive en Finanzas) -->
+      <div style="margin-top:16px;padding:14px 16px;background:var(--surface-2);border-left:3px solid var(--ok);border-radius:var(--radius-sm);font-size:12px;line-height:1.6;color:var(--text);">
+        <strong>Puntos clave del plan</strong>
+        <ul style="margin:8px 0 0 0;padding-left:18px;list-style:none;">
+          <li style="margin-bottom:4px;">🎯 Trayectoria objetivo: <strong>$21.27M</strong> (jul-26) → <strong>$9.60M</strong> (ene-27) → <strong>$4.03M</strong> (ene-28) · reducción acumulada <strong>−$16.98M</strong>.</li>
+          <li style="margin-bottom:4px;">🏢 <strong>Quita compra propiedad CDMX (INGRUSUR):</strong> hasta −$6.50M — la palanca más grande.</li>
+          <li style="margin-bottom:4px;">🏦 <strong>Quita BBVA:</strong> −$2.28M (oferta del banco $1.9M ≈ 54% del saldo $4.23M).</li>
+          <li style="margin-bottom:4px;">🧾 <strong>Quita ISH locales (50%):</strong> −$1.25M.</li>
+          <li style="margin-bottom:4px;">💰 <strong>Aportación socios refundadores:</strong> −$1.80M (destinada a SAT + liquidación BBVA).</li>
+          <li style="margin-bottom:4px;">📈 <strong>Utilidad a deuda:</strong> −$2.50M (2026) + −$4.00M (2027).</li>
+          <li>🤝 <strong>Negociación proveedores (15%):</strong> −$0.26M · <strong>Pago corriente Sayulita (BALMOND):</strong> −$4.46M ($2.30M 26 + $2.16M 27).</li>
+        </ul>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-muted);">El simulador interactivo de palancas (editable, casillas por año) vive en el módulo Finanzas.</div>
+      </div>
+
+      <!-- Tabla INTERACTIVA de palancas con selector de año (OCULTA en Socios via CSS · vive en Finanzas) -->
+      <div style="display:none;margin-top:18px;font-size:11px;color:var(--text-soft);">📍 <em>Para QUITAS escribe el % de negociación que esperas lograr · Para APORTACIÓN/UTILIDAD escribe el monto en millones · Marca las casillas 2026/2027 según el año en que aplique. Las cifras en gris itálica son la recomendación basada en plan + forecast.</em></div>
       <table class="kpi" id="plan-deuda-tabla" style="margin-top:8px;">
         <thead><tr>
           <th style="text-align:left;">Palanca</th>
@@ -2005,8 +2172,8 @@
         </tfoot>
       </table>
 
-      <!-- Lectura -->
-      <div style="margin-top:14px;padding:12px 14px;background:var(--ok-soft);border-left:3px solid var(--ok);border-radius:var(--radius-sm);font-size:12px;line-height:1.6;color:var(--text);">
+      <!-- Lectura (OCULTA en Socios: explica el simulador editable, que vive en Finanzas) -->
+      <div style="display:none;margin-top:14px;padding:12px 14px;background:var(--ok-soft);border-left:3px solid var(--ok);border-radius:var(--radius-sm);font-size:12px;line-height:1.6;color:var(--text);">
         <strong>Cómo usar:</strong> Las casillas son <em>opcionales</em> — marca una o ambas según el escenario. Si una palanca no se concreta (ej. no entra capitalista para compra CDMX), <strong>desmárcala</strong> en ambos años y verás el impacto en el saldo final. Las palancas <em>fijas</em> (Utilidades por año + Pagos Sayulita) son automáticas. Para llegar a la meta Ene 2028 ($4.03M), el plan necesita aportar <strong>$16.98M acumulados</strong> en reducciones.
       </div>
     </div>
