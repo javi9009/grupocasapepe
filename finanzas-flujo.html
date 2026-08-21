@@ -61,6 +61,8 @@
     padding:4px 6px;border-radius:5px;color:var(--text);font-variant-numeric:tabular-nums;}
   input.cell:hover{border-color:var(--border);}
   input.cell:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 2px var(--accent-soft);}
+  input.cell.derived{background:var(--accent-soft);color:var(--accent);font-weight:600;cursor:not-allowed;border-color:transparent;}
+  input.cell.derived:hover{border-color:transparent;}
   td.calc{color:var(--text-soft);}
   td.pos{color:var(--ok);} td.neg{color:var(--bad);}
   .footnote{color:var(--text-muted);font-size:11.5px;margin:4px 2px 0;line-height:1.5;}
@@ -127,15 +129,15 @@ var ROWS=[
   {bloque:'operacion', rubro:'Pagado nomina personal',        label:'Pagado nómina / personal',                 sign:'-', flow:'out', type:'data'},
   {bloque:'operacion', rubro:'Pagado gastos de operacion',    label:'Pagado gastos de operación',               sign:'-', flow:'out', type:'data'},
   {bloque:'operacion', rubro:'Pagado GA y servicios',         label:'Pagado G&A + servicios (agua/luz/gas)',    sign:'-', flow:'out', type:'data'},
-  {bloque:'operacion', rubro:'Pagado renta del mes',          label:'Pagado renta del mes',                     sign:'-', flow:'out', type:'data', critico:true},
-  {bloque:'operacion', rubro:'Impuestos del periodo pagados', label:'Impuestos del periodo pagados (IVA/ISH/IMSS/ISR)', sign:'-', flow:'out', type:'data', critico:true},
+  {bloque:'operacion', rubro:'Pagado renta del mes',          label:'Pagado renta del mes',                     sign:'-', flow:'out', type:'data', critico:true, derived:true},
+  {bloque:'operacion', rubro:'Impuestos del periodo pagados', label:'Impuestos del periodo pagados (IVA/ISH/IMSS/ISR)', sign:'-', flow:'out', type:'data', critico:true, derived:true},
   {bloque:'operacion', rubro:'Flujo operativo neto',          label:'= FLUJO OPERATIVO NETO', type:'calc', calc:'flujoOperativo', subtotal:true},
 
   {section:'B · FINANCIAMIENTO / DEUDA'},
   {bloque:'financiamiento', rubro:'Prestamos capital e intereses BBVA', label:'Préstamos: capital + intereses (BBVA)',  sign:'-', flow:'out', type:'data'},
   {bloque:'financiamiento', rubro:'Proveedores CxP anteriores',         label:'Proveedores (CxP de meses anteriores)',  sign:'-', flow:'out', type:'data'},
   {bloque:'financiamiento', rubro:'Rentas atrasadas CDMX',              label:'Rentas atrasadas — CDMX',                sign:'-', flow:'out', type:'data'},
-  {bloque:'financiamiento', rubro:'Rentas atrasadas Sayulita',          label:'Rentas atrasadas — Sayulita',            sign:'-', flow:'out', type:'data', critico:true},
+  {bloque:'financiamiento', rubro:'Rentas atrasadas Sayulita',          label:'Rentas atrasadas — Sayulita',            sign:'-', flow:'out', type:'data', critico:true, derived:true},
   {bloque:'financiamiento', rubro:'Rentas atrasadas Puebla',            label:'Rentas atrasadas — Puebla',              sign:'-', flow:'out', type:'data'},
   {bloque:'financiamiento', rubro:'Impuestos atrasados',                label:'Impuestos atrasados',                    sign:'-', flow:'out', type:'data'},
   {bloque:'financiamiento', rubro:'Pagos a deuda atrasada',             label:'= PAGOS A DEUDA ATRASADA', type:'calc', calc:'pagosDeuda', subtotal:true},
@@ -211,9 +213,15 @@ var CALCROWS=[];  // filas calc/deuda_inicial -> {cfg, tds:[12]}
         var inp=document.createElement('input');
         inp.className='cell'; inp.type='text'; inp.setAttribute('inputmode','numeric');
         inp.dataset.bloque=cfg.bloque; inp.dataset.rubro=cfg.rubro; inp.dataset.mes=m;
-        inp.addEventListener('input', recalc);
-        inp.addEventListener('focus', function(e){ var v=parseNum(e.target.value); e.target.value=isNaN(v)?'':v; e.target.select(); });
-        inp.addEventListener('blur',  function(e){ var v=parseNum(e.target.value); e.target.value=fmtInput(v); });
+        if(cfg.derived){
+          // Fila DERIVADA de Pagos Críticos: no editable, se llena en loadPagosCriticos().
+          inp.readOnly=true; inp.classList.add('derived'); inp.title='Viene de Pagos Críticos';
+          inp.tabIndex=-1;
+        } else {
+          inp.addEventListener('input', recalc);
+          inp.addEventListener('focus', function(e){ var v=parseNum(e.target.value); e.target.value=isNaN(v)?'':v; e.target.select(); });
+          inp.addEventListener('blur',  function(e){ var v=parseNum(e.target.value); e.target.value=fmtInput(v); });
+        }
         td.appendChild(inp);
         IN[cfg.bloque+'|'+cfg.rubro+'|'+m]=inp;
       } else if(cfg.type==='plan'){
@@ -349,6 +357,7 @@ function recalc(){
           if(cfg.type!=='data' && cfg.type!=='deuda_inicial') return; // solo DATOS
           counters[cfg.bloque]=(counters[cfg.bloque]||0)+1;
           var orden=counters[cfg.bloque];
+          if(cfg.derived) return; // filas derivadas de Pagos Críticos NO se guardan en fin_flujo
           for(var m=1;m<=12;m++){
             var inp=IN[cfg.bloque+'|'+cfg.rubro+'|'+m];
             if(!inp) continue;                                // deuda_inicial: solo Enero tiene input
@@ -369,16 +378,56 @@ function recalc(){
     });
   }
 
+  /* ---------------------------------------------------------------------
+     DERIVADAS DE PAGOS CRÍTICOS
+     Las 3 filas marcadas {derived:true} se llenan (readonly) sumando el
+     'pagado' de fin_pagos_criticos por mes. NO se guardan en fin_flujo:
+     el flujo las toma en vivo de la captura de Pagos Críticos.
+     ------------------------------------------------------------------- */
+  var DERIVED_MAP={
+    'operacion|Pagado renta del mes':          ['Renta CDMX','Renta Puebla'],
+    'operacion|Impuestos del periodo pagados': ['IMSS','IVA','ISR','ISH CDMX','ISH Puebla'],
+    'financiamiento|Rentas atrasadas Sayulita':['Convenio Sayulita (Renta)','Convenio Sayulita (Mantenimiento)']
+  };
+  function loadPagosCriticos(){
+    return getClient().then(function(sb){
+      return sb.auth.getSession().then(function(){          // getSession ANTES del select (RLS)
+        return sb.from('fin_pagos_criticos').select('concepto,mes,pagado').eq('anio',ANIO);
+      });
+    }).then(function(r){
+      if(!r || r.error || !r.data){ return; }               // sin datos -> deja derivadas en blanco
+      var sums={};                                           // targetKey|mes -> Σ pagado
+      r.data.forEach(function(rec){
+        var m=+rec.mes; if(!(m>=1 && m<=12)) return;
+        var pag=(rec.pagado==null)?0:+rec.pagado;
+        for(var key in DERIVED_MAP){
+          if(DERIVED_MAP[key].indexOf(rec.concepto)>=0){
+            var k=key+'|'+m; sums[k]=(sums[k]||0)+pag;
+          }
+        }
+      });
+      for(var key in DERIVED_MAP){
+        var parts=key.split('|'), bloque=parts[0], rubro=parts[1];
+        for(var m=1;m<=12;m++){
+          var inp=IN[bloque+'|'+rubro+'|'+m]; if(!inp) continue;
+          var v=sums[key+'|'+m];
+          inp.value=(v==null)?'':fmtInput(v);
+        }
+      }
+      recalc();
+    }).catch(function(){ /* fallback silencioso: deja derivadas en blanco */ });
+  }
+
   document.getElementById('btnSave').addEventListener('click', function(){
     this.disabled=true; var self=this;
     saveAll().then(function(){ self.disabled=false; });
   });
   document.getElementById('btnReload').addEventListener('click', function(){
     this.disabled=true; var self=this;
-    loadFromDB().then(function(){ self.disabled=false; notify('Datos recargados', true); });
+    loadFromDB().then(loadPagosCriticos).then(function(){ self.disabled=false; notify('Datos recargados', true); });
   });
 
-  function boot(){ loadFromDB(); }
+  function boot(){ loadFromDB().then(loadPagosCriticos); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
