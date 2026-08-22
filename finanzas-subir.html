@@ -310,6 +310,211 @@
     return {ok:true, rows:rows, totalCalc:round2(totalCalc), totalArchivo:(totalArchivo==null?null:round2(totalArchivo))};
   }
 
+  /* ---------- Resultados (P&L QuickBooks): mapeo depto->loc y parseo ---------- */
+  var DEPT_MAP={ 'CDMX':'cdmx','CORPORATIVO':'corp','PUEBLA':'pue','SAYULITA':'sayu','SINCRETICO':'sinc' };
+  var LOC_ORDER=['cdmx','corp','pue','sayu','sinc'];
+  var LOC_LABEL={cdmx:'CDMX', corp:'Corporativo', pue:'Puebla', sayu:'Sayulita', sinc:'Sincrético'};
+
+  function parseResultados(matrix){
+    // 1) fila de ENCABEZADO DE DEPARTAMENTO: la que contiene CDMX y SAYULITA
+    var hdr=-1;
+    for(var i=0;i<matrix.length && i<40;i++){
+      var up=(matrix[i]||[]).map(function(c){return normCell(c);});   // normCell ya va en MAYÚSCULAS
+      if(up.indexOf('CDMX')>=0 && up.indexOf('SAYULITA')>=0){ hdr=i; break; }
+    }
+    if(hdr<0) return {ok:false, error:'no-header'};
+    var H=(matrix[hdr]||[]).map(function(c){return normCell(c);});
+    // 2) columnas por depto: real = donde aparece el nombre, aa = la siguiente
+    var locCols={};
+    for(var c=0;c<H.length;c++){
+      var loc=DEPT_MAP[H[c]];
+      if(loc && locCols[loc]==null) locCols[loc]={real:c, aa:c+1};
+    }
+    if(locCols.cdmx==null || locCols.pue==null) return {ok:false, error:'no-header'};
+    // columna "Total" del archivo (la última etiquetada TOTAL) para el cuadre
+    var totalCol=-1;
+    for(var c2=H.length-1;c2>=0;c2--){ if(H[c2]==='TOTAL'){ totalCol=c2; break; } }
+
+    var accMap={};                                   // "loc|cuenta" -> fila fin_pl
+    var perLocIngresos={}, perLocNeta={};
+    LOC_ORDER.forEach(function(l){ if(locCols[l]){ perLocIngresos[l]=0; perLocNeta[l]=0; } });
+    var fileIngresos=null, fileNeta=null;
+
+    for(var r=hdr+1;r<matrix.length;r++){
+      var row=matrix[r]||[];
+      var label=normCell(row[0]);
+      if(!label) continue;
+      // Subtotales: se saltan (pero de "Total para Ingresos" leemos el total del archivo)
+      if(/^TOTAL PARA\b/.test(label)){
+        if(fileIngresos==null && /^TOTAL PARA\s+(?:400\s+)?INGRESOS$/.test(label) && totalCol>=0){
+          var t=toNum(row[totalCol]); if(!isNaN(t)) fileIngresos=round2(t);
+        }
+        continue;
+      }
+      // Línea de utilidad neta (calculada por QuickBooks)
+      if(/^GANANCIAS NETAS$/.test(label)){
+        if(totalCol>=0){ var tn=toNum(row[totalCol]); if(!isNaN(tn)) fileNeta=round2(tn); }
+        LOC_ORDER.forEach(function(l){ if(locCols[l]) perLocNeta[l]=round2(nz(toNum(row[locCols[l].real]))); });
+        continue;
+      }
+      // Filas de cuenta: deben empezar con código NNN(-NN)*
+      var m=label.match(/^(\d{3}(?:-\d{2})*)/);
+      if(!m) continue;                                // encabezados de sección sin código
+      var code=m[1];
+      LOC_ORDER.forEach(function(l){
+        if(!locCols[l]) return;
+        var rv=toNum(row[locCols[l].real]);
+        var av=toNum(row[locCols[l].aa]);
+        var real=isNaN(rv)?null:round2(rv);
+        var aa=isNaN(av)?null:round2(av);
+        if(real==null && aa==null) return;
+        var key=l+'|'+code;
+        if(accMap[key]){                              // dedup: suma si el código se repite
+          accMap[key].real=round2((accMap[key].real||0)+(real||0));
+          accMap[key].aa  =round2((accMap[key].aa||0)+(aa||0));
+        } else {
+          accMap[key]={loc:l, cuenta:code, real:real, aa:aa};
+        }
+        // Cuadre de Ingresos: suma de cuentas 400* (padre 400-03 + hijos + demás, sin subtotales)
+        if(/^400/.test(code) && real!=null) perLocIngresos[l]=round2(perLocIngresos[l]+real);
+      });
+    }
+    var rows=Object.keys(accMap).map(function(k){ return accMap[k]; });
+    var calcIng=0;  LOC_ORDER.forEach(function(l){ if(locCols[l]) calcIng+=perLocIngresos[l]; });
+    var calcNeta=0; LOC_ORDER.forEach(function(l){ if(locCols[l]) calcNeta+=perLocNeta[l]; });
+    if(!rows.length) return {ok:false, error:'no-rows'};
+    return {ok:true, locCols:locCols, rows:rows,
+      perLocIngresos:perLocIngresos, calcIngresosTotal:round2(calcIng),
+      perLocNeta:perLocNeta, calcNetaTotal:round2(calcNeta),
+      fileIngresos:(fileIngresos==null?null:round2(fileIngresos)),
+      fileNeta:(fileNeta==null?null:round2(fileNeta))};
+  }
+
+  /* ---------- Resultados: descarga del Storage, parsea y abre la vista previa ---------- */
+  function processResultados(ctx){
+    // ctx: {storage_path, anio, mes, email, uploadId}
+    var sbRef=null;
+    return getClient().then(function(sb){ sbRef=sb; return sb.auth.getSession(); })
+      .then(function(r){
+        var s=(r && r.data && r.data.session) || null;
+        var email=(s && s.user && s.user.email) || '';
+        if(!s || ALLOWED.indexOf((email||'').toLowerCase())<0){
+          notify('Inicia sesión como Roberto o Javi para procesar', false); return null;
+        }
+        ctx.email=email;
+        return sbRef.storage.from(BUCKET).download(ctx.storage_path).then(function(dl){
+          if(!dl || dl.error || !dl.data) throw new Error((dl&&dl.error&&dl.error.message)||'No se pudo descargar el archivo');
+          return dl.data.arrayBuffer();
+        }).then(function(buf){
+          return getXLSX().then(function(XLSX){
+            var wb=XLSX.read(buf, {type:'array'});
+            var ws=wb.Sheets[wb.SheetNames[0]];
+            var matrix=XLSX.utils.sheet_to_json(ws,{header:1, blankrows:false});
+            var parsed=parseResultados(matrix);
+            if(!parsed.ok){
+              notify('No pude leer el formato — revísalo conmigo. El archivo quedó guardado.', false);
+              return null;
+            }
+            parsed.anio=ctx.anio; parsed.mes=ctx.mes; parsed.email=ctx.email; parsed.uploadId=ctx.uploadId;
+            openPreviewResultados(parsed);
+            return null;
+          });
+        });
+      }).catch(function(e){
+        notify('No pude procesar el P&L: '+((e&&e.message)||'error')+'. El archivo quedó guardado.', false);
+      });
+  }
+
+  /* ---------- Vista previa de Resultados + confirmación ---------- */
+  function openPreviewResultados(ctx){
+    _pv=ctx; _pvMode='resultados';
+    var ingMis =(ctx.fileIngresos!=null) && Math.abs(ctx.calcIngresosTotal-ctx.fileIngresos)>1;
+    var netaMis=(ctx.fileNeta!=null)     && Math.abs(ctx.calcNetaTotal-ctx.fileNeta)>1;
+    var mismatch=ingMis||netaMis;
+    document.getElementById('pvTitle').textContent='Vista previa · Resultados '+MESES[ctx.mes-1]+' '+ctx.anio;
+    var html='';
+    html+='<p class="pv-lead">Leí <b>'+ctx.rows.length+'</b> renglones de cuenta. Ingresos <b>'+fmtMoney(ctx.calcIngresosTotal)+'</b> · Utilidad neta <b>'+fmtMoney(ctx.calcNetaTotal)+'</b>. ¿Confirmas y actualizo la Cuenta de Resultados?</p>';
+    html+='<table class="pv"><thead><tr><th>Propiedad</th><th>Ingresos</th><th>Utilidad neta</th></tr></thead><tbody>';
+    LOC_ORDER.forEach(function(l){
+      if(!ctx.locCols[l]) return;
+      html+='<tr class="cat"><td>'+escHtml(LOC_LABEL[l])+'</td><td>'+fmtMoney(ctx.perLocIngresos[l]||0)+'</td><td>'+fmtMoney(ctx.perLocNeta[l]||0)+'</td></tr>';
+    });
+    html+='<tr class="tot"><td>Total</td><td>'+fmtMoney(ctx.calcIngresosTotal)+'</td><td>'+fmtMoney(ctx.calcNetaTotal)+'</td></tr>';
+    html+='</tbody></table>';
+    // Cuadre vs archivo
+    html+='<table class="pv"><thead><tr><th>Cuadre vs archivo</th><th>Calculado</th><th>Archivo</th></tr></thead><tbody>';
+    html+='<tr class="arch"><td>Ingresos</td><td>'+fmtMoney(ctx.calcIngresosTotal)+'</td><td>'+(ctx.fileIngresos==null?'—':fmtMoney(ctx.fileIngresos))+'</td></tr>';
+    html+='<tr class="arch"><td>Utilidad neta</td><td>'+fmtMoney(ctx.calcNetaTotal)+'</td><td>'+(ctx.fileNeta==null?'—':fmtMoney(ctx.fileNeta))+'</td></tr>';
+    html+='</tbody></table>';
+    document.getElementById('pvBody').innerHTML=html;
+    var warn=document.getElementById('pvWarn');
+    var confirm=document.getElementById('pvConfirm');
+    confirm.textContent='Confirmar y actualizar reporte';
+    if(mismatch){
+      var partes=[];
+      if(ingMis)  partes.push('Ingresos calculado '+fmtMoney(ctx.calcIngresosTotal)+' vs archivo '+fmtMoney(ctx.fileIngresos));
+      if(netaMis) partes.push('Utilidad neta calculada '+fmtMoney(ctx.calcNetaTotal)+' vs archivo '+fmtMoney(ctx.fileNeta));
+      warn.textContent='⚠ No cuadra con el archivo ('+partes.join(' · ')+'). No puedo cargar datos mal leídos — revísalo conmigo en sesión.';
+      confirm.disabled=true;
+    } else {
+      warn.textContent='';
+      confirm.disabled=false;
+    }
+    document.getElementById('pvOverlay').classList.add('show');
+  }
+
+  function confirmResultados(){
+    if(!_pv) return;
+    var ctx=_pv;
+    var confirmBtn=document.getElementById('pvConfirm');
+    confirmBtn.disabled=true; confirmBtn.textContent='Actualizando…';
+    var nowIso=new Date().toISOString();
+    var sbRef=null;
+    getClient().then(function(sb){ sbRef=sb; return sb.auth.getSession(); })
+    .then(function(r){
+      var s=(r && r.data && r.data.session) || null;
+      var email=(s && s.user && s.user.email) || '';
+      if(!s || ALLOWED.indexOf((email||'').toLowerCase())<0) throw new Error('Sesión no autorizada');
+      ctx.email=email;
+      // Preservar el plan existente del mes
+      return sbRef.from('fin_pl').select('loc,cuenta,plan').eq('anio',ctx.anio).eq('mes',ctx.mes);
+    }).then(function(sel){
+      if(sel && sel.error) throw new Error(sel.error.message||'No pude leer el plan existente');
+      var planMap={};
+      (sel && sel.data ? sel.data : []).forEach(function(x){ planMap[x.loc+'|'+x.cuenta]=x.plan; });
+      var rows=ctx.rows.map(function(x){
+        var key=x.loc+'|'+x.cuenta;
+        return {anio:ctx.anio, mes:ctx.mes, loc:x.loc, cuenta:x.cuenta,
+          real:x.real, aa:x.aa, plan:(key in planMap ? planMap[key] : null),
+          updated_by:ctx.email, updated_at:nowIso};
+      });
+      // Upsert por lotes (<=500)
+      var chain=Promise.resolve();
+      for(var i=0;i<rows.length;i+=500){
+        (function(batch){
+          chain=chain.then(function(){
+            return sbRef.from('fin_pl').upsert(batch,{onConflict:'anio,mes,loc,cuenta'})
+              .then(function(u){ if(u && u.error) throw new Error(u.error.message||'Error al guardar fin_pl'); });
+          });
+        })(rows.slice(i,i+500));
+      }
+      return chain;
+    }).then(function(){
+      var resumen='P&L '+MESES[ctx.mes-1]+': Ingresos '+fmtMoney(ctx.calcIngresosTotal)+', neta '+fmtMoney(ctx.calcNetaTotal);
+      if(ctx.uploadId!=null){
+        return sbRef.from('fin_uploads').update({procesado:true, procesado_at:nowIso, resultado_proceso:resumen}).eq('id',ctx.uploadId);
+      }
+      return null;
+    }).then(function(){
+      closePreview();
+      notify('Reporte actualizado ✓ (la Cuenta de Resultados lee en vivo)', true);
+      loadHistory();
+    }).catch(function(e){
+      confirmBtn.disabled=false; confirmBtn.textContent='Confirmar y actualizar reporte';
+      notify('No se pudo actualizar: '+((e&&e.message)||'error'), false);
+    });
+  }
+
   /* ---------- Deuda: lee el File, parsea y abre la vista previa ---------- */
   function processDeuda(file, ctx){
     return getXLSX().then(function(XLSX){
@@ -337,8 +542,9 @@
 
   /* ---------- Vista previa + confirmación ---------- */
   var _pv=null;
+  var _pvMode='deuda';
   function openPreview(ctx){
-    _pv=ctx;
+    _pv=ctx; _pvMode='deuda';
     var subt=catSubtotales(ctx.rows);
     var mismatch=(ctx.totalArchivo!=null) && Math.abs(ctx.totalCalc-ctx.totalArchivo)>1;
     document.getElementById('pvTitle').textContent='Vista previa · Deuda '+MESES[ctx.mes-1]+' '+ctx.anio;
@@ -367,7 +573,7 @@
     }
     document.getElementById('pvOverlay').classList.add('show');
   }
-  function closePreview(){ var o=document.getElementById('pvOverlay'); if(o) o.classList.remove('show'); _pv=null; }
+  function closePreview(){ var o=document.getElementById('pvOverlay'); if(o) o.classList.remove('show'); _pv=null; _pvMode='deuda'; }
 
   function confirmDeuda(){
     if(!_pv) return;
@@ -559,7 +765,7 @@
     return getClient().then(function(sb){
       return sb.auth.getSession().then(function(){
         return sb.from('fin_uploads')
-          .select('anio,mes,tipo,nombre_archivo,subido_por,subido_at,procesado,resultado_proceso')
+          .select('id,anio,mes,tipo,storage_path,nombre_archivo,subido_por,subido_at,procesado,resultado_proceso')
           .order('subido_at',{ascending:false})
           .limit(30);
       });
@@ -578,14 +784,20 @@
       rows.forEach(function(rec){
         var tr=document.createElement('tr');
         var mesN=(+rec.mes>=1 && +rec.mes<=12) ? MESES[+rec.mes-1] : rec.mes;
+        function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+          return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
         var estado;
         if(rec.procesado){
           estado='<span class="badge ok">✅ Procesado</span>';
         } else {
           estado='<span class="badge pend">⏳ Pendiente</span>';
+          // "Procesar" solo para Resultados (P&L) aún no procesados
+          if(rec.tipo==='resultados' && rec.storage_path){
+            estado+=' <button class="btn btn-save btn-proc" style="padding:4px 12px;font-size:12px;"'
+              +' data-id="'+esc(rec.id)+'" data-anio="'+esc(rec.anio)+'" data-mes="'+esc(rec.mes)+'"'
+              +' data-path="'+esc(rec.storage_path)+'">Procesar</button>';
+          }
         }
-        function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
-          return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
         tr.innerHTML=
           '<td>'+esc(fmtFecha(rec.subido_at))+'</td>'+
           '<td>'+esc(mesN)+' '+esc(rec.anio)+'</td>'+
@@ -605,7 +817,21 @@
   document.getElementById('btnReload').addEventListener('click', function(){ loadHistory(); });
   document.getElementById('pvClose').addEventListener('click', function(){ closePreview(); });
   document.getElementById('pvCancel').addEventListener('click', function(){ closePreview(); });
-  document.getElementById('pvConfirm').addEventListener('click', function(){ confirmDeuda(); });
+  document.getElementById('pvConfirm').addEventListener('click', function(){
+    if(_pvMode==='resultados') confirmResultados(); else confirmDeuda();
+  });
+  // Botón "Procesar" del historial (delegado)
+  document.getElementById('histBody').addEventListener('click', function(ev){
+    var b=ev.target && ev.target.closest ? ev.target.closest('button.btn-proc') : null;
+    if(!b) return;
+    b.disabled=true; b.textContent='Procesando…';
+    processResultados({
+      storage_path:b.getAttribute('data-path'),
+      anio:parseInt(b.getAttribute('data-anio'),10),
+      mes:parseInt(b.getAttribute('data-mes'),10),
+      uploadId:(b.getAttribute('data-id')||null)
+    }).then(function(){ b.disabled=false; b.textContent='Procesar'; });
+  });
 
   function boot(){ refreshAuth(); loadHistory(); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
