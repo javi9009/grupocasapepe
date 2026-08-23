@@ -296,8 +296,8 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
     </div>
     <div class="leyenda">
       <span><i style="background:var(--ok-bg);border-color:var(--ok)"></i>Todo el dinero confirmado</span>
-      <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>Sólo falta el estado de cuenta de Banorte</span>
-      <span><i style="background:var(--bad-bg);border-color:var(--bad)"></i>Dinero sin ubicar o concepto por corregir</span>
+      <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>Sólo falta el estado de cuenta</span>
+      <span><i style="background:var(--bad-bg);border-color:var(--bad)"></i>Descuadre o concepto por corregir</span>
       <span><i style="background:var(--none-bg)"></i>Incompleto: faltó una fuente</span>
       <span><i class="ptexc"></i>Con excepciones abiertas</span>
     </div>
@@ -386,12 +386,20 @@ function celdas(entro,comp){const dif=(comp===null||comp===undefined)?null:comp-
   return '<td class="n">'+m(entro)+'</td><td class="n">'+((comp===null||comp===undefined)?'—':m(comp))+'</td>'
     +'<td class="n'+(nv?' d'+nv:'')+'">'+((dif===null)?'—':(nv===0?'0.00':m(dif)))+'</td>';}
 
-function totales(){let comp=0,banco=0,falta=0;
-  (D.conc||[]).forEach(c=>{const st=c[6],cb=c[4];
+// Los tres cajones los calcula la base (auditoria.cajones_dia), así el color del día
+// en la tira y las cifras de arriba salen siempre del mismo sitio.
+function totales(){
+  const c = D && D.cajones;
+  if(Array.isArray(c)){
+    const comp=Number(c[0]||0), banco=Number(c[1]||0), falta=Number(c[2]||0);
+    return {comp,banco,falta,tot:comp+banco+falta};
+  }
+  let comp=0,banco=0,falta=0;      // respaldo por si el panel es más viejo que la función
+  (D.conc||[]).forEach(x=>{const st=x[6],cb=x[4];
     if(st==='no_aplica')return;
-    if(cb!==null&&cb!==undefined){comp+=Math.min(Number(c[3]),Number(cb));falta+=Math.max(0,Number(c[3])-Number(cb));}
-    else if(st==='pendiente_estado_de_cuenta'){banco+=Number(c[3]);}
-    else {falta+=Number(c[3]);}});
+    if(cb!==null&&cb!==undefined){comp+=Math.min(Number(x[3]),Number(cb));falta+=Math.max(0,Number(x[3])-Number(cb));}
+    else if(st==='pendiente_estado_de_cuenta'){banco+=Number(x[3]);}
+    else {falta+=Number(x[3]);}});
   return {comp,banco,falta,tot:comp+banco+falta};}
 
 /* ---------- carga ---------- */
@@ -451,9 +459,9 @@ async function cargaCalendario(){
   CAL = (hasta<desde) ? [] : (await rpc('aud_panel_mes',{p_property:prop,p_desde:desde,p_hasta:hasta})||[]);
 }
 // El color del día lo manda el dinero, no las excepciones:
-//   rojo    = hay dinero que no sabemos dónde está, o algo que hay que corregir
+//   rojo    = hay descuadre (cobro sin ruta o liquidador corto), o algo que corregir
 //             en Cloudbeds / Poster / Turitop (tour duplicado, captura tardía…)
-//   naranja = todo ubicado salvo lo que espera el estado de cuenta de Banorte
+//   naranja = todo el ingreso está entre lo verificado y lo que espera estado de cuenta
 //   verde   = todo el dinero del día está confirmado
 //   gris    = faltó una fuente, o no hubo movimiento
 // Los días con excepciones abiertas llevan además un punto (clase .exc).
@@ -474,9 +482,9 @@ function tituloDia(r){
   if(cobrado>0) tit+=' · $'+m(cobrado);
   if(faltan>0) tit+=' · incompleto, faltaron '+faltan+' fuente(s)';
   else if(!(cobrado>0)) tit+=' · sin movimiento';
-  else if(Number(r[7]||0)>0) tit+=' · $'+m(r[7])+' sin ubicar';
+  else if(Number(r[7]||0)>0) tit+=' · $'+m(r[7])+' de descuadre';
   else if(Number(r[8]||0)>0) tit+=' · '+r[8]+' concepto(s) por corregir en el sistema origen';
-  else if(Number(r[6]||0)>0) tit+=' · $'+m(r[6])+' esperando el estado de cuenta de Banorte';
+  else if(Number(r[6]||0)>0) tit+=' · $'+m(r[6])+' esperando estado de cuenta';
   else tit+=' · todo el dinero confirmado';
   if(exc>0) tit+=' · '+exc+' excepción(es) por $'+m(r[4]);
   return tit;
@@ -579,16 +587,16 @@ function pintaResumen(){
    +'<span class="op">=</span>'
    +tile('Sabemos dónde está','$'+m(t.comp),'El método de cobro confirma la misma cifra',false,'comp')
    +'<span class="op">+</span>'
-   +tile('Creemos que está en Banorte','$'+m(t.banco),'Pasó por la terminal; falta el estado de cuenta',false,'banco')
+   +tile('Falta el estado de cuenta','$'+m(t.banco),'Pasó por terminal o pasarela; falta que el banco lo confirme',false,'banco')
    +'<span class="op">+</span>'
-   +tile('No sabemos dónde está','$'+m(t.falta),'Nadie ha confirmado que este dinero llegó',false,'falta');
+   +tile('Descuadre del día','$'+m(t.falta),'Cobros sin ruta o que el liquidador reportó de menos',false,'falta');
   const p=v=>t.tot?(v*100/t.tot):0;
   document.getElementById('barra').innerHTML='<i style="width:'+p(t.comp)+'%;background:var(--ok)"></i>'
     +'<i style="width:'+p(t.banco)+'%;background:var(--info)"></i><i style="width:'+p(t.falta)+'%;background:var(--warn)"></i>';
   document.getElementById('barleyenda').innerHTML=
     '<span><i style="background:var(--ok);border:0"></i>Sabemos dónde está</span>'
-   +'<span><i style="background:var(--info);border:0"></i>Creemos que está en Banorte</span>'
-   +'<span><i style="background:var(--warn);border:0"></i>No sabemos dónde está</span>'
+   +'<span><i style="background:var(--info);border:0"></i>Falta el estado de cuenta</span>'
+   +'<span><i style="background:var(--warn);border:0"></i>Descuadre del día</span>'
    +'<span style="margin-left:auto">'+((D.exc||[]).length
       ?'<b style="color:var(--bad)">'+D.exc.length+' excepciones abiertas por $'+m(ab)+'</b> — en la pestaña Excepciones'
       :'Sin excepciones abiertas')+'</span>';
@@ -601,8 +609,8 @@ function pintaResumen(){
 }
 const TILE_TXT={
  comp:["Sabemos dónde está","El método de cobro por el que entró ese dinero confirma la misma cifra: la caja fuerte contó lo que declaró el turno, la terminal de recepción pasó esas tarjetas, Stripe cobró esos cargos. Está localizado."],
- banco:["Creemos que está en Banorte","Son cobros con tarjeta que sí pasaron por la terminal, así que el dinero debería estar en Banorte — pero nadie ha subido el estado de cuenta, y hasta que aparezca es una creencia, no un hecho."],
- falta:["No sabemos dónde está","Nadie ha confirmado que este dinero llegó: el cobro no dice por qué método entró, o el comprobante trae una cifra menor. Aquí es donde se esconde cualquier faltante."]};
+ banco:["Falta el estado de cuenta","Cobros que pasaron por una terminal o una pasarela — la TPV de Cósmica, la de recepción, o una tarjeta que Cloudbeds no supo identificar. El dinero va en camino; hasta que el estado de cuenta lo confirme sigue siendo una creencia, no un hecho."],
+ falta:["Descuadre del día","Cobros que no tienen ninguna ruta de comprobación, o cuyo liquidador reportó menos de lo que dice el sistema. Aquí es donde se esconde cualquier faltante: si hay un peso, el día va en rojo."]};
 function panelTile(){
   if(!tileAbierto||!D)return '';
   const t=TILE_TXT[tileAbierto];if(!t)return '';
@@ -614,7 +622,7 @@ function panelTile(){
   const filas=ls.map(c=>{const st=c[6],cb=c[4],tiene=(cb!==null&&cb!==undefined);
     const monto=tileAbierto==='comp'?Math.min(Number(c[3]),Number(cb)):(tiene?Number(c[3])-Number(cb):Number(c[3]));
     const pq=tileAbierto==='comp'?'Confirmado contra el comprobante.'
-      :tileAbierto==='banco'?'Pasó por la terminal. Falta subir el estado de cuenta de Banorte.'
+      :tileAbierto==='banco'?'Pasó por una terminal o pasarela. Falta el estado de cuenta que lo confirme.'
       :(st==='pendiente'?'Este cobro no dice por qué método entró.'
         :st==='sin_liquidador'?'Esta propiedad no tiene ese método de cobro conectado.'
         :'El comprobante dice $'+m(cb)+' y el sistema $'+m(c[3])+'.');
