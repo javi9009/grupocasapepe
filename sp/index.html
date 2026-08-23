@@ -1216,10 +1216,11 @@ async function loadReporte(force){
   finally{ if(btn) btn.style.opacity='.7'; }
 }
 
-// ===== Tours propios: walking de HOY + propios de MAÑANA (desde experiencias) =====
+// ===== Tours propios: walking de HOY + propios de MAÑANA (por ubicación) =====
 const _DOW=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 function _dowCDMX(off){ const b=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); b.setDate(b.getDate()+(off||0)); return _DOW[b.getDay()]; }
 function _norm(s){ return (s||'').replace(/Mie\b/,'Mié').replace(/Sab\b/,'Sáb'); }
+function _tc(s){ return String(s||'').toLowerCase().split(/\s+/).map(w=>w?w[0].toUpperCase()+w.slice(1):w).join(' '); }
 function _runsOn(txt,dow){
   if(!txt) return false;
   const t=_norm(txt.trim());
@@ -1241,34 +1242,38 @@ function _catExp(n){
   return 'otro';
 }
 async function loadReporteTours(){
-  const elW=$('rep-walking'), elM=$('rep-manana');
+  const elW=$('rep-walking'), elM=$('rep-manana'), list=$('rep-manana-list');
+  let wdata=null;
   try{
-    const _q=await sb.from('experiencias').select('nombre,propio_3o,dias_horario,lugar_salida').order('nombre');
+    const ses=await sb.auth.getSession(); const tok=(ses&&ses.data&&ses.data.session)?ses.data.session.access_token:SB_KEY;
+    const wr=await fetch(SB_URL+'/functions/v1/walking-dia',{method:'POST',headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+tok},body:'{}'});
+    wdata=await wr.json().catch(()=>null);
+  }catch(e){}
+  if(elW){
+    const hoy=(wdata&&wdata.hoy)||[];
+    if(hoy.length){ const d=[...new Set(hoy.map(e=>_tc(e.destino)))].join(' · '); elW.textContent=d; elW.classList.remove('dash'); elW.title=hoy.map(e=>e.producto+' '+e.hora).join(' | '); }
+    else { elW.textContent='—'; elW.classList.add('dash'); elW.title='Sin walking hoy'; }
+  }
+  try{
+    const _q=await sb.from('experiencias').select('sku,nombre,propio_3o,dias_horario,lugar_salida').order('nombre');
     const rows=_q.data||[];
-    const hoy=_dowCDMX(0), man=_dowCDMX(1);
-    if(elW){
-      const w=rows.filter(x=>_catExp(x.nombre)==='walking' && _runsOn(x.dias_horario,hoy));
-      if(w.length){ const dest=w.map(x=>x.lugar_salida||x.nombre.replace(/walking tour/i,'').trim()).filter(Boolean).join(' · '); elW.textContent=dest||'Sí'; elW.classList.remove('dash'); elW.title=w.map(x=>x.nombre).join(', '); }
-      else { elW.textContent='—'; elW.classList.add('dash'); elW.title='Walking se sincroniza con Akia (por conectar)'; }
-    }
-    if(elM){
-      const prop=rows.filter(x=>/propio/i.test(x.propio_3o||'') && _runsOn(x.dias_horario,man));
-      const by={};
-      prop.forEach(x=>{ const c=_catExp(x.nombre); (by[c]=by[c]||[]).push(x.nombre); });
+    const man=_dowCDMX(1);
+    const prop=rows.filter(x=>/propio/i.test(x.propio_3o||'') && _runsOn(x.dias_horario,man));
+    const grp={CDMX:{},Puebla:{}}; let total=0;
+    prop.forEach(x=>{ const L=/EXP-PUE/i.test(x.sku||'')?'Puebla':'CDMX'; const c=_catExp(x.nombre); (grp[L][c]=grp[L][c]||[]).push(x.nombre); total++; });
+    const wm=(wdata&&wdata.manana)||[];
+    wm.forEach(e=>{ (grp.CDMX.walking=grp.CDMX.walking||[]).push('Walking '+_tc(e.destino)); total++; });
+    if(elM){ elM.textContent=String(total); elM.classList.remove('dash'); }
+    if(list){
       const ICON={hiking:'🥾 Hiking',luchas:'🤼 Luchas',walking:'🚶 Walking',gastro:'🌮 Taller gastro',xochimilco:'🛶 Xochimilco',otro:'✨ Otros'};
-      const orderCat=['hiking','luchas','walking','gastro','xochimilco','otro'];
-      const present=orderCat.filter(c=>by[c]&&by[c].length);
-      elM.textContent = prop.length ? String(prop.length) : '0';
-      elM.classList.remove('dash');
-      const list=$('rep-manana-list');
-      if(list){
-        if(!prop.length){ list.innerHTML='<div style="color:var(--txt3)">Sin tours propios programados mañana ('+man+')</div>'; }
-        else{ list.innerHTML='<div style="font-weight:700;margin-bottom:4px">Mañana '+man+'</div>'+present.map(c=>'<div style="margin:2px 0"><b>'+ICON[c]+'</b>: '+by[c].join(', ')+'</div>').join(''); }
-      }
+      const ORDER=['hiking','luchas','walking','gastro','xochimilco','otro'];
+      const sec=(L)=>{ const cats=ORDER.filter(c=>grp[L][c]&&grp[L][c].length); if(!cats.length) return ''; return '<div style="font-weight:800;margin:6px 0 2px">📍 '+L+'</div>'+cats.map(c=>'<div style="margin:1px 0 1px 6px"><b>'+ICON[c]+'</b>: '+grp[L][c].join(', ')+'</div>').join(''); };
+      const html=sec('CDMX')+sec('Puebla');
+      list.innerHTML = total ? ('<div style="font-weight:700;margin-bottom:2px">Mañana '+man+'</div>'+html) : '<div style="color:var(--txt3)">Sin tours propios programados mañana ('+man+')</div>';
     }
-    const card=$('rep-manana-card');
-    if(card && !card._wired){ card._wired=true; card.onclick=()=>{ const l=$('rep-manana-list'); if(l) l.style.display=(l.style.display==='none'?'block':'none'); }; }
-  }catch(e){ /* deja — */ }
+  }catch(e){}
+  const card=$('rep-manana-card');
+  if(card && !card._wired){ card._wired=true; card.onclick=()=>{ const l=$('rep-manana-list'); if(l) l.style.display=(l.style.display==='none'?'block':'none'); }; }
 }
 
 /* ===== Desayunos interactivo (modal centrado) ===== */
