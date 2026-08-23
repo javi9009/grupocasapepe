@@ -228,6 +228,7 @@ tr.lv4.s3 .difnota{color:var(--sev3)} tr.lv4.s4 .difnota{color:var(--sev4)}
 .guia ol{margin:0;padding-left:18px} .guia li{margin:2px 0;line-height:1.4}
 .mini.go{border-color:var(--ok);color:var(--ok)}
 td.n.esperando{color:var(--warn)}
+td.n.cuadra{color:var(--ok)}
 
 .sec{display:flex;flex-direction:column;gap:12px}
 .sechead{display:flex;flex-direction:column;gap:5px}
@@ -392,12 +393,21 @@ function linkReserva(res){const c=CB[prop];if(!res||!c)return '';
   return ' <a class="mini" style="text-decoration:none" target="_blank" rel="noopener" href="https://hotels.cloudbeds.com/connect/'+c+'#/reservations/'+encodeURIComponent(res)+'">Abrir reserva</a>';}
 function nivel(d){const a=Math.abs(d||0);if(a<0.005)return 0;if(a<1)return 1;if(a<10)return 2;if(a<=100)return 3;return 4;}
 const NIVEL_ET=['Comprobado','Diferencia de centavos','Diferencia menor','Diferencia','Diferencia grande'];
-function celdas(entro,comp,espera){const dif=(comp===null||comp===undefined)?null:comp-entro;const nv=dif===null?0:nivel(dif);
-  // si el hueco es exactamente lo que espera estado de cuenta, no es un faltante: va naranja
-  const soloBanco = espera!=null && dif!==null && Math.abs(Math.abs(dif)-Math.abs(espera))<0.01;
-  const cls = dif===null?'':(soloBanco?' esperando':(nv?' d'+nv:''));
-  return '<td class="n">'+m(entro)+'</td><td class="n">'+((comp===null||comp===undefined)?'—':m(comp))+'</td>'
-    +'<td class="n'+cls+'">'+((dif===null)?'—':(nv===0?'0.00':m(dif)))+'</td>';}
+function celdas(entro,comp,espera){
+  const esp = Number(espera||0);
+  const sinComp = (comp===null||comp===undefined);
+  // el hueco real, descontando lo que sólo espera al banco
+  const dif  = sinComp ? -entro : comp-entro;
+  const real = dif + esp;                       // lo que de verdad falta
+  const nv   = nivel(real);
+  let cls, txt;
+  if (sinComp && esp>0 && Math.abs(real)<0.01){ cls=' esperando'; txt=m(dif); }   // todo espera al banco
+  else if (Math.abs(dif)<0.005){ cls=' cuadra'; txt='0.00'; }
+  else if (esp>0 && Math.abs(real)<0.01){ cls=' esperando'; txt=m(dif); }
+  else if (sinComp && esp===0){ cls=' d4'; txt=m(dif); }
+  else { cls=nv?' d'+nv:' cuadra'; txt=m(dif); }
+  return '<td class="n">'+m(entro)+'</td><td class="n">'+(sinComp?'—':m(comp))+'</td>'
+    +'<td class="n'+cls+'">'+txt+'</td>';}
 
 // Los tres cajones los calcula la base (auditoria.cajones_dia), así el color del día
 // en la tira y las cifras de arriba salen siempre del mismo sitio.
@@ -657,10 +667,14 @@ function vistaDia(){
     const rp=plats[pl], cobrado=rp.reduce((a,r)=>a+Number(r[6]),0);
     let compPlat=0, algoSin=false;
     rp.forEach(r=>{ if(r[10]===null||r[10]===undefined) algoSin=true; else compPlat+=Number(r[10]); });
+    // cuánto de lo que falta en esta plataforma sólo espera el estado de cuenta
+    let esperaPlat=0; { const px={}; rp.forEach(r=>{px[r[1]]=(px[r[1]]||0)+Number(r[6]);});
+      Object.keys(px).forEach(k=>{const c=cp[k];
+        if(c && c[6]==='pendiente_estado_de_cuenta' && (c[4]===null||c[4]===undefined)) esperaPlat+=px[k];}); }
     const kp='p:'+pl, ab=abierto[kp];
     filas+='<tr><td class="name stripe info"><button class="tg" type="button" data-k="'+kp+'" aria-expanded="'+(ab?'true':'false')+'">'+(ab?'−':'+')+'</button>'
       +esc(PLAT_ET[pl]||pl)+(algoSin?'<span class="sub">Parte de este dinero todavía no tiene comprobante.</span>':'')+'</td>'
-      +celdas(cobrado,algoSin&&compPlat===0?null:compPlat)+'<td class="n">'+rp.length+'</td><td></td></tr>';
+      +celdas(cobrado,algoSin&&compPlat===0?null:compPlat,esperaPlat)+'<td class="n">'+rp.length+'</td><td></td></tr>';
     if(!ab)return;
     const puntos={}; rp.forEach(r=>{(puntos[r[1]]=puntos[r[1]]||[]).push(r);});
     Object.keys(puntos).forEach(pt=>{
@@ -677,7 +691,7 @@ function vistaDia(){
       const kt='t:'+pl+':'+pt, at=abierto[kt];
       filas+='<tr class="lv2"><td class="ind1 stripe '+col+'"><button class="tg" type="button" data-k="'+kt+'" aria-expanded="'+(at?'true':'false')+'">'+(at?'−':'+')+'</button>'
         +esc(c?c[1]:pt)+'<span class="sub">'+esc(nota)+'</span></td>'
-        +celdas(sum,sinC?null:compPt,st==='pendiente_estado_de_cuenta'?sum:null)+'<td class="n">'+rs.length+'</td><td>'+chip(col,!sinC?NIVEL_ET[nv]:ec[1])+'</td></tr>';
+        +celdas(sum,sinC?null:compPt,(st==='pendiente_estado_de_cuenta'&&sinC)?sum:0)+'<td class="n">'+rs.length+'</td><td>'+chip(col,!sinC?NIVEL_ET[nv]:ec[1])+'</td></tr>';
       if(!at)return;
       const turnos={}; rs.forEach(r=>{(turnos[r[2]]=turnos[r[2]]||[]).push(r);});
       Object.keys(turnos).sort().forEach(tu=>{
@@ -740,10 +754,11 @@ function vistaDia(){
     +'se abre por el método de cobro por el que entró, y de ahí al turno y a cada transacción. La diferencia no se reparte: aparece marcada en la transacción que la causa.</p></div>'
     +'<div class="card scroll"><table><thead><tr><th>Punto de venta · método de cobro</th><th class="n">Entró</th>'
     +'<th class="n">Comprobado</th><th class="n">Δ</th><th class="n">Movs</th><th>Comprobación</th></tr></thead><tbody>'
-    +filas+'<tr class="sum"><td>Total cobrado del día</td>'+celdas(totC,t.comp)+'<td class="n">'+det.length+'</td><td></td></tr></tbody></table></div>'
-    +'<div class="leyenda" style="margin-top:2px"><span><i style="background:var(--sev1);border:0"></i>Menos de $1</span>'
-    +'<span><i style="background:var(--sev2);border:0"></i>Hasta $10</span><span><i style="background:var(--sev3);border:0"></i>Hasta $100</span>'
-    +'<span><i style="background:var(--sev4);border:0"></i>Más de $100</span></div>'
+    +filas+'<tr class="sum"><td>Total cobrado del día</td>'+celdas(totC,t.comp,t.banco)+'<td class="n">'+det.length+'</td><td></td></tr></tbody></table></div>'
+    +'<div class="leyenda" style="margin-top:2px"><span><i style="background:var(--ok);border:0"></i>Cuadra</span>'
+    +'<span><i style="background:var(--warn);border:0"></i>Sólo falta el estado de cuenta</span>'
+    +'<span><i style="background:var(--sev2);border:0"></i>Falta hasta $10</span><span><i style="background:var(--sev3);border:0"></i>Falta hasta $100</span>'
+    +'<span><i style="background:var(--sev4);border:0"></i>Falta más de $100</span></div>'
     +tarjetaQuien()
     +'<p class="lede" style="font-size:.85rem">Lo que se vendió y todavía no se cobra —o se cobró antes y se consume hoy— no entra aquí: eso vive en la póliza, en la cuenta 225 Huéspedes.</p></section>';
 }
