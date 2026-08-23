@@ -77,6 +77,12 @@
   .chat-row.unread .chat-prev{color:var(--txt);font-weight:600}
   mark{background:#ffe9a8;color:inherit;border-radius:3px;padding:0 1px}
   .empty-inline{padding:26px;text-align:center;color:var(--txt3);font-size:13px}
+  /* botón ⋮ de acciones de la fila + menú flotante */
+  .row-menu-btn{border:none;background:transparent;color:var(--txt3);font-size:20px;line-height:1;cursor:pointer;padding:4px 6px;border-radius:8px;flex:0 0 auto;align-self:center}
+  .row-menu-btn:active{background:var(--bg3)}
+  .row-menu{position:fixed;background:var(--bg);border:1px solid var(--bd);border-radius:11px;box-shadow:0 6px 22px rgba(0,0,0,.18);padding:5px;z-index:50;min-width:194px}
+  .row-menu button{border:none;background:transparent;text-align:left;width:100%;padding:10px 12px;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;color:inherit;font-family:inherit;display:flex;align-items:center;gap:8px}
+  .row-menu button:active{background:var(--bg2)}
 
   /* ===== VISTA CONVERSACION ===== */
   #convView{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg3);z-index:6}
@@ -216,6 +222,7 @@
       <button class="chip active" data-f="todos">Todos</button>
       <button class="chip" data-f="pendientes">Pendientes</button>
       <button class="chip" data-f="pepes">Pepes</button>
+      <button class="chip" data-f="grupos">Grupos</button>
       <button class="chip disabled" data-f="huespedes">Huéspedes</button>
     </div>
     <div id="chatList"></div>
@@ -357,6 +364,7 @@ let MSG_MATCH_IDS = new Set();// conversacion_id que coinciden por contenido de 
 let searchTimer = null;
 let pollTimer = null;
 let lastMsgCount = 0;
+let ROW_MENU_EL = null;      // menú flotante de acciones de fila (⋮ / long-press)
 
 /* ---------- utilidades ---------- */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -542,7 +550,7 @@ async function loadList(){
     if(c.tipo==='ticket') badge = '<span class="badge '+(c.estado==='cerrado'?'cerrado':'abierto')+'">'+(c.estado==='cerrado'?'Cerrado':'Abierto')+'</span>';
     else if(c.tipo==='incidencia') badge = '<span class="badge inc">Incidencia</span>';
     const searchText = (title+' '+others.map(p=>(p.nombre||'')+' '+(p.email||'')).join(' ')).toLowerCase();
-    LIST_ROWS.push({ id:c.id, tipo:c.tipo, estado:c.estado, avHtml, title, timeTxt:fmtTime(c.ultimo_at||(last&&last.created_at)), badge, prev, unread, search:searchText });
+    LIST_ROWS.push({ id:c.id, tipo:c.tipo, estado:c.estado, avHtml, title, timeTxt:fmtTime(c.ultimo_at||(last&&last.created_at)), badge, prev, unread, lastAt:(last?last.created_at:(c.ultimo_at||null)), search:searchText });
   }
   renderList(SEARCH_Q);
 }
@@ -557,6 +565,7 @@ function renderList(q){
   let rows=LIST_ROWS;
   if(FILTER==='pendientes') rows = rows.filter(r=> (r.tipo==='ticket'||r.tipo==='incidencia') && r.estado==='abierto');
   else if(FILTER==='pepes') rows = rows.filter(r=> r.tipo==='directo'||r.tipo==='grupo');
+  else if(FILTER==='grupos') rows = rows.filter(r=> r.tipo==='grupo');
   if(q){ rows = rows.filter(r=> r.search.includes(q) || MSG_MATCH_IDS.has(r.id)); }
   if(!rows.length){ listEl.innerHTML='<div class="empty-inline">'+(q?('Sin coincidencias para "'+esc(q)+'"'):'Sin conversaciones en este filtro')+'</div>'; return; }
   listEl.innerHTML = rows.map(r=>{
@@ -564,9 +573,10 @@ function renderList(q){
     return '<div class="chat-row'+(r.unread?' unread':'')+(active?' active':'')+'" data-id="'+esc(r.id)+'">'
       + r.avHtml
       + '<div class="chat-main"><div class="chat-top"><span class="chat-name">'+hl(r.title,q)+'</span><span class="chat-time">'+esc(r.timeTxt)+'</span></div>'
-      + '<div class="chat-prev">'+r.badge+'<span class="pv-txt">'+hl(r.prev,q)+'</span>'+(r.unread?'<span class="unread-dot"></span>':'')+'</div></div></div>';
+      + '<div class="chat-prev">'+r.badge+'<span class="pv-txt">'+hl(r.prev,q)+'</span>'+(r.unread?'<span class="unread-dot"></span>':'')+'</div></div>'
+      + '<button class="row-menu-btn" title="Acciones" aria-label="Acciones de la conversación">⋮</button></div>';
   }).join('');
-  listEl.querySelectorAll('.chat-row').forEach(el=> el.onclick=()=> openConv(el.dataset.id));
+  listEl.querySelectorAll('.chat-row').forEach(el=>{ el.onclick=()=> openConv(el.dataset.id); attachRowMenuTriggers(el); });
 }
 
 function markActiveRow(){ document.querySelectorAll('#chatList .chat-row').forEach(el=> el.classList.toggle('active', !!(CURRENT && el.dataset.id===CURRENT.id))); }
@@ -714,6 +724,59 @@ function fmtDay(iso){ const d=new Date(iso), now=new Date(); if(d.toDateString()
   return d.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short'}); }
 
 async function markRead(id){ try{ await sb.from('chat_participantes').update({last_read_at:nowISO()}).eq('conversacion_id',id).eq('email',ME.email); }catch(e){} }
+
+/* ---------- MARCAR LEÍDO / NO LEÍDO A MANO ---------- */
+// Poner last_read_at 1s ANTES del último mensaje -> la conv vuelve a salir como NO leída.
+// El poll (loadList/loadMessages) NO toca last_read_at; solo openConv/markRead lo marca leído,
+// así que el estado "no leído" persiste hasta que el usuario abra la conversación.
+async function marcarNoLeido(convId){
+  const row = LIST_ROWS.find(r=>r.id===convId);
+  let lastAt = row ? row.lastAt : null;
+  if(!lastAt){
+    try{ const { data } = await sb.from('chat_mensajes').select('created_at').eq('conversacion_id',convId).order('created_at',{ascending:false}).limit(1).maybeSingle(); lastAt = data ? data.created_at : null; }catch(e){}
+  }
+  const base = lastAt ? new Date(lastAt).getTime() : Date.now();
+  const target = new Date(base-1000).toISOString();
+  try{ await sb.from('chat_participantes').update({last_read_at:target}).eq('conversacion_id',convId).eq('email',ME.email); }
+  catch(e){ toast('No se pudo marcar'); return; }
+  await loadList();
+  toast('Marcado como no leído');
+}
+async function marcarLeido(convId){
+  await markRead(convId);
+  await loadList();
+  toast('Marcado como leído');
+}
+
+/* ---------- MENÚ DE ACCIONES DE FILA (⋮ / long-press) ---------- */
+function closeRowMenu(){ if(ROW_MENU_EL){ ROW_MENU_EL.remove(); ROW_MENU_EL=null; } }
+function openRowMenu(convId, anchor){
+  closeRowMenu();
+  const row = LIST_ROWS.find(r=>r.id===convId); if(!row) return;
+  const menu=document.createElement('div');
+  menu.className='row-menu';
+  const label = row.unread ? '✓ Marcar como leído' : '● Marcar como no leído';
+  menu.innerHTML='<button type="button">'+label+'</button>';
+  menu.querySelector('button').onclick=(e)=>{ e.stopPropagation(); closeRowMenu(); if(row.unread) marcarLeido(convId); else marcarNoLeido(convId); };
+  document.body.appendChild(menu);
+  const ar=(anchor&&anchor.getBoundingClientRect)?anchor.getBoundingClientRect():{right:window.innerWidth-8,bottom:60,top:20};
+  const mw=menu.offsetWidth, mh=menu.offsetHeight;
+  let left=Math.min(ar.right-mw, window.innerWidth-mw-8); left=Math.max(8,left);
+  let top=ar.bottom+4; if(top+mh>window.innerHeight-8) top=Math.max(8, ar.top-mh-4);
+  menu.style.left=left+'px'; menu.style.top=top+'px';
+  ROW_MENU_EL=menu;
+}
+// ⋮ en escritorio + long-press ~500ms en móvil, ambos sin abrir la conversación (stopPropagation).
+function attachRowMenuTriggers(el){
+  const id=el.dataset.id;
+  const btn=el.querySelector('.row-menu-btn');
+  if(btn) btn.onclick=(e)=>{ e.stopPropagation(); e.preventDefault(); openRowMenu(id, btn); };
+  let lpTimer=null;
+  el.addEventListener('touchstart',()=>{ if(lpTimer) clearTimeout(lpTimer); lpTimer=setTimeout(()=>{ lpTimer=null; openRowMenu(id, btn||el); }, 500); }, {passive:true});
+  const cancel=()=>{ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } };
+  el.addEventListener('touchmove', cancel, {passive:true});
+  el.addEventListener('touchend',(e)=>{ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } else { e.preventDefault(); } });
+}
 
 /* ---------- ENVIAR ---------- */
 let PENDING=[]; // {url}
@@ -1017,6 +1080,9 @@ function wireUI(){
   document.addEventListener('click', (e)=>{ if($('attachMenu').classList.contains('hide')) return; if(e.target!==$('btnAttach') && !$('attachMenu').contains(e.target)) closeAttachMenu(); });
   $('msgInput').addEventListener('input', autoGrow);
   $('msgInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
+  // cerrar el menú de acciones de fila al tocar fuera o al hacer scroll de la lista
+  document.addEventListener('click', (e)=>{ if(ROW_MENU_EL && !ROW_MENU_EL.contains(e.target)) closeRowMenu(); });
+  $('chatList').addEventListener('scroll', closeRowMenu, {passive:true});
 }
 
 boot();
