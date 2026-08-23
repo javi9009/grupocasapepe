@@ -566,9 +566,10 @@
         <div id="rep-encasa-list" style="display:none;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--txt2)"></div>
         <div class="stat-grid" style="margin-top:8px">
           <div class="stat" id="rep-desayunos-card"><div class="v dash" id="rep-desayunos">—</div><div class="l">Desayunos</div></div>
-          <div class="stat"><div class="v dash" id="rep-tours">—</div><div class="l">Salida tours</div></div>
-          <div class="stat" id="rep-evento"><div class="v dash">—</div><div class="l">Evento Cósmica</div></div>
+          <div class="stat"><div class="v dash" id="rep-walking" style="font-size:12.5px;line-height:1.15">—</div><div class="l">Walking hoy</div></div>
+          <div class="stat" id="rep-manana-card" style="cursor:pointer"><div class="v dash" id="rep-manana" style="font-size:12.5px;line-height:1.15">—</div><div class="l">Propios mañana ▾</div></div>
         </div>
+        <div id="rep-manana-list" style="display:none;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--txt2)"></div>
         <div class="occ-row">
           <div class="occ"><div class="v" id="rep-occ-gen">—</div><div class="l">OCC general</div></div>
           <div class="occ"><div class="v" id="rep-occ-priv">—</div><div class="l">Privadas</div></div>
@@ -1327,32 +1328,59 @@ async function loadReporte(force){
   finally{ if(btn) btn.style.opacity='.7'; }
 }
 
-// ===== Salida tours (Turitop) — función aparte, no bloquea el reporte =====
-async function loadTours(){
-  try{
-    const r = await fetch(TOURS_FN,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
-      body: JSON.stringify({})
-    });
-    const d = await r.json().catch(()=>null);
-    const el=$('rep-tours');
-    if(!el) return;
-    if(!d || !d.ok || !d.conectado){ el.textContent='—'; el.classList.add('dash'); el.title='Turitop aún no conectado'; return; }
-    if(!d.total){ el.textContent='0'; el.classList.remove('dash'); el.title='Sin salidas hoy'; return; }
-    el.textContent = d.total;
-    el.classList.remove('dash');
-    el.title = d.resumen || (d.total+' pax');
-  }catch(e){ /* deja — */ }
+// ===== Tours propios: walking de HOY + propios de MAÑANA (desde experiencias) =====
+const _DOW=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+function _dowCDMX(off){ const b=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); b.setDate(b.getDate()+(off||0)); return _DOW[b.getDay()]; }
+function _norm(s){ return (s||'').replace(/Mie\b/,'Mié').replace(/Sab\b/,'Sáb'); }
+function _runsOn(txt,dow){
+  if(!txt) return false;
+  const t=_norm(txt.trim());
+  if(/diario/i.test(t)) return true;
+  if(/seg[uú]n calendario|20\d\d/i.test(t)) return false;
+  const order=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+  const days=t.replace(/\d{1,2}:\d{2}/g,'').trim();
+  const rm=days.match(/(Lun|Mar|Mié|Jue|Vie|Sáb|Dom)\s*[–-]\s*(Lun|Mar|Mié|Jue|Vie|Sáb|Dom)/);
+  if(rm){ const a=order.indexOf(rm[1]),b=order.indexOf(rm[2]),d=order.indexOf(dow); if(a<0||b<0)return false; return a<=b?(d>=a&&d<=b):(d>=a||d<=b); }
+  return days.split(/[^A-Za-zÁÉÍÓÚáéíóúü]+/).map(_norm).includes(dow);
 }
-
-// Evento Cósmica: aún no existe en Turitop -> placeholder "Próximamente"
-function setEventoPlaceholder(){
-  const card=$('rep-evento');
-  if(!card) return;
-  const v=card.querySelector('.v');
-  if(v){ v.textContent='Próximamente'; v.style.fontSize='13px'; v.classList.remove('dash'); }
-  card.title='Se creará en Turitop más adelante';
+function _catExp(n){
+  const s=(n||'').toLowerCase();
+  if(/walking|caminata|a pie/.test(s)) return 'walking';
+  if(/lucha|mito|ring/.test(s)) return 'luchas';
+  if(/xoxi|xochi|trajiner/.test(s)) return 'xochimilco';
+  if(/hik|izta|malinche|tolantongo|nevado|volc|cerro|ajusco/.test(s)) return 'hiking';
+  if(/food tour|ma[ií]z|molcaje|tortilla|margarita|mezcal|taco|gastro|cocina|tenampa|charro|comida|salsa/.test(s)) return 'gastro';
+  return 'otro';
+}
+async function loadReporteTours(){
+  const elW=$('rep-walking'), elM=$('rep-manana');
+  try{
+    const _q=await sb.from('experiencias').select('nombre,propio_3o,dias_horario,lugar_salida').order('nombre');
+    const rows=_q.data||[];
+    const hoy=_dowCDMX(0), man=_dowCDMX(1);
+    if(elW){
+      const w=rows.filter(x=>_catExp(x.nombre)==='walking' && _runsOn(x.dias_horario,hoy));
+      if(w.length){ const dest=w.map(x=>x.lugar_salida||x.nombre.replace(/walking tour/i,'').trim()).filter(Boolean).join(' · '); elW.textContent=dest||'Sí'; elW.classList.remove('dash'); elW.title=w.map(x=>x.nombre).join(', '); }
+      else { elW.textContent='—'; elW.classList.add('dash'); elW.title='Walking se sincroniza con Akia (por conectar)'; }
+    }
+    if(elM){
+      const prop=rows.filter(x=>/propio/i.test(x.propio_3o||'') && _runsOn(x.dias_horario,man));
+      const by={};
+      prop.forEach(x=>{ const c=_catExp(x.nombre); (by[c]=by[c]||[]).push(x.nombre); });
+      const ICON={hiking:'🥾 Hiking',luchas:'🤼 Luchas',walking:'🚶 Walking',gastro:'🌮 Taller gastro',xochimilco:'🛶 Xochimilco',otro:'✨ Otros'};
+      const orderCat=['hiking','luchas','walking','gastro','xochimilco','otro'];
+      const present=orderCat.filter(c=>by[c]&&by[c].length);
+      elM.textContent = prop.length ? String(prop.length) : '0';
+      elM.classList.remove('dash');
+      const list=$('rep-manana-list');
+      if(list){
+        if(!prop.length){ list.innerHTML='<div style="color:var(--txt3)">Sin tours propios programados mañana ('+man+')</div>'; }
+        else{ list.innerHTML='<div style="font-weight:700;margin-bottom:4px">Mañana '+man+'</div>'+present.map(c=>'<div style="margin:2px 0"><b>'+ICON[c]+'</b>: '+by[c].join(', ')+'</div>').join(''); }
+      }
+    }
+    const card=$('rep-manana-card');
+    if(card && !card._wired){ card._wired=true; card.onclick=()=>{ const l=$('rep-manana-list'); if(l) l.style.display=(l.style.display==='none'?'block':'none'); }; }
+  }catch(e){ /* deja — */ }
 }
 
 /* ===== Desayunos interactivo (modal centrado) ===== */
@@ -2490,14 +2518,13 @@ async function start(){
     loadNotifs();
     setupPayButton();
     loadReporte();
-    loadTours();
-    setEventoPlaceholder();
+    loadReporteTours();
     setupDesayunos();
     loadBitacora();
     renderRankings();
     loadDocsPorFirmar();
     const rb=$('rep-refresh');
-    if(rb) rb.onclick=()=>{ loadReporte(true); loadTours(); };
+    if(rb) rb.onclick=()=>{ loadReporte(true); loadReporteTours(); };
   }catch(e){ /* el shell ya se mostro; si un loader falla, no rompemos la app */ }
 }
 
