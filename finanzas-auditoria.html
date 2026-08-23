@@ -242,7 +242,13 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
 <main>
   <div id="gate"></div>
   <section class="mes" id="secmes" hidden>
-    <div class="sechead"><span class="eyebrow">Últimos 30 días</span></div>
+    <div class="sechead" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="eyebrow" id="mesTitulo">Últimos 30 días</span>
+      <span style="flex:1"></span>
+      <button class="mini" type="button" id="mesAnt" title="Mes anterior">← Mes anterior</button>
+      <button class="mini" type="button" id="mesSig" title="Mes siguiente">Mes siguiente →</button>
+      <button class="mini" type="button" id="mesHoy">Últimos 30 días</button>
+    </div>
     <div class="tira" id="tira"></div>
     <div class="leyenda">
       <span><i style="background:var(--ok-bg);border-color:var(--ok)"></i>Cerrado sin nada abierto</span>
@@ -250,6 +256,8 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
       <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>Tuvo excepciones y se resolvieron</span>
       <span><i style="background:var(--none-bg)"></i>Incompleto: faltó una fuente</span>
     </div>
+    <p class="lede" style="font-size:.82rem;margin:6px 0 0">Hay auditoría desde el 19 de julio, que es cuando empieza el histórico de CashProtect.
+    El cuadre de tarjeta sólo es completo desde el 19 de agosto: antes de esa fecha no había Stripe ni NetPay cargados, así que esos días salen en gris.</p>
   </section>
   <div class="hero"><span class="eyebrow" id="propsub"></span><h1 id="titulo"></h1></div>
   <div class="tiles" id="tiles"></div>
@@ -288,6 +296,10 @@ const CB={"45e69775-d877-4507-a9e1-a45bd3400dc5":"10668"};
 const SEC=[["dia","El día"],["excepciones","Excepciones"],["poliza","Póliza"],["fuentes","Fuentes"]];
 
 let ACC=null, prop=null, propNombre='', fecha=null, sec='dia', MES=[], D=null;
+// vista del calendario: null = últimos 30 días; {a:año, m:mes(0-11)} = un mes concreto
+let vistaMes=null;
+const MIN_FECHA='2026-05-01';
+const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 let abierto={}, tileAbierto=null, redactando=null, borrador={}, enviados={}, polizaEdit=null, cargando=false;
 
 const m=v=>(v===null||v===undefined)?'—':Number(v).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -336,11 +348,40 @@ async function arranque(){
   await cargaMes(); await cargaDia(/^\d{4}-\d{2}-\d{2}$/.test(qf||'')?qf:ultimoAuditado());
 }
 function ultimoAuditado(){for(let i=MES.length-1;i>=0;i--){if(Number(MES[i][5])===0&&Number(MES[i][1])>0)return MES[i][0];}return MES.length?MES[MES.length-1][0]:null;}
+function hoyCDMX(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
+function iso(d){const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+function rangoCalendario(){
+  const hoy=hoyCDMX(), ayer=new Date(hoy.getTime()-864e5);
+  if(!vistaMes) return {desde:iso(new Date(ayer.getTime()-29*864e5)), hasta:iso(ayer),
+                        titulo:'Últimos 30 días'};
+  const ini=new Date(vistaMes.a, vistaMes.m, 1);
+  let fin=new Date(vistaMes.a, vistaMes.m+1, 0);
+  if(fin>ayer) fin=ayer;
+  return {desde:iso(ini), hasta:iso(fin), titulo:MESES[vistaMes.m]+' de '+vistaMes.a};
+}
 async function cargaMes(){
-  const hoy=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));
-  const hasta=new Date(hoy.getTime()-864e5), desde=new Date(hasta.getTime()-29*864e5);
-  const f=d=>d.toISOString().slice(0,10);
-  MES=await rpc('aud_panel_mes',{p_property:prop,p_desde:f(desde),p_hasta:f(hasta)})||[];
+  const r=rangoCalendario();
+  const t=document.getElementById('mesTitulo'); if(t)t.textContent=r.titulo;
+  if(r.hasta < r.desde){ MES=[]; return; }
+  MES=await rpc('aud_panel_mes',{p_property:prop,p_desde:r.desde,p_hasta:r.hasta})||[];
+}
+function moverMes(delta){
+  const hoy=hoyCDMX();
+  const base=vistaMes?new Date(vistaMes.a,vistaMes.m,1):new Date(hoy.getFullYear(),hoy.getMonth(),1);
+  const nuevo=new Date(base.getFullYear(), base.getMonth()+delta, 1);
+  const min=new Date(MIN_FECHA+'T12:00:00');
+  if(nuevo < new Date(min.getFullYear(),min.getMonth(),1)) return false;
+  if(nuevo > new Date(hoy.getFullYear(),hoy.getMonth(),1)) return false;
+  vistaMes={a:nuevo.getFullYear(), m:nuevo.getMonth()};
+  return true;
+}
+function estadoBotonesMes(){
+  const hoy=hoyCDMX(), min=new Date(MIN_FECHA+'T12:00:00');
+  const base=vistaMes?new Date(vistaMes.a,vistaMes.m,1):new Date(hoy.getFullYear(),hoy.getMonth(),1);
+  const ant=document.getElementById('mesAnt'), sig=document.getElementById('mesSig'), h=document.getElementById('mesHoy');
+  if(ant) ant.disabled = new Date(base.getFullYear(),base.getMonth()-1,1) < new Date(min.getFullYear(),min.getMonth(),1);
+  if(sig) sig.disabled = new Date(base.getFullYear(),base.getMonth()+1,1) > new Date(hoy.getFullYear(),hoy.getMonth(),1);
+  if(h) h.disabled = !vistaMes;
 }
 async function cargaDia(f){
   if(!f)return; cargando=true; fecha=f; pinta();
@@ -367,12 +408,21 @@ function pintaTop(){
 }
 function pintaTira(){
   const t=document.getElementById('tira');t.innerHTML='';
+  estadoBotonesMes();
+  if(!MES.length){t.innerHTML='<span class="sub" style="padding:6px 2px">Nada auditado en este periodo.</span>';return;}
   MES.forEach(r=>{const b=document.createElement('button');b.type='button';b.className='d';
-    const cls=Number(r[5])>0?'':(Number(r[2])>0?'bad':(Number(r[3])>0?'warn':'ok'));
+    const cobrado=Number(r[1]), faltan=Number(r[5]), exc=Number(r[2]), res=Number(r[3]);
+    const cls=faltan>0?'':(exc>0?'bad':(res>0?'warn':'ok'));
     if(cls)b.className+=' '+cls;
-    if(Number(r[5])===0&&Number(r[1])>0){b.dataset.f=r[0];if(r[0]===fecha)b.className+=' sel';}else b.disabled=true;
-    let tit=r[0]+' · $'+m(r[1]);
-    tit+=Number(r[5])>0?' · incompleto, faltaron '+r[5]+' fuente(s)':(Number(r[2])>0?' · '+r[2]+' excepción(es) por $'+m(r[4]):' · sin nada abierto');
+    // un día incompleto o sin nada cobrado se puede abrir igual: se ve lo que hay
+    b.dataset.f=r[0];
+    if(r[0]===fecha)b.className+=' sel';
+    let tit=r[0];
+    if(cobrado>0) tit+=' · $'+m(cobrado);
+    if(faltan>0) tit+=' · incompleto, faltaron '+faltan+' fuente(s)';
+    else if(exc>0) tit+=' · '+exc+' excepción(es) por $'+m(r[4]);
+    else if(cobrado>0) tit+=' · sin nada abierto';
+    else tit+=' · sin movimiento';
     b.title=tit;b.setAttribute('aria-label',tit);b.innerHTML='<span>'+r[0].slice(8)+'</span>';t.appendChild(b);});
 }
 function tile(k,v,s,on,id){return '<button class="tile'+(on?' on':'')+(id&&tileAbierto===id?' sel':'')+'" type="button"'
@@ -765,6 +815,9 @@ document.getElementById('props').addEventListener('click',async e=>{const b=e.ta
   prop=b.dataset.p; propNombre=(ACC.propiedades.find(p=>p.id===prop)||{}).nombre||'';
   await cargaMes(); await cargaDia(ultimoAuditado());});
 document.getElementById('tira').addEventListener('click',e=>{const b=e.target.closest('button.d');if(!b||!b.dataset.f)return;cargaDia(b.dataset.f);});
+document.getElementById('mesAnt').addEventListener('click',async()=>{if(moverMes(-1)){await cargaMes();pintaTira();}});
+document.getElementById('mesSig').addEventListener('click',async()=>{if(moverMes(1)){await cargaMes();pintaTira();}});
+document.getElementById('mesHoy').addEventListener('click',async()=>{vistaMes=null;await cargaMes();pintaTira();});
 document.getElementById('secnav').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;sec=b.dataset.s;pinta();});
 document.getElementById('tiles').addEventListener('click',e=>{const b=e.target.closest('[data-t]');if(!b)return;
   tileAbierto=(tileAbierto===b.dataset.t)?null:b.dataset.t;pinta();});
