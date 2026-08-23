@@ -147,6 +147,11 @@ main{max-width:1180px;margin:0 auto;padding:24px 22px 90px;display:flex;flex-dir
 .leyenda{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.78rem;color:var(--muted)}
 .leyenda span{display:flex;align-items:center;gap:6px}
 .leyenda i{width:10px;height:10px;border-radius:2px;display:block;border:1px solid var(--rule-2)}
+.leyenda i.ptexc{border:1px solid var(--rule-2);background:var(--none-bg);position:relative}
+.leyenda i.ptexc::after{content:'';position:absolute;top:1px;right:1px;width:4px;height:4px;border-radius:50%;background:var(--bad)}
+/* punto = el día tiene excepciones abiertas (el color sigue siendo el del dinero) */
+.d,.calgrid .cd{position:relative}
+.d.exc::after,.calgrid .cd.exc::after{content:'';position:absolute;top:2px;right:2px;width:5px;height:5px;border-radius:50%;background:var(--bad)}
 
 .hero{display:flex;flex-direction:column;gap:5px}
 .tiles{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
@@ -290,10 +295,11 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
       <button class="flecha" type="button" id="tiraSig" aria-label="30 días siguientes">›</button>
     </div>
     <div class="leyenda">
-      <span><i style="background:var(--ok-bg);border-color:var(--ok)"></i>Cerrado sin nada abierto</span>
-      <span><i style="background:var(--bad-bg);border-color:var(--bad)"></i>Con excepciones abiertas</span>
-      <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>Tuvo excepciones y se resolvieron</span>
+      <span><i style="background:var(--ok-bg);border-color:var(--ok)"></i>Todo el dinero confirmado</span>
+      <span><i style="background:var(--warn-bg);border-color:var(--warn)"></i>Sólo falta el estado de cuenta de Banorte</span>
+      <span><i style="background:var(--bad-bg);border-color:var(--bad)"></i>Dinero sin ubicar o concepto por corregir</span>
       <span><i style="background:var(--none-bg)"></i>Incompleto: faltó una fuente</span>
+      <span><i class="ptexc"></i>Con excepciones abiertas</span>
     </div>
     <p class="lede" style="font-size:.82rem;margin:6px 0 0">Hay auditoría desde el 19 de julio, que es cuando empieza el histórico de CashProtect.
     El cuadre de tarjeta sólo es completo desde el 19 de agosto: antes de esa fecha no había Stripe ni NetPay cargados, así que esos días salen en gris.</p>
@@ -444,13 +450,36 @@ async function cargaCalendario(){
   const hasta=iso(ultimo>ayer?ayer:ultimo);
   CAL = (hasta<desde) ? [] : (await rpc('aud_panel_mes',{p_property:prop,p_desde:desde,p_hasta:hasta})||[]);
 }
+// El color del día lo manda el dinero, no las excepciones:
+//   rojo    = hay dinero que no sabemos dónde está, o algo que hay que corregir
+//             en Cloudbeds / Poster / Turitop (tour duplicado, captura tardía…)
+//   naranja = todo ubicado salvo lo que espera el estado de cuenta de Banorte
+//   verde   = todo el dinero del día está confirmado
+//   gris    = faltó una fuente, o no hubo movimiento
+// Los días con excepciones abiertas llevan además un punto (clase .exc).
 function claseDia(r){
   if(!r) return 'nd';
   if(Number(r[5])>0) return 'nd';
-  if(Number(r[2])>0) return 'bad';
-  if(Number(r[3])>0) return 'warn';
-  if(Number(r[1])>0) return 'ok';
-  return 'nd';
+  if(!(Number(r[1])>0)) return 'nd';
+  let c;
+  if(Number(r[7]||0)>0 || Number(r[8]||0)>0) c='bad';
+  else if(Number(r[6]||0)>0) c='warn';
+  else c='ok';
+  if(Number(r[2])>0) c+=' exc';
+  return c;
+}
+function tituloDia(r){
+  const cobrado=Number(r[1]), faltan=Number(r[5]), exc=Number(r[2]);
+  let tit=r[0];
+  if(cobrado>0) tit+=' · $'+m(cobrado);
+  if(faltan>0) tit+=' · incompleto, faltaron '+faltan+' fuente(s)';
+  else if(!(cobrado>0)) tit+=' · sin movimiento';
+  else if(Number(r[7]||0)>0) tit+=' · $'+m(r[7])+' sin ubicar';
+  else if(Number(r[8]||0)>0) tit+=' · '+r[8]+' concepto(s) por corregir en el sistema origen';
+  else if(Number(r[6]||0)>0) tit+=' · $'+m(r[6])+' esperando el estado de cuenta de Banorte';
+  else tit+=' · todo el dinero confirmado';
+  if(exc>0) tit+=' · '+exc+' excepción(es) por $'+m(r[4]);
+  return tit;
 }
 function pintaCalendario(){
   const cont=document.getElementById('calmeses'); if(!cont) return;
@@ -466,14 +495,7 @@ function pintaCalendario(){
     for(let d=1;d<=ultimo.getDate();d++){
       const f=iso(new Date(x.a,x.m,d)), r=por[f];
       const cl=claseDia(r)+(f===fecha?' sel':'');
-      let tit=f;
-      if(r){
-        if(Number(r[1])>0) tit+=' · $'+m(r[1]);
-        if(Number(r[5])>0) tit+=' · incompleto, faltaron '+r[5]+' fuente(s)';
-        else if(Number(r[2])>0) tit+=' · '+r[2]+' excepción(es) por $'+m(r[4]);
-        else if(Number(r[1])>0) tit+=' · sin nada abierto';
-        else tit+=' · sin movimiento';
-      } else tit+=' · sin datos';
+      const tit = r ? tituloDia(r) : (f+' · sin datos');
       celdas+='<button type="button" class="cd '+cl+'" data-cf="'+f+'" title="'+esc(tit)+'">'+d+'</button>';
     }
     return '<div class="calmes"><h4>'+MESES[x.m]+' '+x.a+'</h4>'
@@ -536,18 +558,12 @@ function pintaTira(){
   const t=document.getElementById('tira');t.innerHTML='';
   if(!MES.length){t.innerHTML='<span class="sub" style="padding:6px 2px">Nada auditado en este periodo.</span>';return;}
   MES.forEach(r=>{const b=document.createElement('button');b.type='button';b.className='d';
-    const cobrado=Number(r[1]), faltan=Number(r[5]), exc=Number(r[2]), res=Number(r[3]);
-    const cls=faltan>0?'':(exc>0?'bad':(res>0?'warn':'ok'));
-    if(cls)b.className+=' '+cls;
+    const cls=claseDia(r);
+    if(cls!=='nd') b.className+=' '+cls;
     // un día incompleto o sin nada cobrado se puede abrir igual: se ve lo que hay
     b.dataset.f=r[0];
     if(r[0]===fecha)b.className+=' sel';
-    let tit=r[0];
-    if(cobrado>0) tit+=' · $'+m(cobrado);
-    if(faltan>0) tit+=' · incompleto, faltaron '+faltan+' fuente(s)';
-    else if(exc>0) tit+=' · '+exc+' excepción(es) por $'+m(r[4]);
-    else if(cobrado>0) tit+=' · sin nada abierto';
-    else tit+=' · sin movimiento';
+    const tit=tituloDia(r);
     b.title=tit;b.setAttribute('aria-label',tit);b.innerHTML='<span>'+r[0].slice(8)+'</span>';t.appendChild(b);});
 }
 function tile(k,v,s,on,id){return '<button class="tile'+(on?' on':'')+(id&&tileAbierto===id?' sel':'')+'" type="button"'
