@@ -340,6 +340,24 @@
   .desay-row .tag.dorm{color:#5f5e5a;background:rgba(0,0,0,.06)}
   .desay-total{display:flex;align-items:baseline;gap:8px;background:var(--bg2);border:1px solid var(--bd2);border-radius:12px;padding:12px 14px;margin-bottom:12px}
   .desay-total b{font-size:24px;color:var(--accent)}
+  /* lista real de habitaciones con desayuno (fuente: Cloudbeds) */
+  .dq-row{display:flex;align-items:center;gap:11px;padding:11px 2px;border-bottom:1px solid var(--bd)}
+  .dq-row .tick{width:44px;height:44px;flex:0 0 auto;border-radius:12px;border:2px solid var(--bd2);
+    background:var(--bg2);cursor:pointer;font-size:20px;line-height:1;color:var(--txt3);padding:0}
+  .dq-row .cuarto{font-weight:800;font-size:16px;min-width:84px;font-variant-numeric:tabular-nums}
+  .dq-row .det{flex:1;min-width:0}
+  .dq-row .det b{display:block;font-size:13.5px;font-weight:700}
+  .dq-row .det span{display:block;font-size:11.5px;color:var(--txt3);margin-top:1px}
+  .dq-row .pax{font-weight:800;font-size:15px;min-width:26px;text-align:right}
+  .dq-row.hecho{opacity:.62}
+  .dq-row.hecho .cuarto{text-decoration:line-through;color:#1d9e75}
+  .dq-row.hecho .tick{background:#1d9e75;border-color:#1d9e75;color:#fff}
+  .dq-cnt{display:flex;gap:8px;margin-bottom:12px}
+  .dq-cnt div{flex:1;background:var(--bg2);border:1px solid var(--bd2);border-radius:12px;padding:10px 12px;text-align:center}
+  .dq-cnt b{display:block;font-size:21px;color:var(--accent)}
+  .dq-cnt small{font-size:10.5px;color:var(--txt3)}
+  .dq-warn{margin-top:12px;background:rgba(201,162,39,.12);border:1px solid rgba(201,162,39,.35);
+    border-radius:11px;padding:11px 13px;font-size:12.5px;line-height:1.5}
   .desay-serv{display:flex;gap:8px;margin-top:14px}
   .desay-serv input{flex:1;padding:12px;border:1px solid var(--bd);border-radius:11px;font-size:16px}
   .desay-serv button{padding:12px 18px;border:none;border-radius:11px;background:var(--accent);color:#fff;font-size:15px;font-weight:800;cursor:pointer}
@@ -824,13 +842,15 @@
 <div class="sheet" id="desaySheet"><div class="box">
   <div class="grab"></div>
   <h2>Desayunos de hoy</h2>
-  <div class="ssub">Huéspedes con desayuno incluido</div>
-  <div class="desay-total"><b id="desayTotal">0</b><span>desayunos a servir hoy</span></div>
-  <div class="ssub" style="margin:-6px 0 8px">Anota cuántos serviste en cada reserva (máx. por tipo: privada 2 · B&amp;B 4 · dorm 1)</div>
-  <div id="desayList"><div class="ph"><div class="ico">🍳</div><div class="d">Cargando…</div></div></div>
-  <div class="desay-serv">
-    <button id="desaySave" style="flex:1">Guardar desayunos servidos</button>
+  <div class="ssub" id="desayFecha">Habitaciones que anoche durmieron con desayuno incluido</div>
+  <div class="dq-cnt">
+    <div><b id="dqDerecho">0</b><small>con derecho</small></div>
+    <div><b id="dqSubieron">0</b><small>ya subieron</small></div>
+    <div><b id="dqPoster">0</b><small>en Poster</small></div>
   </div>
+  <div class="ssub" style="margin:-4px 0 8px">Toca el círculo de cada habitación conforme vayan bajando a desayunar.</div>
+  <div id="desayList"><div class="ph"><div class="ico">🍳</div><div class="d">Cargando…</div></div></div>
+  <div id="dqWarn"></div>
   <div id="desayMsg" style="display:none;font-size:13px;margin-top:8px;text-align:center;color:#1d9e75;font-weight:700"></div>
 </div></div>
 
@@ -1332,7 +1352,7 @@ function setEventoPlaceholder(){
 }
 
 /* ===== Desayunos interactivo (modal centrado) ===== */
-const DESAY_KEY = /front|recepci|gerenc|admin|direcci|chef|cocina|barra|a&b/;
+const DESAY_KEY = /front|recepci|gerenc|admin|direct|direcci|chef|cocina|barra|a&b|meser|comedor|restaurant/;
 
 async function setupDesayunos(){
   try{
@@ -1347,6 +1367,14 @@ async function setupDesayunos(){
   if(DESAY_ALLOWED){
     card.classList.add('clickable');
     card.onclick=openDesayunos;
+    // el número del tablero sale de la misma fuente que la lista (plan tarifario real)
+    try{
+      const D=await cargarDesayunos();
+      if(D && !D.error && !D.sin_datos){
+        const n=(D.lista||[]).reduce((a,x)=>a+Number(x[3]||0),0);
+        repSet('rep-desayunos', n);
+      }
+    }catch(e){ /* si falla, queda el número del reporte del día */ }
   }else{
     card.classList.remove('clickable');
     card.onclick=null;
@@ -1363,97 +1391,100 @@ function tagFor(tipo){
 
 const CDMX_PROP='45e69775-d877-4507-a9e1-a45bd3400dc5';
 const ATENEO_PROP='3e10a9ea-4913-4f7c-86ef-0c829caa851d'; // Ateneo Virreyes: su personal come en CDMX
-let DESAY_ROWS=[];   // metadatos por reserva para guardar
 
-// tope de desayunos por tipo de reserva
-function capTipo(tipo){
-  const t=(tipo||'').toLowerCase();
-  if(/priv/.test(t)) return 2;
-  if(/dorm/.test(t)) return 1;
-  if(/bb|b&b|desay/.test(t)) return 4;
-  return 4;
-}
-function maxReserva(x){
-  const cap=capTipo(x.tipo);
-  const p=Number(x.personas)||0;
-  return p>0 ? Math.min(p,cap) : cap;
-}
-function reservaKey(x){ return (x.nombre||'?')+'|'+(x.checkin||'')+'|'+(x.checkout||''); }
+/* ------------------------------------------------------------------
+   DESAYUNOS — lista real, habitación por habitación.
+   Fuente: auditoria.hospedaje_noche (plan tarifario de Cloudbeds, noche
+   anterior). El mesero de la mañana tacha a quien va subiendo.
+   Lo que se contabiliza sigue siendo Poster; si ahí salen MÁS desayunos
+   incluidos que los que tenían derecho, la auditoría levanta incidencia.
+   ------------------------------------------------------------------ */
+let DESAY_D=null;    // respuesta de aud_desayunos_dia
 function ymdMX(){ const d=mxToday(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function dqEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-function recalcDesayTotal(){
-  let s=0;
-  DESAY_ROWS.forEach((r,i)=>{ const el=$('ds-'+i); if(el){ const v=parseInt(el.value,10); if(!isNaN(v)) s+=v; } });
-  $('desayTotal').textContent=s;
+async function cargarDesayunos(){
+  const prop=(await resolverProp())||CDMX_PROP;
+  const fecha=ymdMX();
+  const { data, error } = await sb.rpc('aud_desayunos_dia',{ p_property:prop, p_fecha:fecha });
+  if(error) throw error;
+  DESAY_D = data || null;
+  return DESAY_D;
+}
+
+function pintarDesayunos(){
+  const wrap=$('desayList'); if(!wrap) return;
+  const D=DESAY_D;
+  if(!D || D.error){
+    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">No se pudo cargar la lista.</div></div>';
+    return;
+  }
+  const L = Array.isArray(D.lista) ? D.lista : [];
+  const derecho  = L.reduce((a,x)=>a+Number(x[3]||0),0);
+  const subieron = L.filter(x=>x[4]).reduce((a,x)=>a+Number(x[5]||x[3]||0),0);
+  const poster   = Number(D.servidos_poster||0);
+  $('dqDerecho').textContent  = derecho;
+  $('dqSubieron').textContent = subieron;
+  $('dqPoster').textContent   = poster;
+
+  if(D.sin_datos){
+    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Cloudbeds todavía no ha cargado la noche de ayer.</div></div>';
+    $('dqWarn').innerHTML=''; return;
+  }
+  if(!L.length){
+    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Hoy nadie durmió con tarifa de desayuno incluido.</div></div>';
+  }else{
+    wrap.innerHTML = L.map(x=>{
+      const hecho=!!x[4];
+      const ref=[x[10],x[9]].filter(Boolean).join(' · ');
+      return '<div class="dq-row'+(hecho?' hecho':'')+'">'
+        +'<button class="tick" type="button" data-sub="'+dqEsc(x[0])+'" data-on="'+(hecho?'1':'0')+'" '
+        +'aria-label="'+(hecho?'Desmarcar ':'Marcar ')+dqEsc(x[1])+'">'+(hecho?'✓':'')+'</button>'
+        +'<span class="cuarto">'+dqEsc(x[1]||'—')+'</span>'
+        +'<span class="det"><b>'+dqEsc(x[2]||'')+'</b><span>'+dqEsc(ref)
+        +(hecho&&x[6]?' · tachó '+dqEsc(x[6]):'')+'</span></span>'
+        +'<span class="pax">'+Number(x[3]||0)+'</span></div>';
+    }).join('');
+  }
+  $('dqWarn').innerHTML = poster>derecho
+    ? '<div class="dq-warn"><b>Ojo.</b> En Poster van '+poster+' desayunos incluidos y sólo '+derecho
+      +' personas tenían derecho. Esa diferencia se registra como incidencia en la auditoría nocturna.</div>'
+    : '';
 }
 
 async function openDesayunos(){
   if(!DESAY_ALLOWED) return;
   $('desaySheet').classList.add('show');
-  const wrap=$('desayList');
-  const list=DESAYUNOS_LISTA||[];
   const msg=$('desayMsg'); if(msg) msg.style.display='none';
-
-  if(!list.length){
-    DESAY_ROWS=[];
-    $('desayTotal').textContent='0';
-    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Sin desayunos incluidos para hoy.</div></div>';
-    return;
-  }
-
-  // metadatos por reserva
-  DESAY_ROWS = list.map(x=>({ key:reservaKey(x), nombre:x.nombre||'Huésped', tipo:x.tipo||'', checkin:x.checkin||'', checkout:x.checkout||'', max:maxReserva(x) }));
-
-  // cargar lo ya registrado hoy
-  const prop=(await resolverProp())||CDMX_PROP;
-  const fecha=ymdMX();
-  const saved={};
-  try{
-    const { data } = await sb.from('desayunos_servidos').select('reserva_key,servidos').eq('property_id',prop).eq('fecha',fecha);
-    (data||[]).forEach(r=>{ saved[r.reserva_key]=r.servidos; });
-  }catch(e){ /* sin guardado previo */ }
-
-  wrap.innerHTML=DESAY_ROWS.map((r,i)=>{
-    const val = (saved[r.key]!=null) ? saved[r.key] : r.max;  // por defecto, todos los incluidos
-    return '<div class="desay-row"><div style="flex:1">'
-      +'<div class="nm">'+r.nombre+'</div>'
-      +'<div class="mt">Check-in '+(r.checkin||'—')+' · Check-out '+(r.checkout||'—')+'</div>'
-      +tagFor(r.tipo)
-      +'</div><div class="serv">'
-        +'<input id="ds-'+i+'" type="number" min="0" max="'+r.max+'" inputmode="numeric" value="'+val+'">'
-        +'<span class="cap">de '+r.max+'</span>'
-      +'</div></div>';
-  }).join('');
-
-  // clamp + total en vivo
-  DESAY_ROWS.forEach((r,i)=>{
-    const el=$('ds-'+i);
-    if(el) el.oninput=()=>{ let v=parseInt(el.value,10); if(isNaN(v)){ recalcDesayTotal(); return; } if(v<0)v=0; if(v>r.max)v=r.max; el.value=v; recalcDesayTotal(); };
-  });
-  recalcDesayTotal();
+  const f=$('desayFecha');
+  if(f){ const d=mxToday(); f.textContent='Quien durmió anoche con desayuno incluido · '
+    + d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}); }
+  $('desayList').innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">Cargando…</div></div>';
+  try{ await cargarDesayunos(); }catch(e){ DESAY_D=null; }
+  pintarDesayunos();
 }
 
 $('desaySheet').onclick=(e)=>{ if(e.target.id==='desaySheet') $('desaySheet').classList.remove('show'); };
 
-$('desaySave').onclick=async ()=>{
-  const msg=$('desayMsg');
-  if(!DESAY_ROWS.length){ if(msg){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No hay reservas que registrar.'; } return; }
+// tachar / destachar una habitación
+$('desayList').addEventListener('click', async (e)=>{
+  const b=e.target.closest('[data-sub]'); if(!b) return;
+  const nuevo = b.dataset.on!=='1';
   const prop=(await resolverProp())||CDMX_PROP;
-  const fecha=ymdMX();
-  const filas=DESAY_ROWS.map((r,i)=>{
-    let v=parseInt(($('ds-'+i)||{}).value,10); if(isNaN(v))v=0; if(v<0)v=0; if(v>r.max)v=r.max;
-    return { property_id:prop, fecha, reserva_key:r.key, nombre:r.nombre, tipo:r.tipo, max_pers:r.max, servidos:v, emp_id:EMP||null, updated_at:new Date().toISOString() };
-  });
-  const btn=$('desaySave'); if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
+  const msg=$('desayMsg');
+  b.disabled=true;
   try{
-    const { error } = await sb.from('desayunos_servidos').upsert(filas,{ onConflict:'property_id,fecha,reserva_key' });
+    const { data, error } = await sb.rpc('aud_desayuno_marcar',{
+      p_property:prop, p_fecha:ymdMX(), p_sub:b.dataset.sub, p_subio:nuevo, p_pax:null, p_nota:null });
     if(error) throw error;
-    const tot=filas.reduce((s,f)=>s+f.servidos,0);
-    if(msg){ msg.style.display='block'; msg.style.color='#1d9e75'; msg.textContent='✓ Registrado: '+tot+' desayunos servidos'; }
-  }catch(e){
+    if(data && data.error) throw new Error(data.error);
+    await cargarDesayunos();
+    pintarDesayunos();
+  }catch(ex){
+    b.disabled=false;
     if(msg){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo guardar. Intenta de nuevo.'; }
-  }finally{ if(btn){ btn.disabled=false; btn.textContent='Guardar desayunos servidos'; } }
-};
+  }
+});
 
 /* ============================================================
    CHECADOR — Llegué / Me voy (Etapa 2)
