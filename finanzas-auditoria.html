@@ -636,7 +636,7 @@ async function cargaDia(f){
     if(av&&!av.error) Object.keys(av).forEach(k=>{
       enviados[k]='Enviado por SoyPepe a '+av[k][0]+' el '+av[k][2]+': «'+av[k][1]+'»'; });
   }catch(e){}
-  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; pinta();
+  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; pinta();
 }
 
 /* ---------- pintado ---------- */
@@ -766,29 +766,47 @@ function panelTile(){
 // Noches regaladas del día valoradas a coste: cortesías, intercambios y uso casa.
 // Manda el canal de Cloudbeds, no la línea de pago: hay reservas cuya línea dice
 // "Cortesía" y en realidad son un intercambio.
-const CORT_ET={cortesia:['Cortesía','warn'],intercambio:['Intercambio','info'],uso_casa:['Uso casa','info']};
+const CORT_ET={cortesia:['Cortesía','warn'],intercambio:['Intercambio','info'],
+  uso_casa:['Uso casa','info'],compensacion:['Compensación','warn']};
+const CENTRO_ET={'600-05-02-01':'Cortesías','600-05-02-02':'Intercambios','600-01-05':'Pepes',
+  '600-05-02-05':'Compensaciones'};
+// Las noches regaladas necesitan testigo: alguien con mando las firma aquí y con eso
+// quedan liquidadas. La contabilización va aparte, en Conciliaciones.
 function bloqueCortesias(){
   const ls=(D&&D.cortesias)||[];
   if(!ls.length) return '';
-  let tot=0; const porCentro={};
-  ls.forEach(x=>{const c=Number(x[11]||0); tot+=c; porCentro[x[1]]=(porCentro[x[1]]||0)+c;});
+  const puede=!!(D&&D.puede_visto_bueno);
+  let tot=0, faltan=0;
+  ls.forEach(x=>{ tot+=Number(x[11]||0); if(!x[12]) faltan++; });
   const filas=ls.map(x=>{
-    const et=CORT_ET[x[0]]||[x[0],'none'];
+    const et=CORT_ET[x[0]]||[x[0],'none'], ok=!!x[12];
     const cuantas=x[6]==='dorm'?(x[9]+' persona-noche(s) × $'+m(x[10])):(x[8]+' noche(s) × $'+m(x[10]));
-    return '<tr><td class="stripe '+et[1]+'">'+chip(et[1],et[0])+' '+esc(x[3]||'sin nombre')
+    return '<tr><td class="stripe '+(ok?'ok':et[1])+'">'+chip(et[1],et[0])+' '+esc(x[3]||'sin nombre')
       +'<span class="sub">'+esc(x[5]||'')+' · '+(x[6]==='dorm'?'dormitorio':'privada')+' · '+esc(cuantas)
       +(x[4]?linkReserva(x[4]):'')+'</span></td>'
-      +'<td>'+esc(x[1])+'</td><td class="n">'+m(x[11])+'</td></tr>';}).join('');
-  return '<div class="card scroll" style="margin-top:14px"><table><thead><tr>'
-    +'<th>Noches regaladas · valoradas a coste de limpieza</th><th>Centro de coste</th><th class="n">Coste</th>'
+      +'<td>'+esc(CENTRO_ET[x[1]]||x[1])+'</td><td class="n">'+m(x[11])+'</td>'
+      +'<td>'+(ok?chip('ok','Liquidada · '+esc(x[12])+' el '+esc(x[14]||''))
+              :(puede?'<button class="mini go" type="button" data-vb="'+esc(x[4])+'">Dar visto bueno</button>'
+                     :'<span class="sub" style="margin:0">Falta el visto bueno</span>'))
+      +(VB[x[4]]?'<div class="res '+(VB[x[4]].ok?'ok':'bad')+'">'+esc(VB[x[4]].mensaje||'')+'</div>':'')
+      +'</td></tr>';}).join('');
+  return '<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Noches regaladas</h2>'
+    +'<p class="lede">Cortesías, intercambios y uso casa de esta noche, valoradas al coste de limpieza que se '
+    +'incurrió igual. Cada una necesita el visto bueno del jefe de administración, el gerente operativo o dirección: '
+    +'ése es el testigo de que está liquidada. La contabilización se hace por periodo en '
+    +'<a href="finanzas-conciliaciones.html">Conciliaciones del asiento</a>, no aquí.</p></div>'
+    +'<div class="card scroll"><table><thead><tr>'
+    +'<th>Huésped · reserva</th><th>Centro de coste</th><th class="n">Coste</th><th>Visto bueno</th>'
     +'</tr></thead><tbody>'+filas
-    +'<tr class="sum"><td>Total a descontar de gastos de limpieza</td><td>'
-    +esc(Object.keys(porCentro).map(k=>k+' $'+m(porCentro[k])).join(' · '))
-    +'</td><td class="n">'+m(tot)+'</td></tr></tbody></table></div>'
-    +'<div class="nota">Estas líneas <b>ya están en la póliza de arriba</b>: cargo al centro de coste '
-    +'(Cortesías 600-05-02-01 · Intercambios 600-05-02-02 · Pepes 600-01-05) y abono a Suministros de '
-    +'limpieza 600-02-01-02 por $'+m(tot)+'. Cuadran solas, así que no mueven las sumas del día. '
-    +'Falta todavía el 30% de los consumos de A&amp;B y el coste real de los tours regalados.</div>';
+    +'<tr class="sum"><td>Total de la noche</td><td>'
+    +(faltan?faltan+' sin visto bueno':'Todas con testigo')
+    +'</td><td class="n">'+m(tot)+'</td><td></td></tr></tbody></table></div></section>';
+}
+let VB={};
+async function vistoBueno(res){
+  try{ VB[res]=await rpc('aud_cortesia_confirmar',{p_property:prop,p_fecha:fecha,p_reserva:res,p_nota:null});
+       if(VB[res]&&VB[res].ok){ await cargaDia(fecha); } else pinta();
+  }catch(e){ VB[res]={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
 
 // El cuadre método a método: cada uno contra su liquidador. Va debajo del árbol,
@@ -944,7 +962,8 @@ function vistaDia(){
     +'<span><i style="background:var(--sev2);border:0"></i>Falta hasta $10</span><span><i style="background:var(--sev3);border:0"></i>Falta hasta $100</span>'
     +'<span><i style="background:var(--sev4);border:0"></i>Falta más de $100</span></div>'
     +tarjetaQuien()
-    +'<p class="lede" style="font-size:.85rem">Lo que se vendió y todavía no se cobra —o se cobró antes y se consume hoy— no entra aquí: eso vive en la póliza, en la cuenta 225 Huéspedes.</p></section>';
+    +'<p class="lede" style="font-size:.85rem">Lo que se vendió y todavía no se cobra —o se cobró antes y se consume hoy— no entra aquí: eso vive en la póliza, en la cuenta 225 Huéspedes.</p></section>'
+    +bloqueCortesias();
 }
 function personaBtn(nombre,ctx){const id='p:'+fecha+'|'+nombre, env=enviados[id];
   return '<span class="persona">'+esc(nombre)+(env?' <span class="chip ok">Preguntado</span>'
@@ -1191,9 +1210,9 @@ function panelExplicar(id){
 }
 
 /* ---------- póliza ---------- */
-// La póliza son las líneas del día más las de las noches regaladas, que ya vienen
-// cuadradas entre sí (cargo al centro de coste, abono a suministros de limpieza).
-function lineas(){ if(!polizaEdit) polizaEdit=(D.asiento||[]).concat(D.asiento_cortesias||[]).map(l=>l.slice()); return polizaEdit; }
+// Sólo las líneas del día. Las noches regaladas NO van aquí: se reclasifican por
+// periodo en el módulo de Conciliaciones, y meterlas en las dos partes las contaría doble.
+function lineas(){ if(!polizaEdit) polizaEdit=(D.asiento||[]).map(l=>l.slice()); return polizaEdit; }
 function descPoliza(){const MS=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
   const f=fecha.split('-');const et=(propNombre||'').toUpperCase().indexOf('PUEBLA')>=0?'PUEBLA':'CDMX';
   return 'VENTAS '+et+' '+Number(f[2])+' '+MS[Number(f[1])-1];}
@@ -1211,7 +1230,6 @@ function vistaPoliza(){
     +'<p class="lede">Se abona el ingreso devengado y se carga por dónde entró el dinero; la diferencia entre lo facturado y lo cobrado va a <b>225 Huéspedes</b>, '
     +'la misma cuenta de enlace de siempre. Las celdas son editables: corrige lo que haga falta y exporta el archivo con las ocho columnas que pide QuickBooks.</p></div>'
     +bloqueCierre()
-    +bloqueCortesias()
     +'<div class="card scroll pol"><table><thead><tr><th>Cuenta</th><th>Nombre de cuenta en QuickBooks</th><th class="n">Débito</th><th class="n">Créditos</th><th>Nombre</th><th>Clase</th></tr></thead><tbody>'
     +filas+'<tr class="sum"><td colspan="2">Sumas '+(cuadra?'iguales':'DESIGUALES')+'</td><td class="n">'+m(td)+'</td><td class="n">'+m(th)
     +'</td><td colspan="2">'+chip(cuadra?'ok':'bad',cuadra?'Cuadra':'Δ '+m(td-th))+'</td></tr></tbody></table></div>'
@@ -1336,6 +1354,7 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     }catch(err){ if(avi)avi.textContent='No se pudo enviar: '+err.message; sbn.disabled=false; }
     return;}
   const bv=e.target.closest('[data-validar]'); if(bv){ VALID=null; bv.disabled=true; validarCierre(); return; }
+  const bb=e.target.closest('[data-vb]'); if(bb){ bb.disabled=true; vistoBueno(bb.dataset.vb); return; }
   const tc=e.target.closest('[data-conc]');
   if(tc){ const id=tc.dataset.conc;
     const yaFallo = CONC[id] && !CONC[id].ok && CONC[id].error==='no_corregido';
