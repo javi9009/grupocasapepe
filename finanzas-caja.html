@@ -241,6 +241,11 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
 .den{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
 .den label{font-size:.72rem}
 .den input{text-align:right;font-family:"IBM Plex Mono",monospace}
+.tira .d.bien{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
+.tira .d.mal{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
+.tira .d.nd{background:var(--none-bg);border-color:var(--rule);color:var(--faint)}
+.tira .d.on{outline:2px solid var(--accent);outline-offset:1px}
+.just{margin-top:8px}
 @media print{.top,.secnav,.form,.btn,.mini,footer{display:none!important}
   .qrbox{border:2px solid #000;page-break-inside:avoid}}
 </style>
@@ -258,6 +263,15 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
 
 <main>
   <div id="gate"></div>
+  <section class="mes" id="secmes" hidden>
+    <div class="sechead"><span class="eyebrow">Últimos 30 días</span></div>
+    <div class="tira" id="tira"></div>
+    <div class="leyenda">
+      <span><i style="background:var(--ok-bg);border-color:var(--ok)"></i>Cuadra y todo justificado</span>
+      <span><i style="background:var(--bad-bg);border-color:var(--bad)"></i>Incidencia abierta o salida sin folio</span>
+      <span><i style="background:var(--none-bg)"></i>Sin movimiento de caja</span>
+    </div>
+  </section>
   <div class="hero"><span class="eyebrow" id="propsub"></span><h1 id="titulo"></h1></div>
   <div class="tiles" id="tiles"></div>
   <div id="cuerpo"></div>
@@ -279,9 +293,10 @@ const CAT_SALIDA=[['nomina','Nómina'],['proveedor','Proveedor'],['gasto','Gasto
 const EST_SALIDA={emitido:['Esperando salida','warn'],entregado:['Entregado','info'],
   conciliado:['Cuadrado con CashProtect','ok'],vencido:['Venció sin usarse','none'],cancelado:['Cancelado','none']};
 const DENOM=[1000,500,200,100,50,20,10,5,2,1];
-const SEC=[['dia','El día'],['salidas','Salidas con folio'],['arqueo','Arqueo de caja']];
+const SEC=[['resumen','Toda la caja'],['dia','El día'],['salidas','Salidas con folio'],['arqueo','Arqueo de caja']];
 
 let ACC=null, prop=null, propNombre='', fecha=null, sec='dia', D=null, cargando=false, ultimoQR=null;
+let MES=[], RES=null, justificando=null;
 
 const m=v=>(v===null||v===undefined)?'—':Number(v).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -289,7 +304,8 @@ const chip=(c,t)=>'<span class="chip '+c+'">'+esc(t)+'</span>';
 const $=id=>document.getElementById(id);
 function nivel(d){const a=Math.abs(Number(d)||0);return a<1?0:a<10?1:a<=100?2:a<=1000?3:4;}
 const NIVEL_C=['ok','sev1','sev2','sev3','sev4'];
-function fmtFecha(f){const d=new Date(f+'T12:00:00');
+function fechaISO(f){const x=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));return x?x[0]:String(f||'');}
+function fmtFecha(f){const d=new Date(fechaISO(f)+'T12:00:00');
   return d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}).replace(/^./,c=>c.toUpperCase());}
 function hoyCDMX(){const d=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));
   const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
@@ -309,9 +325,19 @@ async function arranque(){
     $('props').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
     prop=b.dataset.p;propNombre=b.textContent;carga();});
   $('secnav').innerHTML=SEC.map(s=>'<button type="button" role="tab" data-s="'+s[0]+'"'+(s[0]===sec?' class="on"':'')+'>'+s[1]+'</button>').join('');
-  $('secnav').addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
-    $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));pinta();});
+  $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
+    $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
+    if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
+    pinta();});
+  document.getElementById('tira').addEventListener('click',e=>{const b=e.target.closest('button.d');
+    if(!b||!b.dataset.f)return;fecha=b.dataset.f;$('dia').value=fecha;carga();});
+  document.getElementById('cuerpo').addEventListener('click',e=>{const b=e.target.closest('[data-ir]');
+    if(!b)return;prop=b.dataset.ir;
+    const bt=$('props').querySelector('[data-p="'+b.dataset.ir+'"]');
+    if(bt){$('props').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===bt));propNombre=bt.textContent;}
+    sec='dia';$('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s==='dia'));carga();});
   prop=PR[0].id; propNombre=PR[0].nombre;
+  cargaResumen();
   const qf=new URLSearchParams(location.search).get('f');
   fecha=/^\d{4}-\d{2}-\d{2}$/.test(qf||'')?qf:hoyCDMX();
   $('dia').value=fecha; $('dia').max=hoyCDMX();
@@ -319,19 +345,93 @@ async function arranque(){
   carga();
 }
 async function carga(){
-  cargando=true;pinta();
+  cargando=true;justificando=null;pinta();
   D=await rpc('aud_caja_dia',{p_property:prop,p_fecha:fecha});
   if(D&&D.error){D=null;$('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
+  await cargaMes();
   cargando=false;pinta();
 }
+async function cargaMes(){
+  const hoy=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));
+  const desde=new Date(hoy.getTime()-29*864e5); const p=n=>(n<10?'0':'')+n;
+  const iso=d=>d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  const r=await rpc('aud_caja_mes',{p_property:prop,p_desde:iso(desde),p_hasta:iso(hoy)});
+  MES=(r&&!r.error)?r:[];
+}
+async function cargaResumen(){ const r=await rpc('aud_caja_resumen'); RES=(r&&!r.error)?r:[]; }
 
 function pinta(){
-  $('propsub').textContent=propNombre+(D?(D.modo==='cashprotect'?' · CashProtect':' · arqueo manual'):'');
-  $('titulo').textContent=fecha?fmtFecha(fecha):'';
+  const esRes = sec==='resumen';
+  $('propsub').textContent=esRes?'Grupo Casa Pepe':(propNombre+(D?(D.modo==='cashprotect'?' · CashProtect':' · arqueo manual'):''));
+  $('titulo').textContent=esRes?'Toda la caja':(fecha?fmtFecha(fecha):'');
+  $('secmes').hidden=esRes;
   if(cargando){$('tiles').innerHTML='';$('cuerpo').innerHTML='<div class="empty">Cargando…</div>';return;}
+  if(esRes){ $('tiles').innerHTML=''; $('cuerpo').innerHTML=vistaResumen(); return; }
   if(!D){$('tiles').innerHTML='';$('cuerpo').innerHTML='';return;}
   $('tiles').innerHTML=tiles();
+  $('tira').innerHTML=pintaTira();
   $('cuerpo').innerHTML = sec==='dia'?vistaDia() : sec==='salidas'?vistaSalidas() : vistaArqueo();
+}
+
+// ── Tira de los últimos 30 días ───────────────────────────────────────────
+// [fecha, saldo_final, incidencias_abiertas, salidas_sin_folio, hubo_movimiento]
+function pintaTira(){
+  if(!MES.length) return '';
+  return MES.map(r=>{
+    const inc=Number(r[2])||0, sin=Number(r[3])||0, hubo=!!r[4], sal=r[1];
+    const cls = !hubo ? 'nd' : (inc||sin) ? 'mal' : 'bien';
+    const dia = r[0].slice(8);
+    let t = fmtFecha(r[0]);
+    t += !hubo ? ' · sin movimiento de caja'
+       : (sal!=null?' · cierra con $'+m(sal):'')
+         +(inc?' · '+inc+' incidencia(s) sin resolver':'')
+         +(sin?' · $'+m(sin)+' sin justificar':'')
+         +((!inc&&!sin)?' · cuadra':'');
+    return '<button type="button" class="d '+cls+(r[0]===fechaISO(fecha)?' on':'')+'" data-f="'+esc(r[0])+'" title="'+esc(t)+'">'+dia+'</button>';
+  }).join('');
+}
+
+// ── Toda la caja del grupo ────────────────────────────────────────────────
+// [id, nombre, modo, saldo_cp, fecha_cp, neto_arqueo, fecha_arqueo,
+//  incidencias, sin_justificar_30d, folios_abiertos, entradas_7d, salidas_7d]
+function vistaResumen(){
+  if(!RES) return '<div class="empty">Cargando…</div>';
+  if(!RES.length) return '<div class="empty">No tienes ninguna propiedad asignada.</div>';
+  let total=0, conSaldo=0;
+  RES.forEach(r=>{const v=r[2]==='cashprotect'?r[3]:r[5]; if(v!=null){total+=Number(v);conSaldo++;}});
+  const tarjetas=RES.map(r=>{
+    const manual=r[2]!=='cashprotect';
+    const saldo=manual?r[5]:r[3], cuando=manual?r[6]:r[4];
+    const inc=Number(r[7])||0, sin=Number(r[8])||0, fol=Number(r[9])||0;
+    const cls=(inc||sin)?'sev4':(saldo==null?'none':'ok');
+    return '<div class="tile '+cls+'"><span class="eyebrow">'+esc(r[1])+' · '+(manual?'arqueo manual':'CashProtect')+'</span>'
+     +'<b>'+(saldo==null?'—':'$'+m(saldo))+'</b>'
+     +'<span class="sub">'+(cuando?('Último dato: '+fmtFecha(cuando)):'Todavía sin ningún conteo')+'</span></div>';
+  }).join('');
+  const filas=RES.map(r=>{
+    const manual=r[2]!=='cashprotect';
+    const saldo=manual?r[5]:r[3], cuando=manual?r[6]:r[4];
+    const inc=Number(r[7])||0, sin=Number(r[8])||0, fol=Number(r[9])||0;
+    return '<tr><td class="stripe '+((inc||sin)?'sev4':(saldo==null?'none':'ok'))+'">'+esc(r[1])
+      +'<span class="sub">'+(manual?'Se cuenta a mano al cierre':'Reporte diario de CashProtect')+'</span></td>'
+      +'<td class="n">'+(saldo==null?'—':m(saldo))+'<span class="sub">'+(cuando?esc(cuando):'sin dato')+'</span></td>'
+      +'<td class="n">'+m(r[10])+'</td><td class="n">'+m(r[11])+'</td>'
+      +'<td class="n'+(sin>=1?' sev4':'')+'">'+(sin>=1?'$'+m(sin):'—')+'</td>'
+      +'<td>'+(inc?chip('sev4',inc+' sin resolver'):chip('ok','al día'))
+      +(fol?' '+chip('warn',fol+' folio(s) abierto(s)'):'')+'</td>'
+      +'<td><button class="mini" type="button" data-ir="'+esc(r[0])+'">Abrir</button></td></tr>';
+  }).join('');
+  return '<section class="sec"><div class="sechead"><h2>Efectivo parado ahora mismo</h2>'
+   +'<p class="lede">El último saldo conocido de cada caja. En CDMX sale del reporte de CashProtect; '
+   +'donde se cuenta a mano, del último arqueo capturado — si nadie lo captura, aquí no hay cifra.</p></div>'
+   +'<div class="tiles">'+tarjetas
+   +'<div class="tile info"><span class="eyebrow">Total del grupo</span><b>$'+m(total)+'</b>'
+   +'<span class="sub">Suma de '+conSaldo+' de '+RES.length+' caja(s) con dato</span></div></div>'
+   +'<div class="card scroll" style="margin-top:16px"><table><thead><tr><th>Propiedad</th>'
+   +'<th class="n">Saldo</th><th class="n">Entró 7d</th><th class="n">Salió 7d</th>'
+   +'<th class="n">Sin justificar</th><th>Estado</th><th></th></tr></thead><tbody>'+filas+'</tbody></table></div>'
+   +'<p class="lede" style="font-size:.85rem;margin-top:10px">El Ateneo aparecerá aquí en cuanto tenga cajas dadas de alta; '
+   +'funcionará como Puebla, con arqueo capturado a mano.</p></section>';
 }
 function tile(et,val,sub,cls){return '<div class="tile'+(cls?' '+cls:'')+'"><span class="eyebrow">'+esc(et)+'</span>'
   +'<b>'+val+'</b><span class="sub">'+esc(sub||'')+'</span></div>';}
@@ -348,7 +448,12 @@ function tiles(){
        dif===null?'':NIVEL_C[nivel(dif)])
    + tile('Salió sin folio','$'+m(D.salidas_sin_folio),
        Number(D.salidas_sin_folio)>0?'Nadie justificó esa salida':'Todas las salidas están justificadas',
-       Number(D.salidas_sin_folio)>0?'sev4':'ok');
+       Number(D.salidas_sin_folio)>0?'sev4':'ok')
+   + (D.saldo_final!=null
+      ? tile('Se queda en la caja','$'+m(D.saldo_final),
+          'Abrió con $'+m(D.saldo_inicial)+(Number(D.saldo_delta)?' · no cuadra con el cálculo por $'+m(D.saldo_delta):''),
+          Number(D.saldo_delta)?NIVEL_C[nivel(D.saldo_delta)]:'info')
+      : '');
 }
 
 // ── El día ────────────────────────────────────────────────────────────────
@@ -364,13 +469,21 @@ function vistaDia(){
     +'<td class="n">'+m(D.cp_entradas)+'</td><td></td><td></td></tr></tbody></table></div>';
   const cuerpoSal=!sal.length?'<div class="empty">No salió efectivo de la caja fuerte este día.</div>'
    :'<div class="card scroll"><table><thead><tr><th>Salida</th><th class="n">Importe</th><th class="n">Hora</th>'
-    +'<th>Quién la hizo</th><th>Folio</th></tr></thead><tbody>'
-    +sal.map(x=>{const ok=!!x[6];
-      return '<tr class="'+(ok?'':'s4')+'"><td class="stripe '+(ok?'ok':'sev4')+'">'+esc(x[1]||'')
-       +(x[2]?'<span class="sub">'+esc(x[2])+'</span>':'')+'</td>'
+    +'<th>Quién la hizo</th><th>Folio</th><th></th></tr></thead><tbody>'
+    +sal.map(x=>{const ok=!!x[6], id=x[7];
+      return '<tr><td class="stripe '+(ok?'ok':'sev4')+'">'+esc(x[1]||'')
+       +(x[2]?'<span class="sub">Motivo en CashProtect: “'+esc(x[2])+'”</span>'
+             :'<span class="sub">CashProtect no registró ningún motivo</span>')
+       +(x[8]?'<span class="sub">Justificación: '+esc(x[8])+'</span>':'')+'</td>'
        +'<td class="n">'+m(x[3])+'</td><td class="n mono">'+esc(x[4]||'')+'</td><td>'+esc(x[5]||'—')+'</td>'
-       +'<td>'+(ok?'<span class="mono">'+esc(x[6])+'</span>':chip('sev4','Sin justificar'))+'</td></tr>';}).join('')
+       +'<td>'+(ok?'<span class="mono">'+esc(x[6])+'</span>':chip('sev4','Sin justificar'))+'</td>'
+       +'<td>'+(ok?'':'<button class="mini" type="button" data-just="'+esc(id)+'" data-motivo="'+esc(x[2]||'')+'" data-monto="'+esc(x[3])+'">Justificar</button>')+'</td></tr>'
+       +(justificando===id?'<tr><td colspan="6">'+panelJustificar(id,x[2]||'',x[3])+'</td></tr>':'');}).join('')
     +'</tbody></table></div>';
+  const saldo=D.saldo_final==null?'':'<div class="nota"><b>Saldo de la caja fuerte.</b> Abrió el día con $'+m(D.saldo_inicial)
+    +', entraron $'+m(D.cp_entradas)+', salieron $'+m(D.cp_salidas)+' y se queda con <b>$'+m(D.saldo_final)+'</b>.'
+    +(Number(D.saldo_delta)?' El cálculo da $'+m(D.saldo_final_calculado)+', o sea '+(Number(D.saldo_delta)>0?'sobran':'faltan')
+      +' $'+m(Math.abs(Number(D.saldo_delta)))+' respecto a lo que reporta la máquina.':'')+'</div>';
   const tienda=Number(D.cp_tiendita)||0;
   return '<section class="sec"><div class="sechead"><h2>Lo que entró a la caja fuerte</h2>'
    +'<p class="lede">Cada depósito de CashProtect: lo que se metió, el cambio que devolvió y lo que de verdad se quedó dentro. '
@@ -380,7 +493,9 @@ function vistaDia(){
    +'</section>'
    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Lo que salió</h2>'
    +'<p class="lede">Toda salida necesita un folio con QR emitido por quien saca el dinero. '
-   +'Lo que sale sin folio queda en rojo y se reporta como incidencia el mismo día.</p></div>'+cuerpoSal+'</section>';
+   +'Lo que sale sin folio queda en rojo y se reporta como incidencia el mismo día. '
+   +'CashProtect guarda un motivo escrito a mano al sacar el dinero: lo mostramos tal cual y sirve de punto de partida para justificarlo.</p></div>'
+   +saldo+cuerpoSal+'</section>';
 }
 
 // ── Salidas con folio ─────────────────────────────────────────────────────
@@ -448,6 +563,20 @@ function vistaArqueo(){
    +form+'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Arqueos capturados</h2></div>'+lista+'</section></section>';
 }
 
+function panelJustificar(id,motivo,monto){
+  const pista=(motivo||'').trim();
+  return '<div class="form just">'
+   +'<label class="ancho">Para quién fue<input id="j_para" placeholder="Nombre de quien recibió el dinero"'
+   +(pista?' value="'+esc(pista)+'"':'')+'></label>'
+   +'<label>Concepto<select id="j_cat">'+CAT_SALIDA.map(c=>'<option value="'+c[0]+'">'+c[1]+'</option>').join('')+'</select></label>'
+   +'<label>Importe<input value="'+m(monto)+'" disabled></label>'
+   +'<label class="ancho">Para qué se usó<textarea id="j_con" rows="2" placeholder="Ej. pago al músico del sábado, sin factura">'
+   +esc(pista)+'</textarea></label>'
+   +'<label class="ancho">Comprobante (opcional)<input id="j_comp" placeholder="Enlace al ticket o factura, si lo hay"></label>'
+   +'<div class="ancho"><button class="mini" type="button" data-jok="'+esc(id)+'">Guardar justificación</button> '
+   +'<button class="mini" type="button" data-jno="1">Cancelar</button></div></div>';
+}
+
 // ── QR ────────────────────────────────────────────────────────────────────
 function pintaQR(payload,folio,extra){
   const q=qrcode(0,'M'); q.addData(payload); q.make();
@@ -507,6 +636,20 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     const r=await rpc('aud_caja_cancelar',{p_id:cn.dataset.can,p_motivo:mo});
     if(r&&r.error){nota('No se pudo: '+r.error,'bad');cn.disabled=false;return;}
     nota('Folio cancelado.','ok');carga();return;
+  }
+  const jb=e.target.closest('[data-just]');
+  if(jb){ justificando=jb.dataset.just; pinta(); return; }
+  if(e.target.dataset&&e.target.dataset.jno){ justificando=null; pinta(); return; }
+  const jk=e.target.closest('[data-jok]');
+  if(jk){
+    const para=($('j_para').value||'').trim(), con=($('j_con').value||'').trim();
+    if(!para){nota('Pon a quién se le dio el dinero.','bad');return;}
+    if(!con){nota('Explica para qué se usó.','bad');return;}
+    jk.disabled=true;
+    const r=await rpc('aud_caja_justificar_mov',{p_movimiento:jk.dataset.jok,p_categoria:$('j_cat').value,
+      p_concepto:con,p_para_nombre:para,p_nota:($('j_comp').value||'').trim()||null});
+    if(r&&r.error){nota('No se pudo guardar: '+(r.error==='ya_justificada'?'esa salida ya estaba justificada.':r.error),'bad');jk.disabled=false;return;}
+    nota('Justificada con el folio '+r.folio+'.','ok'); justificando=null; carga(); return;
   }
   const ag=e.target.closest('#a_guardar');
   if(ag){
