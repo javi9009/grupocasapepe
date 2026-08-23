@@ -284,6 +284,22 @@
   </div>
 </div>
 
+<!-- MODAL AÑADIR COLABORADORES (ticket / incidencia) -->
+<div class="sheet-bg" id="addSheet">
+  <div class="sheet">
+    <div class="sheet-h">
+      <h2>Añadir colaboradores</h2>
+      <button class="x" id="btnCloseAdd">✕</button>
+    </div>
+    <input class="srch" id="addSearch" placeholder="Buscar colaborador…" autocomplete="off">
+    <div class="gm-count" id="addCount">Selecciona a quién añadir</div>
+    <div id="addList"></div>
+    <div class="sheet-foot">
+      <button class="btn-primary" id="btnAddConfirm" disabled>Añadir</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -298,7 +314,7 @@ const qs = new URLSearchParams(location.search);
 const EMBED = qs.get('embed') === '1';
 if (EMBED) document.body.classList.add('embed');
 
-let ME = { email:null, empId:null, nombre:null };
+let ME = { email:null, empId:null, nombre:null, isAdmin:false };
 let CURRENT = null;          // {id,tipo,estado,titulo,...}
 let CURRENT_PARTS = [];      // participantes de la conv abierta
 let CONTACTS = [];           // colaboradores para nuevo chat / directorio
@@ -372,6 +388,8 @@ async function boot(){
       .eq('user_id', session.user.id).maybeSingle();
     if(link){ ME.empId = link.employee_id || null; ME.nombre = link.nombre_display || link.nickname || link.nombre_completo || ME.nombre; }
   }catch(e){}
+  // ¿es admin? (Dirección / gerente operativo / contabilidad / jefa de administración) — habilita cerrar cualquier ticket
+  try{ const { data } = await sb.rpc('chat_soy_admin'); ME.isAdmin = !!data; }catch(e){ ME.isAdmin=false; }
 
   hide($('gate'));
   wireUI();
@@ -545,18 +563,32 @@ async function openConv(id){
   markActiveRow();
 }
 
+// ¿puede el usuario cerrar/reabrir este ticket? Solo quien lo abrió (created_by) o un admin.
+function canCloseTicket(conv){ return !!(conv && (conv.created_by===ME.email || ME.isAdmin)); }
+function addBtnHTML(){ return '<button class="act" id="btnAddPart">＋ Añadir</button>'; }
+function wireAddBtn(conv){ const b=$('btnAddPart'); if(b) b.onclick = ()=> openAddParts(conv); }
+
 function renderActions(conv){
   const bar=$('convActions');
   if(conv.tipo==='ticket'){
     show(bar);
     const chip = '<span class="badge '+(conv.estado==='cerrado'?'cerrado':'abierto')+'">'+(conv.estado==='cerrado'?'Cerrado':'Abierto')+'</span>';
-    if(conv.estado==='abierto') bar.innerHTML = chip + '<button class="act warn" id="btnTicket">Cerrar ticket</button>';
-    else bar.innerHTML = chip + '<button class="act reopen" id="btnTicket">Reabrir</button>';
-    $('btnTicket').onclick = ()=> toggleTicket(conv);
+    // El botón Cerrar/Reabrir SOLO para el que abrió el ticket o un admin. El resto ve solo el chip y puede responder.
+    let btn='';
+    if(canCloseTicket(conv)){
+      btn = conv.estado==='abierto'
+        ? '<button class="act warn" id="btnTicket">Cerrar ticket</button>'
+        : '<button class="act reopen" id="btnTicket">Reabrir</button>';
+    }
+    bar.innerHTML = chip + btn + addBtnHTML();
+    if($('btnTicket')) $('btnTicket').onclick = ()=> toggleTicket(conv);
+    wireAddBtn(conv);
+    $('btnAttach').classList.remove('hot');
   } else if(conv.tipo==='incidencia'){
     show(bar);
-    bar.innerHTML = '<span class="badge inc">Incidencia</span><button class="act hi" id="btnActAttach">📎 Adjuntar foto</button>';
+    bar.innerHTML = '<span class="badge inc">Incidencia</span><button class="act hi" id="btnActAttach">📎 Adjuntar foto</button>' + addBtnHTML();
     $('btnActAttach').onclick = ()=> $('attachMenu').classList.remove('hide');
+    wireAddBtn(conv);
     $('btnAttach').classList.add('hot');
   } else {
     hide(bar); bar.innerHTML='';
@@ -649,6 +681,8 @@ async function notifyOthers(preview){
 
 /* ---------- TICKET ---------- */
 async function toggleTicket(conv){
+  // Defensa: solo el que abrió el ticket o un admin puede cambiar el estado.
+  if(!canCloseTicket(conv)){ toast('Solo quien abrió el ticket o un admin puede cerrarlo'); return; }
   const nuevo = conv.estado==='cerrado' ? 'abierto' : 'cerrado';
   const accion = nuevo==='cerrado' ? 'cerrar_ticket' : 'reabrir_ticket';
   const cuerpo = nuevo==='cerrado' ? ('✅ Ticket cerrado por '+ME.nombre) : ('🔄 Ticket reabierto por '+ME.nombre);
@@ -792,6 +826,71 @@ async function createGroup(){
   }catch(e){ toast('No se pudo crear el grupo'); $('btnCreateGroup').disabled=false; }
 }
 
+/* ---------- AÑADIR COLABORADORES (ticket / incidencia) ---------- */
+let ADD_SEL = new Set();      // emails seleccionados en el sheet de añadir
+let ADD_CONV = null;          // conversación a la que se añaden participantes
+async function openAddParts(conv){
+  ADD_CONV = conv || CURRENT; if(!ADD_CONV) return;
+  ADD_SEL = new Set();
+  $('addSheet').classList.add('show');
+  $('addSearch').value='';
+  if(!CONTACTS.length){ await loadContacts(); }
+  renderAddContacts('');
+  updateAddBtn();
+  $('addSearch').focus();
+}
+function closeAddParts(){ $('addSheet').classList.remove('show'); }
+function renderAddContacts(q){
+  q=(q||'').toLowerCase().trim();
+  // excluye a quienes YA son participantes (y al propio usuario, que ya no está en CONTACTS)
+  const already = new Set((CURRENT_PARTS||[]).map(p=>p.email));
+  const list = CONTACTS.filter(c=> !already.has(c.email) && (!q || contactName(c).toLowerCase().includes(q) || (c.email||'').toLowerCase().includes(q)));
+  const box=$('addList');
+  if(!list.length){ box.innerHTML='<div class="empty-inline">Sin colaboradores para añadir</div>'; return; }
+  box.innerHTML = list.map(c=>{ const n=contactName(c); const foto=fotoByEmpId(c.employee_id); const sel=ADD_SEL.has(c.email);
+    return '<div class="gm-row'+(sel?' sel':'')+'" data-email="'+esc(c.email)+'">'+avatarHTML(n,foto,'md')
+      + '<div class="ct-info"><div class="ct-name">'+esc(n)+'</div><div class="ct-mail">'+esc(c.email)+'</div></div>'
+      + '<span class="gm-check">'+(sel?'✓':'')+'</span></div>'; }).join('');
+  box.querySelectorAll('.gm-row').forEach(r=> r.onclick=()=>{
+    const em=r.dataset.email;
+    if(ADD_SEL.has(em)) ADD_SEL.delete(em); else ADD_SEL.add(em);
+    renderAddContacts($('addSearch').value); updateAddBtn();
+  });
+}
+function updateAddBtn(){
+  const n=ADD_SEL.size;
+  $('addCount').textContent = n===0 ? 'Selecciona a quién añadir' : (n+' seleccionado'+(n===1?'':'s'));
+  $('btnAddConfirm').disabled = n<1;
+}
+async function confirmAddParts(){
+  const conv = ADD_CONV || CURRENT; if(!conv) return;
+  const emails=Array.from(ADD_SEL);
+  if(!emails.length) return;
+  $('btnAddConfirm').disabled=true;
+  const chosen = emails.map(em=> CONTACTS.find(x=>x.email===em)).filter(Boolean);
+  const rows = chosen.map(c=>({ conversacion_id:conv.id, email:c.email, employee_id:c.employee_id||null, nombre:contactName(c) }));
+  try{
+    // on-conflict ignore por si ya existiera la fila (clave conversacion_id+email)
+    await sb.from('chat_participantes').upsert(rows, { onConflict:'conversacion_id,email', ignoreDuplicates:true });
+    const nombres = chosen.map(c=>contactName(c)).join(', ');
+    await sb.from('chat_mensajes').insert({ conversacion_id:conv.id, autor_email:ME.email, autor_nombre:ME.nombre, cuerpo:'＋ '+ME.nombre+' añadió a '+nombres, accion:'sistema' });
+    await sb.from('chat_conversaciones').update({ ultimo_at:nowISO() }).eq('id',conv.id);
+    // notificar a los añadidos
+    for(const c of chosen){
+      try{ await sb.from('notificaciones').insert({ employee_id:c.employee_id||null, titulo:'💬 '+(conv.titulo||'Conversación'), cuerpo:ME.nombre+' te añadió a una conversación', icono:'💬', accion:{ url:'/m/mensajes.html?conv='+conv.id }, leido:false, created_at:nowISO() }); }catch(e){}
+    }
+    closeAddParts();
+    // refrescar participantes de la conv abierta + la conversación
+    if(CURRENT && CURRENT.id===conv.id){
+      try{ const { data } = await sb.from('chat_participantes').select('conversacion_id,email,nombre,employee_id,last_read_at').eq('conversacion_id',conv.id); CURRENT_PARTS=data||[]; }catch(e){}
+      if(conv.tipo==='grupo') $('convSub').textContent = 'Grupo · '+CURRENT_PARTS.length+' miembros';
+      await loadMessages(conv.id, true);
+    }
+    loadList();
+    toast('Colaboradores añadidos');
+  }catch(e){ toast('No se pudo añadir'); $('btnAddConfirm').disabled=false; }
+}
+
 /* ---------- POLL ---------- */
 function startPoll(){ if(pollTimer) clearInterval(pollTimer); pollTimer=setInterval(async ()=>{
   if(document.hidden) return;
@@ -812,6 +911,10 @@ function wireUI(){
   $('newSheet').onclick = (e)=>{ if(e.target===$('newSheet')) $('newSheet').classList.remove('show'); };
   $('btnCloseGroup').onclick = closeNewGroup;
   $('groupSheet').onclick = (e)=>{ if(e.target===$('groupSheet')) closeNewGroup(); };
+  $('btnCloseAdd').onclick = closeAddParts;
+  $('addSheet').onclick = (e)=>{ if(e.target===$('addSheet')) closeAddParts(); };
+  $('addSearch').oninput = (e)=> renderAddContacts(e.target.value);
+  $('btnAddConfirm').onclick = confirmAddParts;
   $('gSearch').oninput = (e)=> renderGroupContacts(e.target.value);
   $('gName').oninput = updateGroupBtn;
   $('btnCreateGroup').onclick = createGroup;
