@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
 <title>El Pepe Chat · Casa Pepe</title>
 <style>
   :root{
@@ -64,6 +64,8 @@
   .chat-main{flex:1;min-width:0}
   .chat-top{display:flex;align-items:baseline;gap:8px}
   .chat-name{font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chat-who{font-weight:800;color:#0f7a52}
+  .chat-who::after{content:'·';color:var(--txt2);font-weight:700;margin:0 5px}
   .chat-time{font-size:11.5px;color:var(--txt3);flex:0 0 auto}
   .chat-prev{font-size:13px;color:var(--txt2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;display:flex;align-items:center;gap:6px}
   .chat-prev .pv-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -544,6 +546,15 @@ async function loadList(){
     const others = ps.filter(p=>p.email!==ME.email);
     let title = c.titulo;
     if(!title || c.tipo==='directo'){ title = others.map(p=>p.nombre||p.email).join(', ') || c.titulo || 'Conversación'; }
+    // quién solicitó (tickets/incidencias): el que abrió (created_by) o el colaborador, no Pepe Soporte ni yo
+    let who='';
+    if(c.tipo==='ticket' || c.tipo==='incidencia'){
+      const cb=(c.created_by||'').toLowerCase();
+      const creator = ps.find(p=>(p.email||'').toLowerCase()===cb);
+      const cand = others.find(p=>(p.email||'').toLowerCase()!=='pepe.soporte@casapepe.mx') || others[0];
+      const w = creator ? (creator.nombre||creator.email) : (cand ? (cand.nombre||cand.email) : '');
+      if(w && w.toLowerCase()!==(title||'').toLowerCase()) who = w;
+    }
     const last = lastByConv[c.id];
     let prev = '';
     if(last){ if(last.accion) prev = last.cuerpo||''; else if(last.fotos && last.fotos.length) prev = (isImageName(last.fotos[0])?'📷 Foto':'📎 Archivo'); else prev = (last.autor_email===ME.email?'Tú: ':'') + (last.cuerpo||''); }
@@ -558,7 +569,7 @@ async function loadList(){
     if(c.tipo==='ticket') badge = '<span class="badge '+(c.estado==='cerrado'?'cerrado':'abierto')+'">'+(c.estado==='cerrado'?'Cerrado':'Abierto')+'</span>';
     else if(c.tipo==='incidencia') badge = '<span class="badge inc">Incidencia</span>';
     const searchText = (title+' '+others.map(p=>(p.nombre||'')+' '+(p.email||'')).join(' ')).toLowerCase();
-    LIST_ROWS.push({ id:c.id, tipo:c.tipo, estado:c.estado, avHtml, title, timeTxt:fmtTime(c.ultimo_at||(last&&last.created_at)), badge, prev, unread, lastAt:(last?last.created_at:(c.ultimo_at||null)), search:searchText });
+    LIST_ROWS.push({ id:c.id, tipo:c.tipo, estado:c.estado, avHtml, title, who, timeTxt:fmtTime(c.ultimo_at||(last&&last.created_at)), badge, prev, unread, lastAt:(last?last.created_at:(c.ultimo_at||null)), search:searchText });
   }
   renderList(SEARCH_Q);
 }
@@ -582,7 +593,7 @@ function renderList(q){
     const active = CURRENT && r.id===CURRENT.id;
     return '<div class="chat-row'+(r.unread?' unread':'')+(active?' active':'')+'" data-id="'+esc(r.id)+'">'
       + r.avHtml
-      + '<div class="chat-main"><div class="chat-top"><span class="chat-name">'+hl(r.title,q)+'</span><span class="chat-time">'+esc(r.timeTxt)+'</span></div>'
+      + '<div class="chat-main"><div class="chat-top"><span class="chat-name">'+(r.who?'<span class="chat-who">'+esc(r.who)+'</span>':'')+hl(r.title,q)+'</span><span class="chat-time">'+esc(r.timeTxt)+'</span></div>'
       + '<div class="chat-prev">'+r.badge+'<span class="pv-txt">'+hl(r.prev,q)+'</span>'+(r.unread?'<span class="unread-dot"></span>':'')+'</div></div>'
       + '<button class="row-menu-btn" title="Acciones" aria-label="Acciones de la conversación">⋮</button></div>';
   }).join('');
@@ -1094,6 +1105,25 @@ function wireUI(){
   document.addEventListener('click', (e)=>{ if(ROW_MENU_EL && !ROW_MENU_EL.contains(e.target)) closeRowMenu(); });
   $('chatList').addEventListener('scroll', closeRowMenu, {passive:true});
   wirePasteAndDrop();
+  wireKeyboard();
+}
+
+/* ---------- Teclado móvil: que el compositor no quede tapado por el teclado ----------
+   El viewport de layout no se encoge con el teclado, así que anclamos la altura visible
+   usando visualViewport y bajamos a los últimos mensajes al enfocar el campo. */
+function wireKeyboard(){
+  const vv = window.visualViewport;
+  if(!vv) return;
+  let raf=null;
+  function fit(){ document.body.style.height = vv.height + 'px'; window.scrollTo(0,0); }
+  function onVV(){ if(raf) cancelAnimationFrame(raf); raf=requestAnimationFrame(fit); }
+  vv.addEventListener('resize', onVV);
+  vv.addEventListener('scroll', onVV);
+  const inp=$('msgInput');
+  if(inp){
+    inp.addEventListener('focus', ()=>{ setTimeout(()=>{ fit(); const box=$('msgs'); if(box) box.scrollTop=box.scrollHeight; }, 300); });
+    inp.addEventListener('blur', ()=>{ setTimeout(()=>{ document.body.style.height=''; window.scrollTo(0,0); }, 120); });
+  }
 }
 
 /* ---------- ESCRITORIO: pegar (Ctrl/Cmd+V) + arrastrar y soltar en la conversación ----------
