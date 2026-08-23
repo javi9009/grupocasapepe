@@ -247,6 +247,8 @@ td.n.cuadra{color:var(--ok)}
 .exc-item{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--bad);
   border-radius:7px;padding:14px 16px;display:grid;gap:4px 18px;grid-template-columns:1fr auto;box-shadow:var(--shadow)}
 .exc-item.warn{border-left-color:var(--warn)}
+.exc-item.aviso{border-left-color:var(--info)}
+.exc-item.aviso .exc-m{color:var(--info);font-size:.9rem;font-weight:600}
 .exc-m{font-family:"IBM Plex Mono",monospace;font-size:1.05rem;font-weight:500;font-variant-numeric:tabular-nums;
   grid-row:1 / span 2;grid-column:2;align-self:center;text-align:right}
 .exc-f{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.77rem;color:var(--muted);
@@ -328,7 +330,6 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
   <div class="tiles" id="tiles"></div>
   <div class="barra" id="barra"></div>
   <div class="leyenda" id="barleyenda"></div>
-  <div class="acciones" id="cierre"></div>
   <div id="paneltile"></div>
   <div id="cuerpo"></div>
   <footer>
@@ -366,12 +367,16 @@ const ESTADO={conciliado:["ok","Comprobado"],cargado:["ok","Comprobado"],con_dif
  pendiente_estado_de_cuenta:["warn","Falta el estado de cuenta"],pendiente:["bad","No sabemos dónde está"],
  sin_liquidador:["none","Sin liquidador"],no_aplica:["none","No aplica"]};
 const PLAT_ET={cloudbeds:"Cloudbeds · hospedaje",poster:"Poster · A&B",turitop:"Turitop · experiencias"};
+// Métodos que no viven en conciliacion_dia y aun así hay que nombrar bien en la tabla
+const PUNTO_ET={interno:"Cortesías e intercambios",cargo_habitacion:"Cargado a la habitación",
+  tarjeta_sin_identificar:"Tarjeta sin identificar",sin_asignar:"Sin método declarado"};
 const TURNO_ET={desayuno:"Turno mañana · 07 a 15",comida:"Turno noche · 15 a 01","?":"Sin turno"};
 const CAT={faltante_efectivo:["Faltante de efectivo","bad"],descuadre_metodo:["Cobro sin ruta","warn"],
  turno_sin_cerrar:["Turno sin cerrar","warn"],tour_duplicado:["Tour escrito dos veces","warn"],
  captura_tardia:["Capturado fuera de fecha","warn"],
  venta_sin_cobro:["Venta sin cobrar","bad"],cobro_sin_venta:["Cobro sin venta","warn"],
- caja_descuadrada:["Caja descuadrada","bad"],fuente_faltante:["Fuente faltante","warn"]};
+ caja_descuadrada:["Caja descuadrada","bad"],fuente_faltante:["Fuente faltante","warn"],
+ sobrante_efectivo:["Sobrante en la caja fuerte","info"],desayuno_sin_venta:["Desayunos de más","info"]};
 const INC_ET={cancela:["Cancelación","bad"],descuento:["Descuento o cortesía","warn"],
  mueve_mesa:["Cambio de mesa","none"],modifica:["Modificación de cuenta","warn"],
  divide:["Cuenta dividida","warn"],autoriza:["Autorización de gerente","none"]};
@@ -408,20 +413,58 @@ function linkReserva(res){const c=CB[prop];if(!res||!c)return '';
 function nivel(d){const a=Math.abs(d||0);if(a<0.005)return 0;if(a<1)return 1;if(a<10)return 2;if(a<=100)return 3;return 4;}
 const NIVEL_ET=['Comprobado','Diferencia de centavos','Diferencia menor','Diferencia','Diferencia grande'];
 function celdas(entro,comp,espera){
-  const esp = Number(espera||0);
-  const sinComp = (comp===null||comp===undefined);
-  // el hueco real, descontando lo que sólo espera al banco
-  const dif  = sinComp ? -entro : comp-entro;
-  const real = dif + esp;                       // lo que de verdad falta
-  const nv   = nivel(real);
+  // Siempre hay número: nunca un guión. El color sale del hueco REAL, descontando
+  // lo que sólo espera el estado de cuenta (eso va en naranja, no en rojo).
+  const esp  = Number(espera||0);
+  const c    = Number(comp||0);
+  const dif  = c - Number(entro||0);
+  const real = dif + esp;
   let cls, txt;
-  if (sinComp && esp>0 && Math.abs(real)<0.01){ cls=' esperando'; txt=m(dif); }   // todo espera al banco
-  else if (Math.abs(dif)<0.005){ cls=' cuadra'; txt='0.00'; }
-  else if (esp>0 && Math.abs(real)<0.01){ cls=' esperando'; txt=m(dif); }
-  else if (sinComp && esp===0){ cls=' d4'; txt=m(dif); }
-  else { cls=nv?' d'+nv:' cuadra'; txt=m(dif); }
-  return '<td class="n">'+m(entro)+'</td><td class="n">'+(sinComp?'—':m(comp))+'</td>'
+  if (Math.abs(dif)<0.005){ cls=' cuadra'; txt='0.00'; }
+  else if (Math.abs(real)<0.01){ cls=' esperando'; txt=m(dif); }
+  else { const nv=nivel(real); cls=nv?' d'+nv:' cuadra'; txt=m(dif); }
+  return '<td class="n">'+m(entro)+'</td><td class="n">'+m(c)+'</td>'
     +'<td class="n'+cls+'">'+txt+'</td>';}
+
+// El efectivo no cuadra movimiento a movimiento: cuadra en cuatro líneas
+// (A&B, recepción, tiendita, salidas). Aquí se ve en cuál se fue el dinero.
+function filasEfectivo(){
+  const ls=(D&&D.efectivo)||[];
+  if(!ls.length) return '<tr class="lv3"><td class="ind2" colspan="5"><span class="sub" style="margin:0">'
+    +'Ese día no llegó ningún cierre de efectivo: por eso no hay contra qué comparar.</span></td></tr>';
+  return ls.map(l=>{
+    const dec=(l[1]===null||l[1]===undefined)?null:Number(l[1]);
+    const dep=Number(l[2]||0), dif=dec===null?0:dep-dec, nv=nivel(dif);
+    return '<tr class="lv3"><td class="ind2">'+esc(l[0])+'<span class="sub">'+esc(l[5]||'')+'</span></td>'
+      +'<td class="n">'+(dec===null?'—':m(dec))+'</td><td class="n">'+m(dep)+'</td>'
+      +'<td class="n'+(dec===null?'':(Math.abs(dif)<0.005?' cuadra':' d'+nv))+'">'
+      +(dec===null?'—':(Math.abs(dif)<0.005?'0.00':m(dif)))+'</td>'
+      +'<td class="n">—</td><td></td></tr>';}).join('');
+}
+// Los cortes de Cósmica del día, con quién los abrió y quién los cerró.
+function filasTurnos(){
+  const ts=(D&&D.turnos)||[];
+  return ts.map(t=>{
+    const dif=Number(t[7]||0), nv=nivel(dif);
+    return '<tr class="lv3"><td class="ind2">Corte de Cósmica '+esc(t[0])+'<span class="sub">'
+      +'Abrió '+esc(t[3]||'—')+' a las '+esc(t[1]||'—')+' · '
+      +(t[2]?('cerró '+esc(t[4]||t[3]||'—')+' a las '+esc(t[2])):'<b>sin cerrar</b>')
+      +'</span></td><td class="n">'+m(t[5]||0)+'</td><td class="n">'+m(Number(t[5]||0)+dif)+'</td>'
+      +'<td class="n'+(Math.abs(dif)<0.005?' cuadra':' d'+nv)+'">'+(Math.abs(dif)<0.005?'0.00':m(dif))+'</td>'
+      +'<td class="n">—</td><td></td></tr>';}).join('');
+}
+// Cuánto de un método de cobro está comprobado, contado igual que el cajón del día:
+// manda el liquidador (banco, pasarela, caja fuerte), no la suma de los movimientos.
+function cuadreDe(rs,c){
+  const capt=rs.reduce((a,r)=>a+Number(r[6]),0);
+  if(!c){ let comp=0; rs.forEach(r=>{ comp+=Number(r[10]||0); });
+          return {entro:capt,comp:comp,esp:0,capt:capt,st:null,liq:null}; }
+  const entro=Number(c[3]), liq=(c[4]===null||c[4]===undefined)?null:Number(c[4]), st=c[6];
+  if(st==='no_aplica')                  return {entro:capt,comp:capt,esp:0,capt:capt,st:st,liq:null};
+  if(liq!==null)                        return {entro:entro,comp:Math.min(entro,liq),esp:0,capt:capt,st:st,liq:liq};
+  if(st==='pendiente_estado_de_cuenta') return {entro:entro,comp:0,esp:entro,capt:capt,st:st,liq:null};
+  return {entro:entro,comp:0,esp:0,capt:capt,st:st,liq:null};
+}
 
 // Los tres cajones los calcula la base (auditoria.cajones_dia), así el color del día
 // en la tira y las cifras de arriba salen siempre del mismo sitio.
@@ -618,7 +661,7 @@ function pintaResumen(){
   document.getElementById('propsub').textContent=propNombre;
   document.getElementById('titulo').textContent=D?fmtFecha(fecha):(cargando?'Cargando…':'');
   if(!D){document.getElementById('tiles').innerHTML='';document.getElementById('barra').innerHTML='';
-    document.getElementById('barleyenda').innerHTML='';document.getElementById('cierre').innerHTML='';return;}
+    document.getElementById('barleyenda').innerHTML='';return;}
   const t=totales(), vivas=(D.exc||[]).filter(e=>ABIERTA(e[6])), ab=vivas.reduce((a,e)=>a+Number(e[2]),0);
   document.getElementById('tiles').innerHTML=
     tile('Cobrado en el día','$'+m(D.cobrado),(D.conc||[]).length+' métodos de cobro',true)
@@ -638,30 +681,49 @@ function pintaResumen(){
    +'<span style="margin-left:auto">'+(vivas.length
       ?'<b style="color:var(--bad)">'+vivas.length+' cobro(s) por revisar por $'+m(ab)+'</b> — en la pestaña Revisiones'
       :'Nada por revisar')+'</span>';
-  const cerrable=(t.banco+t.falta)<1 && !vivas.length;
+}
+// El cierre del día se firma en la póliza: el contador la genera y en el mismo gesto
+// echa el candado del día. Vive ahí y no en la cabecera.
+function bloqueCierre(){
+  if(!D) return '';
+  const t=totales(), vivas=(D.exc||[]).filter(e=>ABIERTA(e[6])&&Number(e[2])>0);
+  // Lo que espera estado de cuenta NO impide cerrar: ese dinero va en camino y en la
+  // póliza vive como banco en tránsito. Bloquea lo que no sabemos dónde está.
+  const cerrable=t.falta<1 && !vivas.length;
   const ya=D.cierre, puede=!!D.puede_validar;
-  let html;
+  let html='<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:10px">';
   if(ya){
-    html='<span class="chip ok">Cierre validado</span><span class="lede" style="font-size:.85rem">'
-      +'Lo validó <b>'+esc(ya.validado_por||'')+'</b> ('+esc(ya.rol||'')+') el '+esc(ya.validado_at||'')
-      +'. El asiento ya se puede emitir: la póliza está abierta para contabilidad.</span>';
+    html+='<div><span class="chip ok">Día cerrado con candado</span></div>'
+      +'<div class="lede" style="font-size:.85rem;margin:0">Lo firmó <b>'+esc(ya.validado_por||'')+'</b> ('
+      +esc(ya.rol||'')+') el '+esc(ya.validado_at||'')+'. El asiento de abajo es el definitivo.</div>';
   } else if(!puede){
-    html='<button class="btn ghost" type="button" disabled>Validar el cierre del día</button>'
-      +'<span class="lede" style="font-size:.85rem">Validar el cierre lo hacen el jefe de administración, el contador o dirección. '
-      +'Tu cuenta no tiene ese permiso.</span>';
+    html+='<div><b>Generar la póliza y cerrar el día</b></div>'
+      +'<div class="lede" style="font-size:.85rem;margin:0">Firmar el cierre lo hacen el jefe de administración, '
+      +'el contador o dirección. Tu cuenta no tiene ese permiso.</div>';
   } else {
-    html='<button class="btn'+(cerrable?'':' ghost')+'" type="button" data-validar="1"'
-      +(cerrable?'':' disabled')+'>Validar el cierre del día</button><span class="lede" style="font-size:.85rem">'
-      +(cerrable?'Todo el dinero del día está localizado y no hay nada abierto: al validar se abre la póliza.'
-                :'La póliza se abre cuando el día queda en verde: todo el dinero localizado y ninguna revisión abierta.')
-      +'</span>';
+    html+='<div><b>Generar la póliza y cerrar el día</b></div>'
+      +'<div class="lede" style="font-size:.85rem;margin:0">'
+      +(cerrable
+        ?'Todo el dinero del día está localizado. Al firmar se echa el candado y este asiento queda como el definitivo.'
+          +(t.banco>0.005?' Quedan $'+m(t.banco)+' esperando estado de cuenta: van a la póliza como banco en tránsito.':'')
+        :'Todavía no cuadra: '
+          +(t.falta>0.005?'$'+m(t.falta)+' sin ubicar. ':'')
+          +(vivas.length?vivas.length+' revisión(es) con dinero abiertas. ':'')
+          +'Puedes forzarlo si escribes el motivo: queda registrado con tu nombre.')
+      +'</div>'
+      +(cerrable?'':'<input id="motivocierre" placeholder="Motivo por el que se fuerza el cierre" '
+         +'style="width:100%;padding:8px 10px;border:1px solid var(--linea);border-radius:8px;font:inherit">')
+      +'<div class="acciones"><button class="btn" type="button" data-validar="1">'
+      +(cerrable?'Firmar el cierre y echar el candado':'Forzar el cierre y firmarlo')+'</button></div>';
   }
-  if(VALID) html+='<div class="res '+(VALID.ok?'ok':'bad')+'" style="margin-top:8px">'+esc(VALID.mensaje||'')+'</div>';
-  document.getElementById('cierre').innerHTML=html;
+  if(VALID) html+='<div class="res '+(VALID.ok?'ok':'bad')+'">'+esc(VALID.mensaje||'')+'</div>';
+  return html+'</div>';
 }
 let VALID=null;
 async function validarCierre(){
-  try{ VALID = await rpc('aud_dia_validar',{p_property:prop,p_fecha:fecha,p_nota:null});
+  const mo=document.getElementById('motivocierre');
+  const nota=mo?(mo.value||'').trim():null;
+  try{ VALID = await rpc('aud_dia_validar',{p_property:prop,p_fecha:fecha,p_nota:nota||null});
        if(VALID&&VALID.ok){ await cargaDia(fecha); } else pinta();
   }catch(e){ VALID={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
@@ -697,50 +759,75 @@ function panelTile(){
 function vistaDia(){
   const det=D.det||[], conc=D.conc||[], cp={}; conc.forEach(c=>cp[c[0]]=c);
   let filas='';
-  const plats={}; det.forEach(r=>{(plats[r[0]]=plats[r[0]]||[]).push(r);});
-  Object.keys(plats).sort().forEach(pl=>{
-    const rp=plats[pl], cobrado=rp.reduce((a,r)=>a+Number(r[6]),0);
-    let compPlat=0, algoSin=false;
-    rp.forEach(r=>{ if(r[10]===null||r[10]===undefined) algoSin=true; else compPlat+=Number(r[10]); });
-    // cuánto de lo que falta en esta plataforma sólo espera el estado de cuenta
-    let esperaPlat=0; { const px={}; rp.forEach(r=>{px[r[1]]=(px[r[1]]||0)+Number(r[6]);});
-      Object.keys(px).forEach(k=>{const c=cp[k];
-        if(c && c[6]==='pendiente_estado_de_cuenta' && (c[4]===null||c[4]===undefined)) esperaPlat+=px[k];}); }
-    const kp='p:'+pl, ab=abierto[kp];
-    filas+='<tr><td class="name stripe info"><button class="tg" type="button" data-k="'+kp+'" aria-expanded="'+(ab?'true':'false')+'">'+(ab?'−':'+')+'</button>'
-      +esc(PLAT_ET[pl]||pl)+(algoSin?'<span class="sub">Parte de este dinero todavía no tiene comprobante.</span>':'')+'</td>'
-      +celdas(cobrado,algoSin&&compPlat===0?null:compPlat,esperaPlat)+'<td class="n">'+rp.length+'</td><td></td></tr>';
-    if(!ab)return;
-    const puntos={}; rp.forEach(r=>{(puntos[r[1]]=puntos[r[1]]||[]).push(r);});
-    Object.keys(puntos).forEach(pt=>{
-      const rs=puntos[pt], sum=rs.reduce((a,r)=>a+Number(r[6]),0), c=cp[pt];
-      let compPt=0, sinC=false; rs.forEach(r=>{if(r[10]===null||r[10]===undefined)sinC=true;else compPt+=Number(r[10]);});
-      const etPt=c?c[1]:pt;
-      const st=c?c[6]:null, cb=c?c[4]:null, ec=c?(ESTADO[st]||['none',st]):['none','Sin clasificar'];
-      const nv=sinC?0:nivel(compPt-sum);
-      const col=!c?'none':st==='no_aplica'?'none':sinC?(st==='pendiente_estado_de_cuenta'?'warn':'bad'):(nv===0?'ok':'s'+nv);
-      const nota=!c?'':(cb!==null&&cb!==undefined)
-        ?'Por este método entraron $'+m(c[3])+' en todo el día y el comprobante dice $'+m(cb)+'.'
-        :(st==='pendiente_estado_de_cuenta'?'Por este método entraron $'+m(c[3])+' en todo el día. Falta el estado de cuenta para confirmarlo.'
-          :'Por este método entraron $'+m(c[3])+' en todo el día y nadie ha confirmado que llegaron.');
-      const kt='t:'+pl+':'+pt, at=abierto[kt];
-      filas+='<tr class="lv2"><td class="ind1 stripe '+col+'"><button class="tg" type="button" data-k="'+kt+'" aria-expanded="'+(at?'true':'false')+'">'+(at?'−':'+')+'</button>'
-        +esc(c?c[1]:pt)+'<span class="sub">'+esc(nota)+'</span></td>'
-        +celdas(sum,sinC?null:compPt,(st==='pendiente_estado_de_cuenta'&&sinC)?sum:0)+'<td class="n">'+rs.length+'</td><td>'+chip(col,!sinC?NIVEL_ET[nv]:ec[1])+'</td></tr>';
+  // El árbol arranca por el método de cobro, que es la unidad que de verdad se concilia:
+  // cada método tiene su liquidador y su cajón. Dentro va el punto de venta, el turno y el movimiento.
+  const puntos={}; det.forEach(r=>{(puntos[r[1]]=puntos[r[1]]||[]).push(r);});
+  conc.forEach(c=>{ if(!puntos[c[0]] && Number(c[3])>0 && c[6]!=='no_aplica') puntos[c[0]]=[]; });
+  let totEntro=0, totComp=0, totEsp=0, totMovs=0;
+  Object.keys(puntos)
+    .sort((a,b)=>cuadreDe(puntos[b],cp[b]).entro-cuadreDe(puntos[a],cp[a]).entro)
+    .forEach(pt=>{
+      const rs=puntos[pt], c=cp[pt], q=cuadreDe(rs,c);
+      totEntro+=q.entro; totComp+=q.comp; totEsp+=q.esp; totMovs+=rs.length;
+      const falta=q.entro-q.comp-q.esp;
+      const st=c?c[6]:null, ec=c?(ESTADO[st]||['none',st]):['none','Sin conciliar'];
+      const col=falta>0.005?(nivel(falta)?'s'+nivel(falta):'ok'):(q.esp>0?'warn':'ok');
+      const nota=!c?'Este concepto no pasa por ningún liquidador: cuadra solo.'
+        :(q.liq!==null
+          ?'El sistema dice $'+m(q.entro)+' y el liquidador confirma $'+m(q.liq)+'.'
+          :(st==='pendiente_estado_de_cuenta'
+            ?'Pasó por terminal. Entraron $'+m(q.entro)+' y falta el estado de cuenta que lo confirme.'
+            :'Entraron $'+m(q.entro)+' y nadie ha confirmado todavía dónde están.'));
+      const kt='t:'+pt, at=abierto[kt];
+      filas+='<tr><td class="name stripe '+col+'"><button class="tg" type="button" data-k="'+kt+'" aria-expanded="'+(at?'true':'false')+'">'+(at?'−':'+')+'</button>'
+        +esc(c?c[1]:(PUNTO_ET[pt]||pt))+'<span class="sub">'+esc(nota)+'</span></td>'
+        +celdas(q.entro,q.comp,q.esp)+'<td class="n">'+rs.length+'</td><td>'
+        +chip(col,falta>0.005?NIVEL_ET[nivel(falta)]:(q.esp>0?'Falta el estado de cuenta':(c?ec[1]:'Sin efecto en caja')))+'</td></tr>';
       if(!at)return;
-      const turnos={}; rs.forEach(r=>{(turnos[r[2]]=turnos[r[2]]||[]).push(r);});
+      // Si el liquidador cuadra por corte y no por movimiento, se dice en qué se va la diferencia
+      if(q.liq!==null && Math.abs(q.capt-q.entro)>0.005)
+        filas+='<tr class="lv2"><td class="ind1" colspan="5"><span class="sub" style="margin:0">'
+          +'Los movimientos capturados este día suman $'+m(q.capt)+' y el corte declaró $'+m(q.entro)
+          +'. La diferencia es de horario de corte, no de dinero.</span></td></tr>';
+      // Si algún movimiento concreto ya carga la diferencia, no se repite arriba:
+      // se dice dónde mirar. Si no hay ninguno, la diferencia es del corte entero.
+      const conGap=rs.filter(r=>Math.abs(Number(r[10]||0)-Number(r[6]))>0.005);
+      if(falta>0.005 && conGap.length)
+        filas+='<tr class="lv2"><td class="ind1" colspan="5"><span class="sub" style="margin:0">'
+          +'La diferencia está señalada abajo, en '+conGap.length+' movimiento(s): '
+          +esc(conGap.map(r=>(r[4]||'sin nombre')+' a las '+r[3]).join(' · '))+'.</span></td></tr>';
+      if(falta>0.005 && !conGap.length)
+        filas+='<tr class="lv2"><td class="ind1 stripe '+col+'"><b>Diferencia del corte</b>'
+          +'<span class="sub">'+(pt==='cashprotect'
+            ? 'El efectivo se comprueba por línea de cierre, no movimiento a movimiento. Los cierres declararon $'
+              +m(q.entro)+' y en la caja fuerte se depositaron $'+m(q.liq)+'. Abajo está en qué línea se fue.'
+            : 'No se puede atribuir a un movimiento concreto: el liquidador reportó $'+m(falta)
+              +' menos de lo que dice el sistema.')+'</span></td>'
+          +'<td class="n">'+m(falta)+'</td><td class="n">0.00</td><td class="n d'+nivel(falta)+'">'+m(-falta)+'</td>'
+          +'<td class="n">—</td><td></td></tr>'
+          +(pt==='cashprotect'?filasEfectivo()+filasTurnos():'');
+      const plats={}; rs.forEach(r=>{(plats[r[0]]=plats[r[0]]||[]).push(r);});
+      Object.keys(plats).sort().forEach(pl=>{
+        const rp=plats[pl], sumP=rp.reduce((a,r)=>a+Number(r[6]),0);
+        let compP=0; rp.forEach(r=>{compP+=Number(r[10]||0);});
+        const kp='p:'+pt+':'+pl, ab=abierto[kp];
+        filas+='<tr class="lv2"><td class="ind1"><button class="tg" type="button" data-k="'+kp+'" aria-expanded="'+(ab?'true':'false')+'">'+(ab?'−':'+')+'</button>'
+          +esc(PLAT_ET[pl]||pl)+'</td>'+celdas(sumP,compP,q.esp>0?sumP:0)+'<td class="n">'+rp.length+'</td><td></td></tr>';
+        if(!ab)return;
+      const etPt=c?c[1]:(PUNTO_ET[pt]||pt);
+      const turnos={}; rp.forEach(r=>{(turnos[r[2]]=turnos[r[2]]||[]).push(r);});
       Object.keys(turnos).sort().forEach(tu=>{
         const rt=turnos[tu], stt=rt.reduce((a,r)=>a+Number(r[6]),0);
-        let ct=0,sinT=false; rt.forEach(r=>{if(r[10]===null||r[10]===undefined)sinT=true;else ct+=Number(r[10]);});
-        const ku='u:'+pl+':'+pt+':'+tu, au=abierto[ku];
+        let ct=0; rt.forEach(r=>{ct+=Number(r[10]||0);});
+        const ku='u:'+pt+':'+pl+':'+tu, au=abierto[ku];
         const us=fusiona(rt.map(r=>norm(r[7])));
         filas+='<tr class="lv3"><td class="ind2"><button class="tg" type="button" data-k="'+ku+'" aria-expanded="'+(au?'true':'false')+'">'+(au?'−':'+')+'</button>'
           +esc(TURNO_ET[tu]||tu)+(us.length?'<span class="sub">Cobró: '+esc(us.join(' · '))+'</span>':'')+'</td>'
-          +celdas(stt,sinT?null:ct)+'<td class="n">'+rt.length+'</td><td></td></tr>';
+          +celdas(stt,ct,q.esp>0?stt:0)+'<td class="n">'+rt.length+'</td><td></td></tr>';
         if(!au)return;
         rt.slice().sort((a,b)=>a[3]<b[3]?-1:1).forEach(r=>{
-          const cf=(r[10]===null||r[10]===undefined)?null:Number(r[10]);
-          const nvR=cf===null?0:nivel(cf-Number(r[6]));
+          const cf=Number(r[10]||0);
+          const nvR=q.esp>0?0:nivel(cf-Number(r[6]));
           const uu=norm(r[7]);
           let linea=uu?'Capturó '+esc(uu):'';
           if(gen(uu)){const tt=turnoTexto(r[3]); if(tt)linea+=(linea?' · ':'')+esc(tt);}
@@ -764,7 +851,7 @@ function vistaDia(){
             +(nvR?'<span class="difacc">'+(enviados[idMsg]?'<span class="chip ok">Preguntado a '+esc(resp||'—')+'</span>'
                :(resp?'<button class="mini" type="button" data-notif="'+esc(idMsg)+'" data-nom="'+esc(resp)+'" data-ctx="'+esc(ctx)+'">Preguntar a '+esc(resp.split(' ')[0])+' por SoyPepe</button>'
                      :'<span class="sub" style="margin:0">No hay nadie identificado en ese turno para preguntarle.</span>'))+'</span>':'')
-            +'</td>'+celdas(Number(r[6]),cf)+'<td class="n mono">'+esc(r[3])+'</td><td></td></tr>';
+            +'</td>'+celdas(Number(r[6]),cf,q.esp>0?Number(r[6]):0)+'<td class="n mono">'+esc(r[3])+'</td><td></td></tr>';
           const rev=revisionDe(r[13]);
           if(rev){
             filas+='<tr class="lv4"><td class="ind3" colspan="5">'
@@ -783,17 +870,14 @@ function vistaDia(){
       });
     });
   });
-  const totC=det.reduce((a,r)=>a+Number(r[6]),0), t=totales();
-  // el total tiene que sumar lo mismo que las filas de arriba, no el cajón:
-  // si no, salen diferencias fantasma cuando el efectivo se compara por declarado
-  let totComp=0, totSin=false;
-  det.forEach(r=>{ if(r[10]===null||r[10]===undefined) totSin=true; else totComp+=Number(r[10]); });
+  // El total suma exactamente lo mismo que los tres cajones de arriba, método por método.
   return '<section class="sec"><div class="sechead"><h2>Lo que entró hoy</h2>'
-    +'<p class="lede">Sólo el dinero que se cobró este día, sin importar de qué noche era. Se empieza por el punto de venta donde se capturó, '
-    +'se abre por el método de cobro por el que entró, y de ahí al turno y a cada transacción. La diferencia no se reparte: aparece marcada en la transacción que la causa.</p></div>'
-    +'<div class="card scroll"><table><thead><tr><th>Punto de venta · método de cobro</th><th class="n">Entró</th>'
+    +'<p class="lede">Sólo el dinero que se cobró este día, sin importar de qué noche era. Se empieza por el método de cobro, '
+    +'que es lo que se concilia contra su liquidador; dentro está el punto de venta, el turno y cada movimiento. '
+    +'El total de esta tabla es exactamente la suma de los tres cajones de arriba.</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Método de cobro · punto de venta</th><th class="n">Entró</th>'
     +'<th class="n">Comprobado</th><th class="n">Δ</th><th class="n">Movs</th><th>Comprobación</th></tr></thead><tbody>'
-    +filas+'<tr class="sum"><td>Total cobrado del día</td>'+celdas(totC,totSin&&totComp===0?null:totComp,t.banco)+'<td class="n">'+det.length+'</td><td></td></tr></tbody></table></div>'
+    +filas+'<tr class="sum"><td>Total cobrado del día</td>'+celdas(totEntro,totComp,totEsp)+'<td class="n">'+totMovs+'</td><td></td></tr></tbody></table></div>'
     +'<div class="leyenda" style="margin-top:2px"><span><i style="background:var(--ok);border:0"></i>Cuadra</span>'
     +'<span><i style="background:var(--warn);border:0"></i>Sólo falta el estado de cuenta</span>'
     +'<span><i style="background:var(--sev2);border:0"></i>Falta hasta $10</span><span><i style="background:var(--sev3);border:0"></i>Falta hasta $100</span>'
@@ -974,14 +1058,19 @@ function vistaExc(){
   const turnos=(D.turnos||[]).length?'<div class="nota"><b>Quién estuvo en caja.</b> '
     +(D.turnos||[]).map(t=>'Turno '+t[0]+': '+esc(t[3]||'—')+' de '+(t[1]||'—')+' a '+(t[2]||'sin cerrar')
       +((t[4]&&t[4]!==t[3])?', lo cerró '+esc(t[4]):'')+(Number(t[7])?' · descuadre de $'+m(t[7]):'')).join('. ')+'.</div>':'';
-  const abiertas = exc.filter(e=>ABIERTA(e[6]));
-  const b1=!exc.length?'<div class="empty">Ningún cobro por revisar este día. El día se puede cerrar.</div>'
-    :exc.map(e=>{const c=CAT[e[1]]||[e[1],'warn'], id='e:'+e[0], env=enviados[id];
-      const viva=ABIERTA(e[6]);
+  // Tres montones: lo que falta dinero, los avisos que no mueven caja, y lo ya cerrado.
+  const porMonto=(a,b)=>Number(b[2])-Number(a[2]);
+  const faltantes=exc.filter(e=>ABIERTA(e[6])&&Number(e[2])>0).sort(porMonto);
+  const avisos   =exc.filter(e=>ABIERTA(e[6])&&!(Number(e[2])>0));
+  const cerradas =exc.filter(e=>!ABIERTA(e[6])).sort(porMonto);
+  const pinta1=ls=>ls.map(e=>{const c=CAT[e[1]]||[e[1],'warn'], id='e:'+e[0], env=enviados[id];
+      const viva=ABIERTA(e[6]), conDinero=Number(e[2])>0;
       const dE=datosExc(e); CTXD[id]=dE;
-      return '<div class="exc-item '+(!viva?'hecha':(c[1]==='warn'?'warn':''))+'"><div>'+chip(viva?c[1]:'ok',c[0])
-        +' '+chip(viva?(e[6]==='explicada'?'info':'bad'):'ok',EST_EXC[e[6]]||e[6])+'</div>'
-        +'<div class="exc-m">$'+m(e[2])+'</div><p>'+esc(e[3])+'</p>'
+      return '<div class="exc-item '+(!viva?'hecha':(conDinero?(c[1]==='warn'?'warn':''):'aviso'))+'"><div>'
+        +chip(viva?(conDinero?c[1]:'info'):'ok',c[0])
+        +' '+chip(viva?(conDinero?(e[6]==='explicada'?'info':'bad'):'info'):'ok',
+                  viva&&!conDinero?'Aviso · no mueve dinero':(EST_EXC[e[6]]||e[6]))+'</div>'
+        +'<div class="exc-m">'+(conDinero?'$'+m(e[2]):'Sin efecto en caja')+'</div><p>'+esc(e[3])+'</p>'
         + respuestaHTML(e) + guiaHTML(e)
         +(viva?'<div class="exc-f"><span>Lo capturó: <b>'+esc(quienDe(e))+'</b></span>'
         +'<span>Falta leve el <b>'+esc(e[4])+'</b></span><span>Falta grave el <b>'+esc(e[5])+'</b></span></div>':'')
@@ -996,6 +1085,12 @@ function vistaExc(){
         +(CONC[e[0]]?'<div class="res '+(CONC[e[0]].ok?'ok':'bad')+'" style="grid-column:1/-1">'+esc(CONC[e[0]].mensaje||'')+'</div>':'')
         +(redactando===id?'<div style="grid-column:1/-1">'+panelMensaje(id,quienDe(e).split(' —')[0],e[3],dE)+'</div>':'')
         +(redactando==='exp:'+e[0]?'<div style="grid-column:1/-1">'+panelExplicar(e[0])+'</div>':'')+'</div>';}).join('');
+  const b1=faltantes.length?pinta1(faltantes)
+    :'<div class="empty">No falta dinero este día. Lo que quede abajo son avisos.</div>';
+  const bAvisos=avisos.length?pinta1(avisos)
+    :'<div class="empty">Ningún aviso este día.</div>';
+  const bCerradas=cerradas.length?pinta1(cerradas)
+    :'<div class="empty">Todavía no se ha cerrado ninguna revisión de este día.</div>';
   const inc=D.incidencias||[];
   const b2=!inc.length?'<div class="empty">Ninguna cuenta se canceló, se movió de mesa ni se descontó este día. Si el día es anterior al 21 de agosto, la historia cuenta por cuenta todavía no está cargada.</div>'
     :'<div class="card scroll"><table><thead><tr><th>Qué pasó</th><th class="n">Cuenta</th><th>Quién</th><th class="n">Hora</th><th class="n">Importe</th><th></th></tr></thead><tbody>'
@@ -1011,16 +1106,20 @@ function vistaExc(){
         +(redactando===id?'<tr class="lv3"><td colspan="6">'+panelMensaje(id,x[2],det+'.',dI)+'</td></tr>':'')
         +(env?'<tr class="lv3"><td colspan="6"><div class="res ok">'+esc(env)+'</div></td></tr>':'');}).join('')
      +'</tbody></table></div>';
-  return '<section class="sec"><div class="sechead"><h2>1 · Cobros a revisar</h2>'
-    +'<p class="lede">Diferencias de operación, con dueño y con reloj. A los 3 días hábiles sin explicación se levanta falta leve; a los 7, falta grave con acta. '
-    +'El mensaje aparece en la campana de notificaciones de SoyPepe de esa persona, con la referencia del cobro. Lo pueden resolver contabilidad, el gerente administrativo o el gerente operativo.</p></div>'
+  return '<section class="sec"><div class="sechead"><h2>1 · Falta dinero</h2>'
+    +'<p class="lede">Lo único que impide cerrar el día. Cada uno tiene dueño y reloj: a los 3 días hábiles sin explicación '
+    +'se levanta falta leve; a los 7, falta grave con acta. El mensaje llega a la campana de SoyPepe de esa persona con la referencia del cobro.</p></div>'
     +turnos+'<div class="sec">'+b1+'</div></section>'
-    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>2 · Incidencias de cobro</h2>'
+    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>2 · Avisos <span class="chip info">!</span></h2>'
+    +'<p class="lede">Cosas que hay que arreglar pero que no mueven la caja: desayunos de más, turnos sin cerrar, sobrantes en la caja fuerte. '
+    +'No pintan el día de rojo ni bloquean la póliza.</p></div>'
+    +'<div class="sec">'+bAvisos+'</div></section>'
+    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>3 · Ya revisadas</h2>'
+    +'<p class="lede">Lo que ya se concilió o se descartó, con el histórico de la conversación y quién lo cerró. No se borra: queda la traza.</p></div>'
+    +'<div class="sec">'+bCerradas+'</div></section>'
+    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>4 · Incidencias del día <span class="chip info">!</span></h2>'
     +'<p class="lede">Lo que se tocó dentro de una cuenta: cancelaciones, cambios de mesa, descuentos y cortesías. No siempre es un error — pero tiene nombre y hora. '
-    +'Es el módulo de tickets al revés: de dirección o jefatura hacia el colaborador.</p></div>'+b2+'</section>'
-    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>3 · Ya explicadas</h2>'
-    +'<p class="lede">Explicar no es resolver: una excepción se cierra cuando aparece la evidencia.</p></div>'
-    +'<div class="empty">Las que alguien explique salen de la lista de arriba y quedan aquí con su texto y quién la cerró.</div></section>';
+    +'Es el módulo de tickets al revés: de dirección o jefatura hacia el colaborador.</p></div>'+b2+'</section>';
 }
 function panelExplicar(id){
   const v=borrador['exp:'+id]!==undefined?borrador['exp:'+id]:'';
@@ -1048,6 +1147,7 @@ function vistaPoliza(){
   return '<section class="sec"><div class="sechead"><h2>Póliza del día</h2>'
     +'<p class="lede">Se abona el ingreso devengado y se carga por dónde entró el dinero; la diferencia entre lo facturado y lo cobrado va a <b>225 Huéspedes</b>, '
     +'la misma cuenta de enlace de siempre. Las celdas son editables: corrige lo que haga falta y exporta el archivo con las ocho columnas que pide QuickBooks.</p></div>'
+    +bloqueCierre()
     +'<div class="card scroll pol"><table><thead><tr><th>Cuenta</th><th>Nombre de cuenta en QuickBooks</th><th class="n">Débito</th><th class="n">Créditos</th><th>Nombre</th><th>Clase</th></tr></thead><tbody>'
     +filas+'<tr class="sum"><td colspan="2">Sumas '+(cuadra?'iguales':'DESIGUALES')+'</td><td class="n">'+m(td)+'</td><td class="n">'+m(th)
     +'</td><td colspan="2">'+chip(cuadra?'ok':'bad',cuadra?'Cuadra':'Δ '+m(td-th))+'</td></tr></tbody></table></div>'
