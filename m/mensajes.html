@@ -112,6 +112,11 @@
   .bubble{max-width:78%;padding:8px 11px;border-radius:14px;font-size:14.5px;line-height:1.38;word-wrap:break-word;white-space:pre-wrap;box-shadow:var(--shadow);position:relative}
   .bubble .who{font-size:11.5px;font-weight:800;color:var(--accent);margin-bottom:2px}
   .bubble .time{font-size:10px;color:var(--txt3);text-align:right;margin-top:3px}
+  .cc-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .cc-btn{border:1px solid var(--bd);background:var(--bg);border-radius:10px;padding:7px 10px;font-size:12.5px;font-weight:700;cursor:pointer;color:inherit}
+  .cc-btn.sug{border-color:var(--accent);background:var(--accent);color:#fff}
+  .cc-btn.cc-desc{opacity:.85;font-weight:600}
+  .cc-btn:disabled{opacity:.5;cursor:default}
   .bubble.me{align-self:flex-end;background:var(--mine);border-bottom-right-radius:5px}
   .bubble.them{align-self:flex-start;background:var(--theirs);border-bottom-left-radius:5px;border:1px solid var(--bd2)}
   .bubble img{max-width:100%;border-radius:9px;margin-top:5px;display:block;cursor:pointer}
@@ -394,6 +399,19 @@ function fmtTime(iso){ if(!iso) return ''; const d=new Date(iso); const now=new 
   const yd=new Date(now); yd.setDate(now.getDate()-1);
   if(d.toDateString()===yd.toDateString()) return 'Ayer';
   return d.toLocaleDateString('es-MX',{day:'2-digit',month:'2-digit'});
+}
+function fmtHora(iso){ if(!iso) return ''; return new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }
+function parseAccion(a){ if(!a) return null; if(typeof a==='object') return a; try{ return JSON.parse(a); }catch(e){ return null; } }
+async function onClasificar(b){
+  const msgId=b.dataset.msg, cat=b.dataset.cat;
+  const wrap=b.closest('.cc-btns'); if(wrap) wrap.querySelectorAll('.cc-btn').forEach(x=>x.disabled=true);
+  try{
+    if(cat==='descartar'){ await sb.rpc('clasificar_descartar',{p_msg_id:msgId}); toast('Ok 👌'); await loadMessages(CURRENT.id,true); return; }
+    const { data, error }=await sb.rpc('clasificar_crear_ticket',{p_msg_id:msgId,p_categoria:cat});
+    if(error) throw error;
+    toast('Registrado ✓');
+    if(data){ location.href='/m/mensajes.html?conv='+data; } else { await loadMessages(CURRENT.id,true); }
+  }catch(e){ toast('No se pudo, intenta de nuevo'); if(wrap) wrap.querySelectorAll('.cc-btn').forEach(x=>x.disabled=false); }
 }
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600); }
 function show(el){ el.classList.remove('hide'); }
@@ -717,7 +735,18 @@ async function loadMessages(id, forceScroll){
   for(const m of msgs){
     const day = new Date(m.created_at).toDateString();
     if(day!==lastDay){ lastDay=day; html += '<div class="sys">'+esc(fmtDay(m.created_at))+'</div>'; }
-    if(m.accion){ html += '<div class="sys">'+esc(m.cuerpo||'')+'</div>'; continue; }
+    if(m.accion){
+      const acc=parseAccion(m.accion);
+      if(acc && acc.tipo==='clasificar' && acc.estado==='abierto'){
+        const foto=fotoByEmail(m.autor_email); const sug=acc.sugerida||'';
+        const cats=[['mantenimiento','🔧 Mantenimiento'],['mejora','💡 Mejora'],['solicitud','📩 Solicitud'],['incidencia','🛎️ Incidencia']];
+        let btns='<div class="cc-btns">'+cats.map(c=>'<button class="cc-btn'+(c[0]===sug?' sug':'')+'" data-msg="'+esc(m.id)+'" data-cat="'+c[0]+'">'+c[1]+'</button>').join('')+'<button class="cc-btn cc-desc" data-msg="'+esc(m.id)+'" data-cat="descartar">🙅 Solo platico</button></div>';
+        const inner=(grupal?'<div class="who">'+esc(m.autor_nombre||'Don Charly')+'</div>':'')+'<div>'+esc(m.cuerpo||'').replace(/\n/g,'<br>')+'</div>'+btns+'<div class="time">'+esc(fmtHora(m.created_at))+'</div>';
+        html += '<div class="mrow">'+avatarHTML(m.autor_nombre||'Don Charly', foto, 'xs')+'<div class="bubble them">'+inner+'</div></div>';
+        continue;
+      }
+      html += '<div class="sys">'+esc(m.cuerpo||'')+'</div>'; continue;
+    }
     const mine = m.autor_email===ME.email;
     let inner='';
     if(!mine && grupal) inner += '<div class="who">'+esc(m.autor_nombre||m.autor_email)+'</div>';
@@ -726,7 +755,7 @@ async function loadMessages(id, forceScroll){
       if(isImageName(u)) inner += '<img src="'+esc(u)+'" loading="lazy" onclick="window.open(this.src,\'_blank\')">';
       else inner += '<a class="filelink" href="'+esc(u)+'" target="_blank" rel="noopener"><span class="ic">📎</span><span class="nm">'+esc(fileNameFromUrl(u))+'</span></a>';
     }); }
-    inner += '<div class="time">'+esc(fmtTime(m.created_at))+'</div>';
+    inner += '<div class="time">'+esc(fmtHora(m.created_at))+'</div>';
     if(mine){ html += '<div class="bubble me">'+inner+'</div>'; }
     else { // avatar (foto o inicial) del autor en TODA burbuja entrante, incl. mensajes migrados
            // del buzon/tickets antiguos: usa autor_nombre/autor_email; si no hay foto, cae a inicial de color.
@@ -736,6 +765,7 @@ async function loadMessages(id, forceScroll){
   }
   if(!msgs.length) html='<div class="sys">Aún no hay mensajes. Escribe el primero 👇</div>';
   box.innerHTML=html;
+  box.querySelectorAll('.cc-btn').forEach(b=>b.onclick=()=>onClasificar(b));
   if(forceScroll || nearBottom || msgs.length!==lastMsgCount){ box.scrollTop=box.scrollHeight; }
   lastMsgCount=msgs.length;
 }
