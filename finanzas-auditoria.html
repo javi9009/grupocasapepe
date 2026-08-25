@@ -375,7 +375,8 @@ const PLAT_ET={cloudbeds:"Cloudbeds · hospedaje",poster:"Poster · A&B",turitop
 // Métodos que no viven en conciliacion_dia y aun así hay que nombrar bien en la tabla
 const PUNTO_ET={interno:"Cortesías e intercambios",cargo_habitacion:"Cargado a la habitación",
   tarjeta_sin_identificar:"Tarjeta sin identificar",sin_asignar:"Sin método declarado"};
-const TURNO_ET={desayuno:"Turno mañana · 07 a 15",comida:"Turno noche · 15 a 01","?":"Sin turno"};
+const TURNO_ET={turno_1:"Turno 1 · 07 a 15 h",turno_2:"Turno 2 · 15 a 23 h",turno_3:"Turno 3 · 23 a 07 h",
+  desayuno:"Turno 1 · 07 a 15 h",comida:"Turno 2 · 15 a 23 h","?":"Sin turno"};
 const CAT={faltante_efectivo:["Faltante de efectivo","bad"],descuadre_metodo:["Cobro sin ruta","warn"],
  turno_sin_cerrar:["Turno sin cerrar","warn"],tour_duplicado:["Tour escrito dos veces","warn"],
  captura_tardia:["Capturado fuera de fecha","warn"],
@@ -533,6 +534,7 @@ function claseDia(r){
   if(Number(r[7]||0)>0 || Number(r[8]||0)>0) c='bad';
   else if(Number(r[6]||0)>0) c='warn';
   else c='ok';
+  if(c==='ok' && Math.abs(Number(r[11]||0))>0.005) c='warn';   // venta e ingreso no casan y nadie lo ha firmado
   if(Number(r[9]||0)>0) c+=' exc';       // revisiones con dinero detrás
   else if(Number(r[2])>0) c+=' aviso';    // sólo para tener en cuenta
   if(Number(r[10]||0)>0) c+=' cerrado';   // la póliza ya se firmó: día bajo candado
@@ -611,7 +613,7 @@ async function cargaDia(f){
     if(av&&!av.error) Object.keys(av).forEach(k=>{
       enviados[k]='Enviado por SoyPepe a '+av[k][0]+' el '+av[k][2]+': «'+av[k][1]+'»'; });
   }catch(e){}
-  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; pinta();
+  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; SV=null; DT=null; pinta();
 }
 
 /* ---------- pintado ---------- */
@@ -639,6 +641,65 @@ function pintaTira(){
 }
 function tile(k,v,s,on,id,col){return '<button class="tile'+(on?' on':'')+(col?' c-'+col:'')+(id&&tileAbierto===id?' sel':'')+'" type="button"'
   +(id?' data-t="'+id+'"':'')+'><span class="k">'+esc(k)+'</span><span class="v">'+esc(v)+'</span><span class="s">'+esc(s)+'</span></button>';}
+// La venta y el ingreso no siempre son la misma cifra. Todos los métodos de cobro
+// traen el importe de sus propios cobros; el efectivo no: el suyo sale del corte de
+// turno contra el depósito en la caja fuerte. Cuando el turno de la terraza cruza la
+// medianoche, el total del turno cae en un día y los tickets se reparten entre dos,
+// así que sale una diferencia que regresa al día siguiente. Se queda en ámbar hasta
+// que alguien con mando la da por compensada: el sistema propone contra qué casa.
+let SV=null;
+function sinVenta(){ const x=(D&&D.sin_venta)||null;
+  if(!Array.isArray(x)) return null;
+  const dif=Number(x[2]||0);
+  if(Math.abs(dif)<0.005) return null;
+  const visto=x[5]||null;
+  const ok=!!(visto&&Math.abs(Number(visto.monto||0)-dif)<0.005);
+  return {decl:Number(x[0]||0), capt:Number(x[1]||0), dif:dif, saldo:Number(x[3]||0),
+          casa:Array.isArray(x[4])?x[4]:[], visto:visto, ok:ok};
+}
+function tileSinVenta(){ const v=sinVenta(); if(!v) return '';
+  const sobra=v.dif<0;
+  return '<span class="op">'+(sobra?'−':'+')+'</span>'
+    +tile(sobra?'Sin venta detrás':'Sin ingreso detrás','$'+m(Math.abs(v.dif)),
+      sobra?'Entró más dinero del que se vendió':'Se vendió más de lo que entró',
+      false,null, v.ok?'ok':'warn');
+}
+function fechaCorta(f){const x=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
+  return x?((+x[3])+' '+MESES[(+x[2])-1]):String(f||'');}
+function bloqueSinVenta(){ const v=sinVenta(); if(!v) return '';
+  const sobra=v.dif<0;
+  const puede=!!(D&&(D.puede_visto_bueno||D.puede_validar));
+  const casa=v.casa.filter(c=>Math.abs(Number(c.monto||0))>0.005);
+  const suma=casa.reduce((a,c)=>a+Math.abs(Number(c.monto||0)),0);
+  const cubre=Math.abs(suma-Math.abs(v.dif))<0.005;
+  const lista=casa.map(c=>fechaCorta(c.fecha)+' ($'+m(Math.abs(Number(c.monto)))+')').join(' · ');
+  const propuesta = casa.length
+    ? (cubre?'Casa exacto contra ':'Casa en parte contra ')+lista
+      +(cubre?': suman $'+m(suma)+', lo mismo que falta aquí.':': suman $'+m(suma)+' de los $'+m(Math.abs(v.dif))+'.')
+    : 'No encuentro ningún día cercano que lo compense. Hay que revisarlo a mano.';
+  return '<div class="card" style="padding:16px;margin-top:14px;display:flex;flex-direction:column;gap:10px">'
+    +'<div><b>'+(sobra?'Entró $'+m(Math.abs(v.dif))+' más de lo que se vendió.'
+                     :'Se vendió $'+m(Math.abs(v.dif))+' más de lo que entró.')+'</b> '
+    +'<span class="lede" style="display:inline">Los cierres de caja declararon $'+m(v.decl)
+    +' y las ventas capturadas suman $'+m(v.capt)+'. El efectivo se declara por corte de turno, '
+    +'y el turno de la terraza cruza la medianoche: el total cae en un día y los tickets se reparten entre dos.</span></div>'
+    +'<div class="nota"><b>Contra qué casa.</b> '+esc(propuesta)+'</div>'
+    +(v.ok
+      ?'<div>'+chip('ok','Dado por compensado por '+esc(v.visto.por||'—')+' el '+esc(v.visto.at||''))
+        +(v.visto.nota?'<span class="sub">'+esc(v.visto.nota)+'</span>':'')+'</div>'
+      :(puede
+        ?'<div><button class="mini go" type="button" data-sinventa="1">Dar por compensado</button>'
+          +'<span class="sub">Queda firmado con tu nombre y la fecha. Si el importe cambia, vuelve a pedir firma.</span></div>'
+        :'<div class="sub" style="margin:0">Falta que lo dé por compensado el jefe de administración, '
+          +'gerencia operativa, contabilidad o dirección.</div>'))
+    +(SV?'<div class="res '+(SV.ok?'ok':'bad')+'">'+esc(SV.mensaje||'')+'</div>':'')
+    +'</div>';
+}
+async function darPorCompensado(){
+  try{ SV=await rpc('aud_ingreso_sin_venta_confirmar',{p_property:prop,p_fecha:fecha,p_nota:null});
+       if(SV&&SV.ok){ await cargaDia(fecha); } else pinta();
+  }catch(e){ SV={ok:false,mensaje:String(e.message||e)}; pinta(); }
+}
 function pintaResumen(){
   document.getElementById('propsub').textContent=propNombre;
   document.getElementById('titulo').textContent=
@@ -653,7 +714,8 @@ function pintaResumen(){
    +'<span class="op">+</span>'
    +tile('Falta el estado de cuenta','$'+m(t.banco),'Pasó por TPV; falta que el banco lo confirme',false,'banco',t.banco>0?'warn':null)
    +'<span class="op">+</span>'
-   +tile('No sabemos dónde está','$'+m(t.falta),'Cobros sin ruta o que el liquidador reportó de menos',false,'falta',t.falta>0?'bad':null);
+   +tile('No sabemos dónde está','$'+m(t.falta),'Cobros sin ruta o que el liquidador reportó de menos',false,'falta',t.falta>0?'bad':null)
+   +tileSinVenta();
   const p=v=>t.tot?(v*100/t.tot):0;
   document.getElementById('barra').innerHTML='<i style="width:'+p(t.comp)+'%;background:var(--ok)"></i>'
     +'<i style="width:'+p(t.banco)+'%;background:var(--warn)"></i><i style="width:'+p(t.falta)+'%;background:var(--bad)"></i>';
@@ -832,6 +894,28 @@ function filaLiquidador(pt,c,res,q,pl,et){
 }
 // El cuadre del efectivo, línea por línea: aquí se ve en cuál de los cuatro cortes
 // se fue el dinero y a quién hay que pedirle la explicación.
+// Un depósito que se hizo tarde o con la etiqueta cambiada deja dos huellas: falta
+// en el día al que pertenece y sobra en el día en que se depositó. La base busca las
+// dos y propone la pareja; moverlo lo firma una persona, nunca el sistema solo.
+let DT=null;
+async function moverDeposito(id,dest,linea){
+  try{ DT=await rpc('aud_deposito_tardio_confirmar',
+         {p_movimiento:id,p_fecha_destino:dest,p_linea:linea,p_nota:null});
+       if(DT&&DT.ok){ await cargaDia(fecha); } else pinta();
+  }catch(e){ DT={ok:false,mensaje:String(e.message||e)}; pinta(); }
+}
+function filaTardio(linea){
+  const ts=(D&&D.tardios)||[];
+  const c=ts.filter(t=>t[5]===linea);
+  if(!c.length) return '';
+  const puede=!!(D&&(D.puede_visto_bueno||D.puede_validar));
+  return c.map(t=>'<tr><td colspan="5" class="ind1">'
+    +'<div class="nota"><b>Puede que el dinero ya esté.</b> '+esc(t[8])
+    +(puede?' <button class="mini go" type="button" data-tardio="'+esc(t[0])+'" data-dest="'+esc(fecha)
+        +'" data-linea="'+esc(t[6])+'">Sí, es ese depósito</button>'
+      :' <span class="sub" style="margin:0">Falta que lo confirme el jefe de administración, gerencia operativa, contabilidad o dirección.</span>')
+    +'</div></td></tr>').join('');
+}
 function bloqueEfectivo(){
   const ls=(D&&D.efectivo)||[], ts=(D&&D.turnos)||[];
   if(!ls.length&&!ts.length) return '';
@@ -853,7 +937,7 @@ function bloqueEfectivo(){
       +'<td class="n">'+(dec===null?'—':m(dec))+'</td><td class="n">'+m(dep)+'</td>'
       +'<td class="n'+(dec===null?'':(ok?' cuadra':' d'+nv))+'">'+(dec===null?'—':(ok?'0.00':m(dif)))+'</td>'
       +'<td>'+chip(dec===null?'none':(ok?'ok':'bad'),dec===null?'Sin declarar':(ok?'Cuadra':NIVEL_ET[nv]))+'</td></tr>'
-      +panelFila(id,resp,ctx,'','',datos);
+      +panelFila(id,resp,ctx,'','',datos)+filaTardio(l[0]);
   });
   // Un turno abierto en Poster no tiene arqueo: el sistema da por perdido el fondo y
   // escupe una diferencia que no existe. Eso es un turno sin cerrar, no un faltante.
@@ -885,6 +969,7 @@ function bloqueEfectivo(){
     +'<th>Cuadre de efectivo · corte de turno contra la caja fuerte</th>'
     +'<th class="n">Declarado</th><th class="n">Entró a la caja</th><th class="n">Δ</th><th>Comprobación</th>'
     +'</tr></thead><tbody>'+filas+'</tbody></table></div>'
+    +(DT?'<div class="res '+(DT.ok?'ok':'bad')+'" style="margin-top:8px">'+esc(DT.mensaje||'')+'</div>':'')
     +'<p class="lede" style="font-size:.85rem">El efectivo no se comprueba movimiento a movimiento: se comprueba por corte. '
     +'Si arriba un punto de venta tiene un hueco en efectivo, aquí se ve en qué corte se fue.</p>';
 }
@@ -1054,7 +1139,7 @@ function vistaDia(){
     +'<div class="card scroll"><table><thead><tr><th>Punto de venta · método de cobro</th><th class="n">Entró</th>'
     +'<th class="n">Comprobado</th><th class="n">Δ</th><th class="n">Movs</th><th>Comprobación</th></tr></thead><tbody>'
     +filas+'<tr class="sum"><td>Total cobrado del día</td>'+celdas(totEntro,totComp,totEsp)+'<td class="n">'+totMovs+'</td><td></td></tr></tbody></table></div>'
-    +bloqueCuadre()+bloqueEfectivo()
+    +bloqueSinVenta()+bloqueCuadre()+bloqueEfectivo()
     +'<div class="leyenda" style="margin-top:2px"><span><i style="background:var(--ok);border:0"></i>Cuadra</span>'
     +'<span><i style="background:var(--warn);border:0"></i>Sólo falta el estado de cuenta</span>'
     +'<span><i style="background:var(--sev2);border:0"></i>Falta hasta $10</span><span><i style="background:var(--sev3);border:0"></i>Falta hasta $100</span>'
@@ -1169,10 +1254,8 @@ function msgDefault(nombre,texto,datos){
   if(d.donde)    ref.push('Dónde verlo: '+d.donde);
   return 'Hola'+(nombre&&nombre!=='—'&&nombre.indexOf('(')<0?' '+nombre.split(' ')[0]:'')
     +', ¿cómo vas?\n\n'
-    +'Estamos cerrando la auditoría del '+fechaLarga(fecha)+' y antes de darla por buena nos gustaría entender esto contigo. '
-    +'No es un señalamiento ni te estamos pidiendo cuentas: la mayoría de las veces es un cobro capturado en otro método, '
-    +'un depósito que entró más tarde o un turno que quedó abierto en el sistema, y con lo que recuerdes se aclara en un minuto.\n\n'
-    +'Te dejo todos los datos para que lo ubiques rápido y no tengas que buscarlo:\n\n'
+    +'Estamos cerrando la auditoría del '+fechaLarga(fecha)+' y hay un movimiento que nos gustaría entender bien antes de darla por buena. '
+    +'Te dejo todos los datos para que lo ubiques rápido y no tengas que ponerte a buscarlo:\n\n'
     +(ref.length?'• '+ref.join('\n• ')+'\n\n':'')
     +texto+'\n\n'
     +'¿Nos cuentas qué recuerdas de ese momento? Si prefieres revisarlo con calma, dinos cuándo puedes y lo vemos juntos. '
@@ -1217,7 +1300,8 @@ function quienDe(e){
     const u=norm(x[7]); return gen(u)?(D.jefa_front||soloRecepcion(x[3])[0]||''):u;}));
   return nombres.length?nombres.join(' · '):'Sin usuario identificado';
 }
-const EST_EXC={abierta:'Abierta',explicada:'Explicada, falta corregir',verificada:'Conciliada',
+const EST_EXC={abierta:'Abierta',explicada:'Explicada, falta corregir',
+ en_espera:'Resuelta · esperando el próximo cierre',verificada:'Conciliada',
  ajustada:'Cerrada por dirección',descartada:'Descartada',vencida:'Vencida',incobrable:'Incobrable'};
 const ABIERTA=st=>st==='abierta'||st==='explicada';
 let CONC={}, DESTINO={};
@@ -1470,6 +1554,10 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     return;}
   const bv=e.target.closest('[data-validar]'); if(bv){ VALID=null; bv.disabled=true; validarCierre(); return; }
   const bb=e.target.closest('[data-vb]'); if(bb){ bb.disabled=true; vistoBueno(bb.dataset.vb); return; }
+  const td=e.target.closest('[data-tardio]');
+  if(td){ td.disabled=true; DT=null; await moverDeposito(td.dataset.tardio,td.dataset.dest,td.dataset.linea); return; }
+  const sv=e.target.closest('[data-sinventa]');
+  if(sv){ sv.disabled=true; SV=null; await darPorCompensado(); return; }
   const tc=e.target.closest('[data-conc]');
   if(tc){ const id=tc.dataset.conc;
     const yaFallo = CONC[id] && !CONC[id].ok && CONC[id].error==='no_corregido';
