@@ -451,9 +451,13 @@ function cuadreDe(rs,c){
 // en la tira y las cifras de arriba salen siempre del mismo sitio.
 function totales(){
   const c = D && D.cajones;
+  // Lo que entró sin una venta detrás no cabe en ningún cajón conocido: sabemos el
+  // cobro pero no la venta, así que es justo lo que no sabemos dónde está. Va ahí,
+  // en negativo, para que la cuenta de arriba siga siendo una resta exacta.
+  const sv=sinVenta(), aj=sv?Number(sv.dif||0):0;
   if(Array.isArray(c)){
-    const comp=Number(c[0]||0), banco=Number(c[1]||0), falta=Number(c[2]||0);
-    return {comp,banco,falta,tot:comp+banco+falta};
+    const comp=Number(c[0]||0), banco=Number(c[1]||0), falta=Number(c[2]||0)+aj;
+    return {comp,banco,falta,aj:aj,tot:comp+banco+falta};
   }
   let comp=0,banco=0,falta=0;      // respaldo por si el panel es más viejo que la función
   (D.conc||[]).forEach(x=>{const st=x[6],cb=x[4];
@@ -461,7 +465,8 @@ function totales(){
     if(cb!==null&&cb!==undefined){comp+=Math.min(Number(x[3]),Number(cb));falta+=Math.max(0,Number(x[3])-Number(cb));}
     else if(st==='pendiente_estado_de_cuenta'){banco+=Number(x[3]);}
     else {falta+=Number(x[3]);}});
-  return {comp,banco,falta,tot:comp+banco+falta};}
+  falta+=aj;
+  return {comp,banco,falta,aj:aj,tot:comp+banco+falta};}
 
 /* ---------- carga ---------- */
 async function rpc(fn,args){const {data,error}=await sb.rpc(fn,args||{});if(error)throw error;return data;}
@@ -534,7 +539,7 @@ function claseDia(r){
   if(Number(r[7]||0)>0 || Number(r[8]||0)>0) c='bad';
   else if(Number(r[6]||0)>0) c='warn';
   else c='ok';
-  if(c==='ok' && Math.abs(Number(r[11]||0))>0.005) c='warn';   // venta e ingreso no casan y nadie lo ha firmado
+  if(Math.abs(Number(r[11]||0))>0.005) c='bad';   // entró dinero sin venta detrás, o al revés
   if(Number(r[9]||0)>0) c+=' exc';       // revisiones con dinero detrás
   else if(Number(r[2])>0) c+=' aviso';    // sólo para tener en cuenta
   if(Number(r[10]||0)>0) c+=' cerrado';   // la póliza ya se firmó: día bajo candado
@@ -604,16 +609,28 @@ async function centraTiraEn(f){
   if(dias<=14) tiraOffset=0;
   await cargaMes();
 }
+// Dos clics seguidos lanzaban dos peticiones y pintaba la que llegara al final:
+// el título decía un día y las tarjetas traían las cifras del otro. Cada carga lleva
+// su ficha y sólo la última tiene derecho a pintar.
+let CARGA=0;
 async function cargaDia(f){
-  if(!f)return; cargando=true; fecha=f; pinta();
-  D=await rpc('aud_panel_dia',{p_property:prop,p_fecha:f});
+  if(!f)return;
+  const tk=++CARGA;
+  cargando=true; fecha=f; D=null; pinta();
+  let d;
+  try{ d=await rpc('aud_panel_dia',{p_property:prop,p_fecha:f}); }
+  catch(e){ if(tk!==CARGA) return; cargando=false; pinta(); throw e; }
+  if(tk!==CARGA) return;                     // llegó tarde: manda la petición más nueva
+  D=d;
   if(D&&D.error){D=null;document.getElementById('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
   enviados={};
   try{ const av=await rpc('aud_panel_avisos',{p_property:prop,p_fecha:f});
+    if(tk!==CARGA) return;
     if(av&&!av.error) Object.keys(av).forEach(k=>{
       enviados[k]='Enviado por SoyPepe a '+av[k][0]+' el '+av[k][2]+': «'+av[k][1]+'»'; });
   }catch(e){}
-  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; SV=null; DT=null; pinta();
+  if(tk!==CARGA) return;
+  polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; SV=null; DT=null; SUB={}; pinta();
 }
 
 /* ---------- pintado ---------- */
@@ -657,13 +674,6 @@ function sinVenta(){ const x=(D&&D.sin_venta)||null;
   return {decl:Number(x[0]||0), capt:Number(x[1]||0), dif:dif, saldo:Number(x[3]||0),
           casa:Array.isArray(x[4])?x[4]:[], visto:visto, ok:ok};
 }
-function tileSinVenta(){ const v=sinVenta(); if(!v) return '';
-  const sobra=v.dif<0;
-  return '<span class="op">'+(sobra?'−':'+')+'</span>'
-    +tile(sobra?'Sin venta detrás':'Sin ingreso detrás','$'+m(Math.abs(v.dif)),
-      sobra?'Entró más dinero del que se vendió':'Se vendió más de lo que entró',
-      false,null, v.ok?'ok':'warn');
-}
 function fechaCorta(f){const x=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
   return x?((+x[3])+' '+MESES[(+x[2])-1]):String(f||'');}
 function bloqueSinVenta(){ const v=sinVenta(); if(!v) return '';
@@ -673,23 +683,30 @@ function bloqueSinVenta(){ const v=sinVenta(); if(!v) return '';
   const suma=casa.reduce((a,c)=>a+Math.abs(Number(c.monto||0)),0);
   const cubre=Math.abs(suma-Math.abs(v.dif))<0.005;
   const lista=casa.map(c=>fechaCorta(c.fecha)+' ($'+m(Math.abs(Number(c.monto)))+')').join(' · ');
+  const otro = sobra?'vendido y no cobrado':'cobrado y no vendido';
   const propuesta = casa.length
-    ? (cubre?'Casa exacto contra ':'Casa en parte contra ')+lista
-      +(cubre?': suman $'+m(suma)+', lo mismo que falta aquí.':': suman $'+m(suma)+' de los $'+m(Math.abs(v.dif))+'.')
-    : 'No encuentro ningún día cercano que lo compense. Hay que revisarlo a mano.';
+    ? (cubre?'Encontré exactamente lo contrario en ':'Encontré parte de lo contrario en ')+lista
+      +' — ahí hay '+otro+'. '
+      +(cubre?'Suman $'+m(suma)+', justo lo de aquí: es el mismo dinero contado en el día equivocado, y con darlo por compensado se cierran los dos lados.'
+             :'Suman $'+m(suma)+' de los $'+m(Math.abs(v.dif))+'; el resto hay que buscarlo a mano.')
+    : 'No encuentro en los días cercanos nada '+otro+' por ese importe. Hay que revisarlo a mano.';
   return '<div class="card" style="padding:16px;margin-top:14px;display:flex;flex-direction:column;gap:10px">'
-    +'<div><b>'+(sobra?'Entró $'+m(Math.abs(v.dif))+' más de lo que se vendió.'
-                     :'Se vendió $'+m(Math.abs(v.dif))+' más de lo que entró.')+'</b> '
+    +'<div><b>'+(sobra?'De los $'+m(Math.abs(v.dif))+' en rojo sabemos el cobro, pero no la venta.'
+                     :'Hay $'+m(Math.abs(v.dif))+' vendidos que nadie cobró.')+'</b> '
     +'<span class="lede" style="display:inline">Los cierres de caja declararon $'+m(v.decl)
-    +' y las ventas capturadas suman $'+m(v.capt)+'. El efectivo se declara por corte de turno, '
-    +'y el turno de la terraza cruza la medianoche: el total cae en un día y los tickets se reparten entre dos.</span></div>'
-    +'<div class="nota"><b>Contra qué casa.</b> '+esc(propuesta)+'</div>'
+    +' y las ventas capturadas suman $'+m(v.capt)+'. '
+    +(sobra?'El dinero está en la caja; lo que falta es la venta que lo justifica, y por eso cuenta en negativo dentro de «No sabemos dónde está».'
+           :'La venta está capturada pero el dinero no aparece en ningún cierre.')
+    +' El efectivo se declara por corte de turno, y el turno de la terraza cruza la medianoche: '
+    +'el total cae en un día y los tickets se reparten entre dos.</span></div>'
+    +'<div class="nota"><b>Cómo resolverlo.</b> '+esc(propuesta)+'</div>'
     +(v.ok
       ?'<div>'+chip('ok','Dado por compensado por '+esc(v.visto.por||'—')+' el '+esc(v.visto.at||''))
         +(v.visto.nota?'<span class="sub">'+esc(v.visto.nota)+'</span>':'')+'</div>'
       :(puede
         ?'<div><button class="mini go" type="button" data-sinventa="1">Dar por compensado</button>'
-          +'<span class="sub">Queda firmado con tu nombre y la fecha. Si el importe cambia, vuelve a pedir firma.</span></div>'
+          +'<span class="sub">'+(casa.length?'Cierra este día y el contrario a la vez, y repinta los colores. ':'')
+          +'Queda firmado con tu nombre y la fecha. Si el importe cambia, vuelve a pedir firma.</span></div>'
         :'<div class="sub" style="margin:0">Falta que lo dé por compensado el jefe de administración, '
           +'gerencia operativa, contabilidad o dirección.</div>'))
     +(SV?'<div class="res '+(SV.ok?'ok':'bad')+'">'+esc(SV.mensaje||'')+'</div>':'')
@@ -697,7 +714,8 @@ function bloqueSinVenta(){ const v=sinVenta(); if(!v) return '';
 }
 async function darPorCompensado(){
   try{ SV=await rpc('aud_ingreso_sin_venta_confirmar',{p_property:prop,p_fecha:fecha,p_nota:null});
-       if(SV&&SV.ok){ await cargaDia(fecha); } else pinta();
+       if(SV&&SV.ok){ const msg=SV.mensaje; await cargaMes(); await cargaDia(fecha); SV={ok:true,mensaje:msg}; pinta(); }
+       else pinta();
   }catch(e){ SV={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
 function pintaResumen(){
@@ -714,9 +732,12 @@ function pintaResumen(){
    +'<span class="op">+</span>'
    +tile('Falta el estado de cuenta','$'+m(t.banco),'Pasó por TPV; falta que el banco lo confirme',false,'banco',t.banco>0?'warn':null)
    +'<span class="op">+</span>'
-   +tile('No sabemos dónde está','$'+m(t.falta),'Cobros sin ruta o que el liquidador reportó de menos',false,'falta',t.falta>0?'bad':null)
-   +tileSinVenta();
-  const p=v=>t.tot?(v*100/t.tot):0;
+   +tile('No sabemos dónde está','$'+m(t.falta),
+      t.aj<0?'Cobros sin ruta, y dinero que entró sin una venta detrás'
+            :'Cobros sin ruta o que el liquidador reportó de menos',
+      false,'falta',Math.abs(t.falta)>0.005?'bad':null);
+  const base=Math.max(t.comp+t.banco+Math.abs(t.falta), 0.01);
+  const p=v=>Math.abs(v)*100/base;
   document.getElementById('barra').innerHTML='<i style="width:'+p(t.comp)+'%;background:var(--ok)"></i>'
     +'<i style="width:'+p(t.banco)+'%;background:var(--warn)"></i><i style="width:'+p(t.falta)+'%;background:var(--bad)"></i>';
   document.getElementById('barleyenda').innerHTML=
@@ -842,7 +863,7 @@ function bloqueCortesias(){
 let VB={};
 async function vistoBueno(res){
   try{ VB[res]=await rpc('aud_cortesia_confirmar',{p_property:prop,p_fecha:fecha,p_reserva:res,p_nota:null});
-       if(VB[res]&&VB[res].ok){ await cargaDia(fecha); } else pinta();
+       if(VB[res]&&VB[res].ok){ await cargaMes(); await cargaDia(fecha); } else pinta();
   }catch(e){ VB[res]={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
 
@@ -901,7 +922,8 @@ let DT=null;
 async function moverDeposito(id,dest,linea){
   try{ DT=await rpc('aud_deposito_tardio_confirmar',
          {p_movimiento:id,p_fecha_destino:dest,p_linea:linea,p_nota:null});
-       if(DT&&DT.ok){ await cargaDia(fecha); } else pinta();
+       if(DT&&DT.ok){ const msg=DT.mensaje; await cargaMes(); await cargaDia(fecha); DT={ok:true,mensaje:msg}; pinta(); }
+       else pinta();
   }catch(e){ DT={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
 function filaTardio(linea){
@@ -1455,16 +1477,154 @@ function vistaFuentes(){
   const filas=(D.fuentes||[]).map(f=>'<tr><td class="stripe ok">'+esc(f[0])+'</td><td class="n">'+f[1]+'</td>'
     +'<td class="n">'+m(f[2])+'</td><td class="n mono">'+esc(f[3]||'—')+'</td><td>'+chip('ok','Consultada')+'</td></tr>').join('');
   const pend=(D.conc||[]).filter(c=>c[6]==='pendiente_estado_de_cuenta');
-  const zonas=pend.map(c=>'<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">'
-      +'<div><b>'+esc(c[1])+'</b><span class="sub">El sistema registró '+c[2]+' cobros por $'+m(c[3])+' este día. Sube el estado de cuenta y se compara al momento.</span></div>'
-      +'<div class="drop" data-p="'+esc(c[0])+'"><div class="txt">Arrastra aquí el archivo del banco. Se lee en tu navegador: toma la última columna numérica de cada renglón y suma los importes.</div>'
-      +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".csv,.txt,.tsv" hidden></label></div>'
+  const prov=c=>/netpay/i.test(c[0]+' '+(c[1]||''))?'netpay':(/banorte/i.test(c[0]+' '+(c[1]||''))?'banorte':null);
+  const zonas=pend.filter(c=>prov(c)).map(c=>'<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">'
+      +'<div><b>'+esc(c[1])+'</b><span class="sub">El sistema registró '+c[2]+' cobros por $'+m(c[3])+' este día. '
+      +'Sube el archivo de la terminal y se compara al momento.</span></div>'
+      +'<div class="drop" data-p="'+esc(c[0])+'" data-prov="'+prov(c)+'">'
+      +'<div class="txt">Arrastra aquí el archivo, o elígelo. Sirve <b>.csv, .txt, .tsv, .xlsx y .xls</b>, tal como te lo da la terminal: '
+      +'no hace falta convertirlo ni limpiarlo. Se lee en tu navegador, se buscan solas las columnas de fecha, importe, '
+      +'autorización y marca, y antes de guardar nada te enseño lo que entendí.</div>'
+      +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" hidden></label></div>'
       +'<div class="res" data-res="'+esc(c[0])+'" hidden></div></div>').join('');
   return '<section class="sec"><div class="sechead"><h2>De dónde salió cada cifra</h2>'
     +'<p class="lede">Cloudbeds, Poster, Turitop y Stripe se consultan solas cada madrugada. CashProtect llega por correo y un script lo recoge cada hora. '
     +'Las terminales no tienen forma automática de leerse: su archivo se sube aquí.</p></div>'
     +'<div class="card scroll"><table><thead><tr><th>Fuente</th><th class="n">Registros</th><th class="n">Monto</th><th class="n">Hora</th><th>Estado</th></tr></thead><tbody>'+filas+'</tbody></table></div>'
     +(zonas?'<div class="sec">'+zonas+'</div>':'<div class="empty">No falta ningún archivo de este día.</div>')+'</section>';
+}
+
+/* ---------- lector de estados de cuenta de terminal ----------
+   La terminal escupe lo que quiere: csv con punto y coma, xlsx con dos renglones
+   de encabezado, importes con $ y con coma de miles. En vez de exigir un formato,
+   se busca cada columna por el nombre que traiga y se avisa de lo que no se entendió. */
+let _xlsx=null;
+function getXLSX(){ if(!_xlsx) _xlsx=import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm'); return _xlsx; }
+const SIN=s=>String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim();
+function numMX(v){
+  if(typeof v==='number') return v;
+  let c=String(v==null?'':v).replace(/[$\s"']/g,'');
+  if(!c) return null;
+  const neg=/^\(.*\)$/.test(c); c=c.replace(/[()]/g,'');
+  if(/,\d{1,2}$/.test(c) && !/\.\d/.test(c)) c=c.replace(/\./g,'').replace(',','.');
+  else c=c.replace(/,/g,'');
+  if(!/^-?\d+(\.\d+)?$/.test(c)) return null;
+  const n=parseFloat(c); return neg?-n:n;
+}
+function fechaDe(v){
+  if(v instanceof Date && !isNaN(v)) return iso(v);
+  if(typeof v==='number' && v>20000 && v<80000){            // serial de Excel
+    const d=new Date(Date.UTC(1899,11,30)+v*864e5); return iso(new Date(d.getTime()+d.getTimezoneOffset()*6e4));
+  }
+  const t=String(v==null?'':v).trim(); if(!t) return null;
+  let x=/^(\d{4})-(\d{2})-(\d{2})/.exec(t); if(x) return x[1]+'-'+x[2]+'-'+x[3];
+  x=/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/.exec(t);
+  if(x){ let a=+x[1],b=+x[2],y=x[3].length===2?2000+ +x[3]:+x[3];
+         if(a>12){const t2=a;a=b;b=t2;}                      // dd/mm o mm/dd
+         const p=n=>(n<10?'0':'')+n; return y+'-'+p(a>12?b:a)+'-'+p(a>12?a:b); }
+  return null;
+}
+function partirLinea(li){
+  const seps=[';','\t','|',','];
+  let mejor=[li];
+  seps.forEach(sp=>{const t=li.split(sp); if(t.length>mejor.length) mejor=t;});
+  return mejor.map(c=>c.replace(/^"|"$/g,'').trim());
+}
+function aMatriz(texto){
+  return texto.split(/\r?\n/).filter(l=>l.trim()).map(partirLinea);
+}
+// Encuentra el renglón de encabezado y qué columna es cada cosa.
+const COLS=[
+  ['fecha',   /(fecha|date|dia)/],
+  ['hora',    /(hora|time)/],
+  ['monto',   /(importe|monto|amount|total|venta|cargo)/],
+  ['propina', /(propina|tip)/],
+  ['autorizacion',/(autoriz|auth|aprobac)/],
+  ['marca',   /(marca|tarjeta|card|brand|franquic)/],
+  ['terminal',/(terminal|tpv|caja|serie|dispositiv)/],
+  ['estatus', /(estatus|estado|status|resultado)/],
+  ['order_id',/(orden|order|referencia|folio|ticket|operacion)/],
+  ['comercio',/(comercio|sucursal|merchant|afiliad|negocio)/],
+  ['store_id',/(store|tienda|id.?comercio)/]
+];
+function mapaColumnas(matriz){
+  let mejor=null;
+  for(let i=0;i<Math.min(matriz.length,25);i++){
+    const fila=matriz[i].map(SIN), mapa={};
+    COLS.forEach(([k,re])=>{ const j=fila.findIndex(h=>h&&re.test(h)); if(j>=0 && mapa[k]===undefined) mapa[k]=j; });
+    const puntos=(mapa.fecha!==undefined?2:0)+(mapa.monto!==undefined?2:0)+Object.keys(mapa).length;
+    if(mapa.fecha!==undefined && mapa.monto!==undefined && (!mejor||puntos>mejor.puntos))
+      mejor={fila:i, mapa:mapa, puntos:puntos};
+  }
+  return mejor;
+}
+function leeMovimientos(matriz){
+  const h=mapaColumnas(matriz);
+  if(!h) return {error:'No encuentro en el archivo una columna de fecha y otra de importe. '
+    +'Si la terminal las llama de otro modo, dime cómo y las añado.'};
+  const movs=[], malos=[];
+  for(let i=h.fila+1;i<matriz.length;i++){
+    const r=matriz[i]; if(!r||!r.length) continue;
+    const f=fechaDe(r[h.mapa.fecha]), mo=numMX(r[h.mapa.monto]);
+    if(!f||mo===null||Math.abs(mo)<0.005){ if(r.join('').trim()) malos.push(i+1); continue; }
+    const g=k=>h.mapa[k]!==undefined?String(r[h.mapa[k]]==null?'':r[h.mapa[k]]).trim():'';
+    movs.push({fecha:f, hora:g('hora').slice(0,8), monto:mo,
+      propina:h.mapa.propina!==undefined?(numMX(r[h.mapa.propina])||0):0,
+      autorizacion:g('autorizacion'), marca:g('marca'), terminal:g('terminal'),
+      estatus:g('estatus')||'Aprobada', order_id:g('order_id'),
+      comercio:g('comercio'), store_id:g('store_id')});
+  }
+  return {movs:movs, malos:malos, columnas:Object.keys(h.mapa)};
+}
+function archivoAMatriz(f){
+  const nom=(f.name||'').toLowerCase();
+  if(/\.(xlsx|xls)$/.test(nom)){
+    return f.arrayBuffer().then(buf=>getXLSX().then(XLSX=>{
+      const wb=XLSX.read(new Uint8Array(buf),{type:'array',cellDates:true});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      return XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false,raw:true});
+    }));
+  }
+  if(/\.pdf$/.test(nom))
+    return Promise.reject(new Error('Los PDF todavía no los sé leer. Pide a la terminal el mismo corte en Excel o CSV.'));
+  return f.text().then(aMatriz);
+}
+let SUB={};
+async function subeArchivo(zona,f){
+  const punto=zona.dataset.p, proveedor=zona.dataset.prov;
+  const el=document.querySelector('[data-res="'+punto.replace(/"/g,'')+'"]');
+  const pinta1=(cls,html)=>{ el.hidden=false; el.className='res '+cls; el.innerHTML=html; };
+  pinta1('','Leyendo '+esc(f.name)+'…');
+  let matriz;
+  try{ matriz=await archivoAMatriz(f); }
+  catch(err){ pinta1('bad',esc(String(err.message||err))); return; }
+  const r=leeMovimientos(matriz||[]);
+  if(r.error){ pinta1('bad',esc(r.error)); return; }
+  if(!r.movs.length){ pinta1('bad','Encontré las columnas pero ningún renglón con fecha e importe.'); return; }
+  const total=r.movs.reduce((a,x)=>a+Number(x.monto),0);
+  const c=(D.conc||[]).find(x=>x[0]===punto), sis=c?Number(c[3]):0;
+  const dias=[...new Set(r.movs.map(x=>x.fecha))].sort();
+  const delDia=r.movs.filter(x=>x.fecha===fecha).reduce((a,x)=>a+Number(x.monto),0);
+  const ok=Math.abs(delDia-sis)<1;
+  SUB[punto]={movs:r.movs, proveedor:proveedor, archivo:f.name};
+  pinta1(ok?'ok':'bad',
+    'Leí <b>'+r.movs.length+'</b> movimiento(s) por <b>$'+m(total)+'</b>, del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+'. '
+    +'De este día salen <b>$'+m(delDia)+'</b> y el sistema dice <b>$'+m(sis)+'</b>: '
+    +(ok?'cuadra.':'hay una diferencia de $'+m(delDia-sis)+'.')
+    +(r.malos.length?' <span class="sub" style="margin:0">Me salté '+r.malos.length+' renglón(es) sin fecha o sin importe.</span>':'')
+    +'<div style="margin-top:8px"><button class="mini go" type="button" data-guardar="'+esc(punto)+'">Guardar y volver a cuadrar</button></div>');
+}
+async function guardaArchivo(punto){
+  const s=SUB[punto]; if(!s) return;
+  const el=document.querySelector('[data-res="'+punto.replace(/"/g,'')+'"]');
+  el.className='res'; el.innerHTML='Guardando…';
+  try{
+    const r=await rpc('aud_cargar_tpv',{p_meta:{property_id:prop, proveedor:s.proveedor,
+        archivo:s.archivo, nota:null}, p_movs:s.movs});
+    el.className='res '+((r&&r.ok)?'ok':'bad');
+    el.innerHTML=esc((r&&r.mensaje)||'No se pudo guardar.');
+    if(r&&r.ok){ delete SUB[punto]; await cargaMes(); await cargaDia(fecha); }
+  }catch(e){ el.className='res bad'; el.innerHTML=esc(String(e.message||e)); }
 }
 function sumaArchivo(txt){let total=0,n=0;
   txt.split(/\r?\n/).forEach(li=>{if(!li.trim())return;
@@ -1554,6 +1714,8 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     return;}
   const bv=e.target.closest('[data-validar]'); if(bv){ VALID=null; bv.disabled=true; validarCierre(); return; }
   const bb=e.target.closest('[data-vb]'); if(bb){ bb.disabled=true; vistoBueno(bb.dataset.vb); return; }
+  const gu=e.target.closest('[data-guardar]');
+  if(gu){ gu.disabled=true; await guardaArchivo(gu.dataset.guardar); return; }
   const td=e.target.closest('[data-tardio]');
   if(td){ td.disabled=true; DT=null; await moverDeposito(td.dataset.tardio,td.dataset.dest,td.dataset.linea); return; }
   const sv=e.target.closest('[data-sinventa]');
@@ -1591,27 +1753,13 @@ document.getElementById('cuerpo').addEventListener('input',e=>{const el=e.target
 document.getElementById('cuerpo').addEventListener('change',e=>{
   if(e.target.type!=='file')return;
   const zona=e.target.closest('.drop'), f=e.target.files[0]; if(!f)return;
-  const fr=new FileReader();
-  fr.onload=()=>{const r=sumaArchivo(String(fr.result));
-    const c=(D.conc||[]).find(x=>x[0]===zona.dataset.p); const sis=c?Number(c[3]):0;
-    const el=document.querySelector('[data-res="'+zona.dataset.p+'"]');
-    const ok=Math.abs(r.total-sis)<1;
-    el.hidden=false; el.className='res '+(ok?'ok':'bad');
-    el.innerHTML='Del archivo salieron <b>$'+m(r.total)+'</b> en '+r.filas+' renglones y el sistema dice <b>$'+m(sis)+'</b>. '
-      +(ok?'Cuadra. Falta guardarlo: la carga definitiva se conecta en el siguiente paso.':'Diferencia de $'+m(r.total-sis)+'.');};
-  fr.readAsText(f);
+  subeArchivo(zona,f);
 });
 document.addEventListener('dragover',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(!z)return;e.preventDefault();z.classList.add('over');});
 document.addEventListener('dragleave',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(z)z.classList.remove('over');});
-document.addEventListener('drop',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(!z)return;e.preventDefault();z.classList.remove('over');
-  const f=e.dataTransfer.files[0];if(!f)return;const fr=new FileReader();
-  fr.onload=()=>{const r=sumaArchivo(String(fr.result));
-    const c=(D.conc||[]).find(x=>x[0]===z.dataset.p);const sis=c?Number(c[3]):0;
-    const el=document.querySelector('[data-res="'+z.dataset.p+'"]');const ok=Math.abs(r.total-sis)<1;
-    el.hidden=false;el.className='res '+(ok?'ok':'bad');
-    el.innerHTML='Del archivo salieron <b>$'+m(r.total)+'</b> en '+r.filas+' renglones y el sistema dice <b>$'+m(sis)+'</b>. '
-      +(ok?'Cuadra.':'Diferencia de $'+m(r.total-sis)+'.');};
-  fr.readAsText(f);});
+document.addEventListener('drop',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(!z)return;
+  e.preventDefault();z.classList.remove('over');
+  const f=e.dataTransfer.files[0];if(!f)return; subeArchivo(z,f);});
 
 let recalculando=false;
 document.getElementById('recalc').addEventListener('click',async function(){
