@@ -1485,10 +1485,10 @@ function vistaFuentes(){
       +'<div><b>'+esc(c[1])+'</b><span class="sub">El sistema registró '+c[2]+' cobros por $'+m(c[3])+' este día. '
       +'Sube el archivo de la terminal y se compara al momento.</span></div>'
       +'<div class="drop" data-p="'+esc(c[0])+'" data-prov="'+prov(c)+'">'
-      +'<div class="txt">Arrastra aquí el archivo, o elígelo. Sirve <b>.csv, .txt, .tsv, .xlsx y .xls</b>, tal como te lo da la terminal: '
+      +'<div class="txt">Arrastra aquí el archivo, o elígelo. Sirve <b>.csv, .txt, .tsv, .xlsx, .xls y .pdf</b>, tal como te lo da la terminal: '
       +'no hace falta convertirlo ni limpiarlo. Se lee en tu navegador, se buscan solas las columnas de fecha, importe, '
       +'autorización y marca, y antes de guardar nada te enseño lo que entendí.</div>'
-      +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" hidden></label></div>'
+      +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.pdf" hidden></label></div>'
       +'<div class="res" data-res="'+esc(c[0])+'" hidden></div></div>').join('');
   return '<section class="sec"><div class="sechead"><h2>De dónde salió cada cifra</h2>'
     +'<p class="lede">Cloudbeds, Poster, Turitop y Stripe se consultan solas cada madrugada. CashProtect llega por correo y un script lo recoge cada hora. '
@@ -1508,10 +1508,13 @@ function numMX(v){
   if(typeof v==='number') return v;
   let c=String(v==null?'':v).replace(/[$\s"']/g,'');
   if(!c) return null;
-  const neg=/^\(.*\)$/.test(c); c=c.replace(/[()]/g,'');
-  if(/,\d{1,2}$/.test(c) && !/\.\d/.test(c)) c=c.replace(/\./g,'').replace(',','.');
+  const neg=/^\(.*\)$/.test(c)||/^-/.test(c);
+  c=c.replace(/[()]/g,'').replace(/^-/,'');
+  // Manda el último separador: 1.234,56 es europeo y 1,234.56 es de aquí.
+  const coma=c.lastIndexOf(','), punto=c.lastIndexOf('.');
+  if(coma>punto && /,\d{1,2}$/.test(c)) c=c.replace(/\./g,'').replace(',','.');
   else c=c.replace(/,/g,'');
-  if(!/^-?\d+(\.\d+)?$/.test(c)) return null;
+  if(!/^\d+(\.\d+)?$/.test(c)) return null;
   const n=parseFloat(c); return neg?-n:n;
 }
 function fechaDe(v){
@@ -1552,7 +1555,7 @@ const COLS=[
 ];
 function mapaColumnas(matriz){
   let mejor=null;
-  for(let i=0;i<Math.min(matriz.length,25);i++){
+  for(let i=0;i<Math.min(matriz.length,60);i++){
     const fila=matriz[i].map(SIN), mapa={};
     COLS.forEach(([k,re])=>{ const j=fila.findIndex(h=>h&&re.test(h)); if(j>=0 && mapa[k]===undefined) mapa[k]=j; });
     const puntos=(mapa.fecha!==undefined?2:0)+(mapa.monto!==undefined?2:0)+Object.keys(mapa).length;
@@ -1563,8 +1566,13 @@ function mapaColumnas(matriz){
 }
 function leeMovimientos(matriz){
   const h=mapaColumnas(matriz);
-  if(!h) return {error:'No encuentro en el archivo una columna de fecha y otra de importe. '
-    +'Si la terminal las llama de otro modo, dime cómo y las añado.'};
+  if(!h){
+    const alt=leePorPatron(matriz);
+    if(alt.movs.length) return alt;
+    return {error:'No encuentro en el archivo una fecha y un importe que pueda leer. '
+      +'Si es un PDF escaneado no hay texto que sacar; si la terminal llama a las columnas '
+      +'de otro modo, dime cómo y las añado.'};
+  }
   const movs=[], malos=[];
   for(let i=h.fila+1;i<matriz.length;i++){
     const r=matriz[i]; if(!r||!r.length) continue;
@@ -1577,7 +1585,70 @@ function leeMovimientos(matriz){
       estatus:g('estatus')||'Aprobada', order_id:g('order_id'),
       comercio:g('comercio'), store_id:g('store_id')});
   }
+  // Si con las columnas salen menos de la tercera parte de los renglones, el archivo
+  // no respeta la rejilla: se lee por patrón, que aguanta mejor los PDF.
+  if(movs.length && malos.length > movs.length*2){
+    const alt=leePorPatron(matriz);
+    if(alt.movs.length > movs.length) return alt;
+  }
   return {movs:movs, malos:malos, columnas:Object.keys(h.mapa)};
+}
+// Un PDF no tiene renglones: tiene trozos de texto con coordenadas. Se agrupan por
+// altura para rehacer las filas y por posición para rehacer las columnas.
+let _pdfjs=null;
+function getPDF(){
+  if(!_pdfjs) _pdfjs=import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/+esm')
+    .then(mod=>{ try{ mod.GlobalWorkerOptions.workerSrc=
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs'; }catch(e){}
+      return mod; });
+  return _pdfjs;
+}
+async function pdfAMatriz(f){
+  const pdfjs=await getPDF();
+  const buf=await f.arrayBuffer();
+  const doc=await pdfjs.getDocument({data:new Uint8Array(buf), isEvalSupported:false}).promise;
+  const filas=[];
+  for(let n=1;n<=doc.numPages;n++){
+    const pg=await doc.getPage(n), tc=await pg.getTextContent();
+    const renglones={};
+    tc.items.forEach(it=>{
+      const t=String(it.str||'').trim(); if(!t) return;
+      const y=it.transform[5], x=it.transform[4];
+      const k=Math.round(y/3);                       // 3 puntos de tolerancia por renglón
+      (renglones[k]=renglones[k]||[]).push({x:x,t:t});
+    });
+    Object.keys(renglones).map(Number).sort((a,b)=>b-a).forEach(k=>{
+      filas.push(renglones[k].sort((a,b)=>a.x-b.x).map(o=>o.t));
+    });
+  }
+  await doc.destroy().catch(()=>{});
+  if(!filas.length) throw new Error('Ese PDF no trae texto, parece escaneado. '
+    +'Pide a la terminal el mismo corte en Excel o CSV, o pásalo por un OCR antes.');
+  return filas;
+}
+// Plan B para los PDF que no respetan columnas: por renglón, la primera cosa que
+// parece fecha y la última que parece dinero.
+function leePorPatron(matriz){
+  const movs=[], malos=[];
+  const esDinero=t=>/^[$(]?-?[\d.,]+\)?$/.test(t) && /[.,]\d{2}$/.test(t);
+  matriz.forEach((r,i)=>{
+    if(!r||!r.length) return;
+    // Un renglón de PDF puede venir entero en una sola celda: se parte en piezas.
+    const tk=[]; r.forEach(c=>String(c==null?'':c).trim().split(/\s+/).forEach(t=>{ if(t) tk.push(t); }));
+    if(!tk.length) return;
+    let f=null, mo=null, hora='', auth='', marca='';
+    for(const t of tk){ if(f===null){ const x=fechaDe(t); if(x) f=x; } }
+    for(const t of tk){ if(esDinero(t)){ const v=numMX(t); if(v!==null&&Math.abs(v)>=0.01) mo=v; } }
+    if(mo===null) for(const t of tk){ const v=numMX(t); if(v!==null&&Math.abs(v)>=0.01) mo=v; }
+    for(const t of tk){ const h=/^([01]?\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/.exec(t); if(h&&!hora) hora=h[0]; }
+    for(const t of tk){ if(!auth && /^[A-Z0-9]{5,10}$/.test(t) && !/^\d+$/.test(t)
+        && !/^(VISA|MASTERCARD|AMEX|CARNET|DEBITO|CREDITO|TOTAL|SUMA|FECHA|IMPORTE)$/.test(t)) auth=t; }
+    for(const t of tk){ if(!marca && /^(VISA|MASTERCARD|AMEX|CARNET|MC)$/i.test(t)) marca=t.toUpperCase(); }
+    if(f&&mo!==null) movs.push({fecha:f,hora:hora,monto:mo,propina:0,autorizacion:auth,
+      marca:marca,terminal:'',estatus:'Aprobada',order_id:'',comercio:'',store_id:''});
+    else if(tk.join('').length>6) malos.push(i+1);
+  });
+  return {movs:movs, malos:malos, columnas:['fecha','monto'], patron:true};
 }
 function archivoAMatriz(f){
   const nom=(f.name||'').toLowerCase();
@@ -1588,8 +1659,7 @@ function archivoAMatriz(f){
       return XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false,raw:true});
     }));
   }
-  if(/\.pdf$/.test(nom))
-    return Promise.reject(new Error('Los PDF todavía no los sé leer. Pide a la terminal el mismo corte en Excel o CSV.'));
+  if(/\.pdf$/.test(nom)) return pdfAMatriz(f);
   return f.text().then(aMatriz);
 }
 let SUB={};
