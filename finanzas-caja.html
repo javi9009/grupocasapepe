@@ -435,13 +435,15 @@ async function arranque(){
   $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
     $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
     if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
-    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();}
+    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();await cargaArqueos();}
     pinta();});
   // El árbol de cajas se abre y se cierra en el sitio, y los movimientos de cada una
   // se piden sólo cuando alguien la abre.
   $('cuerpo').addEventListener('click',async e=>{
     const nf=e.target.closest('[data-cajaform]');
     if(nf){ formCaja=nf.dataset.cajaform||null; pinta(); return; }
+    const ag=e.target.closest('[data-arqgo]');
+    if(ag){ ag.disabled=true; await guardaArqueo(); ag.disabled=false; return; }
     const tg=e.target.closest('[data-turgo]');
     if(tg){ tg.disabled=true; await guardaTurnos(); tg.disabled=false; return; }
     const go=e.target.closest('[data-cajago]');
@@ -485,12 +487,12 @@ async function carga(){
   cargando=true;justificando=null;
   // Las cajas son de una propiedad y de una fecha: al cambiar cualquiera de las dos
   // hay que volver a pedirlas, o se queda pintado lo de la propiedad anterior.
-  CAJAS=null; TUR=null; LIBRO={}; cajaAbierta=null; formCaja=null;
+  CAJAS=null; TUR=null; ARQ=null; LIBRO={}; cajaAbierta=null; formCaja=null;
   pinta();
   D=await rpc('aud_caja_dia',{p_property:prop,p_fecha:fecha});
   if(D&&D.error){D=null;$('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
   await cargaMes();
-  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); }
+  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); await cargaArqueos(); }
   cargando=false;pinta();
 }
 function iso(d){const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
@@ -656,42 +658,48 @@ function pintaTira(){
 function vistaResumen(){
   if(!RES) return '<div class="empty">Cargando…</div>';
   if(!RES.length) return '<div class="empty">No tienes ninguna propiedad asignada.</div>';
-  let total=0, conSaldo=0;
-  RES.forEach(r=>{const v=r[2]==='cashprotect'?r[3]:r[5]; if(v!=null){total+=Number(v);conSaldo++;}});
-  const tarjetas=RES.map(r=>{
-    const manual=r[2]!=='cashprotect';
-    const saldo=manual?r[5]:r[3], cuando=manual?r[6]:r[4];
-    const inc=Number(r[7])||0, sin=Number(r[8])||0, fol=Number(r[9])||0;
-    const cls=(inc||sin)?'sev4':(saldo==null?'none':'ok');
-    return '<div class="tile '+cls+'"><span class="eyebrow">'+esc(r[1])+' · '+(manual?'arqueo manual':'CashProtect')+'</span>'
-     +'<b>'+(saldo==null?'—':'$'+m(saldo))+'</b>'
-     +'<span class="sub">'+(cuando?('Último dato: '+fmtFecha(cuando)):'Todavía sin ningún conteo')+'</span></div>';
-  }).join('');
+  // Lo que importa es todo el efectivo del grupo, no el último dato de una sola caja.
+  const total=RES.reduce((a,r)=>a+Number(r[12]||0),0);
+  const nCajas=RES.reduce((a,r)=>a+Number(r[13]||0),0);
+
+  const tarjetas='<div class="tile ok"><span class="eyebrow">Todo el grupo</span>'
+     +'<b>$'+m(total)+'</b><span class="sub">En '+nCajas+' cajas de '+RES.length+' propiedad(es)</span></div>'
+    +RES.map(r=>{
+      const inc=Number(r[7])||0, sin=Number(r[8])||0, dias=Number(r[14]);
+      const cls=(inc||sin)?'sev4':'ok';
+      return '<div class="tile '+cls+'"><span class="eyebrow">'+esc(r[1])+'</span>'
+       +'<b>$'+m(r[12])+'</b>'
+       +'<span class="sub">'+Number(r[13]||0)+' cajas · '
+       +(r[2]==='cashprotect'?'con CashProtect':'todo a mano')+'</span></div>';
+    }).join('');
+
   const filas=RES.map(r=>{
-    const manual=r[2]!=='cashprotect';
-    const saldo=manual?r[5]:r[3], cuando=manual?r[6]:r[4];
-    const inc=Number(r[7])||0, sin=Number(r[8])||0, fol=Number(r[9])||0;
-    return '<tr><td class="stripe '+((inc||sin)?'sev4':(saldo==null?'none':'ok'))+'">'+esc(r[1])
-      +'<span class="sub">'+(manual?'Se cuenta a mano al cierre':'Reporte diario de CashProtect')+'</span></td>'
-      +'<td class="n">'+(saldo==null?'—':m(saldo))+'<span class="sub">'+(cuando?esc(cuando):'sin dato')+'</span></td>'
-      +'<td class="n">'+m(r[10])+'</td><td class="n">'+m(r[11])+'</td>'
+    const inc=Number(r[7])||0, sin=Number(r[8])||0, fol=Number(r[9])||0, dias=Number(r[14]);
+    const arq = dias>=9999 ? chip('bad','Nunca se han contado')
+              : dias<=1    ? chip('ok','Contadas al día')
+              : dias<=7    ? chip('warn','Hace '+dias+' días')
+                           : chip('bad','Hace '+dias+' días');
+    return '<tr><td class="stripe '+((inc||sin)?'sev4':'ok')+'">'+esc(r[1])
+      +'<span class="sub">'+(r[2]==='cashprotect'?'CashProtect más las cajas de mano':'Todo el efectivo se lleva a mano')+'</span></td>'
+      +'<td class="n"><b>'+m(r[12])+'</b><span class="sub">'+Number(r[13]||0)+' cajas</span></td>'
+      +'<td class="n">'+(r[3]==null?'—':m(r[3]))+'<span class="sub">'+(r[4]?esc(r[4]):'sin CashProtect')+'</span></td>'
+      +'<td>'+arq+'</td>'
       +'<td class="n'+(sin>=1?' sev4':'')+'">'+(sin>=1?'$'+m(sin):'—')+'</td>'
       +'<td>'+(inc?chip('sev4',inc+' sin resolver'):chip('ok','al día'))
       +(fol?' '+chip('warn',fol+' folio(s) abierto(s)'):'')+'</td>'
       +'<td><button class="mini" type="button" data-ir="'+esc(r[0])+'">Abrir</button></td></tr>';
   }).join('');
+
   return '<section class="sec"><div class="sechead"><h2>Efectivo parado ahora mismo</h2>'
-   +'<p class="lede">El último saldo conocido de cada caja. En CDMX sale del reporte de CashProtect; '
-   +'donde se cuenta a mano, del último arqueo capturado — si nadie lo captura, aquí no hay cifra.</p></div>'
-   +'<div class="tiles">'+tarjetas
-   +'<div class="tile info"><span class="eyebrow">Total del grupo</span><b>$'+m(total)+'</b>'
-   +'<span class="sub">Suma de '+conSaldo+' de '+RES.length+' caja(s) con dato</span></div></div>'
-   +'<div class="card scroll" style="margin-top:16px"><table><thead><tr><th>Propiedad</th>'
-   +'<th class="n">Saldo</th><th class="n">Entró 7d</th><th class="n">Salió 7d</th>'
-   +'<th class="n">Sin justificar</th><th>Estado</th><th></th></tr></thead><tbody>'+filas+'</tbody></table></div>'
-   +'<p class="lede" style="font-size:.85rem;margin-top:10px">El Ateneo aparecerá aquí en cuanto tenga cajas dadas de alta; '
-   +'funcionará como Puebla, con arqueo capturado a mano.</p></section>';
+   +'<p class="lede">Todo el dinero en billetes del grupo, sumando el árbol entero de cajas de cada '
+   +'propiedad. CashProtect aporta lo que dice su propio corte; las demás cajas, su saldo.</p></div>'
+   +'<div class="tiles">'+tarjetas+'</div>'
+   +'<div class="card scroll" style="margin-top:18px"><table><thead><tr><th>Propiedad</th>'
+   +'<th class="n">Efectivo total</th><th class="n">De eso, CashProtect</th><th>Último arqueo</th>'
+   +'<th class="n">Salidas sin justificar</th><th>Incidencias</th><th></th></tr></thead><tbody>'
+   +filas+'</tbody></table></div></section>';
 }
+
 function tile(et,val,sub,cls){return '<div class="tile'+(cls?' '+cls:'')+'"><span class="eyebrow">'+esc(et)+'</span>'
   +'<b>'+val+'</b><span class="sub">'+esc(sub||'')+'</span></div>';}
 function tiles(){
@@ -892,6 +900,64 @@ async function guardaTurnos(){
   }catch(e){ el.className='res bad'; el.textContent=String(e.message||e); }
 }
 
+/* ---------- Histórico de arqueos ----------
+   Un arqueo es contar la caja: los billetes y los vales que hay dentro. Los vales no
+   son efectivo, pero sí son fondo, así que aquí sí cuentan aunque no entren en el
+   saldo del día a día. Lo que de verdad hay que vigilar no es el resultado de cada
+   conteo sino cuánto hace que nadie cuenta una caja. */
+let ARQ=null;
+async function cargaArqueos(){
+  try{ const r=await rpc('aud_arqueos',{p_property:prop,p_limite:60});
+       ARQ=(r&&!r.error)?r:{arqueos:[],cajas:[]}; }
+  catch(e){ ARQ={arqueos:[],cajas:[]}; }
+}
+function bloqueArqueos(){
+  if(!ARQ) return '';
+  const A=ARQ.arqueos||[], C=ARQ.cajas||[];
+  const cuando=c=>{
+    if(!c[4]) return '<span class="chip bad">Nunca se ha contado</span>';
+    const d=Number(c[6]||0);
+    return (d<=1?'<span class="chip ok">':(d<=7?'<span class="chip warn">':'<span class="chip bad">'))
+      +(d===0?'Hoy':(d===1?'Ayer':'Hace '+d+' días'))+'</span>';
+  };
+  const pendientes='<div class="card scroll"><table><thead><tr><th>Caja</th><th class="n">Fondo</th>'
+    +'<th>Último arqueo</th><th>Lo contó</th></tr></thead><tbody>'
+    +C.map(c=>'<tr><td>'+(c[2]?esc(c[2])+' ':'')+esc(c[1])+'</td>'
+      +'<td class="n">'+(c[3]?m(c[3]):'—')+'</td>'
+      +'<td>'+cuando(c)+(c[4]?'<span class="sub">'+esc(fmtCorto(c[4]))+'</span>':'')+'</td>'
+      +'<td>'+esc(c[5]||'—')+'</td></tr>').join('')
+    +'</tbody></table></div>';
+
+  const hist=!A.length?'<div class="empty">Todavía no se ha arqueado ninguna caja.</div>'
+   :'<div class="card scroll"><table><thead><tr><th>Cuándo</th><th>Caja</th><th class="n">Fondo</th>'
+    +'<th class="n">Billetes</th><th class="n">Vales</th><th class="n">Suma</th>'
+    +'<th>Contra el sistema</th><th>Lo contó</th></tr></thead><tbody>'
+    +A.map(a=>{
+      const suma=Number(a[8]||0), fondo=Number(a[5]||0), esp=a[9]==null?null:Number(a[9]);
+      const dif=esp==null?null:Number(a[6])-esp;
+      const cuadraFondo=fondo>0 && Math.abs(suma-fondo)<0.01;
+      return '<tr><td class="mono">'+esc(fmtCorto(a[1]))+'</td>'
+        +'<td>'+(a[3]?esc(a[3])+' ':'')+esc(a[2])
+        +(a[12]?'<span class="sub">'+esc(a[12])+'</span>':'')+'</td>'
+        +'<td class="n">'+(fondo?m(fondo):'—')+'</td>'
+        +'<td class="n">'+m(a[6])+'</td>'
+        +'<td class="n">'+(Number(a[7]||0)>0.005?m(a[7]):'—')+'</td>'
+        +'<td class="n">'+(cuadraFondo?'<b>'+m(suma)+'</b> '+chip('ok','= fondo'):m(suma))+'</td>'
+        +'<td>'+(dif==null?'<span class="sub" style="margin:0">Sin saldo con qué comparar</span>'
+                 :(Math.abs(dif)<0.01?chip('ok','Cuadra')
+                   :'<b style="color:var(--bad)">'+m(dif)+'</b>'))+'</td>'
+        +'<td>'+esc(a[10]||'—')+'<span class="sub">'+esc(a[11]||'')+'</span></td></tr>';
+    }).join('')+'</tbody></table></div>';
+
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Cuándo se contó cada caja</h2>'
+    +'<p class="lede">Lo importante no es tanto el resultado de un conteo como que las cajas se cuenten. '
+    +'Aquí se ve cuánto hace que nadie abre cada una.</p></div>'+pendientes
+    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Arqueos hechos</h2>'
+    +'<p class="lede">Los billetes y los vales que había dentro. Los vales no son efectivo, pero sí son '
+    +'fondo: sumados a los billetes tienen que dar lo asignado.</p></div>'+hist+'</section></section>';
+}
+
 async function cargaCajas(){
   try{ const r=await rpc('aud_cajas',{p_property:prop,p_fecha:fechaISO(fecha)});
        CAJAS=(r&&!r.error)?r:{cajas:[],total:0}; }
@@ -912,15 +978,6 @@ function filaLibro(mv){
     +'<td class="n"'+(neg?' style="color:var(--bad)"':'')+'>'+m(mv[3])+'</td>'
     +'<td>'+esc(mv[4]||'—')+'</td></tr>';
 }
-// Un fondo tiene que dar siempre lo asignado, sumando lo que hay en billetes y lo que
-// anda fuera en vales. Si no llega, ahí falta dinero de verdad y hay que decirlo.
-function faltaFondo(c){
-  const asig=Number(c[8]||0); if(!asig) return '';
-  const falta=asig-(Number(c[11]||0)+Number(c[15]||0));
-  if(Math.abs(falta)<0.01) return '';
-  return '<span class="sub" style="color:var(--bad)">'
-    +(falta>0?'faltan ':'sobran ')+m(Math.abs(falta))+'</span>';
-}
 function bloqueCajas(){
   if(!CAJAS) return '<div class="empty">Cargando las cajas…</div>';
   const L=CAJAS.cajas||[];
@@ -939,11 +996,10 @@ function bloqueCajas(){
         +(c[13]?' · la lleva '+esc(c[13]):'')
         +(propio?' · el saldo lo dice la máquina':(c[10]?' · desde el '+esc(fmtCorto(c[10])):''))+'</span></td>'
       +'<td class="n">'+(c[8]?m(c[8]):'—')+'</td>'
-      +'<td class="n"><b>'+m(c[11])+'</b>'+faltaFondo(c)+'</td>'
-      +'<td class="n">'+(Number(c[15]||0)>0.005?m(c[15])+'<span class="sub">'+(c[16]||0)+' vale(s)</span>':'—')+'</td>'
+      +'<td class="n"><b>'+m(c[11])+'</b></td>'
       +'<td class="n">'+(propio?'—':(c[12]||0))+'</td></tr>';
     if(abierta){
-      h+='<tr class="cajadet"><td colspan="5" style="padding:0 14px 14px '+(28+nivel*26)+'px">'
+      h+='<tr class="cajadet"><td colspan="4" style="padding:0 14px 14px '+(28+nivel*26)+'px">'
         +(c[14]?'<p class="lede" style="margin:6px 0 10px">'+esc(c[14])+'</p>':'')
         +(!lib ? '<div class="empty">Cargando los movimientos…</div>'
           : (!lib.movs||!lib.movs.length)
@@ -962,14 +1018,11 @@ function bloqueCajas(){
     +'<button class="mini go" type="button" data-cajaform="mover">Mover dinero entre cajas</button>'
     +'<button class="mini" type="button" data-cajaform="alta">Añadir una caja</button></div>';
 
-  const tv=Number(CAJAS.total_vales||0);
   return '<div class="card scroll"><table><thead><tr><th>Caja</th><th class="n">Asignado</th>'
-    +'<th class="n">En billetes</th><th class="n">En vales</th><th class="n">Movs</th></tr></thead><tbody>'+filas
+    +'<th class="n">Hay ahora</th><th class="n">Movs</th></tr></thead><tbody>'+filas
     +'<tr><td style="padding-left:14px"><b>Total en efectivo</b>'
-    +'<span class="sub">Todo lo que hay parado en esta propiedad'
-    +(tv>0.005?', sin contar los $'+m(tv)+' que andan en vales':'')+'</span></td>'
-    +'<td class="n">—</td><td class="n"><b>'+m(CAJAS.total)+'</b></td>'
-    +'<td class="n">'+(tv>0.005?m(tv):'—')+'</td><td class="n">—</td></tr>'
+    +'<span class="sub">Todo lo que hay parado en esta propiedad</span></td>'
+    +'<td class="n">—</td><td class="n"><b>'+m(CAJAS.total)+'</b></td><td class="n">—</td></tr>'
     +'</tbody></table></div>'+acciones+formularioCaja();
 }
 function formularioCaja(){
@@ -1025,28 +1078,6 @@ async function guardaCaja(que){
 }
 
 function vistaArqueo(){
-  const cajas=D.cajas||[], arq=D.arqueos||[];
-  const opciones=cajas.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[1])+'</option>').join('');
-  const form=!cajas.length?'<div class="empty">Esta propiedad no tiene cajas dadas de alta.</div>'
-   :'<div class="form">'
-    +'<label>Caja<select id="a_caja">'+opciones+'</select></label>'
-    +'<label>Turno<select id="a_turno"><option value="dia">Todo el día</option>'
-    +'<option value="manana">Mañana</option><option value="tarde">Tarde</option><option value="noche">Noche</option></select></label>'
-    +'<label>Fondo fijo<input id="a_fondo" type="number" step="0.01" min="0" value="0"></label>'
-    +'<label>Total contado<input id="a_total" type="number" step="0.01" min="0" placeholder="0.00"></label>'
-    +'<div class="ancho"><span class="eyebrow">Desglose por denominación (opcional — si lo llenas, suma solo)</span>'
-    +'<div class="den">'+DENOM.map(d=>'<label>$'+d+'<input type="number" min="0" step="1" data-den="'+d+'"></label>').join('')+'</div></div>'
-    +'<label class="ancho">Nota<textarea id="a_nota" rows="2" placeholder="Ej. faltó cambio de $50, se repuso del fondo"></textarea></label>'
-    +'<div class="ancho"><button class="btn" type="button" id="a_guardar">Guardar arqueo</button></div>'
-    +'</div>';
-  const lista=!arq.length?'<div class="empty">Todavía nadie ha contado la caja este día.</div>'
-   :'<div class="card scroll"><table><thead><tr><th>Caja</th><th>Turno</th><th class="n">Fondo</th>'
-    +'<th class="n">Contado</th><th class="n">Neto</th><th>Quién y cuándo</th></tr></thead><tbody>'
-    +arq.map(x=>'<tr><td>'+esc(x[0])+(x[6]?'<span class="sub">'+esc(x[6])+'</span>':'')+'</td>'
-      +'<td>'+esc(x[1])+'</td><td class="n">'+m(x[2])+'</td><td class="n">'+m(x[3])+'</td>'
-      +'<td class="n"><b>'+m(Number(x[3])-Number(x[2]))+'</b></td>'
-      +'<td>'+esc(x[4]||'—')+'<span class="sub">'+esc(x[5]||'')+'</span></td></tr>').join('')
-    +'</tbody></table></div>';
   const hayCP=((CAJAS&&CAJAS.cajas)||[]).some(c=>c[7]==='cashprotect');
   return '<section class="sec"><div class="sechead"><h2>Dónde está el efectivo</h2>'
    +'<p class="lede">Todo el dinero en billetes de esta propiedad, caja por caja. Toca cualquiera para ver de dónde '
@@ -1055,10 +1086,47 @@ function vistaArqueo(){
           :' Aquí no hay CashProtect, así que todo el efectivo se lleva a mano.')+'</p></div>'
    +bloqueCajas()+'</section>'
    +bloqueTurnos()
-   +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Contar la caja</h2>'
-   +'<p class="lede">Cuenta lo que hay al cierre y captúralo aquí. El sistema le resta el fondo fijo y lo compara '
-   +'contra el efectivo que Poster y Cloudbeds dicen que se cobró, menos las salidas con folio.</p></div>'
-   +form+'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Arqueos capturados</h2></div>'+lista+'</section></section>';
+   +bloqueArqueos()
+   +bloqueContar();
+}
+
+/* ---------- Contar una caja ----------
+   Se cuentan las dos cosas que hay dentro: los billetes y los vales. El sistema no
+   pregunta cuánto debería haber — eso ya lo sabe — sólo qué encontraste. */
+function bloqueContar(){
+  const L=((CAJAS&&CAJAS.cajas)||[]).filter(c=>c[7]!=='cashprotect');
+  const form=!L.length?'<div class="empty">Esta propiedad no tiene cajas que contar a mano.</div>'
+   :'<div class="form">'
+    +'<label>Caja<select id="a_caja">'
+      +L.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[3])+'</option>').join('')+'</select></label>'
+    +'<label>Turno<select id="a_turno"><option value="dia">Todo el día</option>'
+    +'<option value="manana">Mañana</option><option value="tarde">Tarde</option><option value="noche">Noche</option></select></label>'
+    +'<label>En billetes<input id="a_efectivo" type="number" step="0.01" min="0" placeholder="0.00"></label>'
+    +'<label>En vales<input id="a_vales" type="number" step="0.01" min="0" placeholder="0.00"></label>'
+    +'<div class="ancho"><span class="eyebrow">Desglose por denominación (opcional — si lo llenas, suma solo en billetes)</span>'
+    +'<div class="den">'+DENOM.map(d=>'<label>$'+d+'<input type="number" min="0" step="1" data-den="'+d+'"></label>').join('')+'</div></div>'
+    +'<label class="ancho">Nota<textarea id="a_nota" rows="2" placeholder="Ej. faltó cambio de $50, se repuso del fondo"></textarea></label>'
+    +'<div class="ancho"><button class="btn" type="button" data-arqgo="1">Guardar arqueo</button>'
+    +'<span class="res" id="a_res" hidden style="margin-left:10px"></span></div>'
+    +'</div>';
+  return '<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Contar una caja</h2>'
+   +'<p class="lede">Cuenta lo que hay dentro y captúralo. Se compara solo contra el saldo que el sistema '
+   +'lleva de esa caja, y el conteo queda en el histórico de arriba con tu nombre.</p></div>'+form+'</section>';
+}
+async function guardaArqueo(){
+  const el=$('a_res');
+  el.hidden=false; el.className='res'; el.textContent='Guardando…';
+  try{
+    const dens=[...document.querySelectorAll('[data-den]')]
+      .reduce((a,i)=>a+(Number(i.value||0)*Number(i.dataset.den)),0);
+    const ef=$('a_efectivo').value!=='' ? $('a_efectivo').value : (dens||'');
+    const r=await rpc('aud_arqueo_guardar',{p:{caja_id:$('a_caja').value, turno:$('a_turno').value,
+      efectivo:ef, vales:$('a_vales').value||'0', nota:$('a_nota').value||null, fecha:fechaISO(fecha)}});
+    el.className='res '+((r&&r.ok)?'ok':'bad');
+    el.textContent=(r&&r.mensaje)||'No se pudo guardar.';
+    if(r&&r.ok){ ARQ=null; await cargaArqueos(); pinta();
+      const e2=$('a_res'); if(e2){ e2.hidden=false; e2.className='res ok'; e2.textContent=r.mensaje; } }
+  }catch(e){ el.className='res bad'; el.textContent=String(e.message||e); }
 }
 
 function selectorCuenta(pref){
