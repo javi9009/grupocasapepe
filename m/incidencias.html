@@ -361,23 +361,38 @@ async function loadSalidasTardias(){
 async function loadPuntualidad(){
   const c=$('punt'); if(!c) return;
   const q=_quincena();
-  let data=[];
-  try{ const r=await sb.from('asistencias').select('employee_id,estatus,fecha,check_in,hora_turno').gte('fecha',q.ini).lte('fecha',q.fin); data=r.data||[]; }catch(e){}
+  const hoy=new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'});
+  const fin=(q.fin<hoy)?q.fin:hoy;
+  let hor=[],asis=[];
+  try{ const r=await sb.from('horarios').select('employee_id,fecha,hora_inicio,actividad').gte('fecha',q.ini).lte('fecha',fin); hor=r.data||[]; }catch(e){}
+  try{ const r=await sb.from('asistencias').select('employee_id,fecha,estatus,check_in,hora_turno').gte('fecha',q.ini).lte('fecha',fin); asis=r.data||[]; }catch(e){}
+  const AS={}; asis.forEach(r=>{ AS[r.employee_id+'|'+r.fecha]=r; });
+  const SCH={}; // emp -> {fecha:hora_inicio}  (solo días laborales programados, sin descansos)
+  hor.forEach(r=>{ if(!r.employee_id) return; const rest=(!r.hora_inicio && /descanso/i.test(r.actividad||'')); if(rest) return;
+    (SCH[r.employee_id]=SCH[r.employee_id]||{}); if(!(r.fecha in SCH[r.employee_id]) || (r.hora_inicio&&!SCH[r.employee_id][r.fecha])) SCH[r.employee_id][r.fecha]=r.hora_inicio||null; });
   const A={};
-  data.forEach(r=>{ if(esBaja(r.employee_id))return; if(!(isAdmin||allAsis||inScope(EMP[r.employee_id]||{})))return;
-    const a=A[r.employee_id]||(A[r.employee_id]={dias:0,malos:0,det:[]}); a.dias++;
-    const ci=_hmLocal(r.check_in), tt=_tmin(r.hora_turno);
-    const tarde = (ci!=null && tt!=null && ci>tt);   // sin tolerancia: cualquier minuto tarde
-    if(r.estatus==='falta'){ a.malos++; a.det.push(r.fecha+' (falta)'); }
-    else if(r.estatus==='retardo'||tarde){ a.malos++; a.det.push(r.fecha+' ('+(r.estatus==='retardo'?'retardo':'llegó tarde')+')'); } });
+  Object.keys(SCH).forEach(emp=>{
+    if(esBaja(emp)) return; if(!(isAdmin||allAsis||inScope(EMP[emp]||{}))) return;
+    const dias=Object.keys(SCH[emp]); if(!dias.length) return;
+    let malos=0, det=[];
+    dias.forEach(f=>{
+      const hi=SCH[emp][f], a=AS[emp+'|'+f];
+      if(!a){ malos++; det.push(f+' (sin registro)'); return; }
+      if(a.estatus==='falta'){ malos++; det.push(f+' (falta)'); return; }
+      if(a.estatus==='retardo'){ malos++; det.push(f+' (retardo)'); return; }
+      const ci=_hmLocal(a.check_in), tt=_tmin(hi||a.hora_turno);
+      if(ci!=null && tt!=null && ci>tt){ malos++; det.push(f+' (llegó tarde)'); return; }
+    });
+    A[emp]={dias:dias.length, malos, det};
+  });
   const ok=[],no=[];
-  Object.keys(A).forEach(id=>{ const a=Object.assign({employee_id:id},A[id]); if(a.dias>0&&a.malos===0)ok.push(a); else if(a.malos>0)no.push(a); });
+  Object.keys(A).forEach(id=>{ const a=Object.assign({employee_id:id},A[id]); if(a.malos===0)ok.push(a); else no.push(a); });
   ok.sort((x,y)=>y.dias-x.dias); no.sort((x,y)=>y.malos-x.malos);
   const filtro='<input id="fPersonaP" placeholder="🔎 Filtrar persona…" style="width:100%;box-sizing:border-box;background:#0000001f;border:1px solid var(--line,#34291c);color:inherit;border-radius:8px;padding:8px 10px;font:inherit;margin-bottom:8px">';
   c.innerHTML=filtro
-    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b>. Gana quien llegó <b>a la hora exacta o antes todos sus días</b> — <b>sin tolerancia</b>: cualquier minuto tarde (o falta) lo saca. Hasta hoy.</div>'
-    +'<div class="item"><div class="top"><span class="nm">✅ Van por el bono ('+ok.length+')</span></div>'+(ok.length?ok.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🟢 <b>'+esc(persona(a))+'</b> · '+a.dias+' día(s) a la hora · '+esc(areaDe(a))+'</div>').join(''):'<div class="det">Aún nadie con quincena perfecta.</div>')+'</div>'
-    +(no.length?('<div class="item"><div class="top"><span class="nm">❌ Perdieron el bono ('+no.length+')</span></div>'+no.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🔴 <b>'+esc(persona(a))+'</b> · '+a.malos+' incidencia(s): '+esc(a.det.slice(0,6).join(', '))+'</div>').join('')):'');
+    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b> (evaluado hasta <b>'+fin+'</b>). Gana quien cumplió <b>TODOS sus días programados</b> (según su horario, sin contar descansos) y entró <b>a la hora exacta o antes</b> — <b>sin tolerancia</b>. Un día sin checar, una falta, un retardo o cualquier minuto tarde lo saca.</div>'
+    +'<div class="item"><div class="top"><span class="nm">✅ Van por el bono ('+ok.length+')</span></div>'+(ok.length?ok.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🟢 <b>'+esc(persona(a))+'</b> · '+a.dias+' día(s) programado(s), todos a la hora · '+esc(areaDe(a))+'</div>').join(''):'<div class="det">Aún nadie con quincena perfecta.</div>')+'</div>'
+    +(no.length?('<div class="item"><div class="top"><span class="nm">❌ Perdieron el bono ('+no.length+')</span></div>'+no.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🔴 <b>'+esc(persona(a))+'</b> · '+a.malos+'/'+a.dias+' día(s) con problema: '+esc(a.det.slice(0,8).join(', '))+'</div>').join('')):'');
   const f=$('fPersonaP'); if(f) f.oninput=()=>{ const t=f.value.toLowerCase().trim(); c.querySelectorAll('[data-nm]').forEach(el=>{ el.style.display=(!t||(el.dataset.nm||'').includes(t))?'':'none'; }); };
 }
 async function loadContratosEmitir(){
