@@ -407,6 +407,15 @@
   .hz-actions button:active{transform:scale(.97)}
   .hz-actions button:disabled{opacity:.45;cursor:default}
   .hz-meta{font-size:11px;color:var(--txt3);text-align:center;margin:2px 2px 10px;line-height:1.4}
+
+  /* Estatus de limpieza por cuarto (modulo Ama de Llaves) */
+  .hkgrid{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+  .hkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid;border-radius:8px;padding:4px 8px;font-size:12px;font-weight:700;line-height:1}
+  .hkchip small{font-weight:500;opacity:.75;font-size:10.5px}
+  .hkleg{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px;padding-top:9px;border-top:1px solid var(--bg3);font-size:11px;color:var(--txt3)}
+  .hkleg span{display:inline-flex;align-items:center;gap:5px}
+  .hkleg i{width:11px;height:11px;border-radius:3px;border:1px solid;display:inline-block}
+  .hkpiso{width:100%;font-size:11px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.04em;margin-top:4px}
 </style></head>
 <body>
 
@@ -560,10 +569,12 @@
         <div class="sub">Resumen operativo de hoy</div>
         <div class="stat-grid">
           <div class="stat" id="rep-encasa-card" style="cursor:pointer"><div class="v dash" id="rep-encasa">—</div><div class="l">En casa ▾</div></div>
-          <div class="stat"><div class="v dash" id="rep-llegadas">—</div><div class="l">Llegadas</div></div>
-          <div class="stat"><div class="v dash" id="rep-salidas">—</div><div class="l">Salidas</div></div>
+          <div class="stat" id="rep-llegadas-card" style="cursor:pointer"><div class="v dash" id="rep-llegadas">—</div><div class="l">Llegadas ▾</div></div>
+          <div class="stat" id="rep-salidas-card" style="cursor:pointer"><div class="v dash" id="rep-salidas">—</div><div class="l">Salidas ▾</div></div>
         </div>
         <div id="rep-encasa-list" style="display:none;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--txt2)"></div>
+        <div id="rep-llegadas-list" style="display:none;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--txt2)"></div>
+        <div id="rep-salidas-list" style="display:none;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:13px;color:var(--txt2)"></div>
         <div class="stat-grid" style="margin-top:8px">
           <div class="stat" id="rep-desayunos-card"><div class="v dash" id="rep-desayunos">—</div><div class="l">Desayunos</div></div>
           <div class="stat"><div class="v dash" id="rep-walking" style="font-size:12.5px;line-height:1.15">—</div><div class="l">Walking hoy</div></div>
@@ -1340,6 +1351,92 @@ async function loadReporte(force){
     if(d.stale && !force){ setTimeout(()=>loadReporte(false), 7000); }
   }catch(e){ /* error de red: deja los — */ }
   finally{ if(btn) btn.style.opacity='.7'; }
+}
+
+// ===== Estatus de limpieza por cuarto (modulo Ama de Llaves) =====
+// rojo = bloqueada · gris = sucia · azul = se esta limpiando · verde = ya la limpiaron
+// blanco = hoy no entraron
+const HK_COL = {
+  bloqueada:{bg:'#fbe9e9',bd:'#e0a3a3',fg:'#9c2b2b',t:'Bloqueada'},
+  sucia:    {bg:'#ecebe6',bd:'#cfcabe',fg:'#5f5e5a',t:'Sucia'},
+  limpiando:{bg:'#e4eefb',bd:'#a9c8ec',fg:'#1f5b96',t:'Limpiandose'},
+  limpia:   {bg:'#dff0e8',bd:'#a5d5be',fg:'#12694d',t:'Limpia'},
+  sin:      {bg:'#ffffff',bd:'#ddd8cd',fg:'#8e8c85',t:'Hoy no entraron'}
+};
+const HK_ORDEN=['bloqueada','sucia','limpiando','limpia','sin'];
+const hkEsc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let HK_CACHE=null;
+
+async function hkCargarEstatus(){
+  if(HK_CACHE) return HK_CACHE;
+  const prop = await resolverProp();
+  if(!prop) return null;
+  const hoy = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);
+  try{
+    const [est, tar] = await Promise.all([
+      sb.from('hk_estatus_dia')
+        .select('area_id,estatus,check_in,check_out,hk_areas(codigo,nombre,tipo,piso)')
+        .eq('property_id',prop).eq('fecha',hoy),
+      sb.from('hk_tareas').select('area_id,estado').eq('property_id',prop).eq('fecha',hoy)
+    ]);
+    if(est.error || !est.data || !est.data.length) return null;
+    const porArea={};
+    (tar.data||[]).forEach(t=>{ porArea[t.area_id]=t.estado; });
+    HK_CACHE=est.data.map(e=>{
+      const a=e.hk_areas||{};
+      let color='sin';
+      if(e.estatus==='fuera_servicio') color='bloqueada';
+      else{
+        const t=porArea[e.area_id];
+        if(t==='terminada') color='limpia';
+        else if(t==='en_curso') color='limpiando';
+        else if(t) color='sucia';
+      }
+      return {codigo:a.codigo||'?', nombre:a.nombre||'', tipo:a.tipo, piso:a.piso||0,
+              encasa:e.estatus==='ocupada', llegada:!!e.check_in, salida:!!e.check_out, color:color};
+    });
+    return HK_CACHE;
+  }catch(e){ return null; }
+}
+
+function hkPinta(el, filas, titulo){
+  if(!filas){ el.innerHTML='<div style="color:var(--txt3)">El modulo de Ama de Llaves todavia no tiene el reparto de hoy.</div>'; return; }
+  if(!filas.length){ el.innerHTML='<div style="color:var(--txt3)">Sin cuartos en '+titulo.toLowerCase()+' hoy.</div>'; return; }
+  filas.sort((a,b)=>a.piso-b.piso || String(a.codigo).localeCompare(String(b.codigo),'es',{numeric:true}));
+  const cuenta={}; filas.forEach(f=>{ cuenta[f.color]=(cuenta[f.color]||0)+1; });
+  let html='<div style="font-weight:700;color:var(--txt2)">'+titulo+' · '+filas.length+' cuartos y camas</div><div class="hkgrid">';
+  let pisoAct=null;
+  filas.forEach(f=>{
+    if(f.piso!==pisoAct){ pisoAct=f.piso; html+='<div class="hkpiso">'+(pisoAct?('Piso '+pisoAct):'Sin piso')+'</div>'; }
+    const c=HK_COL[f.color];
+    html+='<span class="hkchip" style="background:'+c.bg+';border-color:'+c.bd+';color:'+c.fg+'" title="'+hkEsc(f.nombre)+' — '+c.t+'">'+hkEsc(f.codigo)+
+          (f.tipo==='cama'?' <small>cama</small>':'')+'</span>';
+  });
+  html+='</div><div class="hkleg">';
+  HK_ORDEN.forEach(k=>{ const c=HK_COL[k];
+    html+='<span><i style="background:'+c.bg+';border-color:'+c.bd+'"></i>'+c.t+(cuenta[k]?' ('+cuenta[k]+')':'')+'</span>'; });
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+function hkEngancha(cardId, listId, filtro, titulo){
+  const card=$(cardId), list=$(listId);
+  if(!card||!list||card._hkWired) return;
+  card._hkWired=true;
+  card.onclick=async()=>{
+    const abierto = list.style.display!=='none';
+    ['rep-encasa-list','rep-llegadas-list','rep-salidas-list'].forEach(id=>{ const l=$(id); if(l) l.style.display='none'; });
+    if(abierto) return;
+    list.style.display='block';
+    list.innerHTML='<div style="color:var(--txt3)">Cargando…</div>';
+    const filas=await hkCargarEstatus();
+    hkPinta(list, filas?filas.filter(filtro):null, titulo);
+  };
+}
+function setupHkEstatus(){
+  hkEngancha('rep-encasa-card','rep-encasa-list',   f=>f.encasa,  'En casa');
+  hkEngancha('rep-llegadas-card','rep-llegadas-list', f=>f.llegada, 'Llegadas');
+  hkEngancha('rep-salidas-card','rep-salidas-list',  f=>f.salida,  'Salidas');
 }
 
 // ===== Tours propios: walking de HOY + propios de MAÑANA (solo la ciudad del usuario) =====
@@ -2584,6 +2681,7 @@ async function start(){
     renderRankings();
     loadDocsPorFirmar();
     setupLimpieza();
+    setupHkEstatus();
     const rb=$('rep-refresh');
     if(rb) rb.onclick=()=>{ loadReporte(true); loadReporteTours(); };
     if(!window.__notifPoll) window.__notifPoll=setInterval(function(){ try{ loadNotifs(); }catch(e){} }, 30000);
