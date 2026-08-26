@@ -435,7 +435,7 @@ async function arranque(){
   $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
     $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
     if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
-    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();await cargaArqueos();}
+    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();await cargaArqueos();await cargaRelevos();}
     pinta();});
   // El árbol de cajas se abre y se cierra en el sitio, y los movimientos de cada una
   // se piden sólo cuando alguien la abre.
@@ -495,12 +495,12 @@ async function carga(){
   cargando=true;justificando=null;
   // Las cajas son de una propiedad y de una fecha: al cambiar cualquiera de las dos
   // hay que volver a pedirlas, o se queda pintado lo de la propiedad anterior.
-  CAJAS=null; TUR=null; ARQ=null; LIBRO={}; cajaAbierta=null; formCaja=null;
+  CAJAS=null; TUR=null; ARQ=null; REL=null; LIBRO={}; cajaAbierta=null; formCaja=null;
   pinta();
   D=await rpc('aud_caja_dia',{p_property:prop,p_fecha:fecha});
   if(D&&D.error){D=null;$('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
   await cargaMes();
-  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); await cargaArqueos(); }
+  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); await cargaArqueos(); await cargaRelevos(); }
   cargando=false;pinta();
 }
 function iso(d){const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
@@ -913,7 +913,51 @@ async function guardaTurnos(){
    son efectivo, pero sí son fondo, así que aquí sí cuentan aunque no entren en el
    saldo del día a día. Lo que de verdad hay que vigilar no es el resultado de cada
    conteo sino cuánto hace que nadie cuenta una caja. */
-let ARQ=null;
+let ARQ=null, REL=null;
+/* ---------- Cómo pasó la caja de turno a turno ----------
+   La caja de la terraza cambia de manos varias veces al día sin que nadie la cuente
+   delante de nadie. Lo único que lo delata es que lo que un turno dejó al cerrar no
+   sea lo que el siguiente encontró al abrir. Todo esto sale de Poster. */
+const REL_ET={
+  'cuadra':['ok','Cuadra'],
+  'cerró sin recolectar':['warn','Cerró sin recolectar'],
+  'diferencia al cerrar':['bad','Diferencia al cerrar'],
+  'abrió con distinto de lo que dejó el turno anterior':['bad','La caja no pasó limpia'],
+  'sin cerrar':['bad','Sin cerrar']};
+async function cargaRelevos(){
+  try{ const r=await rpc('aud_relevos',{p_property:prop,p_dias:21});
+       REL=(r&&!r.error)?r:{relevos:[]}; }
+  catch(e){ REL={relevos:[]}; }
+}
+function bloqueRelevos(){
+  if(!REL) return '';
+  const L=REL.relevos||[];
+  if(!L.length) return '';
+  const mal=L.filter(x=>x[15]!=='cuadra').length;
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Cómo pasó la caja de turno a turno</h2>'
+    +'<p class="lede">Cada turno de la terraza abre con lo que dejó el anterior. Si esas dos cifras no '
+    +'coinciden, la caja cambió de manos por el camino y nadie lo apuntó. Sale de Poster: apertura, '
+    +'venta, recolección y cierre.'
+    +(mal?' <b>'+mal+' de los últimos '+L.length+' turnos no pasaron limpios</b>, y están en Revisiones.':'')
+    +'</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Turno</th><th>Quién</th><th class="n">Abrió con</th>'
+    +'<th class="n">Venta</th><th class="n">Recolectó</th><th class="n">Cerró con</th>'
+    +'<th class="n">Debía tener</th><th>Cómo pasó</th></tr></thead><tbody>'
+    +L.map(x=>{
+      const et=REL_ET[x[15]]||['none',x[15]];
+      const hueco=x[14]==null?null:Number(x[14]);
+      return '<tr><td class="mono">'+esc(fmtCorto(x[1]))+'<span class="sub">#'+x[0]+' · '+esc(x[4])
+        +(x[5]?' a '+esc(x[5]):'')+'</span></td>'
+        +'<td>'+esc(x[2])+(x[3]&&x[3]!==x[2]?'<span class="sub">cerró '+esc(x[3])+'</span>':'')+'</td>'
+        +'<td class="n">'+m(x[6])
+        +(hueco!==null&&Math.abs(hueco)>=1
+          ?'<span class="sub" style="color:var(--bad)">el anterior dejó '+m(x[13])+'</span>':'')+'</td>'
+        +'<td class="n">'+m(x[7])+'</td><td class="n">'+m(x[8])+'</td>'
+        +'<td class="n">'+m(x[10])+'</td><td class="n">'+m(x[9])+'</td>'
+        +'<td>'+chip(et[0],et[1])+'</td></tr>';
+    }).join('')+'</tbody></table></div></section>';
+}
 async function cargaArqueos(){
   try{ const r=await rpc('aud_arqueos',{p_property:prop,p_limite:60});
        ARQ=(r&&!r.error)?r:{arqueos:[],cajas:[]}; }
@@ -1012,8 +1056,13 @@ function bloqueLibro(lib, propio){
 // responsable se nombra aquí y no se hereda de nada.
 function selectorResponsable(c){
   if(c[7]==='cashprotect') return '';
-  if(c[7]==='poster') return '<div class="sub" style="margin:0 0 10px">Esta caja la abre y la cierra '
-    +'quien esté de turno en Poster. No hace falta nombrar responsable.</div>';
+  // Las cajas de turno no tienen a quién nombrar: las lleva quien esté de turno, y
+  // eso lo dice Poster —o la captura del turno donde no hay POS—, no nosotros.
+  if(c[16]==='turno') return '<div class="sub" style="margin:0 0 10px">'
+    +'Esta caja va pasando de turno en turno, así que no tiene un solo responsable: '
+    +(c[7]==='poster'
+      ? 'la lleva quien abre y cierra en Poster'+(c[17]?', ahora <b>'+esc(c[17])+'</b>':'')
+      : 'la lleva quien esté de turno')+'.</div>';
   const G=(CAJAS&&CAJAS.gente)||[], puede=!!(CAJAS&&CAJAS.puede_mover);
   if(!puede) return c[13]
     ? '<div class="sub" style="margin:0 0 10px">La lleva <b>'+esc(c[13])+'</b></div>' : '';
@@ -1044,7 +1093,8 @@ function bloqueCajas(){
         +'<span class="sub">'+esc(TIPO_CAJA[c[4]]||c[4])
         +(c[13]?' · la lleva '+esc(c[13]):'')
         +(propio?' · el saldo lo dice la máquina'
-          :dePoster?' · lo lleva Poster, turno a turno'
+          :dePoster?' · lo lleva Poster, turno a turno'+(c[17]?' · ahora '+esc(c[17]):'')
+          :c[16]==='turno'?' · pasa de turno en turno'
           :(c[10]?' · desde el '+esc(fmtCorto(c[10])):''))+'</span></td>'
       +'<td class="n">'+(c[8]?m(c[8]):'—')+'</td>'
       +'<td class="n"><b>'+m(c[11])+'</b></td>'
@@ -1134,6 +1184,7 @@ function vistaArqueo(){
           :' Aquí no hay CashProtect, así que todo el efectivo se lleva a mano.')+'</p></div>'
    +bloqueCajas()+'</section>'
    +bloqueTurnos()
+   +bloqueRelevos()
    +bloqueArqueos()
    +bloqueContar();
 }
