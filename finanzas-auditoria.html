@@ -643,7 +643,9 @@ function pintaTop(){
   const ns=document.getElementById('secnav');ns.innerHTML='';
   SEC.forEach(s=>{const b=document.createElement('button');b.type='button';b.dataset.s=s[0];b.setAttribute('role','tab');
     b.setAttribute('aria-selected',s[0]===sec?'true':'false');
-    const n=(D&&D.exc)?D.exc.filter(x=>ABIERTA(x[6])).length:0;
+    // El número de la pestaña es lo que hay que atender: los avisos sin dinero
+    // detrás no cuentan, que si no siempre parece que hay trabajo pendiente.
+    const n=(D&&D.exc)?D.exc.filter(x=>ABIERTA(x[6])&&Number(x[2])>0).length:0;
     b.innerHTML=esc(s[1])+((s[0]==='excepciones'&&n)?'<span class="badge">'+n+'</span>':'');ns.appendChild(b);});
 }
 function pintaTira(){
@@ -721,6 +723,19 @@ async function darPorCompensado(){
        else pinta();
   }catch(e){ SV={ok:false,mensaje:String(e.message||e)}; pinta(); }
 }
+// Un número en verde bajo «no sabemos dónde está» se contradice solo: si ya está
+// compensado hay que decir contra qué, no dejar la cifra suelta.
+function subFalta(t){
+  const v=sinVenta();
+  if(v && v.ok && Math.abs(t.pend)<0.005){
+    const c=(v.casa||[]).filter(x=>Math.abs(Number(x.monto||0))>0.005)
+      .map(x=>fechaCorta(x.fecha));
+    return c.length?('Ya está dado por compensado contra el '+c.join(' y el '))
+                   :'Ya está dado por compensado';
+  }
+  return t.aj<0?'Cobros sin ruta, y dinero que entró sin una venta detrás'
+               :'Cobros sin ruta o que el liquidador reportó de menos';
+}
 function pintaResumen(){
   document.getElementById('propsub').textContent=propNombre;
   document.getElementById('titulo').textContent=
@@ -735,9 +750,7 @@ function pintaResumen(){
    +'<span class="op">+</span>'
    +tile('Falta el estado de cuenta',mon(t.banco),'Pasó por TPV; falta que el banco lo confirme',false,'banco',t.banco>0?'warn':null)
    +'<span class="op">+</span>'
-   +tile('No sabemos dónde está',mon(t.falta),
-      t.aj<0?'Cobros sin ruta, y dinero que entró sin una venta detrás'
-            :'Cobros sin ruta o que el liquidador reportó de menos',
+   +tile('No sabemos dónde está',mon(t.falta), subFalta(t),
       false,'falta', Math.abs(t.pend)>0.005?'bad':(Math.abs(t.falta)>0.005?'ok':null));
   const base=Math.max(t.comp+t.banco+Math.abs(t.falta), 0.01);
   const p=v=>Math.abs(v)*100/base;
@@ -898,18 +911,25 @@ function filaLiquidador(pt,c,res,q,pl,et){
   const efec=/efectivo|caja/i.test(String(pt)+' '+String(et||''));
   const dif=res.c-res.e+(q.esp>0?res.e:0);
   const nv=nivel(dif), ok=Math.abs(dif)<0.005;
-  const id='l:'+fecha+'|'+pl+'|'+pt, resp=respDe(pt,et), capt=q.comp-res.c;
+  const id='l:'+fecha+'|'+pl+'|'+pt, resp=respDe(pt,et);
+  const capt=q.entro-res.e;                 // lo que suman los movimientos de la lista
+  const liqTxt=(q.liq===null||q.liq===undefined)
+    ? 'Todavía no hay liquidador que lo confirme.'
+    : 'El liquidador depositó $'+m(q.liq)+'.';
   const datos={punto:et||pt, capturado:capt, confirmado:q.comp, diferencia:dif,
     liquidador:efec?'la caja fuerte (CashProtect)':'el estado de cuenta',
     donde:efec?'CashProtect: depósitos del '+fechaLarga(fecha)+'. Poster: Finanzas › Cortes de caja de ese día.'
               :'El estado de cuenta de '+(et||pt)+' del '+fechaLarga(fecha)+'.'};
   const titulo=efec?'Corte de caja contra el depósito en la caja fuerte'
-                   :'Lo que confirma el liquidador y no está en ningún movimiento';
+    :(res.e>0.005?'Cobros que el sistema cuenta aquí y no están en la lista de arriba'
+                 :'Diferencia con el liquidador');
   const sub=efec
     ?'El efectivo cuadra por corte de turno, no movimiento a movimiento. Ésta es la diferencia entre lo que declararon los cortes y lo que se capturó como cobro; el detalle línea por línea está abajo, en el cuadre de efectivo.'
-    :'El liquidador confirma $'+m(q.comp)+' y los cobros capturados suman $'+m(capt)+'.';
-  const ctx='En '+(et||pt)+' del '+fechaLarga(fecha)+' el liquidador confirma $'+m(q.comp)
-    +' y los cobros capturados suman $'+m(capt)+': hay $'+m(Math.abs(dif))+' sin explicar.';
+    :'El sistema registra $'+m(q.entro)+' en '+(et||pt)+' y los movimientos de arriba suman $'+m(capt)
+      +'. '+liqTxt;
+  const ctx='En '+(et||pt)+' del '+fechaLarga(fecha)+' el sistema registra $'+m(q.entro)
+    +', los movimientos capturados suman $'+m(capt)+' y '+liqTxt.toLowerCase().replace(/\.$/,'')
+    +': quedan $'+m(Math.abs(dif))+' sin explicar.';
   return '<tr class="lv3'+(ok?'':' s'+nv)+'"><td class="ind2">'+esc(titulo)
     +'<span class="sub">'+esc(sub)+'</span>'+(ok?'':botonPreguntar(id,resp,ctx))+'</td>'
     +celdas(res.e,res.c,res.esp)+'<td class="n">—</td><td>'
@@ -1527,9 +1547,14 @@ function fechaDe(v){
   const t=String(v==null?'':v).trim(); if(!t) return null;
   let x=/^(\d{4})-(\d{2})-(\d{2})/.exec(t); if(x) return x[1]+'-'+x[2]+'-'+x[3];
   x=/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/.exec(t);
-  if(x){ let a=+x[1],b=+x[2],y=x[3].length===2?2000+ +x[3]:+x[3];
-         if(a>12){const t2=a;a=b;b=t2;}                      // dd/mm o mm/dd
-         const p=n=>(n<10?'0':'')+n; return y+'-'+p(a>12?b:a)+'-'+p(a>12?a:b); }
+  if(x){ const a=+x[1], b=+x[2], y=x[3].length===2?2000+ +x[3]:+x[3];
+         const p=n2=>(n2<10?'0':'')+n2;
+         // Aquí se escribe día/mes. Sólo si el segundo pasa de 12 es un archivo
+         // en formato gringo (mes/día); con los dos por debajo, manda día/mes.
+         let dia,mes;
+         if(b>12){ mes=a; dia=b; } else { dia=a; mes=b; }
+         if(mes>12||dia>31) return null;
+         return y+'-'+p(mes)+'-'+p(dia); }
   // Los estados de cuenta suelen traer el mes en letra: 22-AGO-2026, 22 ago 26
   const p2=n=>(n<10?'0':'')+n;
   x=/^(\d{1,2})[\s\/\-.]*([A-Za-zÁÉÍÓÚáéíóú]{3,10})[\s\/\-.]*(\d{2,4})?$/.exec(t);
@@ -1615,6 +1640,31 @@ function getPDF(){
       return mod; });
   return _pdfjs;
 }
+// Muchos PDF colocan letra por letra. Si se pegan los trozos tal cual, "25/08/2026"
+// sale como "2 5 /0 8 /2 0 2 6" y ya no hay fecha que reconocer. Manda la distancia:
+// pegado si casi se tocan, un espacio si hay hueco de palabra, columna nueva si el
+// hueco es grande.
+function juntaRenglon(trozos){
+  trozos.sort((a,b)=>a.x-b.x);
+  const celdas=[]; let act='', finAnt=null, alto=0;
+  trozos.forEach(o=>{
+    const h=o.h||8;
+    if(finAnt===null){ act=o.t; }
+    else{
+      const hueco=o.x-finAnt;
+      if(hueco > Math.max(h*1.1, 6)){ celdas.push(act); act=o.t; }        // columna nueva
+      else if(hueco > h*0.22){ act+=' '+o.t; }                            // espacio de palabra
+      else { act+=o.t; }                                                  // misma palabra
+    }
+    finAnt=o.x+(o.w||0); alto=Math.max(alto,h);
+  });
+  if(act) celdas.push(act);
+  // Red de seguridad: una celda que sólo tenga cifras y separadores no lleva espacios.
+  return celdas.map(c=>{
+    const t=c.trim();
+    return (/\d/.test(t) && /^[\d\s.,\/:$()+-]+$/.test(t)) ? t.replace(/\s+/g,'') : t;
+  }).filter(c=>c!=='');
+}
 async function pdfAMatriz(f){
   const pdfjs=await getPDF();
   const buf=await f.arrayBuffer();
@@ -1624,13 +1674,14 @@ async function pdfAMatriz(f){
     const pg=await doc.getPage(n), tc=await pg.getTextContent();
     const renglones={};
     tc.items.forEach(it=>{
-      const t=String(it.str||'').trim(); if(!t) return;
+      const t=String(it.str||''); if(!t.trim()) return;
       const y=it.transform[5], x=it.transform[4];
+      const h=Math.abs(it.transform[3])||it.height||8;
       const k=Math.round(y/3);                       // 3 puntos de tolerancia por renglón
-      (renglones[k]=renglones[k]||[]).push({x:x,t:t});
+      (renglones[k]=renglones[k]||[]).push({x:x, t:t.trim(), w:(it.width||0), h:h});
     });
     Object.keys(renglones).map(Number).sort((a,b)=>b-a).forEach(k=>{
-      filas.push(renglones[k].sort((a,b)=>a.x-b.x).map(o=>o.t));
+      const c=juntaRenglon(renglones[k]); if(c.length) filas.push(c);
     });
   }
   await doc.destroy().catch(()=>{});
@@ -1685,6 +1736,16 @@ async function subeArchivo(zona,f){
   catch(err){ pinta1('bad',esc(String(err.message||err))); return; }
   const r=leeMovimientos(matriz||[]);
   if(r.error){
+    const texto=(matriz||[]).slice(0,40).map(x=>Array.isArray(x)?x.join(' '):String(x)).join(' ').toUpperCase();
+    if(/CUENTA[S]? DE CHEQUES|SALDO DISPONIBLE|SALDO ACTUAL|ESTADO DE CUENTA/.test(texto)
+       && /BANCO|BANORTE|MERCANTIL DEL NORTE|BBVA|SANTANDER/.test(texto)){
+      pinta1('bad','Eso es el <b>estado de cuenta del banco</b>, no el corte de la terminal. '
+        +'Trae saldos y movimientos de la cuenta de cheques, no los cobros con tarjeta uno por uno, '
+        +'que es lo que hace falta para cuadrar este punto. '
+        +'En el portal de la terminal busca el reporte de ventas o de transacciones del día. '
+        +'<span class="sub" style="margin:0">El estado de cuenta del banco sí sirve, pero para otra cosa: '
+        +'comprobar el depósito que hace la terminal. Eso todavía no está montado; dímelo y lo hago.</span>');
+      return; }
     // Un mensaje que no enseña nada no sirve para arreglarlo: aquí va lo que leí.
     const muestra=(matriz||[]).slice(0,12)
       .map((f,i)=>(i+1)+'. '+(Array.isArray(f)?f.join(' | '):String(f)).slice(0,140))
