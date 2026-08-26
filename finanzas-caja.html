@@ -482,10 +482,15 @@ async function arranque(){
   carga();
 }
 async function carga(){
-  cargando=true;justificando=null;pinta();
+  cargando=true;justificando=null;
+  // Las cajas son de una propiedad y de una fecha: al cambiar cualquiera de las dos
+  // hay que volver a pedirlas, o se queda pintado lo de la propiedad anterior.
+  CAJAS=null; TUR=null; LIBRO={}; cajaAbierta=null; formCaja=null;
+  pinta();
   D=await rpc('aud_caja_dia',{p_property:prop,p_fecha:fecha});
   if(D&&D.error){D=null;$('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
   await cargaMes();
+  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); }
   cargando=false;pinta();
 }
 function iso(d){const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
@@ -843,6 +848,8 @@ async function cargaTurnos(){
 }
 function bloqueTurnos(){
   if(!TUR) return '';
+  // Donde hay CashProtect el efectivo lo cuenta la máquina: esto sólo estorba
+  if(((CAJAS&&CAJAS.cajas)||[]).some(c=>c[7]==='cashprotect')) return '';
   const T=TUR.turnos||[], sis=TUR.sistemas||{};
   const suma=a=>T.filter(t=>t[2]===a).reduce((s,t)=>s+Number(t[4]||0),0);
   const linea=(a,et,fte)=>{
@@ -905,6 +912,15 @@ function filaLibro(mv){
     +'<td class="n"'+(neg?' style="color:var(--bad)"':'')+'>'+m(mv[3])+'</td>'
     +'<td>'+esc(mv[4]||'—')+'</td></tr>';
 }
+// Un fondo tiene que dar siempre lo asignado, sumando lo que hay en billetes y lo que
+// anda fuera en vales. Si no llega, ahí falta dinero de verdad y hay que decirlo.
+function faltaFondo(c){
+  const asig=Number(c[8]||0); if(!asig) return '';
+  const falta=asig-(Number(c[11]||0)+Number(c[15]||0));
+  if(Math.abs(falta)<0.01) return '';
+  return '<span class="sub" style="color:var(--bad)">'
+    +(falta>0?'faltan ':'sobran ')+m(Math.abs(falta))+'</span>';
+}
 function bloqueCajas(){
   if(!CAJAS) return '<div class="empty">Cargando las cajas…</div>';
   const L=CAJAS.cajas||[];
@@ -923,10 +939,11 @@ function bloqueCajas(){
         +(c[13]?' · la lleva '+esc(c[13]):'')
         +(propio?' · el saldo lo dice la máquina':(c[10]?' · desde el '+esc(fmtCorto(c[10])):''))+'</span></td>'
       +'<td class="n">'+(c[8]?m(c[8]):'—')+'</td>'
-      +'<td class="n"><b>'+m(c[11])+'</b></td>'
+      +'<td class="n"><b>'+m(c[11])+'</b>'+faltaFondo(c)+'</td>'
+      +'<td class="n">'+(Number(c[15]||0)>0.005?m(c[15])+'<span class="sub">'+(c[16]||0)+' vale(s)</span>':'—')+'</td>'
       +'<td class="n">'+(propio?'—':(c[12]||0))+'</td></tr>';
     if(abierta){
-      h+='<tr class="cajadet"><td colspan="4" style="padding:0 14px 14px '+(28+nivel*26)+'px">'
+      h+='<tr class="cajadet"><td colspan="5" style="padding:0 14px 14px '+(28+nivel*26)+'px">'
         +(c[14]?'<p class="lede" style="margin:6px 0 10px">'+esc(c[14])+'</p>':'')
         +(!lib ? '<div class="empty">Cargando los movimientos…</div>'
           : (!lib.movs||!lib.movs.length)
@@ -945,11 +962,14 @@ function bloqueCajas(){
     +'<button class="mini go" type="button" data-cajaform="mover">Mover dinero entre cajas</button>'
     +'<button class="mini" type="button" data-cajaform="alta">Añadir una caja</button></div>';
 
+  const tv=Number(CAJAS.total_vales||0);
   return '<div class="card scroll"><table><thead><tr><th>Caja</th><th class="n">Asignado</th>'
-    +'<th class="n">Hay ahora</th><th class="n">Movs</th></tr></thead><tbody>'+filas
+    +'<th class="n">En billetes</th><th class="n">En vales</th><th class="n">Movs</th></tr></thead><tbody>'+filas
     +'<tr><td style="padding-left:14px"><b>Total en efectivo</b>'
-    +'<span class="sub">Todo lo que hay parado en esta propiedad</span></td>'
-    +'<td class="n">—</td><td class="n"><b>'+m(CAJAS.total)+'</b></td><td class="n">—</td></tr>'
+    +'<span class="sub">Todo lo que hay parado en esta propiedad'
+    +(tv>0.005?', sin contar los $'+m(tv)+' que andan en vales':'')+'</span></td>'
+    +'<td class="n">—</td><td class="n"><b>'+m(CAJAS.total)+'</b></td>'
+    +'<td class="n">'+(tv>0.005?m(tv):'—')+'</td><td class="n">—</td></tr>'
     +'</tbody></table></div>'+acciones+formularioCaja();
 }
 function formularioCaja(){
@@ -1027,9 +1047,12 @@ function vistaArqueo(){
       +'<td class="n"><b>'+m(Number(x[3])-Number(x[2]))+'</b></td>'
       +'<td>'+esc(x[4]||'—')+'<span class="sub">'+esc(x[5]||'')+'</span></td></tr>').join('')
     +'</tbody></table></div>';
+  const hayCP=((CAJAS&&CAJAS.cajas)||[]).some(c=>c[7]==='cashprotect');
   return '<section class="sec"><div class="sechead"><h2>Dónde está el efectivo</h2>'
    +'<p class="lede">Todo el dinero en billetes de esta propiedad, caja por caja. Toca cualquiera para ver de dónde '
-   +'salió cada peso. CashProtect no lleva libro aquí: su saldo lo dice la propia máquina.</p></div>'
+   +'salió cada peso.'
+   +(hayCP?' CashProtect no lleva libro aquí: su saldo lo dice la propia máquina.'
+          :' Aquí no hay CashProtect, así que todo el efectivo se lleva a mano.')+'</p></div>'
    +bloqueCajas()+'</section>'
    +bloqueTurnos()
    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Contar la caja</h2>'
