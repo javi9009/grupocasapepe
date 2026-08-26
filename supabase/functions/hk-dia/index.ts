@@ -107,13 +107,13 @@ async function syncEstatus(propKey: string, fecha: string) {
 const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
 
 interface Tarea { area_id: string; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number }
-interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number }
+interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
 async function reparto(propKey: string, fecha: string) {
   const cfg = PROPS[propKey];
   const P = cfg.supaId;
 
-  const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, existentes] = await Promise.all([
+  const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
     rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,orden&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
@@ -121,8 +121,9 @@ async function reparto(propKey: string, fecha: string) {
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
     rest(`horarios?property_id=eq.${P}&fecha=eq.${fecha}&select=employee_id,nombre_display,puesto_id,hora_inicio,hora_fin`),
     rest('hk_puestos_map?activo=eq.true&select=puesto_id,turno'),
+    rest(`hk_admin_turno?property_id=eq.${P}&activo=eq.true&select=turno,dia_semana,minutos,concepto`),
     rest(`hk_asignaciones?property_id=eq.${P}&fecha=eq.${fecha}&select=id,estado`),
-  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ id: string; estado: string }>];
+  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>];
 
   const conf = confArr[0] ?? { horas_turno: 8, minutos_traslado_piso: 5, no_mezclar_pisos: true, factor_ama_llaves: 0.5, minutos_comida: 30 };
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
@@ -184,12 +185,15 @@ async function reparto(propKey: string, fecha: string) {
     const hi = h.hora_inicio as string | null, hf = h.hora_fin as string | null;
     if (!hi || !hf) continue; // descanso
     let dur = (mins(hf)! - mins(hi)!); if (dur < 0) dur += 1440;
-    let cap = dur - Number(conf.minutos_comida ?? 30);
-    // El ama de llaves reparte camas y carros (PDO.ADL.005, hasta 1 h) y revisa cuartos
-    // (PDO.ADL.006). Eso no es limpieza: se le descuenta de la jornada.
-    if (turno === 'ama_llaves') cap = cap - Number(conf.minutos_gestion_ama_llaves ?? 120);
+    const bruta = dur - Number(conf.minutos_comida ?? 30);
+    // Lo que no es limpieza (reparto de camas y carros, revisión de cuartos, briefing
+    // de los lunes) vive en hk_admin_turno: se suma a la pila y baja la capacidad.
+    const admin = adminArr
+      .filter((x) => x.turno === turno && (!x.dia_semana || x.dia_semana === diaSemana))
+      .reduce((s, x) => s + Number(x.minutos || 0), 0);
+    const cap = bruta - admin;
     if (cap <= 0) continue;
-    personas.push({ employee_id: h.employee_id ? String(h.employee_id) : null, nombre: String(h.nombre_display ?? ''), turno, hi, hf, cap });
+    personas.push({ employee_id: h.employee_id ? String(h.employee_id) : null, nombre: String(h.nombre_display ?? ''), turno, hi, hf, cap, bruta, admin });
   }
   const poolCuartos = personas.filter((p) => p.turno === 'recamarista' || p.turno === 'ama_llaves').sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''));
   const poolPublicasReal = personas.filter((p) => p.turno === 'areas_publicas');
@@ -235,7 +239,7 @@ async function reparto(propKey: string, fecha: string) {
       property_id: P, fecha, employee_id: p?.employee_id ?? null, nombre_display: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'),
       turno: p?.turno ?? 'recamarista', hora_inicio: p?.hi ?? null, hora_fin: p?.hf ?? null,
       estado: 'propuesta', minutos_estimados: total, pisos, generado_por: 'motor',
-      metadata: { capacidad_min: p?.cap ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, etiqueta: etiqueta ?? null },
+      metadata: { capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
     const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
@@ -250,7 +254,7 @@ async function reparto(propKey: string, fecha: string) {
   return {
     ok: true, fecha, propiedad: propKey,
     carga: { cuartos_tareas: cuartos.length, cuartos_min: cuartos.reduce((s, t) => s + t.minutos, 0), publicas_tareas: publicas.length, publicas_min: publicas.reduce((s, t) => s + t.minutos, 0) },
-    personal: personas.map((p) => ({ nombre: p.nombre, turno: p.turno, horario: `${p.hi}-${p.hf}`, capacidad_min: p.cap })),
+    personal: personas.map((p) => ({ nombre: p.nombre, turno: p.turno, horario: `${p.hi}-${p.hf}`, capacidad_min: p.cap, admin_min: p.admin, jornada_min: p.bruta })),
     reparto: salida,
     sin_cubrir_min: rc.sobra.reduce((s, t) => s + t.minutos, 0) + rp.sobra.reduce((s, t) => s + t.minutos, 0),
   };
