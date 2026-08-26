@@ -134,7 +134,6 @@ h3{margin:18px 0 8px;font-size:14px}
 
 <div class="tabs">
   <button class="tab active" data-p="reparto">Reparto del día</button>
-  <button class="tab" data-p="asignar">🖐️ Asignar (iPad)</button>
   <button class="tab" data-p="informe">Informe de productividad</button>
   <button class="tab" data-p="tiempos">Tiempos estándar</button>
   <button class="tab" data-p="areas">Áreas y checklists</button>
@@ -146,18 +145,10 @@ h3{margin:18px 0 8px;font-size:14px}
     <button class="b pri" id="btnGen">⟳ Generar propuesta</button>
     <button class="b gold" id="btnVal">✓ Validar reparto</button>
     <button class="b" id="btnRe">↻ Recargar</button>
-  </div>
-  <div class="kpis" id="kpis"></div>
-  <div class="cards" id="reparto"></div>
-</div>
-
-<!-- ================= ASIGNAR (iPad) ================= -->
-<div class="pane" id="p-asignar">
-  <div class="bar">
-    <button class="b" id="btnAsigRe">↻ Recargar</button>
     <span id="asigResumen" class="pill" style="font-size:12px"></span>
     <span class="status" id="stA"></span>
   </div>
+  <div class="kpis" id="kpis"></div>
   <div class="asigwrap">
     <div class="alist">
       <table id="tblAsig"><thead><tr>
@@ -238,7 +229,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.pane').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');$('p-'+t.dataset.p).classList.add('active');
-  ({asignar:pintarAsignar,informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[t.dataset.p]||(()=>{}))();
+  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[t.dataset.p]||(()=>{}))();
 });
 $('sede').onchange=()=>recargarTodo();
 $('fecha').onchange=()=>recargarTodo();
@@ -260,49 +251,20 @@ async function cargarReparto(){
     .eq('property_id',P()).eq('fecha',F()).order('turno');
   if(error){st(error.message,'err');return;}
   ASIG=data||[];
-  pintarReparto();
-  if(document.querySelector('.tab.active')?.dataset.p==='asignar') pintarAsignar();
+  pintarKpis();
+  pintarAsignar();
 }
-function pintarReparto(){
-  const cont=$('reparto');
-  if(!ASIG.length){cont.innerHTML='<div class="empty">Todavía no hay reparto para este día.<br>Pulsa «Generar propuesta» para que el motor lo arme con la ocupación de Cloudbeds y el horario del día.</div>';$('kpis').innerHTML='';return;}
-  const nombres=ASIG.filter(a=>a.employee_id).map(a=>({id:a.id,n:a.nombre_display}));
+
+function pintarKpis(){
+  if(!ASIG.length){ $('kpis').innerHTML=''; return; }
   const validado=ASIG.some(a=>a.estado!=='propuesta');
   let est=0,real=0,tot=0,hechas=0,sin=0;
-  cont.innerHTML=ASIG.map(a=>{
-    const ts=(a.hk_tareas||[]).sort((x,y)=>x.orden-y.orden);
-    est+=a.minutos_estimados||0;tot+=ts.length;
+  ASIG.forEach(a=>{
+    const ts=a.hk_tareas||[];
+    est+=a.minutos_estimados||0; tot+=ts.length;
     hechas+=ts.filter(t=>t.estado==='terminada').length;
     real+=ts.reduce((s,t)=>s+(Number(t.minutos_reales)||0),0);
-    const sinAsig=!a.employee_id;if(sinAsig)sin+=a.minutos_estimados||0;
-    const cap=a.metadata?.capacidad_min||0;
-    const pct=cap?Math.round((a.minutos_estimados/cap)*100):0;
-    const tg=sinAsig?'bad':pct>100?'bad':pct>85?'warn':'ok';
-    return `<div class="card ${sinAsig?'sin':''}">
-      <div class="hd"><span class="nm">${sinAsig?'⚠ ':''}${esc(a.nombre_display)}</span>
-        <span class="tg">${esc(a.turno.replace('_',' '))}</span>
-        <span class="tg">${hhmm(a.hora_inicio)}–${hhmm(a.hora_fin)}</span>
-        ${a.pisos?.length?`<span class="tg">piso ${a.pisos.join(', ')}</span>`:''}
-        <span class="tg ${tg}">${a.minutos_estimados} min${cap?' / '+cap:''}${cap?' · '+pct+'%':''}</span>
-        <span class="tg ${a.estado==='propuesta'?'warn':'ok'}">${a.estado}</span>
-      </div>
-      <div class="load"><i class="${pct>100?'over':''}" style="width:${Math.min(100,pct||0)}%"></i></div>
-      ${ts.map(t=>{
-        const ar=t.hk_areas||{};const e=ESTLBL[t.estatus_area]||['',''];
-        const rl=t.minutos_reales!=null?` · real ${t.minutos_reales}m`:'';
-        return `<div class="tsk ${t.estado==='terminada'?'done':''}">
-          <span class="cod">${esc(ar.codigo||'')}</span>
-          <span class="est ${e[1]}">${e[0]||esc(t.estatus_area||'')}</span>
-          <span style="color:var(--soft);font-size:11.5px">${esc((ar.nombre||'').slice(0,26))}</span>
-          ${validado?'':`<select data-t="${t.id}" class="mv"><option value="">↔</option>${nombres.filter(n=>n.id!==a.id).map(n=>`<option value="${n.id}">→ ${esc(n.n)}</option>`).join('')}</select>`}
-          <span class="mn">${t.minutos_estimados}m${rl}</span>
-        </div>`;}).join('')}
-    </div>`;}).join('');
-  cont.querySelectorAll('select.mv').forEach(s=>s.onchange=async()=>{
-    if(!s.value)return;
-    const {error}=await sb.from('hk_tareas').update({asignacion_id:s.value,es_extra:true}).eq('id',s.dataset.t);
-    if(error)return st(error.message,'err');
-    await recalcularTotales();st('Cuarto reasignado','ok');cargarReparto();
+    if(!a.employee_id) sin+=a.minutos_estimados||0;
   });
   const efi=real?Math.round(est/real*100):null;
   $('kpis').innerHTML=`
@@ -312,13 +274,7 @@ function pintarReparto(){
     ${sin?`<div class="kpi bad"><div class="l">Sin cubrir</div><div class="v">${Math.round(sin/60*10)/10} h</div><div class="s">${sin} min sin persona asignada</div></div>`:''}
     <div class="kpi ${validado?'':'warn'}"><div class="l">Estado</div><div class="v" style="font-size:15px">${validado?'Validado':'Propuesta'}</div><div class="s">${validado?'ya lo vio el ama de llaves':'falta validar en la mañana'}</div></div>`;
 }
-async function recalcularTotales(){
-  for(const a of ASIG){
-    const {data}=await sb.from('hk_tareas').select('minutos_estimados').eq('asignacion_id',a.id);
-    const tot=(data||[]).reduce((s,t)=>s+(t.minutos_estimados||0),0);
-    await sb.from('hk_asignaciones').update({minutos_estimados:tot,updated_at:new Date().toISOString()}).eq('id',a.id);
-  }
-}
+
 $('btnGen').onclick=async()=>{
   $('btnGen').disabled=true;st('Leyendo Cloudbeds y repartiendo…');
   const j=await fn('plan');
@@ -339,9 +295,9 @@ $('btnVal').onclick=async()=>{
 };
 $('btnRe').onclick=()=>cargarReparto();
 
-// ---------------- ASIGNAR (iPad) ----------------
+// ---------------- REPARTO: listado + cajones ----------------
 // Izquierda: el listado del día. Derecha: un cajón por colaboradora con su pila.
-// Se arrastra con el dedo desde cualquiera de los dos lados.
+// Se arrastra con el dedo desde cualquiera de los dos lados (iPad) o con el ratón.
 let CONF_A=null;
 async function confA(){
   if(CONF_A && CONF_A._p===P()) return CONF_A;
@@ -452,7 +408,6 @@ function pintarAsignar(){
   });
 }
 const ABIERTAS=new Set();
-$('btnAsigRe').onclick=()=>cargarReparto();
 
 // Avisa a la colaboradora de que ya tiene su orden del día en Soy Pepe.
 async function enviarOrden(asigId,btn){
@@ -699,7 +654,7 @@ $('btnSyncCB').onclick=async()=>{
 function recargarTodo(){
   const act=document.querySelector('.tab.active').dataset.p;
   cargarReparto();
-  ({asignar:pintarAsignar,informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[act]||(()=>{}))();
+  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[act]||(()=>{}))();
 }
 cargarReparto();
 </script></body></html>

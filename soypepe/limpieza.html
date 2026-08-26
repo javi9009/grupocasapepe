@@ -89,7 +89,11 @@ button{font-family:inherit}
 
 <div class="appbar">
   <button class="bk" onclick="location.href='/soypepe/'">‹</button>
-  <span class="t">🧹 <b>Mi limpieza</b></span>
+  <span class="t">🧹 <b id="titulo">Mi limpieza</b></span>
+  <select id="sede" hidden style="margin-left:auto;background:#2b2620;color:#f4ecdd;border:1px solid #3a3228;border-radius:9px;padding:5px 8px;font-size:12px">
+    <option value="45e69775-d877-4507-a9e1-a45bd3400dc5">CDMX</option>
+    <option value="febfbef6-7fd1-4b45-84d9-13533e8dcb72">Puebla</option>
+  </select>
   <span class="d" id="hoy"></span>
 </div>
 
@@ -120,6 +124,11 @@ const CH={vacia_limpia:['vl','Refresco'],vacia_sucia:['vs','Salida · a fondo'],
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const hhmm=t=>t?String(t).slice(0,5):'';
 let EMP=null,NOMBRE=null,USER=null,MOTIVOS=[],MIA=null,TODAS=[],VISTA='mia',ANTES_N=0;
+// Quien supervisa ve el reparto de todas las recamaristas del día, tenga o no
+// cuartos propios. El ama de llaves lo ve siempre por su turno.
+const SUPERVISORES=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casapepe.mx'];
+const PROPS_CON_CUARTOS=['45e69775-d877-4507-a9e1-a45bd3400dc5','febfbef6-7fd1-4b45-84d9-13533e8dcb72'];
+let ES_SUPER=false, PROP=null;
 
 $('hoy').textContent=new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'});
 function toast(t){const e=$('tst');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2200);}
@@ -131,6 +140,16 @@ async function arranca(){
   const {data:link}=await sb.from('empleado_login').select('employee_id,nombre_display,nombre_completo').eq('user_id',USER.id).maybeSingle();
   if(!link){$('wrap').innerHTML='<div class="ph">Tu usuario todavía no está ligado a un colaborador.<br>Avísale a tu jefe de área.</div>';return;}
   EMP=link.employee_id;NOMBRE=link.nombre_display||link.nombre_completo;
+  const correo=(USER.email||'').toLowerCase();
+  ES_SUPER=SUPERVISORES.includes(correo);
+  if(ES_SUPER){
+    let suya=null;
+    try{ const {data:emp}=await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle(); suya=emp?.property_id||null; }catch(e){}
+    PROP=PROPS_CON_CUARTOS.includes(suya)?suya:PROPS_CON_CUARTOS[0];
+    const sel=$('sede'); sel.hidden=false; sel.value=PROP;
+    sel.onchange=()=>{ PROP=sel.value; cargar(); };
+    $('titulo').textContent='Limpieza del día';
+  }
   const {data:m}=await sb.from('hk_motivos').select('*').eq('activo',true).order('orden');
   MOTIVOS=m||[];
   $('shM').innerHTML='<option value="">Todo normal</option>'+MOTIVOS.map(x=>`<option value="${x.codigo}">${esc(x.nombre)}</option>`).join('');
@@ -167,32 +186,37 @@ async function cargar(){
   if(antes && MIA && antes==='propuesta' && MIA.estado!=='propuesta') toast('El ama de llaves ya validó tu reparto');
   if(antes && MIA && (MIA.hk_tareas||[]).length!==ANTES_N) toast('Tu lista de hoy cambió');
   ANTES_N=(MIA&&MIA.hk_tareas)?MIA.hk_tareas.length:0;
-  if(MIA&&MIA.turno==='ama_llaves'){
+  if(!PROP && MIA) PROP=MIA.property_id;
+  const veTodas = ES_SUPER || (MIA&&MIA.turno==='ama_llaves');
+  if(veTodas && PROP){
     const {data:t}=await sb.from('hk_asignaciones')
       .select('*,hk_tareas(id,orden,estatus_area,minutos_estimados,estado,hk_areas(codigo,nombre,piso))')
-      .eq('fecha',FECHA).eq('property_id',MIA.property_id).order('turno');
+      .eq('fecha',FECHA).eq('property_id',PROP).order('turno');
     TODAS=t||[];
+    if(!MIA) VISTA='rep';
   }
   pintar();
 }
 
 function pintar(){
   const w=$('wrap');
-  if(!MIA){w.innerHTML='<div class="ph">Hoy no tienes cuartos asignados.<br><br>Si crees que es un error, avísale al ama de llaves.</div>';return;}
-  const esAma=MIA.turno==='ama_llaves';
-  const pendiente=MIA.estado==='propuesta';
+  const veTodas = ES_SUPER || (MIA&&MIA.turno==='ama_llaves');
+  if(!MIA && !veTodas){w.innerHTML='<div class="ph">Hoy no tienes cuartos asignados.<br><br>Si crees que es un error, avísale al ama de llaves.</div>';return;}
+  if(!MIA) VISTA='rep';
+  const pendiente = MIA ? MIA.estado==='propuesta' : (TODAS.some(a=>a.estado==='propuesta'));
   let html='';
 
-  if(esAma){
+  if(veTodas && MIA){
     html+=`<div class="tabs">
       <button class="${VISTA==='mia'?'on':''}" data-v="mia">Mis cuartos</button>
       <button class="${VISTA==='rep'?'on':''}" data-v="rep">Reparto del día${pendiente?' ⚠':''}</button>
     </div>`;
   }
 
-  if(esAma&&VISTA==='rep'){
+  if(veTodas&&VISTA==='rep'){
     html+=`<div class="hero"><div class="n">Reparto del ${new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{day:'numeric',month:'long'})}</div>
-      <div class="s">${pendiente?'Propuesta del sistema · revísala y valídala antes de arrancar el turno.':'Ya validado por '+esc(MIA.validado_por_nombre||'—')+'.'}</div></div>`;
+      <div class="s">${pendiente?'Propuesta del sistema · revísala y valídala antes de arrancar el turno.':'Ya validado por '+esc((MIA||TODAS.find(a=>a.validado_por_nombre)||{}).validado_por_nombre||'—')+'.'}</div></div>`;
+    if(!TODAS.length){ w.innerHTML=html+'<div class="ph">Todavía no hay reparto para hoy en esta sede.</div>'; engancharTabs(); return; }
     const dest=TODAS.filter(a=>a.employee_id).map(a=>({id:a.id,n:a.nombre_display}));
     html+=TODAS.map(a=>{
       const ts=(a.hk_tareas||[]).sort((x,y)=>x.orden-y.orden);
@@ -209,7 +233,7 @@ function pintar(){
     }).join('');
     html+=pendiente
       ? `<button class="big pri" id="btnVal">✓ Validar el reparto del día</button>`
-      : `<div class="ph" style="padding:16px">Reparto validado ${MIA.validado_at?'a las '+new Date(MIA.validado_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):''}.</div>`;
+      : `<div class="ph" style="padding:16px">Reparto validado${(()=>{const v=(MIA||TODAS.find(a=>a.validado_at)||{}).validado_at;return v?' a las '+new Date(v).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'';})()}.</div>`;
     w.innerHTML=html;
     engancharTabs();
     w.querySelectorAll('select.mv').forEach(s=>s.onchange=async()=>{
@@ -223,7 +247,7 @@ function pintar(){
       bv.disabled=true;
       const {error}=await sb.from('hk_asignaciones')
         .update({estado:'validada',validado_por:USER.id,validado_por_nombre:NOMBRE,validado_at:new Date().toISOString()})
-        .eq('fecha',FECHA).eq('property_id',MIA.property_id);
+        .eq('fecha',FECHA).eq('property_id',PROP);
       bv.disabled=false;
       if(error)return toast('No se pudo validar');
       toast('Reparto validado');cargar();
