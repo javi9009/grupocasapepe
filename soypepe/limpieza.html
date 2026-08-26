@@ -119,7 +119,7 @@ const FECHA=hoyMX();
 const CH={vacia_limpia:['vl','Refresco'],vacia_sucia:['vs','Salida · a fondo'],ocupada:['oc','En casa'],ocupada_blancos:['bl','En casa · cambio de blancos'],rutina:['rut','Rutina']};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const hhmm=t=>t?String(t).slice(0,5):'';
-let EMP=null,NOMBRE=null,USER=null,MOTIVOS=[],MIA=null,TODAS=[],VISTA='mia';
+let EMP=null,NOMBRE=null,USER=null,MOTIVOS=[],MIA=null,TODAS=[],VISTA='mia',ANTES_N=0;
 
 $('hoy').textContent=new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'});
 function toast(t){const e=$('tst');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2200);}
@@ -134,14 +134,39 @@ async function arranca(){
   const {data:m}=await sb.from('hk_motivos').select('*').eq('activo',true).order('orden');
   MOTIVOS=m||[];
   $('shM').innerHTML='<option value="">Todo normal</option>'+MOTIVOS.map(x=>`<option value="${x.codigo}">${esc(x.nombre)}</option>`).join('');
-  cargar();
+  await cargar();
+  vigilarCambios();
+}
+
+// Si el ama de llaves mueve un cuarto o valida el reparto mientras tienes la
+// pantalla abierta, se actualiza sola. Si el realtime no llega, al volver a la
+// app se recarga igual.
+let CANAL=null, RECARGA=null;
+function recargaSuave(){
+  if(FIN) return;              // no interrumpir mientras cierra un cuarto
+  clearTimeout(RECARGA);
+  RECARGA=setTimeout(()=>cargar(), 600);
+}
+function vigilarCambios(){
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) recargaSuave(); });
+  try{
+    if(CANAL) return;
+    CANAL = sb.channel('hk-limpieza')
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_tareas'},()=>recargaSuave())
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_asignaciones'},()=>recargaSuave())
+      .subscribe();
+  }catch(e){ /* sin realtime: queda el visibilitychange */ }
 }
 
 async function cargar(){
   const {data:mias}=await sb.from('hk_asignaciones')
     .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso),hk_checklists:checklist_id(id,nombre,hk_checklist_items(id,orden,tarea,minutos)))')
     .eq('fecha',FECHA).eq('employee_id',EMP);
+  const antes = MIA ? MIA.estado : null;
   MIA=(mias||[])[0]||null;
+  if(antes && MIA && antes==='propuesta' && MIA.estado!=='propuesta') toast('El ama de llaves ya validó tu reparto');
+  if(antes && MIA && (MIA.hk_tareas||[]).length!==ANTES_N) toast('Tu lista de hoy cambió');
+  ANTES_N=(MIA&&MIA.hk_tareas)?MIA.hk_tareas.length:0;
   if(MIA&&MIA.turno==='ama_llaves'){
     const {data:t}=await sb.from('hk_asignaciones')
       .select('*,hk_tareas(id,orden,estatus_area,minutos_estimados,estado,hk_areas(codigo,nombre,piso))')

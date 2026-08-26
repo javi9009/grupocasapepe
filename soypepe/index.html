@@ -1114,14 +1114,48 @@ document.querySelectorAll('#bottomNav button').forEach(b=>b.onclick=()=>setNav(b
 $('avatarBtn').onclick=()=>setNav('cuenta');
 
 /* Hoja "Próximamente" para circulitos */
-// Ama de Llaves: el icono aparece solo si hoy tienes orden de limpieza asignada.
-async function setupLimpieza(){
+// Ama de Llaves: el icono aparece solo si hoy tienes orden de limpieza asignada,
+// y se refresca solo — al volver a la app, cada pocos minutos, y en el momento en
+// que el ama de llaves te mueve un cuarto o valida el reparto (realtime).
+let HK_ASIG_ID=null, HK_CANAL=null;
+function hkHoyMX(){ return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10); }
+
+async function refrescarBotonLimpieza(){
   try{
     if(!EMP) return;
-    const hoy=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);
-    const { data } = await sb.from('hk_asignaciones').select('id').eq('fecha',hoy).eq('employee_id',EMP).limit(1);
-    if(data&&data.length){ const b=$('cirLimpieza'); if(b){ b.hidden=false; b.onclick=()=>{ location.href='/soypepe/limpieza.html'; }; } }
+    const hoy=hkHoyMX();
+    const { data } = await sb.from('hk_asignaciones')
+      .select('id,estado,hk_tareas(id,estado)').eq('fecha',hoy).eq('employee_id',EMP).limit(1);
+    const a=(data||[])[0];
+    const b=$('cirLimpieza'); if(!b) return;
+    if(!a){ b.hidden=true; HK_ASIG_ID=null; return; }
+    HK_ASIG_ID=a.id;
+    b.hidden=false;
+    b.onclick=()=>{ location.href='/soypepe/limpieza.html'; };
+    const ts=a.hk_tareas||[];
+    const pend=ts.filter(t=>t.estado==='pendiente'||t.estado==='en_curso').length;
+    const t=b.querySelector('.t');
+    if(t){
+      t.innerHTML = pend
+        ? 'Mi limpieza <b style="color:var(--accent)">'+pend+'</b>'
+        : (ts.length ? 'Mi limpieza ✓' : 'Mi limpieza');
+    }
+    const ico=b.querySelector('.b');
+    if(ico) ico.style.boxShadow = (a.estado==='propuesta') ? 'none' : '0 0 0 2px var(--accent)';
   }catch(e){ /* módulo aún no disponible para este usuario */ }
+}
+
+function setupLimpieza(){
+  refrescarBotonLimpieza();
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonLimpieza(); });
+  setInterval(refrescarBotonLimpieza, 180000);
+  try{
+    if(HK_CANAL) return;
+    HK_CANAL = sb.channel('hk-mi-orden')
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_asignaciones'},()=>refrescarBotonLimpieza())
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_tareas'},()=>refrescarBotonLimpieza())
+      .subscribe();
+  }catch(e){ /* sin realtime: quedan el intervalo y el visibilitychange */ }
 }
 function openSoon(title){ $('soonTitle').textContent=title+' · Próximamente'; $('soonSheet').classList.add('show'); }
 document.querySelectorAll('.circle').forEach(c=>c.onclick=()=>{ if(c.dataset.href){ location.href=c.dataset.href; return; } if(c.id==='cirLimpieza'){ location.href='/soypepe/limpieza.html'; return; } if(c.dataset.soon==='Mensajes'){ location.href='/m/mensajes.html'; return; } if(c.dataset.soon==='Guías'){ openGuias(); return; }
