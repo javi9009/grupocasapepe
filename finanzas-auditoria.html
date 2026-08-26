@@ -418,7 +418,11 @@ function linkReserva(res){const c=CB[prop];if(!res||!c)return '';
   // sin la r te deja en el listado para que la busques a mano.
   const id=String(res).trim(); const slug=/^r/i.test(id)?id:('r'+id);
   return ' <a class="mini" style="text-decoration:none" target="_blank" rel="noopener" href="https://hotels.cloudbeds.com/connect/'+c+'#/reservations/'+encodeURIComponent(slug)+'">Abrir reserva</a>';}
-function nivel(d){const a=Math.abs(d||0);if(a<0.005)return 0;if(a<1)return 1;if(a<10)return 2;if(a<=100)return 3;return 4;}
+// Por debajo de esto una diferencia no vale el trabajo de perseguirla: redondeos,
+// propinas partidas, un peso de más en un corte. Se da por cuadrada y se puede cerrar.
+const TOL=40;
+function nivel(d){const a=Math.abs(d||0);
+  if(a<TOL)return 0; if(a<=100)return 3; return 4;}
 const NIVEL_ET=['Comprobado','Diferencia de centavos','Diferencia menor','Diferencia','Diferencia grande'];
 function celdas(entro,comp,espera){
   // Siempre hay número: nunca un guión. El color sale del hueco REAL, descontando
@@ -454,12 +458,12 @@ function totales(){
   // Lo que entró sin una venta detrás no cabe en ningún cajón conocido: sabemos el
   // cobro pero no la venta, así que es justo lo que no sabemos dónde está. Va ahí,
   // en negativo, para que la cuenta de arriba siga siendo una resta exacta.
-  // Lo ya dado por compensado sigue restando —si no, la cuenta de arriba deja de
-  // cuadrar— pero ya no cuenta como pendiente: eso es lo que decide el color.
+  // Cuando alguien firma contra qué día se compensa, ya sabemos dónde está ese
+  // dinero: se pasa al cajón verde. Lo que queda sin firmar sigue en el rojo.
   const sv=sinVenta(), aj=sv?Number(sv.dif||0):0, firmado=(sv&&sv.ok)?aj:0;
   if(Array.isArray(c)){
-    const comp=Number(c[0]||0), banco=Number(c[1]||0), falta=Number(c[2]||0)+aj;
-    return {comp,banco,falta,aj:aj,pend:falta-firmado,tot:comp+banco+falta};
+    const comp=Number(c[0]||0)+firmado, banco=Number(c[1]||0), falta=Number(c[2]||0)+(aj-firmado);
+    return {comp,banco,falta,aj:aj,firmado:firmado,pend:falta,tot:comp+banco+falta};
   }
   let comp=0,banco=0,falta=0;      // respaldo por si el panel es más viejo que la función
   (D.conc||[]).forEach(x=>{const st=x[6],cb=x[4];
@@ -467,8 +471,8 @@ function totales(){
     if(cb!==null&&cb!==undefined){comp+=Math.min(Number(x[3]),Number(cb));falta+=Math.max(0,Number(x[3])-Number(cb));}
     else if(st==='pendiente_estado_de_cuenta'){banco+=Number(x[3]);}
     else {falta+=Number(x[3]);}});
-  falta+=aj;
-  return {comp,banco,falta,aj:aj,pend:falta-firmado,tot:comp+banco+falta};}
+  comp+=firmado; falta+=(aj-firmado);
+  return {comp,banco,falta,aj:aj,firmado:firmado,pend:falta,tot:comp+banco+falta};}
 
 /* ---------- carga ---------- */
 async function rpc(fn,args){const {data,error}=await sb.rpc(fn,args||{});if(error)throw error;return data;}
@@ -538,10 +542,10 @@ function claseDia(r){
   if(Number(r[5])>0) return 'nd';
   if(!(Number(r[1])>0)) return 'nd';
   let c;
-  if(Number(r[7]||0)>0 || Number(r[8]||0)>0) c='bad';
+  if(Number(r[7]||0)>=TOL || Number(r[8]||0)>0) c='bad';
   else if(Number(r[6]||0)>0) c='warn';
   else c='ok';
-  if(Math.abs(Number(r[11]||0))>0.005) c='bad';   // entró dinero sin venta detrás, o al revés
+  if(Math.abs(Number(r[11]||0))>=TOL) c='bad';   // entró dinero sin venta detrás, o al revés
   if(Number(r[9]||0)>0) c+=' exc';       // revisiones con dinero detrás
   else if(Number(r[2])>0) c+=' aviso';    // sólo para tener en cuenta
   if(Number(r[10]||0)>0) c+=' cerrado';   // la póliza ya se firmó: día bajo candado
@@ -673,7 +677,7 @@ let SV=null;
 function sinVenta(){ const x=(D&&D.sin_venta)||null;
   if(!Array.isArray(x)) return null;
   const dif=Number(x[2]||0);
-  if(Math.abs(dif)<0.005) return null;
+  if(Math.abs(dif)<TOL) return null;          // por debajo de la tolerancia, no es noticia
   const visto=x[5]||null;
   const ok=!!(visto&&Math.abs(Number(visto.monto||0)-dif)<0.005);
   return {decl:Number(x[0]||0), capt:Number(x[1]||0), dif:dif, saldo:Number(x[3]||0),
@@ -726,15 +730,17 @@ async function darPorCompensado(){
 // Un número en verde bajo «no sabemos dónde está» se contradice solo: si ya está
 // compensado hay que decir contra qué, no dejar la cifra suelta.
 function subFalta(t){
+  return (t.aj-t.firmado)<0?'Cobros sin ruta, y dinero que entró sin una venta detrás'
+                           :'Cobros sin ruta o que el liquidador reportó de menos';
+}
+// Lo compensado sí sabemos dónde está: cuenta en verde, y aquí se dice contra qué.
+function subComp(t){
+  const base='El método de cobro confirma la misma cifra';
+  if(Math.abs(t.firmado||0)<0.005) return base;
   const v=sinVenta();
-  if(v && v.ok && Math.abs(t.pend)<0.005){
-    const c=(v.casa||[]).filter(x=>Math.abs(Number(x.monto||0))>0.005)
-      .map(x=>fechaCorta(x.fecha));
-    return c.length?('Ya está dado por compensado contra el '+c.join(' y el '))
-                   :'Ya está dado por compensado';
-  }
-  return t.aj<0?'Cobros sin ruta, y dinero que entró sin una venta detrás'
-               :'Cobros sin ruta o que el liquidador reportó de menos';
+  const c=((v&&v.casa)||[]).filter(x=>Math.abs(Number(x.monto||0))>0.005).map(x=>fechaCorta(x.fecha));
+  return 'Incluye $'+m(Math.abs(t.firmado))+' compensados contra el '
+    +(c.length?c.join(' y el '):'día contrario');
 }
 function pintaResumen(){
   document.getElementById('propsub').textContent=propNombre;
@@ -746,12 +752,12 @@ function pintaResumen(){
   document.getElementById('tiles').innerHTML=
     tile('Cobrado en el día',mon(D.cobrado),(D.conc||[]).length+' métodos de cobro',true)
    +'<span class="op">=</span>'
-   +tile('Sabemos dónde está',mon(t.comp),'El método de cobro confirma la misma cifra',false,'comp','ok')
+   +tile('Sabemos dónde está',mon(t.comp),subComp(t),false,'comp','ok')
    +'<span class="op">+</span>'
    +tile('Falta el estado de cuenta',mon(t.banco),'Pasó por TPV; falta que el banco lo confirme',false,'banco',t.banco>0?'warn':null)
    +'<span class="op">+</span>'
    +tile('No sabemos dónde está',mon(t.falta), subFalta(t),
-      false,'falta', Math.abs(t.pend)>0.005?'bad':(Math.abs(t.falta)>0.005?'ok':null));
+      false,'falta', Math.abs(t.pend)>=TOL?'bad':(Math.abs(t.falta)>0.005?'ok':null));
   const base=Math.max(t.comp+t.banco+Math.abs(t.falta), 0.01);
   const p=v=>Math.abs(v)*100/base;
   document.getElementById('barra').innerHTML='<i style="width:'+p(t.comp)+'%;background:var(--ok)"></i>'
