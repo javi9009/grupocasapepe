@@ -384,7 +384,8 @@ const CAT={faltante_efectivo:["Faltante de efectivo","bad"],descuadre_metodo:["C
  caja_descuadrada:["Caja descuadrada","bad"],fuente_faltante:["Fuente faltante","warn"],
  sobrante_efectivo:["Sobrante en la caja fuerte","info"],desayuno_sin_venta:["Desayunos de más","info"],
  cosmica_deposito_tarde:["Cósmica cerró de madrugada","info"],cobro_duplicado:["Cobro capturado dos veces","bad"],
- tour_sin_ayb:["Falta la parte de A&B del tour","info"]};
+ tour_sin_ayb:["Falta la parte de A&B del tour","info"],
+ compensacion_forzada:["Compensación forzada","warn"]};
 const INC_ET={cancela:["Cancelación","bad"],descuento:["Descuento o cortesía","warn"],
  mueve_mesa:["Cambio de mesa","none"],modifica:["Modificación de cuenta","warn"],
  divide:["Cuenta dividida","warn"],autoriza:["Autorización de gerente","none"]};
@@ -402,6 +403,8 @@ const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','
 const DOW=['L','M','X','J','V','S','D'];
 let abierto={}, tileAbierto=null, redactando=null, borrador={}, enviados={}, polizaEdit=null, cargando=false;
 let enviadoInfo={};
+// Todo lo que alguien dio por bueno sin explicarlo. Dirección lo mira aparte.
+let COMP=[];
 
 const m=v=>(v===null||v===undefined)?'—':Number(v).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -639,6 +642,11 @@ async function cargaDia(f){
   D=d;
   if(D&&D.error){D=null;document.getElementById('gate').innerHTML='<div class="empty">No tienes acceso a esta propiedad.</div>';}
   enviados={}; enviadoInfo={};
+  COMP=[];
+  try{ const cc=await rpc('aud_compensaciones',
+         {p_property:prop, p_desde:'2026-05-01', p_hasta:f});
+       if(cc&&!cc.error) COMP=cc; }catch(e){}
+  if(tk!==CARGA) return;
   try{ const av=await rpc('aud_panel_avisos',{p_property:prop,p_fecha:f});
     if(tk!==CARGA) return;
     if(av&&!av.error) Object.keys(av).forEach(k=>{
@@ -949,6 +957,51 @@ function botonPreguntar(id,resp,ctx){
   return '<span class="difacc"><button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'+esc(resp)
     +'" data-ctx="'+esc(ctx)+'">Pedir explicación a '+esc(resp.split(' ')[0])+'</button></span>';
 }
+// Dos cosas muy distintas, y por eso son dos botones.
+//
+// COMPENSAR es cuadrar un día contra otro: el dinero que falta hoy sobra en otro día
+// cercano, por el MISMO método de cobro, y las cifras cuadran exacto. Eso es un
+// arrastre —se depositó tarde— y el sistema lo demuestra antes de dejar cerrarlo.
+// Nunca cruza la terminal con el efectivo: son cajas distintas y que dos números
+// coincidan no los convierte en el mismo dinero.
+//
+// ACEPTAR LA PÉRDIDA es lo otro: no hay de dónde sacarlo, alguien con mando decide
+// darlo por perdido y firma por qué. Va a Compensaciones forzadas y avisa a dirección.
+function arrastreDe(punto){
+  return ((D&&D.arrastres)||[]).find(a=>a[0]===punto)||null;
+}
+function botonCompensar(ref, punto){
+  const a=punto?arrastreDe(punto):null;
+  let h='<span class="difacc">';
+  if(a) h+='<button class="mini go" type="button" data-arr="'+esc(punto)+'">Dar por compensado · se arrastró</button>'
+          +'<span class="sub" style="margin:0">'+esc(a[3])+'</span>';
+  h+='<button class="mini" type="button" data-comp="'+esc(ref)+'">Aceptar la pérdida</button>';
+  return h+'</span>';
+}
+async function arrastrar(punto,btn){
+  const nota=prompt('Se va a cuadrar contra el otro día. ¿Quieres añadir alguna nota? (opcional)');
+  if(nota===null) return;
+  btn.disabled=true; btn.textContent='Cuadrando…';
+  try{
+    const r=await rpc('aud_arrastre_confirmar',{p_property:prop,p_fecha:fecha,p_punto:punto,p_nota:nota});
+    if(r&&r.ok){ estadoRecalc(r.mensaje,'ok'); await cargaMes(); await cargaDia(fecha); }
+    else{ estadoRecalc((r&&r.mensaje)||'No se pudo.','bad');
+          btn.disabled=false; btn.textContent='Dar por compensado · se arrastró'; }
+  }catch(e){ estadoRecalc('No se pudo: '+(e.message||e),'bad');
+             btn.disabled=false; btn.textContent='Dar por compensado · se arrastró'; }
+}
+async function compensar(ref,btn){
+  const motivo=prompt('Vas a aceptar la pérdida: este hueco se cierra sin que nadie lo explique.\n\n¿Por qué?  Queda firmado con tu nombre, entra en Compensaciones forzadas y le llega un aviso a dirección.');
+  if(motivo===null) return;
+  btn.disabled=true; btn.textContent='Firmando…';
+  try{
+    const r=await rpc('aud_compensar',{p_property:prop,p_fecha:fecha,p_ref:ref,p_motivo:motivo});
+    if(r&&r.ok){ estadoRecalc(r.mensaje,'ok'); await cargaMes(); await cargaDia(fecha); }
+    else{ estadoRecalc((r&&r.mensaje)||'No se pudo dar por compensado.','bad');
+          btn.disabled=false; btn.textContent='Dar por compensado'; }
+  }catch(e){ estadoRecalc('No se pudo: '+(e.message||e),'bad');
+             btn.disabled=false; btn.textContent='Dar por compensado'; }
+}
 function panelFila(id,resp,ctx,cls,ind,datos){
   let h='';
   if(datos) CTXD[id]=datos;
@@ -992,7 +1045,8 @@ function filaLiquidador(pt,c,res,q,pl,et){
   const usaB=delBancoT&&!efec, cuadra=usaB?okB:ok, sev=usaB?nvB:nv;
   return '<tr class="lv3'+(cuadra?'':' s'+sev)+'"><td class="ind2">'+esc(titulo)
     +'<span class="sub">'+esc(sub)+'</span>'
-    +(cuadra?'':((delBancoT&&!enviados[id])?notaLiquidador(et||pt):botonPreguntar(id,resp,ctx)))+'</td>'
+    +(cuadra?'':((delBancoT&&!enviados[id])?notaLiquidador(et||pt):botonPreguntar(id,resp,ctx)))
+    +(cuadra?'':botonCompensar(id, pt))+'</td>'
     +(usaB
        ?'<td class="n">—</td><td class="n">'+m(res.c)+'</td>'
         +'<td class="n'+(okB?' cuadra':' d'+nvB)+'">'+(okB?'0.00':m(gapReal))+'</td>'
@@ -1194,7 +1248,8 @@ function vistaDia(){
         lista:lst.slice(0,8), sobran:Math.max(0,lst.length-8),
         donde:(PLAT_ET[pl]||pl)+' del '+fechaLarga(fecha)+'.'};
       filas+='<tr class="lv2"><td class="ind1 stripe '+col+'"><button class="tg" type="button" data-k="'+kt+'" aria-expanded="'+(at?'true':'false')+'">'+(at?'−':'+')+'</button>'
-        +esc(etPt)+((hayGap&&(!soloBanco||enviados[idPt]))?botonPreguntar(idPt,respPt,ctxPt):'')+'</td>'
+        +esc(etPt)+((hayGap&&(!soloBanco||enviados[idPt]))?botonPreguntar(idPt,respPt,ctxPt):'')
+        +(hayGap?botonCompensar(idPt, pt):'')+'</td>'
         +celdas(sum,compPt,q.esp>0?sum:0)+'<td class="n">'+rs.length+'</td><td>'
         +chip(col,Math.abs(gap)<0.01?(q.esp>0?'Falta el estado de cuenta':'Comprobado'):NIVEL_ET[nivel(gap)])+'</td></tr>'
         +panelFila(idPt,respPt,ctxPt,'lv2','ind1',datosPt);
@@ -1489,7 +1544,8 @@ function vistaExc(){
           :(env?'<span class="chip ok">Mensaje enviado</span>'
                :'<button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'+esc(quienDe(e).split(' (')[0])+'" data-ctx="'+esc(e[3])+'">Preguntar por SoyPepe</button>')
             +'<button class="mini" type="button" data-exp="'+esc(e[0])+'">Explicar aquí</button>'
-            +'<button class="mini go" type="button" data-conc="'+esc(e[0])+'">Conciliar</button>')
+            +'<button class="mini go" type="button" data-conc="'+esc(e[0])+'">Conciliar</button>'
+            +(conDinero?'<button class="mini" type="button" data-comp="'+esc(id)+'">Aceptar la pérdida</button>':''))
         +'</div>'
         +(env?'<div class="res ok" style="grid-column:1/-1">'+esc(env)+'</div>':'')
         +(CONC[e[0]]?'<div class="res '+(CONC[e[0]].ok?'ok':'bad')+'" style="grid-column:1/-1">'+esc(CONC[e[0]].mensaje||'')+'</div>':'')
@@ -1537,7 +1593,32 @@ function vistaExc(){
     +'<div class="sec">'+bCerradas+'</div></section>'
     +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>4 · Incidencias del día <span class="chip info">!</span></h2>'
     +'<p class="lede">Lo que se tocó dentro de una cuenta: cancelaciones, cambios de mesa, descuentos y cortesías. No siempre es un error — pero tiene nombre y hora. '
-    +'Es el módulo de tickets al revés: de dirección o jefatura hacia el colaborador.</p></div>'+b2+'</section>';
+    +'Es el módulo de tickets al revés: de dirección o jefatura hacia el colaborador.</p></div>'+b2+'</section>'
+    +bloqueCompensaciones();
+}
+// Un hueco que se dio por bueno sin corregir el origen. No pinta el día de rojo —el
+// dinero quedó asignado— pero no se pierde de vista: aquí está quién lo firmó y por qué.
+function bloqueCompensaciones(){
+  const ls=COMP||[];
+  const cuerpo=!ls.length
+    ? '<div class="empty">Nadie ha aceptado ninguna pérdida. Es la respuesta que queremos.</div>'
+    : '<div class="card scroll"><table><thead><tr><th>Día</th><th>Dónde</th><th class="n">Importe</th>'
+      +'<th>Motivo</th><th>Quién lo firmó</th><th class="n">Cuándo</th></tr></thead><tbody>'
+      +ls.map(c=>'<tr'+(c[0]===fecha?' class="lv2"':'')+'>'
+        +'<td class="mono">'+esc(fechaCorta(c[0]))+'</td>'
+        +'<td>'+esc(c[1]||'—')+'</td>'
+        +'<td class="n"><b>'+mon(c[2])+'</b></td>'
+        +'<td>'+esc(c[3]||'')+'</td>'
+        +'<td>'+esc(c[4]||'—')+(c[5]?'<span class="sub">'+esc(c[5])+'</span>':'')+'</td>'
+        +'<td class="n mono">'+esc(c[6]||'')+'</td></tr>').join('')
+      +'</tbody><tr class="sum"><td colspan="2">Total dado por compensado</td>'
+      +'<td class="n">'+mon(ls.reduce((a,c)=>a+Number(c[2]||0),0))+'</td><td colspan="3"></td></tr></table></div>';
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>5 · Compensaciones forzadas'+(ls.length?' <span class="chip warn">'+ls.length+'</span>':'')+'</h2>'
+    +'<p class="lede">Pérdidas aceptadas: huecos que nadie pudo explicar y que alguien con mando dio por buenos. '
+    +'No son arrastres —un arrastre se cuadra contra otro día por el mismo método y no entra aquí—: es dinero '
+    +'que se dio por perdido. El día no sale en rojo porque ya quedó asignado; lo que se mira aquí es la firma. '
+    +'Cada una levanta un aviso a dirección el día que se hace, y de ahí no se borra.</p></div>'+cuerpo+'</section>';
 }
 function panelExplicar(id){
   const v=borrador['exp:'+id]!==undefined?borrador['exp:'+id]:'';
@@ -1608,7 +1689,20 @@ function vistaFuentes(){
     +'<p class="lede">Cloudbeds, Poster, Turitop y Stripe se consultan solas cada madrugada. CashProtect llega por correo y un script lo recoge cada hora. '
     +'Las terminales no tienen forma automática de leerse: su archivo se sube aquí.</p></div>'
     +'<div class="card scroll"><table><thead><tr><th>Fuente</th><th class="n">Registros</th><th class="n">Monto</th><th class="n">Hora</th><th>Estado</th></tr></thead><tbody>'+filas+'</tbody></table></div>'
-    +(zonas?'<div class="sec">'+zonas+'</div>':'<div class="empty">No falta ningún archivo de este día.</div>')+'</section>';
+    +(zonas?'<div class="sec">'+zonas+'</div>':'<div class="empty">No falta ningún archivo de este día.</div>')
+    // El estado de cuenta no cuelga de un día: cubre un mes entero y resuelve cosas
+    // que ningún archivo de terminal puede resolver. Por eso vive aparte y siempre.
+    +'<div class="sec"><div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">'
+    +'<div><b>Estado de cuenta de Banorte</b><span class="sub">Cubre el mes entero, no un día. '
+    +'De aquí salen dos cosas que no están en ningún otro archivo: el depósito con el que la terminal '
+    +'liquida uno a tres días después, y los pagos de Airbnb, que cobran la tarjeta el día de la reserva '
+    +'y depositan al siguiente juntando CDMX y Puebla en un solo traspaso.</span></div>'
+    +'<div class="drop" data-edo="zona">'
+    +'<div class="txt">Arrastra aquí el PDF tal como lo baja el banco. Se lee en tu navegador y antes de '
+    +'guardar nada te enseño cuántos abonos y cargos entendí.</div>'
+    +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".pdf,.csv,.txt,.xlsx,.xls" hidden></label></div>'
+    +'<div class="res" data-edores="1" hidden></div></div></div>'
+    +'</section>';
 }
 
 /* ---------- lector de estados de cuenta de terminal ----------
@@ -1819,6 +1913,76 @@ function archivoAMatriz(f){
   if(/\.pdf$/.test(nom)) return pdfAMatriz(f);
   return f.text().then(aMatriz);
 }
+
+/* ---------- lector del estado de cuenta del banco ----------
+   No es el corte de la terminal: es la cuenta de cheques. Cada movimiento viene en un
+   renglón con esta forma:
+     REFERENCIA  dd/mm/aaaa  dd/mm/aaaa  0000001  CONCEPTO  $IMPORTE - $SALDO
+   El abono pone el importe ANTES del guión y el cargo DESPUÉS. El saldo que deja cada
+   renglón es único dentro del archivo, así que sirve de huella para no cargar dos
+   veces lo mismo. De aquí salen dos cosas que no se pueden sacar de ningún otro lado:
+   el depósito de la terminal y los pagos de Airbnb, que llegan con días de retraso. */
+function leeEstadoBanorte(matriz){
+  const movs=[], malos=[];
+  const RX =/^(\d{6,12})\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+(.*)$/;
+  const ABO=/\$([\d,]+\.\d{2})\s*-\s*\$([\d,]+\.\d{2})/;
+  const CAR=/-\s*\$([\d,]+\.\d{2})\s+\$([\d,]+\.\d{2})/;
+  const num=t=>parseFloat(String(t).replace(/,/g,''));
+  (matriz||[]).forEach(fila=>{
+    const linea=(Array.isArray(fila)?fila.join(' '):String(fila==null?'':fila)).replace(/\s+/g,' ').trim();
+    const m=RX.exec(linea); if(!m) return;
+    const resto=m[5], a=ABO.exec(resto), c=CAR.exec(resto);
+    let tipo,monto,saldo;
+    if(a && (!c || a.index<=c.index)){ tipo='abono'; monto=num(a[1]); saldo=num(a[2]); }
+    else if(c){ tipo='cargo'; monto=num(c[1]); saldo=num(c[2]); }
+    else { malos.push(linea); return; }
+    const f=m[2];
+    movs.push({fecha: f.slice(6)+'-'+f.slice(3,5)+'-'+f.slice(0,2),
+               referencia: m[1],
+               concepto: resto.split(/\s+-\s+\$|\s+\$/)[0].replace(/\s+/g,' ').trim().slice(0,80),
+               tipo: tipo, monto: monto, saldo: saldo});
+  });
+  return {movs, malos};
+}
+// ¿Esto es un estado de cuenta y no un corte de terminal?
+function pareceEstadoCuenta(matriz){
+  const t=(matriz||[]).slice(0,60).map(x=>Array.isArray(x)?x.join(' '):String(x)).join(' ').toUpperCase();
+  return /CUENTA[S]? DE CHEQUES|SALDO DISPONIBLE|SALDO ACTUAL|ESTADO DE CUENTA/.test(t)
+      && /BANCO|BANORTE|MERCANTIL DEL NORTE|BBVA|SANTANDER/.test(t);
+}
+let EDO=null;
+async function subeEstado(f, pinta1){
+  pinta1('','Leyendo '+esc(f.name)+'…');
+  let matriz;
+  try{ matriz=await archivoAMatriz(f); }
+  catch(err){ pinta1('bad',esc(String(err.message||err))); return; }
+  const r=leeEstadoBanorte(matriz||[]);
+  if(!r.movs.length){
+    pinta1('bad','No reconocí ningún movimiento con la forma de un estado de cuenta de Banorte. '
+      +'Si es de otro banco todavía no lo sé leer: mándamelo y lo agrego.');
+    return; }
+  const ab=r.movs.filter(x=>x.tipo==='abono'), ca=r.movs.filter(x=>x.tipo==='cargo');
+  const sum=l=>l.reduce((a,x)=>a+x.monto,0);
+  const dias=[...new Set(r.movs.map(x=>x.fecha))].sort();
+  EDO={movs:r.movs, archivo:f.name};
+  pinta1('ok','Leí <b>'+r.movs.length+'</b> movimiento(s) del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+': '
+    +'<b>'+ab.length+'</b> abonos por <b>$'+m(sum(ab))+'</b> y <b>'+ca.length+'</b> cargos por <b>$'+m(sum(ca))+'</b>.'
+    +'<span class="sub" style="margin:0">Con esto se cuadra el depósito de la terminal y los pagos de Airbnb, '
+    +'que llegan uno o dos días después de cobrar la tarjeta.</span>'
+    +'<div style="margin-top:8px"><button class="mini go" type="button" data-edo="guardar">Guardar y volver a cuadrar</button></div>');
+}
+async function guardaEstado(el){
+  if(!EDO) return;
+  el.className='res'; el.innerHTML='Guardando…';
+  try{
+    const r=await rpc('aud_cargar_estado_cuenta',
+      {p_meta:{property_id:prop, banco:'banorte', archivo:EDO.archivo, nota:null}, p_movs:EDO.movs});
+    el.className='res '+((r&&r.ok)?'ok':'bad');
+    el.innerHTML=esc((r&&r.mensaje)||'No se pudo guardar.');
+    if(r&&r.ok){ EDO=null; await cargaMes(); await cargaDia(fecha); }
+  }catch(e){ el.className='res bad'; el.innerHTML=esc(String(e.message||e)); }
+}
+
 let SUB={}, DIAG='';
 async function subeArchivo(zona,f){
   const punto=zona.dataset.p, proveedor=zona.dataset.prov;
@@ -1830,15 +1994,13 @@ async function subeArchivo(zona,f){
   catch(err){ pinta1('bad',esc(String(err.message||err))); return; }
   const r=leeMovimientos(matriz||[]);
   if(r.error){
-    const texto=(matriz||[]).slice(0,40).map(x=>Array.isArray(x)?x.join(' '):String(x)).join(' ').toUpperCase();
-    if(/CUENTA[S]? DE CHEQUES|SALDO DISPONIBLE|SALDO ACTUAL|ESTADO DE CUENTA/.test(texto)
-       && /BANCO|BANORTE|MERCANTIL DEL NORTE|BBVA|SANTANDER/.test(texto)){
-      pinta1('bad','Eso es el <b>estado de cuenta del banco</b>, no el corte de la terminal. '
-        +'Trae saldos y movimientos de la cuenta de cheques, no los cobros con tarjeta uno por uno, '
-        +'que es lo que hace falta para cuadrar este punto. '
-        +'En el portal de la terminal busca el reporte de ventas o de transacciones del día. '
-        +'<span class="sub" style="margin:0">El estado de cuenta del banco sí sirve, pero para otra cosa: '
-        +'comprobar el depósito que hace la terminal. Eso todavía no está montado; dímelo y lo hago.</span>');
+    // Es el estado de cuenta, no el corte de la terminal. No es un error del usuario:
+    // sirve, sólo que para otra cosa. Se lee como lo que es y se ofrece guardarlo.
+    if(pareceEstadoCuenta(matriz)){
+      pinta1('','Eso es el <b>estado de cuenta del banco</b>, no el corte de la terminal — pero sirve igual. '
+        +'Lo leo como estado de cuenta…');
+      await subeEstado(f, pinta1);
+      el.dataset.edoAqui='1';
       return; }
     // Un mensaje que no enseña nada no sirve para arreglarlo: aquí va lo que leí.
     const muestra=(matriz||[]).slice(0,12)
@@ -1970,6 +2132,12 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
           catch(err){ dg.textContent='No pude copiarlo; selecciónalo a mano.'; } return; }
   const gtpv=e.target.closest('[data-tpv]');
   if(gtpv){ gtpv.disabled=true; await guardaArchivo(gtpv.dataset.tpv); return; }
+  const ged=e.target.closest('button[data-edo="guardar"]');
+  if(ged){ ged.disabled=true; await guardaEstado(ged.closest('.res')); return; }
+  const ba=e.target.closest('[data-arr]');
+  if(ba){ await arrastrar(ba.dataset.arr, ba); return; }
+  const bc=e.target.closest('[data-comp]');
+  if(bc){ await compensar(bc.dataset.comp, bc); return; }
   const td=e.target.closest('[data-tardio]');
   if(td){ td.disabled=true; DT=null; await moverDeposito(td.dataset.tardio,td.dataset.dest,td.dataset.linea); return; }
   const sv=e.target.closest('[data-sinventa]');
@@ -2004,16 +2172,24 @@ document.getElementById('cuerpo').addEventListener('input',e=>{const el=e.target
     f.innerHTML='<td colspan="2">Sumas '+(cuadra?'iguales':'DESIGUALES')+'</td><td class="n">'+m(td)+'</td><td class="n">'+m(th)
       +'</td><td colspan="2">'+chip(cuadra?'ok':'bad',cuadra?'Cuadra':'Δ '+m(td-th))+'</td>';}
 });
+// Una zona de arrastre puede ser la de una terminal o la del estado de cuenta.
+function recibeArchivo(zona,f){
+  if(!zona||!f)return;
+  if(zona.dataset.edo){
+    const el=document.querySelector('[data-edores]');
+    subeEstado(f,(cls,html)=>{ el.hidden=false; el.className='res '+cls; el.innerHTML=html; });
+  } else subeArchivo(zona,f);
+}
 document.getElementById('cuerpo').addEventListener('change',e=>{
   if(e.target.type!=='file')return;
   const zona=e.target.closest('.drop'), f=e.target.files[0]; if(!f)return;
-  subeArchivo(zona,f);
+  recibeArchivo(zona,f);
 });
 document.addEventListener('dragover',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(!z)return;e.preventDefault();z.classList.add('over');});
 document.addEventListener('dragleave',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(z)z.classList.remove('over');});
 document.addEventListener('drop',e=>{const z=e.target.closest?e.target.closest('.drop'):null;if(!z)return;
   e.preventDefault();z.classList.remove('over');
-  const f=e.dataTransfer.files[0];if(!f)return; subeArchivo(z,f);});
+  const f=e.dataTransfer.files[0];if(!f)return; recibeArchivo(z,f);});
 
 let recalculando=false;
 document.getElementById('recalc').addEventListener('click',async function(){
