@@ -218,6 +218,10 @@ tr.lv4.s3 .difnota{color:var(--sev3)} tr.lv4.s4 .difnota{color:var(--sev4)}
 .stripe.ok{border-left-color:var(--ok)} .stripe.warn{border-left-color:var(--warn)}
 .stripe.bad{border-left-color:var(--bad)} .stripe.none{border-left-color:var(--rule-2)}
 .stripe.info{border-left-color:var(--info)}
+.cajafila{cursor:pointer}
+.cajafila:hover{background:var(--surface-2,rgba(0,0,0,.03))}
+.cajafila.on td{border-bottom:0}
+.cajadet td{background:var(--surface-2,rgba(0,0,0,.02))}
 .chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.67rem;font-weight:600;white-space:nowrap}
 .chip.ok{background:var(--ok-bg);color:var(--ok)} .chip.warn{background:var(--warn-bg);color:var(--warn)}
 .chip.bad{background:var(--bad-bg);color:var(--bad)} .chip.none{background:var(--none-bg);color:var(--none)}
@@ -392,6 +396,8 @@ const SEC=[['resumen','Toda la caja'],['dia','El día'],['arqueo','Arqueo de caj
 
 let ACC=null, prop=null, propNombre='', fecha=null, sec='dia', D=null, cargando=false;
 let MES=[], RES=null, justificando=null, CTAS=null;
+// Árbol de cajas: dónde está parado el efectivo ahora mismo, caja por caja.
+let CAJAS=null, LIBRO={}, cajaAbierta=null, formCaja=null;
 let tiraOffset=0, calBase=null, CAL=[];
 const MIN_FECHA='2026-05-01';
 const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -429,7 +435,23 @@ async function arranque(){
   $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
     $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
     if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
+    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();}
     pinta();});
+  // El árbol de cajas se abre y se cierra en el sitio, y los movimientos de cada una
+  // se piden sólo cuando alguien la abre.
+  $('cuerpo').addEventListener('click',async e=>{
+    const nf=e.target.closest('[data-cajaform]');
+    if(nf){ formCaja=nf.dataset.cajaform||null; pinta(); return; }
+    const tg=e.target.closest('[data-turgo]');
+    if(tg){ tg.disabled=true; await guardaTurnos(); tg.disabled=false; return; }
+    const go=e.target.closest('[data-cajago]');
+    if(go){ go.disabled=true; await guardaCaja(go.dataset.cajago); return; }
+    const fi=e.target.closest('.cajafila');
+    if(fi){ const id=fi.dataset.caja;
+      cajaAbierta = (cajaAbierta===id) ? null : id;
+      pinta();
+      if(cajaAbierta && !LIBRO[cajaAbierta]){ await cargaLibro(cajaAbierta); pinta(); }
+    }});
   document.getElementById('tira').addEventListener('click',e=>{const b=e.target.closest('button.d');
     if(!b||!b.dataset.f)return;fecha=b.dataset.f;$('dia').value=fecha;carga();});
   $('tiraAnt').addEventListener('click',async()=>{tiraOffset++;await cargaMes();$('tira').innerHTML=pintaTira();});
@@ -799,6 +821,189 @@ function vistaDia(){
 }
 
 // ── Arqueo de caja (Puebla y cualquier caja chica) ────────────────────────
+/* ---------- Dónde está el efectivo ----------
+   El dinero no está en un sitio: está repartido en cajas que cuelgan unas de otras.
+   CashProtect manda sobre su propio saldo, porque lo cuenta la máquina; las demás
+   llevan libro, y por eso se puede abrir cada una y ver de dónde salió cada peso. */
+const TIPO_CAJA={caja_fuerte:'Caja fuerte',caja_grande:'Caja grande',fondo_caja:'Fondo de caja',
+  caja_chica:'Caja chica',banco:'Banco'};
+const MOV_ET={traspaso_entra:['ok','Entró de otra caja'],traspaso_sale:['warn','Salió a otra caja'],
+  gasto:['bad','Gasto'],ingreso_turno:['ok','Efectivo del turno'],
+  deposito:['ok','Depósito'],retiro:['warn','Retiro']};
+
+/* ---------- Puebla: el efectivo de cada turno ----------
+   Aquí no hay CashProtect que cuente solo, así que el efectivo entra a mano turno a
+   turno. Al lado se enseña lo que dicen Poster, Cloudbeds y Turitop, para que la
+   diferencia salte el mismo día y no a fin de mes. */
+let TUR=null;
+async function cargaTurnos(){
+  try{ const r=await rpc('aud_turnos_efectivo',{p_property:prop,p_fecha:fechaISO(fecha)});
+       TUR=(r&&!r.error&&r.ok)?r:null; }
+  catch(e){ TUR=null; }
+}
+function bloqueTurnos(){
+  if(!TUR) return '';
+  const T=TUR.turnos||[], sis=TUR.sistemas||{};
+  const suma=a=>T.filter(t=>t[2]===a).reduce((s,t)=>s+Number(t[4]||0),0);
+  const linea=(a,et,fte)=>{
+    const cap=suma(a), dice=Number(sis[a]||0), dif=cap-dice, ok=Math.abs(dif)<1;
+    return '<tr><td>'+esc(et)+'<span class="sub">Lo que dice '+esc(fte)+'</span></td>'
+      +'<td class="n">'+m(cap)+'</td><td class="n">'+m(dice)+'</td>'
+      +'<td class="n">'+(ok?'<span class="chip ok">Cuadra</span>':'<b style="color:var(--bad)">'+m(dif)+'</b>')+'</td></tr>';
+  };
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>El efectivo de cada turno</h2>'
+    +'<p class="lede">Esta propiedad no tiene CashProtect, así que el efectivo se escribe a mano. '
+    +'Cada turno que se captura entra a <b>'+esc(TUR.caja||'la caja grande')+'</b> y se compara solo '
+    +'contra lo que los sistemas dicen que se cobró en efectivo.</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Turno</th><th class="n">Efectivo</th>'
+    +'<th></th><th>Quién lo capturó</th></tr></thead><tbody>'
+    +T.map(t=>'<tr><td>'+esc(t[1])+(t[6]?'<span class="sub">'+esc(t[6])+'</span>':'')+'</td>'
+      +'<td class="n" style="width:150px"><input class="tur" data-turno="'+esc(t[0])+'" type="number" step="0.01" '
+      +'style="width:100%;text-align:right" value="'+(t[4]==null?'':Number(t[4]).toFixed(2))+'" placeholder="0.00"></td>'
+      +'<td class="n" style="width:1%"></td>'
+      +'<td>'+esc(t[5]||'—')+'</td></tr>').join('')
+    +'</tbody></table></div>'
+    +'<div style="margin-top:10px"><button class="btn" type="button" data-turgo="1">Guardar los turnos</button>'
+    +'<span class="res" id="tur_res" hidden style="margin-left:10px"></span></div>'
+    +'<div class="card scroll" style="margin-top:16px"><table><thead><tr><th>Contra qué se compara</th>'
+    +'<th class="n">Capturado</th><th class="n">Dice el sistema</th><th class="n">Diferencia</th></tr></thead><tbody>'
+    +linea('ayb','Cósmica','Poster')+linea('recepcion','Front','Cloudbeds y Turitop')
+    +'</tbody></table></div></section>';
+}
+async function guardaTurnos(){
+  const el=$('tur_res'), campos=[...document.querySelectorAll('input.tur')];
+  el.hidden=false; el.className='res'; el.textContent='Guardando…';
+  try{
+    for(const c of campos){
+      if(c.value==='') continue;
+      await rpc('aud_turno_efectivo_guardar',{p:{property_id:prop,turno:c.dataset.turno,
+        monto:c.value,fecha:fechaISO(fecha)}});
+    }
+    TUR=null; await cargaTurnos(); pinta();
+    const e2=$('tur_res'); if(e2){ e2.hidden=false; e2.className='res ok'; e2.textContent='✓ Guardado'; }
+  }catch(e){ el.className='res bad'; el.textContent=String(e.message||e); }
+}
+
+async function cargaCajas(){
+  try{ const r=await rpc('aud_cajas',{p_property:prop,p_fecha:fechaISO(fecha)});
+       CAJAS=(r&&!r.error)?r:{cajas:[],total:0}; }
+  catch(e){ CAJAS={cajas:[],total:0}; }
+}
+async function cargaLibro(id){
+  if(LIBRO[id]) return LIBRO[id];
+  try{ const r=await rpc('aud_caja_libro',{p_caja:id,p_hasta:fechaISO(fecha)});
+       LIBRO[id]=(r&&!r.error)?r:{movs:[]}; }
+  catch(e){ LIBRO[id]={movs:[]}; }
+  return LIBRO[id];
+}
+function filaLibro(mv){
+  const et=MOV_ET[mv[1]]||['none',mv[1]], neg=Number(mv[3])<0;
+  return '<tr><td class="mono">'+esc(fmtCorto(mv[0]))+'</td>'
+    +'<td>'+chip(et[0],et[1])+'</td>'
+    +'<td>'+esc(mv[2])+(mv[8]?'<span class="sub">'+esc(mv[8])+'</span>':'')+'</td>'
+    +'<td class="n"'+(neg?' style="color:var(--bad)"':'')+'>'+m(mv[3])+'</td>'
+    +'<td>'+esc(mv[4]||'—')+'</td></tr>';
+}
+function bloqueCajas(){
+  if(!CAJAS) return '<div class="empty">Cargando las cajas…</div>';
+  const L=CAJAS.cajas||[];
+  if(!L.length) return '<div class="empty">Esta propiedad todavía no tiene cajas dadas de alta.</div>';
+  const hijos=p=>L.filter(c=>c[1]===p);
+  const puede=!!CAJAS.puede_mover;
+
+  function fila(c,nivel){
+    const abierta=cajaAbierta===c[0], lib=LIBRO[c[0]];
+    const propio=c[7]==='cashprotect';
+    let h='<tr class="cajafila'+(abierta?' on':'')+'" data-caja="'+esc(c[0])+'">'
+      +'<td style="padding-left:'+(14+nivel*26)+'px">'
+        +'<span style="opacity:.5;font-family:monospace">'+(abierta?'▾':'▸')+'</span> '
+        +(c[6]?esc(c[6])+' ':'')+'<b>'+esc(c[3])+'</b>'
+        +'<span class="sub">'+esc(TIPO_CAJA[c[4]]||c[4])
+        +(c[13]?' · la lleva '+esc(c[13]):'')
+        +(propio?' · el saldo lo dice la máquina':(c[10]?' · desde el '+esc(fmtCorto(c[10])):''))+'</span></td>'
+      +'<td class="n">'+(c[8]?m(c[8]):'—')+'</td>'
+      +'<td class="n"><b>'+m(c[11])+'</b></td>'
+      +'<td class="n">'+(propio?'—':(c[12]||0))+'</td></tr>';
+    if(abierta){
+      h+='<tr class="cajadet"><td colspan="4" style="padding:0 14px 14px '+(28+nivel*26)+'px">'
+        +(c[14]?'<p class="lede" style="margin:6px 0 10px">'+esc(c[14])+'</p>':'')
+        +(!lib ? '<div class="empty">Cargando los movimientos…</div>'
+          : (!lib.movs||!lib.movs.length)
+            ? '<div class="empty">Sin movimientos desde el '+esc(fmtCorto(lib.desde||''))+'. El saldo es el que se contó al empezar.</div>'
+            : '<div class="card scroll"><table><thead><tr><th>Fecha</th><th>Qué fue</th><th>Concepto</th>'
+              +'<th class="n">Importe</th><th>Quién</th></tr></thead><tbody>'
+              +lib.movs.map(filaLibro).join('')+'</tbody></table></div>')
+        +'</td></tr>';
+    }
+    hijos(c[0]).forEach(k=>{ h+=fila(k,nivel+1); });
+    return h;
+  }
+  const filas=hijos(null).map(c=>fila(c,0)).join('');
+
+  const acciones=!puede?'' :'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
+    +'<button class="mini go" type="button" data-cajaform="mover">Mover dinero entre cajas</button>'
+    +'<button class="mini" type="button" data-cajaform="alta">Añadir una caja</button></div>';
+
+  return '<div class="card scroll"><table><thead><tr><th>Caja</th><th class="n">Asignado</th>'
+    +'<th class="n">Hay ahora</th><th class="n">Movs</th></tr></thead><tbody>'+filas
+    +'<tr><td style="padding-left:14px"><b>Total en efectivo</b>'
+    +'<span class="sub">Todo lo que hay parado en esta propiedad</span></td>'
+    +'<td class="n">—</td><td class="n"><b>'+m(CAJAS.total)+'</b></td><td class="n">—</td></tr>'
+    +'</tbody></table></div>'+acciones+formularioCaja();
+}
+function formularioCaja(){
+  if(!formCaja) return '';
+  const L=(CAJAS&&CAJAS.cajas)||[];
+  const ops=L.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[3])+'</option>').join('');
+  if(formCaja==='mover'){
+    return '<div class="card" style="padding:16px;margin-top:12px"><div class="form">'
+      +'<label>Sale de<select id="tr_origen"><option value="">— de fuera —</option>'+ops+'</select></label>'
+      +'<label>Entra a<select id="tr_destino"><option value="">— se va fuera —</option>'+ops+'</select></label>'
+      +'<label>Importe<input id="tr_monto" type="number" step="0.01" min="0.01" placeholder="0.00"></label>'
+      +'<label class="ancho">Por qué<input id="tr_motivo" placeholder="Ej. CashProtect juntó mucho saldo y se retiró a la caja grande"></label>'
+      +'<div class="ancho"><button class="btn" type="button" data-cajago="mover">Mover</button> '
+      +'<button class="mini" type="button" data-cajaform="">Cancelar</button></div>'
+      +'<div class="res ancho" id="tr_res" hidden></div></div></div>';
+  }
+  return '<div class="card" style="padding:16px;margin-top:12px"><div class="form">'
+    +'<label class="ancho">Nombre<input id="nc_nombre" placeholder="Ej. Fondo de caja · Mantenimiento"></label>'
+    +'<label>Cuelga de<select id="nc_padre"><option value="">— de la propiedad —</option>'+ops+'</select></label>'
+    +'<label>Tipo<select id="nc_tipo">'
+      +'<option value="fondo_caja">Fondo de caja</option><option value="caja_chica">Caja chica</option>'
+      +'<option value="caja_grande">Caja grande</option></select></label>'
+    +'<label>Área<select id="nc_area"><option value="ayb">A&amp;B</option>'
+      +'<option value="recepcion">Recepción</option><option value="administracion">Administración</option>'
+      +'<option value="gerencia_operativa">Gerencia operativa</option>'
+      +'<option value="experiencias">Experiencias</option><option value="mantenimiento">Mantenimiento</option></select></label>'
+    +'<label>Monto asignado<input id="nc_asig" type="number" step="0.01" min="0" placeholder="opcional"></label>'
+    +'<label>Con cuánto empieza<input id="nc_ini" type="number" step="0.01" min="0" value="0"></label>'
+    +'<label>Icono<input id="nc_icono" maxlength="4" placeholder="🧰"></label>'
+    +'<label class="ancho">Nota<textarea id="nc_nota" rows="2" placeholder="Quién la lleva y para qué es"></textarea></label>'
+    +'<div class="ancho"><button class="btn" type="button" data-cajago="alta">Dar de alta</button> '
+    +'<button class="mini" type="button" data-cajaform="">Cancelar</button></div>'
+    +'<div class="res ancho" id="nc_res" hidden></div></div></div>';
+}
+async function guardaCaja(que){
+  const el=document.getElementById(que==='mover'?'tr_res':'nc_res');
+  const di=(c,t)=>{el.hidden=false;el.className='res '+c;el.innerHTML=t;};
+  di('','Guardando…');
+  try{
+    let r;
+    if(que==='mover'){
+      r=await rpc('aud_caja_traspasar',{p:{origen:$('tr_origen').value||null,destino:$('tr_destino').value||null,
+        monto:$('tr_monto').value,motivo:$('tr_motivo').value,fecha:fechaISO(fecha)}});
+    } else {
+      r=await rpc('aud_caja_alta',{p:{property_id:prop,parent_id:$('nc_padre').value||null,
+        nombre:$('nc_nombre').value,tipo:$('nc_tipo').value,area:$('nc_area').value,
+        monto_asignado:$('nc_asig').value||null,saldo_inicial:$('nc_ini').value||'0',
+        icono:$('nc_icono').value||null,notas:$('nc_nota').value||null,desde:fechaISO(fecha)}});
+    }
+    di((r&&r.ok)?'ok':'bad', esc((r&&r.mensaje)||'No se pudo guardar.'));
+    if(r&&r.ok){ CAJAS=null; LIBRO={}; formCaja=null; await cargaCajas(); pinta(); }
+  }catch(e){ di('bad', esc(String(e.message||e))); }
+}
+
 function vistaArqueo(){
   const cajas=D.cajas||[], arq=D.arqueos||[];
   const opciones=cajas.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[1])+'</option>').join('');
@@ -822,7 +1027,12 @@ function vistaArqueo(){
       +'<td class="n"><b>'+m(Number(x[3])-Number(x[2]))+'</b></td>'
       +'<td>'+esc(x[4]||'—')+'<span class="sub">'+esc(x[5]||'')+'</span></td></tr>').join('')
     +'</tbody></table></div>';
-  return '<section class="sec"><div class="sechead"><h2>Contar la caja</h2>'
+  return '<section class="sec"><div class="sechead"><h2>Dónde está el efectivo</h2>'
+   +'<p class="lede">Todo el dinero en billetes de esta propiedad, caja por caja. Toca cualquiera para ver de dónde '
+   +'salió cada peso. CashProtect no lleva libro aquí: su saldo lo dice la propia máquina.</p></div>'
+   +bloqueCajas()+'</section>'
+   +bloqueTurnos()
+   +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Contar la caja</h2>'
    +'<p class="lede">Cuenta lo que hay al cierre y captúralo aquí. El sistema le resta el fondo fijo y lo compara '
    +'contra el efectivo que Poster y Cloudbeds dicen que se cobró, menos las salidas con folio.</p></div>'
    +form+'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Arqueos capturados</h2></div>'+lista+'</section></section>';
