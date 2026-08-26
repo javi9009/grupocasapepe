@@ -460,9 +460,12 @@ function totales(){
   // en negativo, para que la cuenta de arriba siga siendo una resta exacta.
   // Cuando alguien firma contra qué día se compensa, ya sabemos dónde está ese
   // dinero: se pasa al cajón verde. Lo que queda sin firmar sigue en el rojo.
-  const sv=sinVenta(), aj=sv?Number(sv.dif||0):0, firmado=(sv&&sv.ok)?aj:0;
+  // El dinero sin venta detrás YA está contado arriba (entró y se depositó), así que
+  // no se suma otra vez: se MUEVE del verde al rojo mientras nadie lo explique. Así
+  // la fila de arriba sigue siendo una igualdad exacta y el color dice la verdad.
+  const sv=sinVenta(), aj=sv?Number(sv.dif||0):0, firmado=(sv&&sv.ok)?aj:0, mover=aj-firmado;
   if(Array.isArray(c)){
-    const comp=Number(c[0]||0)+firmado, banco=Number(c[1]||0), falta=Number(c[2]||0)+(aj-firmado);
+    const comp=Number(c[0]||0)-mover, banco=Number(c[1]||0), falta=Number(c[2]||0)+mover;
     return {comp,banco,falta,aj:aj,firmado:firmado,pend:falta,tot:comp+banco+falta};
   }
   let comp=0,banco=0,falta=0;      // respaldo por si el panel es más viejo que la función
@@ -471,7 +474,7 @@ function totales(){
     if(cb!==null&&cb!==undefined){comp+=Math.min(Number(x[3]),Number(cb));falta+=Math.max(0,Number(x[3])-Number(cb));}
     else if(st==='pendiente_estado_de_cuenta'){banco+=Number(x[3]);}
     else {falta+=Number(x[3]);}});
-  comp+=firmado; falta+=(aj-firmado);
+  comp-=mover; falta+=mover;
   return {comp,banco,falta,aj:aj,firmado:firmado,pend:falta,tot:comp+banco+falta};}
 
 /* ---------- carga ---------- */
@@ -749,8 +752,15 @@ function pintaResumen(){
   if(!D){document.getElementById('tiles').innerHTML='';document.getElementById('barra').innerHTML='';
     document.getElementById('barleyenda').innerHTML='';return;}
   const t=totales(), vivas=(D.exc||[]).filter(e=>ABIERTA(e[6])), ab=vivas.reduce((a,e)=>a+Number(e[2]),0);
+  // Lo que aquí se cuenta como cobrado es exactamente lo que se reparte en los tres
+  // cajones de la derecha. Los movimientos internos (cambio de divisa, cortesías,
+  // intercambios) no son un cobro y no entran en la cuenta: se anuncian aparte para
+  // que no se pierdan de vista.
+  const intr=(D.interno||[]), intTot=intr.reduce((a,x)=>a+Number(x[3]||0),0);
+  const subCob=(D.conc||[]).length+' métodos de cobro'
+    +(intTot>0.005 ? ' · aparte, $'+m(intTot)+' de movimientos internos que no son cobro' : '');
   document.getElementById('tiles').innerHTML=
-    tile('Cobrado en el día',mon(D.cobrado),(D.conc||[]).length+' métodos de cobro',true)
+    tile('Cobrado en el día',mon(D.cobrado),subCob,true)
    +'<span class="op">=</span>'
    +tile('Sabemos dónde está',mon(t.comp),subComp(t),false,'comp','ok')
    +'<span class="op">+</span>'
@@ -768,7 +778,12 @@ function pintaResumen(){
    +'<span><i style="background:var(--bad);border:0"></i>No sabemos dónde está</span>'
    +'<span style="margin-left:auto">'+(vivas.length
       ?'<b style="color:var(--bad)">'+vivas.length+' cobro(s) por revisar por $'+m(ab)+'</b> — en la pestaña Revisiones'
-      :'Nada por revisar')+'</span>';
+      :'Nada por revisar')+'</span>'
+   // Red de seguridad: si alguna vez la fila de arriba deja de ser una igualdad,
+   // se dice en voz alta en vez de pintar un verde que no es cierto.
+   +(Math.abs(Number(D.cobrado||0)-t.tot)>0.01
+      ?'<span style="flex-basis:100%;color:var(--bad)"><b>Ojo:</b> el cobrado del día y los tres cajones no dan la misma cifra ('
+        +mon(Number(D.cobrado||0)-t.tot)+' de diferencia). No tomes el color por bueno hasta revisarlo.</span>':'');
 }
 // El cierre del día se firma en la póliza: el contador la genera y en el mismo gesto
 // echa el candado del día. Vive ahí y no en la cabecera.
