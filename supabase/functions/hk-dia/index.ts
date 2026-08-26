@@ -97,7 +97,7 @@ async function reparto(propKey: string, fecha: string) {
     rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,orden&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos`),
-    rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados`),
+    rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
     rest(`horarios?property_id=eq.${P}&fecha=eq.${fecha}&select=employee_id,nombre_display,puesto_id,hora_inicio,hora_fin`),
     rest('hk_puestos_map?activo=eq.true&select=puesto_id,turno'),
     rest(`hk_asignaciones?property_id=eq.${P}&fecha=eq.${fecha}&select=id,estado`),
@@ -115,9 +115,13 @@ async function reparto(propKey: string, fecha: string) {
   const cuartos: Tarea[] = [];
   const publicas: Tarea[] = [];
 
+  const DIAS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+  const diaSemana = DIAS[new Date(fecha + 'T12:00:00Z').getUTCDay()];
+  const dormsTocados = new Set<string>();
+
   for (const a of areas) {
     const tipo = String(a.tipo);
-    if (tipo === 'dorm') continue; // el dorm se limpia cama por cama
+    if (tipo === 'dorm') continue; // se resuelve abajo, cuando ya sabemos qué camas tienen trabajo // el dorm se limpia cama por cama
     if (tipo === 'privada' || tipo === 'cama') {
       const e = estPorArea.get(String(a.id));
       if (!e || !e.solicita_limpieza) continue;
@@ -125,14 +129,29 @@ async function reparto(propKey: string, fecha: string) {
       if (est === 'fuera_servicio') continue;
       const min = (a.minutos_override as number | null) ?? tiempo.get(`${tipo}|${est}`) ?? 0;
       if (!min) continue; // p.ej. cama ocupada = 0 min -> no se toca
+      if (tipo === 'cama' && a.parent_id) dormsTocados.add(String(a.parent_id));
       cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0) });
     } else {
       const chk = chkPorArea.get(String(a.id));
+      // Una zona con checklist semanal (p.ej. la limpieza profunda de azotea de los lunes)
+      // solo entra en el reparto el día que le toca.
+      const frec = String(chk?.frecuencia ?? 'diaria');
+      if (frec !== 'diaria' && frec !== diaSemana) continue;
       const min = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? tiempo.get(`${tipo}|rutina`) ?? 0;
       if (!min) continue;
       publicas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) });
     }
   }
+  // Base del dormitorio: si alguna de sus camas tiene trabajo, hay que barrer, trapear,
+  // ventanas, lockers y su baño (PDO.ADL.001). Se cobra una sola vez por dormitorio.
+  const minDorm = tiempo.get('dorm|rutina') ?? 0;
+  for (const a of areas) {
+    if (String(a.tipo) !== 'dorm' || !dormsTocados.has(String(a.id))) continue;
+    const min = (a.minutos_override as number | null) ?? minDorm;
+    if (!min) continue;
+    cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo: 'dorm', estatus: 'rutina', minutos: min, checklist_id: null, orden: Number(a.orden ?? 0) - 1 });
+  }
+
   cuartos.sort((x, y) => x.piso - y.piso || x.orden - y.orden);
   publicas.sort((x, y) => x.orden - y.orden);
 
@@ -145,7 +164,9 @@ async function reparto(propKey: string, fecha: string) {
     if (!hi || !hf) continue; // descanso
     let dur = (mins(hf)! - mins(hi)!); if (dur < 0) dur += 1440;
     let cap = dur - Number(conf.minutos_comida ?? 30);
-    if (turno === 'ama_llaves') cap = Math.round(cap * Number(conf.factor_ama_llaves ?? 0.5));
+    // El ama de llaves reparte camas y carros (PDO.ADL.005, hasta 1 h) y revisa cuartos
+    // (PDO.ADL.006). Eso no es limpieza: se le descuenta de la jornada.
+    if (turno === 'ama_llaves') cap = cap - Number(conf.minutos_gestion_ama_llaves ?? 120);
     if (cap <= 0) continue;
     personas.push({ employee_id: h.employee_id ? String(h.employee_id) : null, nombre: String(h.nombre_display ?? ''), turno, hi, hf, cap });
   }

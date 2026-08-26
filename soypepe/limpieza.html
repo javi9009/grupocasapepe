@@ -45,6 +45,16 @@ button{font-family:inherit}
 .act .go{background:var(--accent);color:#fff}
 .act .end{background:var(--gold);color:#16130f}
 .act .off{background:var(--bg3);color:var(--txt3)}
+.chkl{margin-top:10px;border-top:1px solid var(--bg3);padding-top:8px}
+.chkl summary{font-size:12.5px;font-weight:700;color:var(--txt2);cursor:pointer;list-style:none}
+.chkl summary::-webkit-details-marker{display:none}
+.chkl summary::before{content:"▸ ";color:var(--accent)}
+.chkl[open] summary::before{content:"▾ "}
+.chkl ol{margin:8px 0 0;padding:0;list-style:none;counter-reset:c}
+.chkl li{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--bg2);font-size:13px;line-height:1.35;color:var(--txt2)}
+.chkl li input{width:20px;height:20px;flex:0 0 auto;margin:0;accent-color:var(--accent)}
+.chkl li.ok{opacity:.5;text-decoration:line-through}
+.chkl .cnt{font-size:11.5px;color:var(--txt3);font-weight:600}
 .res{margin-top:9px;font-size:12.5px;color:var(--txt2);background:var(--bg2);border-radius:10px;padding:8px 10px}
 .res .fast{color:var(--accent);font-weight:700}.res .slow{color:var(--bad);font-weight:700}
 .ph{text-align:center;color:var(--txt3);padding:40px 16px;font-size:14px;line-height:1.5}
@@ -128,7 +138,7 @@ async function arranca(){
 
 async function cargar(){
   const {data:mias}=await sb.from('hk_asignaciones')
-    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso),hk_checklists:checklist_id(nombre))')
+    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso),hk_checklists:checklist_id(id,nombre,hk_checklist_items(id,orden,tarea,minutos)))')
     .eq('fecha',FECHA).eq('employee_id',EMP);
   MIA=(mias||[])[0]||null;
   if(MIA&&MIA.turno==='ama_llaves'){
@@ -224,6 +234,7 @@ function pintar(){
         <div><div class="cod">${esc(a.codigo||'')}</div><div class="nm">${esc(a.nombre||'')}</div></div>
         <div class="mn"><b>${t.minutos_estimados} min</b><span class="chip ${c[0]}">${c[1]}</span></div>
       </div>
+      ${chklHtml(t)}
       ${t.estado==='terminada'
         ? `<div class="res">Hecho en <b>${t.minutos_reales} min</b> ${dif>0?`<span class="fast">· ${dif} min menos de lo previsto</span>`:dif<0?`<span class="slow">· ${-dif} min más</span>`:''}${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`
         : `<div class="act">
@@ -236,8 +247,37 @@ function pintar(){
   if(!ts.length)html+='<div class="ph">No hay tareas en tu orden de hoy.</div>';
   w.innerHTML=html;
   engancharTabs();
+  engancharChecklists(w);
   w.querySelectorAll('[data-ini]').forEach(b=>b.onclick=()=>iniciar(b.dataset.ini));
   w.querySelectorAll('[data-fin]').forEach(b=>b.onclick=()=>abrirFin(b.dataset.fin));
+}
+// Checklist del manual (FOR.APU.00X / PDO.ADL.001). De referencia: se puede palomear
+// para no perder el hilo, pero no bloquea el cierre del cuarto.
+const PAL='hk_pal_';
+function palGet(id){ try{ return JSON.parse(localStorage.getItem(PAL+id)||'[]'); }catch(e){ return []; } }
+function palSet(id,arr){ try{ localStorage.setItem(PAL+id,JSON.stringify(arr)); }catch(e){} }
+function chklHtml(t){
+  const c=t.hk_checklists; const items=(c&&c.hk_checklist_items)||[];
+  if(!items.length||t.estado==='terminada')return '';
+  items.sort((a,b)=>a.orden-b.orden);
+  const hechos=palGet(t.id);
+  return `<details class="chkl" ${t.estado==='en_curso'?'open':''}>
+    <summary>Checklist · ${esc(c.nombre||'')} <span class="cnt">(${hechos.length}/${items.length})</span></summary>
+    <ol>${items.map(i=>`<li class="${hechos.includes(i.id)?'ok':''}">
+      <input type="checkbox" data-pal="${t.id}" data-i="${i.id}" ${hechos.includes(i.id)?'checked':''}>
+      <span>${esc(i.tarea)}${i.minutos?` <span class="cnt">(${i.minutos} min)</span>`:''}</span></li>`).join('')}</ol>
+  </details>`;
+}
+function engancharChecklists(root){
+  root.querySelectorAll('input[data-pal]').forEach(cb=>cb.onchange=()=>{
+    const tid=cb.dataset.pal, iid=cb.dataset.i;
+    const arr=palGet(tid); const k=arr.indexOf(iid);
+    if(cb.checked&&k<0)arr.push(iid); if(!cb.checked&&k>=0)arr.splice(k,1);
+    palSet(tid,arr);
+    cb.closest('li').classList.toggle('ok',cb.checked);
+    const det=cb.closest('details'), tot=det.querySelectorAll('input[data-pal]').length;
+    det.querySelector('.cnt').textContent=`(${arr.length}/${tot})`;
+  });
 }
 function engancharTabs(){
   document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{VISTA=b.dataset.v;pintar();});
@@ -271,7 +311,9 @@ $('shOk').onclick=async()=>{
   const {error}=await sb.from('hk_tareas').update({estado:'terminada',terminado_at:now,motivo_codigo:motivo,comentario:com,updated_at:now}).eq('id',FIN);
   btn.disabled=false;
   if(error)return toast('No se pudo cerrar');
-  await sb.from('hk_eventos').insert({tarea_id:FIN,tipo:'fin',employee_id:EMP,employee_nombre:NOMBRE,nota:com,metadata:{motivo}});
+  const pal=palGet(FIN);
+  await sb.from('hk_eventos').insert({tarea_id:FIN,tipo:'fin',employee_id:EMP,employee_nombre:NOMBRE,nota:com,metadata:{motivo,checklist_palomeado:pal.length}});
+  try{ localStorage.removeItem(PAL+FIN); }catch(e){}
   $('sh').classList.remove('on');FIN=null;
   toast('¡Cuarto listo!');cargar();
 };
