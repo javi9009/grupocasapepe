@@ -44,6 +44,8 @@ button.b:disabled{opacity:.5;cursor:default}
 .tsk .est.vs{background:#fbe9e9;color:var(--bad)}
 .tsk .est.vl{background:#dff0e8;color:#12694d}
 .tsk .est.oc{background:#fff0d6;color:#8a6212}
+.tsk .est.bl{background:#e9e6f5;color:#4a3f8a}
+td.dirty input,td input.dirty{border-color:var(--gold);background:#fffaf0}
 .tsk .mn{margin-left:auto;color:var(--soft);font-size:12px;white-space:nowrap}
 .tsk select{border:1px solid var(--bd);border-radius:6px;padding:3px 5px;font-size:11.5px;background:#fff;color:var(--txt);max-width:120px}
 .tsk.done{opacity:.55}
@@ -107,9 +109,14 @@ h3{margin:18px 0 8px;font-size:14px}
 
 <!-- ================= TIEMPOS ================= -->
 <div class="pane" id="p-tiempos">
-  <p class="sub">Minutos que se dedican a cada tipo de área según el estatus del día. Se editan aquí y el motor de reparto los usa a partir de la siguiente propuesta.</p>
+  <div class="bar">
+    <button class="b pri" id="btnGuardarT" disabled>💾 Guardar y recalcular el día</button>
+    <button class="b" id="btnDeshacerT" disabled>Deshacer</button>
+    <span class="status" id="stT"></span>
+  </div>
+  <p class="sub">Minutos que se dedican a cada tipo de área según el estatus del día. Al guardar se vuelve a calcular el reparto de la fecha seleccionada arriba con los tiempos nuevos.</p>
   <div class="wrap"><table id="tblT"><thead><tr>
-    <th>Tipo de área</th><th>Estatus</th><th>Qué significa</th><th class="num">Minutos</th><th></th>
+    <th>Tipo de área</th><th>Estatus</th><th>Qué significa</th><th class="num">Minutos</th>
   </tr></thead><tbody></tbody></table></div>
   <h3>Parámetros de la jornada</h3>
   <div class="wrap"><table id="tblC"><tbody></tbody></table></div>
@@ -136,7 +143,7 @@ const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
 const PROPS={cdmx:'45e69775-d877-4507-a9e1-a45bd3400dc5',puebla:'febfbef6-7fd1-4b45-84d9-13533e8dcb72'};
-const ESTLBL={vacia_limpia:['VL','vl','Vacía limpia · refresco'],vacia_sucia:['VS','vs','Vacía sucia · salida'],ocupada:['EC','oc','En casa'],rutina:['RUT','','Rutina diaria']};
+const ESTLBL={vacia_limpia:['VL','vl','Vacía limpia · refresco'],vacia_sucia:['VS','vs','Vacía sucia · salida'],ocupada:['EC','oc','En casa'],ocupada_blancos:['EC+B','bl','En casa · cambio de blancos'],rutina:['RUT','','Rutina diaria']};
 const TIPOLBL={privada:'Privada',cama:'Cama de dorm',dorm:'Dormitorio completo',bano_publico:'Baño público',zona_comun:'Zona común'};
 const hoyMX=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const P=()=>PROPS[$('sede').value];
@@ -284,27 +291,66 @@ async function cargarTiempos(){
     <td>${TIPOLBL[t.tipo_area]||t.tipo_area}</td>
     <td><span class="pill">${(ESTLBL[t.estatus]||[t.estatus])[0]}</span></td>
     <td style="color:var(--soft);font-size:12.5px">${esc(t.descripcion||'')}</td>
-    <td class="num"><input type="number" min="0" max="240" value="${t.minutos}"></td>
-    <td><button class="b sv">Guardar</button></td></tr>`).join('');
-  $('tblT').tBodies[0].querySelectorAll('button.sv').forEach(b=>b.onclick=async()=>{
-    const tr=b.closest('tr');const v=Number(tr.querySelector('input').value);
-    const {error}=await sb.from('hk_tiempos').update({minutos:v,updated_at:new Date().toISOString()}).eq('id',tr.dataset.id);
-    st(error?error.message:'Tiempo actualizado',error?'err':'ok');
-  });
+    <td class="num"><input type="number" min="0" max="480" value="${t.minutos}" data-orig="${t.minutos}"></td></tr>`).join('');
+
   const {data:c}=await sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle();
-  if(!c)return;
-  const campos=[['horas_turno','Horas de jornada','number'],['minutos_comida','Minutos de comida','number'],
-    ['hora_limite_privadas','Hora límite de privadas','time'],['factor_ama_llaves','Fracción del ama de llaves que limpia (0–1)','number'],
-    ['minutos_traslado_piso','Minutos de traslado entre pisos','number'],['tolerancia_pct','Tolerancia de eficiencia (%)','number']];
-  $('tblC').tBodies[0].innerHTML=campos.map(([k,l,t])=>`<tr data-k="${k}"><td style="width:320px">${l}</td>
-    <td><input type="${t}" ${t==='number'?'step="0.1"':''} value="${c[k]??''}"></td>
-    <td style="width:110px"><button class="b sv">Guardar</button></td></tr>`).join('');
-  $('tblC').tBodies[0].querySelectorAll('button.sv').forEach(b=>b.onclick=async()=>{
-    const tr=b.closest('tr');const v=tr.querySelector('input').value;
-    const {error}=await sb.from('hk_config').update({[tr.dataset.k]:v,updated_at:new Date().toISOString()}).eq('property_id',P());
-    st(error?error.message:'Parámetro actualizado',error?'err':'ok');
-  });
+  if(c){
+    const campos=[['horas_turno','Horas de jornada','number'],['minutos_comida','Minutos de comida','number'],
+      ['hora_limite_privadas','Hora límite de privadas','time'],
+      ['minutos_gestion_ama_llaves','Minutos de gestión del ama de llaves (reparto y revisión)','number'],
+      ['dias_cambio_blancos','Cada cuántas noches se cambian los blancos a quien sigue en casa','number'],
+      ['minutos_traslado_piso','Minutos de traslado entre pisos','number'],['tolerancia_pct','Tolerancia de eficiencia (%)','number']];
+    $('tblC').tBodies[0].innerHTML=campos.map(([k,l,t])=>`<tr data-k="${k}"><td style="width:380px">${l}</td>
+      <td><input type="${t}" ${t==='number'?'step="0.5"':''} value="${c[k]??''}" data-orig="${c[k]??''}"></td></tr>`).join('');
+  }
+  marcarSucios();
 }
+
+// Un solo guardado para toda la pestaña: escribe lo que cambió y vuelve a calcular el día.
+function inputsTiempos(){ return [...document.querySelectorAll('#tblT input, #tblC input')]; }
+function sucios(){ return inputsTiempos().filter(i=>String(i.value)!==String(i.dataset.orig)); }
+function marcarSucios(){
+  inputsTiempos().forEach(i=>{ i.oninput=marcarSucios; i.classList.toggle('dirty', String(i.value)!==String(i.dataset.orig)); });
+  const n=sucios().length;
+  $('btnGuardarT').disabled=!n;
+  $('btnDeshacerT').disabled=!n;
+  $('btnGuardarT').textContent = n ? `💾 Guardar ${n} cambio${n>1?'s':''} y recalcular el día` : '💾 Guardar y recalcular el día';
+  const e=$('stT'); if(e) e.textContent = n ? 'Sin guardar' : '';
+}
+$('btnDeshacerT').onclick=()=>{ inputsTiempos().forEach(i=>{ i.value=i.dataset.orig; }); marcarSucios(); };
+$('btnGuardarT').onclick=async()=>{
+  const cambios=sucios(); if(!cambios.length)return;
+  const b=$('btnGuardarT'); b.disabled=true;
+  const e=$('stT'); e.className='status'; e.textContent='Guardando…';
+  try{
+    for(const i of cambios){
+      const tr=i.closest('tr');
+      if(tr.dataset.id){
+        const {error}=await sb.from('hk_tiempos').update({minutos:Number(i.value),updated_at:new Date().toISOString()}).eq('id',tr.dataset.id);
+        if(error)throw error;
+      }else if(tr.dataset.k){
+        const {error}=await sb.from('hk_config').update({[tr.dataset.k]:i.value,updated_at:new Date().toISOString()}).eq('property_id',P());
+        if(error)throw error;
+      }
+      i.dataset.orig=i.value;
+    }
+    e.textContent='Guardado · recalculando el reparto…';
+    const j=await fn('reparto');
+    marcarSucios();
+    if(j && j.ya_validado){
+      e.className='status err';
+      e.textContent='Tiempos guardados, pero el reparto de este día ya está validado y no se regenera.';
+    }else if(j && j.ok){
+      const c=j.carga||{};
+      e.className='status ok';
+      e.textContent=`Recalculado: ${Math.round(((c.cuartos_min||0)+(c.publicas_min||0))/60*10)/10} h de trabajo`;
+      cargarReparto();
+    }else{
+      e.className='status err'; e.textContent='Guardado, pero no se pudo recalcular.';
+    }
+  }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo guardar'; }
+  finally{ marcarSucios(); }
+};
 
 // ---------------- ÁREAS Y CHECKLISTS ----------------
 async function cargarAreas(){

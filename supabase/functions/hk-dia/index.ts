@@ -49,10 +49,28 @@ async function cbHousekeeping(key: string, pid: string): Promise<HkRow[]> {
   return out;
 }
 
-function mapEstatus(r: HkRow) {
+// Noches que lleva el huésped en casa a día de hoy.
+function nochesEnCasa(llegada: string, fecha: string): number {
+  const a = Date.parse((llegada || '').slice(0, 10) + 'T00:00:00Z');
+  const b = Date.parse(fecha + 'T00:00:00Z');
+  if (!a || !b || b < a) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+function mapEstatus(r: HkRow, fecha: string, diasBlancos: number) {
   if (r.roomBlocked) return { estatus: 'fuera_servicio', ci: false, co: false, pide: false };
   switch ((r.frontdeskStatus || '').toLowerCase()) {
-    case 'stayover': return { estatus: 'ocupada', ci: false, co: false, pide: !r.doNotDisturb && !r.refusedService };
+    case 'stayover': {
+      // El flag doNotDisturb de Cloudbeds no es de fiar aquí: sale en la mitad de los
+      // stayovers e incluso en cuartos vacíos. No se usa para quitar trabajo del reparto;
+      // viaja en metadata y la recamarista cierra con el motivo NO_MOLESTAR si de verdad
+      // no pudo entrar.
+      const pide = !r.refusedService;
+      // Regla de estancia larga: cada N noches se le cambian los blancos aunque siga en casa.
+      const n = nochesEnCasa(r.arrivalDate, fecha);
+      const toca = diasBlancos > 0 && n > 0 && n % diasBlancos === 0;
+      return { estatus: toca ? 'ocupada_blancos' : 'ocupada', ci: false, co: false, pide, noches: n };
+    }
     case 'turnover': return { estatus: 'vacia_sucia', ci: true, co: true, pide: true };
     case 'check-out': case 'checkout': case 'departure': return { estatus: 'vacia_sucia', ci: false, co: true, pide: true };
     case 'check-in': case 'checkin': case 'arrival': return { estatus: 'vacia_limpia', ci: true, co: false, pide: true };
@@ -66,6 +84,8 @@ async function syncEstatus(propKey: string, fecha: string) {
   const pid = cfg.id ?? Deno.env.get(cfg.idEnv ?? '') ?? '';
   if (!key || !pid) return { ok: false, error: 'sin credenciales Cloudbeds' };
   const rows = await cbHousekeeping(key, pid);
+  const confArr = await rest(`hk_config?property_id=eq.${cfg.supaId}&select=dias_cambio_blancos`) as Array<{ dias_cambio_blancos: number }>;
+  const diasBlancos = Number(confArr?.[0]?.dias_cambio_blancos ?? 4);
   const areas = await rest(`hk_areas?property_id=eq.${cfg.supaId}&select=id,tipo,codigo,cloudbeds_room_id&limit=1000`) as Array<{ id: string; tipo: string; codigo: string; cloudbeds_room_id: string | null }>;
   const porCb = new Map(areas.filter((a) => a.cloudbeds_room_id).map((a) => [a.cloudbeds_room_id!, a]));
   const filas: Array<Record<string, unknown>> = [];
@@ -73,13 +93,14 @@ async function syncEstatus(propKey: string, fecha: string) {
   for (const r of rows) {
     const a = porCb.get(r.roomID);
     if (!a) { sinMatch++; continue; }
-    const m = mapEstatus(r);
-    filas.push({ property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate } });
+    const m = mapEstatus(r, fecha, diasBlancos);
+    filas.push({ property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } });
   }
   for (let i = 0; i < filas.length; i += 100) {
     await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
   }
-  return { ok: true, cloudbeds_rows: rows.length, guardadas: filas.length, sin_match: sinMatch };
+  const conBlancos = filas.filter((f) => f.estatus === 'ocupada_blancos').length;
+  return { ok: true, cloudbeds_rows: rows.length, guardadas: filas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
 }
 
 // ---------- 2. REPARTO ----------
