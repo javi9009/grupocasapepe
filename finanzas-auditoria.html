@@ -374,6 +374,7 @@ const ESTADO={conciliado:["ok","Comprobado"],cargado:["ok","Comprobado"],con_dif
 const PLAT_ET={cloudbeds:"Cloudbeds · hospedaje",poster:"Poster · A&B",turitop:"Turitop · experiencias"};
 // Métodos que no viven en conciliacion_dia y aun así hay que nombrar bien en la tabla
 const PUNTO_ET={interno:"Pago en especie y cortesías",cargo_habitacion:"Cargado a la habitación",
+  sincretico:"Experiencias de Sincrético",
   tarjeta_sin_identificar:"Tarjeta sin identificar",sin_asignar:"Sin método declarado"};
 const TURNO_ET={turno_1:"Turno 1 · 07 a 15 h",turno_2:"Turno 2 · 15 a 23 h",turno_3:"Turno 3 · 23 a 07 h",
   desayuno:"Turno 1 · 07 a 15 h",comida:"Turno 2 · 15 a 23 h","?":"Sin turno"};
@@ -780,8 +781,13 @@ function pintaResumen(){
   // intercambios) no son un cobro y no entran en la cuenta: se anuncian aparte para
   // que no se pierdan de vista.
   const intr=(D.interno||[]), intTot=intr.reduce((a,x)=>a+Number(x[3]||0),0);
+  // Lo de "aparte" no siempre es lo mismo: unas veces son cortesías y otras una
+  // experiencia que liquida Sincrético a 30 días. Se nombra con su propia etiqueta
+  // en vez de dar por hecho que todo es pago en especie.
+  const intNom=intr.filter(x=>Number(x[3]||0)>0.005)
+    .map(x=>String(x[1]||x[0])).join(' y ');
   const subCob=(D.conc||[]).length+' métodos de cobro'
-    +(intTot>0.005 ? ' · aparte, $'+m(intTot)+' de pago en especie y cortesías, que no son cobro' : '');
+    +(intTot>0.005 ? ' · aparte, $'+m(intTot)+' de '+esc(intNom)+', que no entran en el cuadre de hoy' : '');
   document.getElementById('tiles').innerHTML=
     tile('Cobrado en el día',mon(D.cobrado),subCob,true)
    +'<span class="op">=</span>'
@@ -1721,6 +1727,10 @@ function vistaFuentes(){
     +'guardar nada te enseño cuántos abonos y cargos entendí.</div>'
     +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".pdf,.csv,.txt,.xlsx,.xls" hidden></label></div>'
     +'<div class="res" data-edores="1" hidden></div></div></div>'
+    +'<div class="sec"><div class="sechead"><h3 style="margin:0 0 2px">Archivos que ya se subieron</h3>'
+    +'<p class="lede" style="margin:0">El original, tal como lo bajó del banco quien lo subió. '
+    +'Cualquiera que entre al panel puede verlo y quedárselo.</p></div>'
+    +'<div id="zonaArchivos">'+bloqueArchivos()+'</div></div>'
     +'</section>';
 }
 
@@ -1983,7 +1993,9 @@ async function subeEstado(f, pinta1){
   const ab=r.movs.filter(x=>x.tipo==='abono'), ca=r.movs.filter(x=>x.tipo==='cargo');
   const sum=l=>l.reduce((a,x)=>a+x.monto,0);
   const dias=[...new Set(r.movs.map(x=>x.fecha))].sort();
-  EDO={movs:r.movs, archivo:f.name};
+  // Se guarda el archivo tal cual, no sólo lo que entendí de él: quien revise el cierre
+  // tiene que poder abrir el PDF del banco.
+  EDO={movs:r.movs, archivo:f.name, file:f};
   pinta1('ok','Leí <b>'+r.movs.length+'</b> movimiento(s) del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+': '
     +'<b>'+ab.length+'</b> abonos por <b>$'+m(sum(ab))+'</b> y <b>'+ca.length+'</b> cargos por <b>$'+m(sum(ca))+'</b>.'
     +'<span class="sub" style="margin:0">Con esto se cuadra el depósito de la terminal y los pagos de Airbnb, '
@@ -1993,14 +2005,74 @@ async function subeEstado(f, pinta1){
 async function guardaEstado(el){
   if(!EDO) return;
   el.className='res'; el.innerHTML='Guardando…';
+  let ruta=null;
+  // Si el archivo no se puede guardar no se pierde el cuadre: se avisa y se sigue.
+  try{
+    if(EDO.file){
+      const lim=(EDO.movs[0]||{}).fecha||'';
+      const nom=(EDO.archivo||'estado').replace(/[^\w.\- ]+/g,'_');
+      ruta='estados/'+prop+'/'+(lim.slice(0,7)||'sin-fecha')+'/'+Date.now()+'-'+nom;
+      const up=await sb.storage.from('finanzas-uploads')
+        .upload(ruta, EDO.file, {contentType:EDO.file.type||'application/pdf'});
+      if(up.error){ ruta=null; }
+    }
+  }catch(e){ ruta=null; }
   try{
     const r=await rpc('aud_cargar_estado_cuenta',
-      {p_meta:{property_id:prop, banco:'banorte', archivo:EDO.archivo, nota:null}, p_movs:EDO.movs});
+      {p_meta:{property_id:prop, banco:'banorte', archivo:EDO.archivo, archivo_path:ruta, nota:null},
+       p_movs:EDO.movs});
     el.className='res '+((r&&r.ok)?'ok':'bad');
-    el.innerHTML=esc((r&&r.mensaje)||'No se pudo guardar.');
-    if(r&&r.ok){ EDO=null; await cargaMes(); await cargaDia(fecha); }
+    el.innerHTML=esc((r&&r.mensaje)||'No se pudo guardar.')
+      +(r&&r.ok&&!ruta?'<span class="sub" style="margin:0">Los movimientos entraron, pero el archivo '
+        +'en sí no se pudo guardar, así que no va a poder descargarse desde aquí.</span>':'');
+    if(r&&r.ok){ EDO=null; ARCHIVOS=null; await cargaMes(); await cargaDia(fecha); }
   }catch(e){ el.className='res bad'; el.innerHTML=esc(String(e.message||e)); }
 }
+
+/* ---------- archivos subidos: verlos y bajarlos ----------
+   El estado de cuenta no es de quien lo sube. Cualquiera que entre al panel tiene que
+   poder abrir el PDF del banco y quedarse con él, sin pedírselo al contador. */
+let ARCHIVOS=null;
+async function cargaArchivos(){
+  if(ARCHIVOS) return ARCHIVOS;
+  try{ const r=await rpc('aud_estados_cuenta',{p_property:prop,p_limite:40});
+       ARCHIVOS=Array.isArray(r)?r:[]; }
+  catch(e){ ARCHIVOS=[]; }
+  return ARCHIVOS;
+}
+async function abreArchivo(btn){
+  const ruta=btn.dataset.ruta, baja=btn.dataset.baja==='1';
+  if(!ruta) return;
+  const t=btn.textContent; btn.textContent='…'; btn.disabled=true;
+  try{
+    const r=await sb.storage.from('finanzas-uploads')
+      .createSignedUrl(ruta, 3600, baja?{download:btn.dataset.nom||true}:undefined);
+    if(r.error||!r.data) throw r.error||new Error('sin url');
+    window.open(r.data.signedUrl,'_blank');
+  }catch(e){ alert('No se pudo abrir el archivo. Puede que ya no esté guardado.'); }
+  finally{ btn.textContent=t; btn.disabled=false; }
+}
+function bloqueArchivos(){
+  const L=ARCHIVOS||[];
+  if(!L.length) return '<div class="empty">Todavía no se ha subido ningún estado de cuenta.</div>';
+  return '<div class="card scroll"><table><thead><tr><th>Archivo</th><th>Periodo</th>'
+    +'<th class="n">Movs</th><th class="n">Abonos</th><th>Lo subió</th><th></th></tr></thead><tbody>'
+    +L.map(f=>{
+      const nom=String(f[2]||'archivo');
+      return '<tr><td class="stripe ok"><b>'+esc(nom)+'</b>'
+        +(f[10]?'<span class="sub">'+esc(f[10])+'</span>':'')+'</td>'
+        +'<td class="mono">'+esc(fmtCorta(f[3]))+' a '+esc(fmtCorta(f[4]))+'</td>'
+        +'<td class="n">'+(f[5]||0)+'</td><td class="n">'+m(f[6])+'</td>'
+        +'<td>'+esc(f[7]||'—')+'<span class="sub">'+esc(f[8]||'')+'</span></td>'
+        +'<td class="n" style="white-space:nowrap">'+(f[9]
+            ? '<button class="mini" type="button" data-ruta="'+esc(f[9])+'">Ver</button> '
+              +'<button class="mini" type="button" data-ruta="'+esc(f[9])+'" data-baja="1" '
+              +'data-nom="'+esc(nom)+'">Descargar</button>'
+            : '<span class="sub" style="margin:0">Se subió antes de que se guardaran los archivos</span>')
+        +'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+function fmtCorta(s){ if(!s) return '—'; const p=String(s).split('-'); return p.length===3?(p[2]+'/'+p[1]):s; }
 
 let SUB={}, DIAG='';
 async function subeArchivo(zona,f){
@@ -2072,6 +2144,12 @@ function pinta(){
   const c=document.getElementById('cuerpo');
   if(!D){c.innerHTML=cargando?'<div class="empty">Cargando el día…</div>':'';return;}
   c.innerHTML = sec==='dia'?vistaDia(): sec==='excepciones'?vistaExc(): sec==='poliza'?vistaPoliza(): vistaFuentes();
+  // La lista de archivos se pide una vez y se repinta sola: no vale la pena hacer
+  // esperar toda la pestaña por ella.
+  if(sec!=='dia' && sec!=='excepciones' && sec!=='poliza' && !ARCHIVOS){
+    cargaArchivos().then(()=>{ const z=document.getElementById('zonaArchivos');
+                               if(z) z.innerHTML=bloqueArchivos(); });
+  }
 }
 function estadoRecalc(txt,cls){const el=document.getElementById('estadoRecalc');
   el.textContent=txt;el.className='res'+(cls?' '+cls:'');el.hidden=!txt;}
@@ -2153,6 +2231,8 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
   if(gtpv){ gtpv.disabled=true; await guardaArchivo(gtpv.dataset.tpv); return; }
   const ged=e.target.closest('button[data-edo="guardar"]');
   if(ged){ ged.disabled=true; await guardaEstado(ged.closest('.res')); return; }
+  const bar=e.target.closest('button[data-ruta]');
+  if(bar){ await abreArchivo(bar); return; }
   const ba=e.target.closest('[data-arr]');
   if(ba){ await arrastrar(ba.dataset.arr, ba); return; }
   const bc=e.target.closest('[data-comp]');
