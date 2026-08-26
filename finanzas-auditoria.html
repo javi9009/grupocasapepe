@@ -234,6 +234,13 @@ tr.lv4.s3 .difnota{color:var(--sev3)} tr.lv4.s4 .difnota{color:var(--sev4)}
 .guia{background:var(--none-bg);border-left:3px solid var(--accent);border-radius:6px;padding:9px 12px;margin-top:8px;font-size:.83rem}
 .guia b{display:block;font-family:"IBM Plex Mono",monospace;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}
 .guia ol{margin:0;padding-left:18px} .guia li{margin:2px 0;line-height:1.4}
+/* lo que se habló con la persona: el resumen que dejó Don José en el hilo */
+.hilo{background:var(--surface-2);border-left:3px solid var(--info);border-radius:6px;
+  padding:10px 13px;margin-top:8px;font-size:.84rem;line-height:1.45;display:flex;flex-direction:column;gap:6px}
+.hilo .quien{font-family:"IBM Plex Mono",monospace;font-size:.7rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--info)}
+.hilo .dijo{color:var(--muted)}
+.hilo .dijo b{color:var(--ink-2);font-weight:600}
 .mini.go{border-color:var(--ok);color:var(--ok)}
 td.n.esperando{color:var(--warn)}
 td.n.cuadra{color:var(--ok)}
@@ -662,6 +669,13 @@ async function cargaDia(f){
       // y si la pregunta ya se resolvió sola al llegar el estado de cuenta.
       enviadoInfo[k]={quien:av[k][0], cuando:av[k][2], resuelto:av[k][4]||null}; });
   }catch(e){}
+  if(tk!==CARGA) return;
+  // Lo que se habló con la gente ese día: la pregunta, lo que contestaron y a qué
+  // se llegó. Don José va dejando el resumen ahí conforme avanza la conversación.
+  HILOS=[];
+  try{ const hh=await rpc('aud_hilos_dia',{p_property:prop,p_fecha:f});
+       if(tk!==CARGA) return;
+       if(Array.isArray(hh)) HILOS=hh; }catch(e){}
   if(tk!==CARGA) return;
   polizaEdit=null; abierto={}; cargando=false; VALID=null; CONC={}; VB={}; SV=null; DT=null; SUB={}; pinta();
 }
@@ -1521,6 +1535,51 @@ function respuestaHTML(e){
   return '<div class="res ok" style="grid-column:1/-1"><b>'+esc(e[8]||'Respuesta')+'</b> '+esc(e[7])
     +(Number(e[9])?' <span class="chip info">'+e[9]+' foto(s)</span>':'')+'</div>';
 }
+/* ---------- lo que se habló ----------
+   Cuando se le pregunta a alguien por un movimiento, la conversación sigue en SoyPepe
+   y Don José la acompaña: lee lo que contesta, le lleva la resta y deja un resumen.
+   Ese resumen es lo que tiene que quedar en el cierre, no el hilo entero. */
+let HILOS=[];
+function hiloDe(convId){
+  if(!convId) return null;
+  return HILOS.find(h=>h && h.conversacion===convId) || null;
+}
+// el resumen de un hilo, tal como se lee dentro de una revisión
+function hiloHTML(e){
+  const h=hiloDe(e[11]); if(!h) return '';
+  return hiloBloque(h, false);
+}
+function hiloBloque(h, conTitulo){
+  const res=(h.respuestas||[]);
+  const dijo=res.length
+    ? res.slice(-2).map(r=>'<div class="dijo"><b>'+esc(r[0]||'')+'</b> ('+esc(r[2]||'')+'): '+esc(r[1]||'')+'</div>').join('')
+    : '<div class="dijo">Todavía no contesta nadie.</div>';
+  const cierre = h.resuelto
+    ? '<div><span class="chip ok">Cerrado</span> '+esc(h.nota||'')+'</div>'
+    : (h.abierto ? '<div><span class="chip info">La conversación sigue abierta</span></div>'
+                 : '<div><span class="chip">Conversación cerrada sin resolver</span></div>');
+  return '<div class="hilo"'+(conTitulo?'':' style="grid-column:1/-1"')+'>'
+    +(conTitulo?'<div class="quien">'+esc(h.a_quien||'Colaborador')+' · '+esc(h.titulo||'')+'</div>'
+               :'<div class="quien">Se le preguntó a '+esc(h.a_quien||'alguien')+'</div>')
+    + dijo
+    +(h.resumen?'<div><b>Don José:</b> '+esc(h.resumen)+'</div>':'')
+    +(!h.resumen&&h.dijo_bot===0&&res.length
+        ?'<div class="dijo">Don José todavía no ha leído esta respuesta.</div>':'')
+    + cierre
+    +'<div><button class="mini" type="button" data-hilo="'+esc(h.conversacion||'')+'">Abrir la conversación</button></div>'
+    +'</div>';
+}
+// El cierre del día tiene que llevar por escrito lo que se habló con la gente.
+function bloqueHilos(){
+  if(!HILOS.length) return '';
+  return '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:10px">'
+    +'<div><b>Lo que se habló con el equipo este día</b></div>'
+    +'<div class="lede" style="font-size:.85rem;margin:0">Cada pregunta que salió de la auditoría, '
+    +'lo que contestaron y a qué se llegó. Lo va resumiendo Don José conforme avanza la conversación.</div>'
+    +HILOS.map(h=>hiloBloque(h,true)).join('')
+    +'</div>';
+}
+
 // qué hay que borrar o añadir, y dónde
 function guiaHTML(e){
   const g=Array.isArray(e[10])?e[10]:[];
@@ -1561,7 +1620,7 @@ function vistaExc(){
         +' '+chip(viva?(conDinero?(e[6]==='explicada'?'info':'bad'):'info'):'ok',
                   viva&&!conDinero?'Aviso · no mueve dinero':(EST_EXC[e[6]]||e[6]))+'</div>'
         +'<div class="exc-m">'+(conDinero?'$'+m(e[2]):'Sin efecto en caja')+'</div><p>'+esc(e[3])+'</p>'
-        + respuestaHTML(e) + guiaHTML(e)
+        + respuestaHTML(e) + hiloHTML(e) + guiaHTML(e)
         +(viva?'<div class="exc-f"><span>Lo capturó: <b>'+esc(quienDe(e))+'</b></span>'
         +'<span>Falta leve el <b>'+esc(e[4])+'</b></span><span>Falta grave el <b>'+esc(e[5])+'</b></span></div>':'')
         +'<div class="exc-f" style="border-top:0;padding-top:0;margin-top:0">'
@@ -1673,6 +1732,7 @@ function vistaPoliza(){
   return '<section class="sec"><div class="sechead"><h2>Póliza del día</h2>'
     +'<p class="lede">Se abona el ingreso devengado y se carga por dónde entró el dinero; la diferencia entre lo facturado y lo cobrado va a <b>225 Huéspedes</b>, '
     +'la misma cuenta de enlace de siempre. Las celdas son editables: corrige lo que haga falta y exporta el archivo con las ocho columnas que pide QuickBooks.</p></div>'
+    +bloqueHilos()
     +bloqueCierre()
     +'<div class="card scroll pol"><table><thead><tr><th>Cuenta</th><th>Nombre de cuenta en QuickBooks</th><th class="n">Débito</th><th class="n">Créditos</th><th>Nombre</th><th>Clase</th></tr></thead><tbody>'
     +filas+'<tr class="sum"><td colspan="2">Sumas '+(cuadra?'iguales':'DESIGUALES')+'</td><td class="n">'+m(td)+'</td><td class="n">'+m(th)
@@ -2237,6 +2297,8 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
   if(ba){ await arrastrar(ba.dataset.arr, ba); return; }
   const bc=e.target.closest('[data-comp]');
   if(bc){ await compensar(bc.dataset.comp, bc); return; }
+  const bh=e.target.closest('[data-hilo]');
+  if(bh&&bh.dataset.hilo){ window.open('/m/mensajes.html?conv='+encodeURIComponent(bh.dataset.hilo),'_blank'); return; }
   const td=e.target.closest('[data-tardio]');
   if(td){ td.disabled=true; DT=null; await moverDeposito(td.dataset.tardio,td.dataset.dest,td.dataset.linea); return; }
   const sv=e.target.closest('[data-sinventa]');
