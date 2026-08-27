@@ -416,12 +416,13 @@ td.grab:hover{color:var(--gold)}
   <div class="vac">
     <div class="vh">
       <b>Contrataciones a modelar</b>
-      <span>Mete una entrada y mira cómo queda el año. Cuenta la curva de formación: seis semanas hasta el 100%.</span>
+      <span>Mete una entrada —y una salida si es temporal— y mira cómo queda el año. Cuenta la curva de formación: seis semanas hasta el 100%.</span>
       <button class="b pri" id="pvAltaAdd">＋ Añadir contratación</button>
     </div>
     <div class="vform" id="pvAltaForm" hidden>
       <label class="cp">Cuántas <input type="number" id="afN" min="1" max="5" value="1"></label>
       <label class="cp">Entra el <input type="date" id="afDesde"></label>
+      <label class="cp">Sale el <input type="date" id="afHasta"> <span style="font-weight:400;font-size:11.5px">(vacío = fija)</span></label>
       <label class="cp">Cómo la llamamos <input type="text" id="afNombre" placeholder="Recamarista nueva"></label>
       <label class="cp">Descansa <select id="afDow">
         <option value="">la elige el sistema</option>
@@ -1348,7 +1349,7 @@ function calcularPrevision(){
       if(d.sin) return;
       let suma=0;
       altas.forEach(a=>{
-        if(d.fecha<a.desde) return;
+        if(d.fecha<a.desde || (a.hasta && d.fecha>a.hasta)) return;
         // Curva de formación de seis semanas: 60% las tres primeras, 80% hasta la sexta.
         const sem=Math.floor((Date.parse(d.fecha)-Date.parse(a.desde))/(7*86400000));
         const rend=sem<3?0.6:sem<6?0.8:1;
@@ -1498,6 +1499,12 @@ function pintarPrevision(){
   });
   // Las ausencias, sombreadas al fondo
   let sombras='';
+  (PV.altas||[]).filter(a=>a.hasta).forEach(a=>{
+    const i0=vista.findIndex(d=>d.fecha>=a.desde), i1=vista.findIndex(d=>d.fecha>a.hasta);
+    if(i0<0 || vista[i0].fecha>a.hasta) return;
+    const x0=PADL+i0*bw, x1=PADL+((i1<0?vista.length:i1))*bw;
+    sombras+=`<rect x="${x0.toFixed(1)}" y="${PADT}" width="${Math.max(1,x1-x0).toFixed(1)}" height="4" fill="#1d9e75" opacity="0.5"><title>${a.nombre} · ${a.desde} → ${a.hasta}</title></rect>`;
+  });
   (PV.vac||[]).forEach(v=>{
     const i0=vista.findIndex(d=>d.fecha>=v.desde), i1=vista.findIndex(d=>d.fecha>v.hasta);
     if(i0<0 || vista[i0].fecha>v.hasta) return;
@@ -1531,6 +1538,7 @@ function pintarPrevision(){
     <span><i style="background:#16130f;height:3px;border-radius:2px"></i>personas trabajando ese día</span>
     <span><i style="background:#16130f;opacity:.12"></i>ausencias</span>
     <span><i style="background:#16130f;opacity:.06"></i>domingos · el día de más salidas</span>
+    <span><i style="background:#1d9e75;opacity:.5;height:4px"></i>contratación temporal</span>
   </div>`;
 
   // ---- plan de contratación ----
@@ -1675,8 +1683,10 @@ function pintarAltas(){
   const a=PV.altas||[];
   $('pvAltaLista').innerHTML = a.length ? a.map(x=>{
     const dows=(x._dows||[]).map(d=>DOWL[d]).join(', ');
+    const meses=x.hasta?Math.round((Date.parse(x.hasta)-Date.parse(x.desde))/86400000/30.4*10)/10:null;
     return `<div class="fila"><span class="n">${esc(x.nombre)}</span>
-      <span class="r">entra el ${fmtF(x.desde)} · ${x.personas} ${x.personas===1?'persona':'personas'}</span>
+      <span class="r">${x.personas} ${x.personas===1?'persona':'personas'} · ${fmtF(x.desde)} ${x.hasta?`→ ${fmtF(x.hasta)}`:'en adelante'}</span>
+      <span class="pill">${x.hasta?`temporal · ${meses} ${meses===1?'mes':'meses'}`:'fija'}</span>
       ${dows?`<span class="pill">descansa ${esc(dows)}</span>`:''}
       <span class="pill">al 100% desde el ${fmtF(masDias(x.desde,42))}</span>
       <button class="x" data-alta="${x.id}">Quitar</button></div>`;
@@ -1691,7 +1701,7 @@ function pintarAltas(){
   });
 }
 $('pvAltaAdd').onclick=()=>{
-  $('afDesde').value=masDias(F(),30); $('afN').value=1; $('afNombre').value=''; $('afDow').value='';
+  $('afDesde').value=masDias(F(),30); $('afHasta').value=''; $('afN').value=1; $('afNombre').value=''; $('afDow').value='';
   $('pvAltaForm').hidden=false; $('pvAltaAdd').disabled=true;
 };
 $('afX').onclick=()=>{ $('pvAltaForm').hidden=true; $('pvAltaAdd').disabled=false; };
@@ -1701,12 +1711,14 @@ $('afOk').onclick=async()=>{
   const nombre=($('afNombre').value||'').trim()||(personas>1?`${personas} recamaristas nuevas`:'Recamarista nueva');
   const descanso=$('afDow').value===''?null:Number($('afDow').value);
   $('afOk').disabled=true;
-  const {data,error}=await sb.from('hk_altas').insert({property_id:P(),nombre,desde,personas,descanso}).select().single();
+  const hasta=$('afHasta').value||null;
+  if(hasta && hasta<desde) return st('La salida va antes de la entrada','err');
+  const {data,error}=await sb.from('hk_altas').insert({property_id:P(),nombre,desde,hasta,personas,descanso}).select().single();
   $('afOk').disabled=false;
   if(error) return st(error.message,'err');
   PV.altas=[...(PV.altas||[]),data].sort((a,b)=>a.desde.localeCompare(b.desde));
   $('pvAltaForm').hidden=true; $('pvAltaAdd').disabled=false;
-  st(`${nombre} desde el ${desde}`,'ok');
+  st(`${nombre} desde el ${desde}${hasta?` hasta el ${hasta}`:''}`,'ok');
   calcularPrevision();
 };
 
