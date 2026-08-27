@@ -1292,7 +1292,7 @@ function calcularPrevision(){
 // Regla de contratación: no se contrata por un pico. Se contrata cuando en una
 // ventana de 30 días hay más de 15 en los que el equipo no alcanza.
 function ventanasDeContratacion(dias){
-  const falta=dias.map(d=>!d.sin && d.necesarias>d.enTurno+0.001);
+  const falta=dias.map(d=>!d.sin && (d.necesarias-d.enTurno)>CARGA.rojo);
   const out=[]; let i=0;
   while(i<dias.length-29){
     let c=0; for(let k=i;k<i+30;k++) if(falta[k]) c++;
@@ -1316,6 +1316,11 @@ function ventanasDeContratacion(dias){
 
 const fmtF=f=>{const d=new Date(f+'T12:00:00');return `${d.getDate()} de ${MESL[d.getMonth()]}`;};
 
+// Semáforo del día: cuánto se pasa la necesidad por encima de quien trabaja.
+// Verde por debajo, naranja hasta +0,3 y rojo a partir de ahí.
+const CARGA={verde:-0.1, rojo:0.3};
+const colorCarga=dif=>dif<CARGA.verde?'#1d9e75':dif<=CARGA.rojo?'#c9a227':'#b03434';
+
 function pintarPrevision(){
   const {dias,equipo,minimo}=PV;
   const conDato=dias.filter(d=>!d.sin);
@@ -1325,15 +1330,17 @@ function pintarPrevision(){
   const mediaPlantilla=conDato.reduce((s,d)=>s+d.plantilla,0)/(conDato.length||1);
   const mediaOc=conDato.reduce((s,d)=>s+(d.ocup||0),0)/(conDato.length||1);
   const mediaH=conDato.reduce((s,d)=>s+d.min,0)/(conDato.length||1)/60;
-  const diasSobre=conDato.filter(d=>d.necesarias>d.enTurno+0.001).length;
+  const diasSobre=conDato.filter(d=>(d.necesarias-d.enTurno)>CARGA.rojo).length;
   const bajoMin=conDato.filter(d=>d.enTurno<minimo).length;
   const ventanas=ventanasDeContratacion(dias);
   const extra=conDato.reduce((s,d)=>s+Math.max(0,(d.necesarias-d.enTurno))*PV.jornada,0)/60;
+  const diasNaranja=conDato.filter(d=>{const x=d.necesarias-d.enTurno;return x>=CARGA.verde&&x<=CARGA.rojo;}).length;
 
   $('pvKpis').innerHTML=[
     ['Ocupación media',`${Math.round(mediaOc)}`,'cuartos y camas al día'],
     ['Trabajo medio',`${mediaH.toFixed(1)} h`,'al día, todo incluido'],
     ['Personas por día',`${media.toFixed(1)}`,`en turno · equivalen a ${mediaPlantilla.toFixed(1)} de plantilla`],
+    ['Días al límite',`${diasNaranja}`,`en naranja · ${diasSobre} en rojo`],
     ['Horas extra',`${Math.round(extra)}`,'en los seis meses, si no se contrata'],
   ].map(([t,v,x])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join('');
 
@@ -1342,7 +1349,7 @@ function pintarPrevision(){
   let cur=null;
   conDato.forEach(d=>{
     const falta=d.necesarias-d.enTurno;
-    if(falta>0.001){
+    if(falta>CARGA.rojo){
       if(cur && cur.fin===masDias(d.fecha,-1)) { cur.fin=d.fecha; cur.dias++; cur.horas+=falta*PV.jornada/60; cur.pico=Math.max(cur.pico,falta); }
       else { if(cur) tramos.push(cur); cur={ini:d.fecha,fin:d.fecha,dias:1,horas:falta*PV.jornada/60,pico:falta}; }
     }
@@ -1356,7 +1363,7 @@ function pintarPrevision(){
   conDato.forEach(d=>{
     if(!dow[d.dow]) dow[d.dow]={n:0,nec:0,turno:0,cortos:0};
     const x=dow[d.dow]; x.n++; x.nec+=d.necesarias; x.turno+=d.enTurno;
-    if(d.necesarias>d.enTurno+0.001) x.cortos++;
+    if((d.necesarias-d.enTurno)>CARGA.rojo) x.cortos++;
   });
   const ordenDow=[1,2,3,4,5,6,0];
 
@@ -1383,7 +1390,7 @@ function pintarPrevision(){
   dias.forEach((d,i)=>{
     const x=PADL+i*bw;
     const h=d.sin?0:Math.max(1,alto-(yP(d.necesarias)-PADT));
-    const col=d.sin?'#e6e1d6':d.necesarias>d.enTurno+0.001?'#b03434':d.necesarias>d.enTurno-0.5?'#c9a227':'#1d9e75';
+    const col=d.sin?'#e6e1d6':colorCarga(d.necesarias-d.enTurno);
     const tip=d.sin?'sin dato del año pasado'
       :`${DOWL[d.dow]}${d.festivo?' · '+d.festivo:''} · ${d.ocup} cuartos · ${Math.round(d.min/60*10)/10} h de trabajo · hacen falta ${d.necesarias.toFixed(1)} y trabajan ${d.enTurno}`
        +(d.fuera&&d.fuera.length?` · fuera: ${d.fuera.map(v=>v.nombre).join(', ')}`:'');
@@ -1422,9 +1429,9 @@ function pintarPrevision(){
     <text x="${W-PADR+6}" y="${PADT+9}" font-size="9.5" fill="#7fa0c0">cuartos</text>
   </svg>
   <div class="lg">
-    <span><i style="background:#1d9e75"></i>alcanza de sobra</span>
-    <span><i style="background:#c9a227"></i>al límite</span>
-    <span><i style="background:#b03434"></i>falta gente</span>
+    <span><i style="background:#1d9e75"></i>alcanza · por debajo de lo que se necesita</span>
+    <span><i style="background:#c9a227"></i>al límite · entre −0,1 y +0,3</span>
+    <span><i style="background:#b03434"></i>falta gente · más de +0,3</span>
     <span><i style="background:#e6e1d6"></i>sin dato</span>
     <span><i style="background:#7fa0c0;height:3px;border-radius:2px"></i>ocupación del año pasado (eje derecho)</span>
     <span><i style="background:#16130f;height:3px;border-radius:2px"></i>personas trabajando ese día</span>
@@ -1481,7 +1488,7 @@ function pintarPrevision(){
     if(!meses2.has(k)) meses2.set(k,{min:0,n:0,ocup:0,nec:0,sobre:0,max:0});
     const m=meses2.get(k);
     m.min+=d.min; m.n++; m.ocup+=d.ocup||0; m.nec+=d.necesarias; m.max=Math.max(m.max,d.necesarias);
-    if(d.necesarias>d.enTurno+0.001) m.sobre++;
+    if((d.necesarias-d.enTurno)>CARGA.rojo) m.sobre++;
   });
   $('pvTbl').tBodies[0].innerHTML=[...meses2.entries()].map(([k,m])=>{
     const fte=m.nec/m.n;
