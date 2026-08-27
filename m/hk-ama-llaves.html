@@ -222,9 +222,9 @@ td.grab:hover{color:var(--gold)}
 <!-- ================= REPARTO ================= -->
 <div class="pane active" id="p-reparto">
   <div class="bar">
-    <button class="b pri" id="btnGen">⟳ Generar propuesta</button>
-    <button class="b gold" id="btnVal">✓ Validar reparto</button>
-    <button class="b" id="btnRe">↻ Recargar</button>
+    <button class="b gold" id="btnGen" title="Vuelve a leer Cloudbeds y rehace el reparto desde cero. Se pierden los movimientos que hayas hecho a mano.">⟳ Generar propuesta</button>
+    <button class="b pri" id="btnVal" title="Cierra el reparto del día: a partir de aquí lo ven las recamaristas y ya no se regenera solo.">✓ Validar reparto</button>
+    <button class="b" id="btnRe" title="Trae los últimos cambios de la base: útil si alguien más movió algo o una recamarista ya cerró un cuarto.">↻ Ver los últimos cambios</button>
     <span id="asigResumen" class="pill" style="font-size:12px"></span>
     <span class="status" id="stA"></span>
   </div>
@@ -280,6 +280,9 @@ td.grab:hover{color:var(--gold)}
   <div class="wrap"><table id="tblT"><thead><tr>
     <th>Tipo de área</th><th>Estatus</th><th>Qué significa</th><th class="num">Minutos</th>
   </tr></thead><tbody></tbody></table></div>
+  <h3>Limpiezas del dormitorio</h3>
+  <p class="sub">La general se hace a diario en cuanto la habitación estuvo ocupada e incluye baño, habitación, balcón y ventana; la misma persona hace el cuarto completo. La profunda de cada dormitorio sale todos los días en «Sin asignar» con su número de habitación, para programarla el día que toque.</p>
+  <div id="chkDorm"></div>
   <h3>Parámetros de la jornada</h3>
   <div class="wrap"><table id="tblC"><tbody></tbody></table></div>
 </div>
@@ -297,9 +300,7 @@ td.grab:hover{color:var(--gold)}
   </div>
   <p class="sub">Aquí se miden los minutos de cada zona común, uno por uno. Cambia el número, pulsa guardar y el reparto del día se vuelve a calcular. La casilla de la izquierda activa o deja en stand by la zona.</p>
   <div id="zonas"></div>
-  <h3>Limpiezas del dormitorio</h3>
-  <p class="sub">La general se hace a diario en cuanto la habitación estuvo ocupada e incluye baño, habitación, balcón y ventana; la misma persona hace el cuarto completo. La profunda se programa aparte.</p>
-  <div id="chkDorm"></div>
+
   <h3>Inventario de cuartos (Cloudbeds)</h3>
   <div class="wrap"><table id="tblInv"><thead><tr>
     <th>Tipo</th><th class="num">Piso 1</th><th class="num">Piso 2</th><th class="num">Piso 3</th><th class="num">Piso 4</th><th class="num">Otros</th><th class="num">Total</th>
@@ -313,7 +314,7 @@ const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
 const PROPS={cdmx:'45e69775-d877-4507-a9e1-a45bd3400dc5',puebla:'febfbef6-7fd1-4b45-84d9-13533e8dcb72'};
-const ESTLBL={vacia_limpia:['VL','vl','Vacía limpia · refresco'],vacia_sucia:['VS','vs','Vacía sucia · salida'],ocupada:['EC','oc','En casa'],ocupada_blancos:['EC+B','bl','En casa · cambio de blancos'],rutina:['RUT','','Rutina diaria']};
+const ESTLBL={vacia_limpia:['VL','vl','Vacía limpia · refresco'],vacia_sucia:['VS','vs','Vacía sucia · salida'],ocupada:['EC','oc','En casa'],ocupada_blancos:['EC+B','bl','En casa · cambio de blancos'],rutina:['RUT','','Rutina diaria'],profunda:['PROF','','Limpieza profunda']};
 const TIPOLBL={privada:'Privada',cama:'Cama de dorm',dorm:'Dormitorio (limpieza general)',zona_comun:'Zona común'};
 const hoyMX=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const P=()=>PROPS[$('sede').value];
@@ -386,7 +387,13 @@ $('btnGen').onclick=async()=>{
 };
 $('btnVal').onclick=async()=>{
   if(!ASIG.length)return;
-  if(ASIG.some(a=>!a.employee_id)&&!confirm('Hay trabajo sin persona asignada. ¿Validar de todos modos?'))return;
+  // La caja SIN ASIGNAR siempre existe (camas libres, opcionales y profundas):
+  // solo se avisa si de verdad quedó trabajo obligado sin dueño.
+  let pend=0;
+  ASIG.filter(a=>!a.employee_id).forEach(a=>(a.hk_tareas||[]).forEach(t=>{
+    if(!t.metadata?.sin_trabajo && !t.metadata?.opcional && !t.metadata?.profunda && t.minutos_estimados>0) pend++;
+  }));
+  if(pend&&!confirm(`Quedan ${pend} ${pend===1?'área con limpieza pendiente':'áreas con limpieza pendiente'} sin persona asignada.\n\n¿Validar de todos modos?`))return;
   const {data:{user}}=await sb.auth.getUser();
   let nom=user?.email||'';
   if(user){const{data:el}=await sb.from('empleado_login').select('nombre_display,nombre_completo').eq('user_id',user.id).maybeSingle();if(el)nom=el.nombre_display||el.nombre_completo||nom;}
@@ -467,14 +474,14 @@ function pintarAsignar(){
           + (cerrado?'':info.items.map(({t,a})=>{
             const ar=t.hk_areas||{}, op=t.hk_tareas_op;
             const fijo=validado||t.estado!=='pendiente';
-            const nom=op?esc(op.nombre):`${esc(ar.codigo||'')} <span class="who">${ar.tipo==='cama'?'cama':ar.tipo==='dorm'?'dorm':ar.tipo==='privada'?'hab':'área'}</span>`;
+            const nom=op?esc(op.nombre):`${esc(ar.codigo||'')} <span class="who">${t.estatus_area==='profunda'?'profunda':ar.tipo==='cama'?'cama':ar.tipo==='dorm'?'dorm':ar.tipo==='privada'?'hab':'área'}</span>`;
             const et=op?(op.hora_sugerida?String(op.hora_sugerida).slice(0,5):'op'):(ABREV[t.estatus_area]||t.estatus_area||'');
-            const libre=t.metadata?.sin_trabajo, opc=t.metadata?.opcional;
+            const libre=t.metadata?.sin_trabajo, opc=t.metadata?.opcional, prof=t.metadata?.profunda;
             return `<tr class="arow ${op?'op':''} ${libre?'libre':''} ${a.employee_id?'asignada':'sin'}" data-t="${t.id}" data-fijo="${fijo?1:0}">
               <td class="grab" ${fijo?'':'data-grab="1"'} title="Arrastra desde aquí">${fijo?'':'⠿'}</td>
               <td>${nom}</td>
               <td><span class="pill est ${op?'':(CLS[t.estatus_area]||'')}">${et}</span></td>
-              <td class="who">${esc(a.nombre_display||'')}${t.partes>1?` <span class="pill">1 de ${t.partes}</span>`:''}${t.pases>1?` <span class="pill">pase ${t.pase}/${t.pases}</span>`:''}${t.es_extra&&!t.reasignada_desde?' <span class="pill prov">extra</span>':''}${opc?' <span class="pill">opcional</span>':''}</td>
+              <td class="who">${esc(a.nombre_display||'')}${t.partes>1?` <span class="pill">1 de ${t.partes}</span>`:''}${t.pases>1?` <span class="pill">pase ${t.pase}/${t.pases}</span>`:''}${t.es_extra&&!t.reasignada_desde?' <span class="pill prov">extra</span>':''}${opc?' <span class="pill">opcional</span>':''}${prof?' <span class="pill prov">profunda</span>':''}</td>
               <td class="num">${libre?'—':t.minutos_estimados}</td>
               <td class="rep">${fijo?'':`<button class="rep" data-rep="${t.id}" title="Repartir esta tarea entre una o varias personas">&lt;&gt;</button>`}</td></tr>`;
           }).join(''));
@@ -491,7 +498,7 @@ function pintarAsignar(){
     // Aviso: algo que sí pide limpieza y no tiene dueño (una llegada que se les pasó).
     const olvidadas=[];
     ASIG.filter(a=>!a.employee_id).forEach(a=>(a.hk_tareas||[]).forEach(t=>{
-      if(!t.metadata?.sin_trabajo && !t.metadata?.opcional && (t.minutos_estimados>0)) olvidadas.push({t,a});
+      if(!t.metadata?.sin_trabajo && !t.metadata?.opcional && !t.metadata?.profunda && (t.minutos_estimados>0)) olvidadas.push({t,a});
     }));
     $('alertaSin').innerHTML = olvidadas.length
       ? `<div class="alerta">⚠ <b>${olvidadas.length} ${olvidadas.length===1?'área con limpieza pendiente sin asignar':'áreas con limpieza pendiente sin asignar'}</b>
@@ -786,12 +793,29 @@ async function cargarInforme(){
 
 // ---------------- TIEMPOS ----------------
 async function cargarTiempos(){
-  const {data}=await sb.from('hk_tiempos').select('*').eq('property_id',P()).order('tipo_area').order('estatus');
+  const [{data},{data:ch},{data:it}]=await Promise.all([
+    sb.from('hk_tiempos').select('*').eq('property_id',P()).order('tipo_area').order('orden').order('estatus'),
+    sb.from('hk_checklists').select('*').eq('property_id',P()).is('area_id',null),
+    sb.from('hk_checklist_items').select('*').order('orden'),
+  ]);
+  const itByChk={};(it||[]).forEach(i=>(itByChk[i.checklist_id]=itByChk[i.checklist_id]||[]).push(i));
   $('tblT').tBodies[0].innerHTML=(data||[]).map(t=>`<tr data-id="${t.id}">
-    <td>${TIPOLBL[t.tipo_area]||t.tipo_area}</td>
-    <td><span class="pill">${(ESTLBL[t.estatus]||[t.estatus])[0]}</span></td>
+    <td>${t.etiqueta?esc(t.etiqueta):(TIPOLBL[t.tipo_area]||t.tipo_area)}</td>
+    <td><span class="pill est ${CLS[t.estatus]||''}">${(ESTLBL[t.estatus]||[t.estatus])[0]}</span></td>
     <td style="color:var(--soft);font-size:12.5px">${esc(t.descripcion||'')}</td>
     <td class="num"><input type="number" min="0" max="480" value="${t.minutos}" data-orig="${t.minutos}"></td></tr>`).join('');
+
+  // Los checklists del dormitorio (general y profunda) viven junto a sus tiempos
+  $('chkDorm').innerHTML=(ch||[]).map(c=>{
+    const items=itByChk[c.id]||[];
+    return `<div class="chk" data-c="${c.id}">
+      <div class="t">${esc(c.nombre)}
+        <span class="pill">${c.frecuencia==='profunda'?'se programa · sale sin asignar':'diaria'}</span>
+        <span style="margin-left:auto"><button class="b edc">✎ Checklist</button></span></div>
+      ${items.length?`<ol>${items.map(i=>`<li>${esc(i.tarea)}</li>`).join('')}</ol>`:''}
+    </div>`;}).join('')||'';
+  $('chkDorm').querySelectorAll('button.edc').forEach(b=>b.onclick=()=>
+    editarChecklistSuelto(b.closest('.chk').dataset.c,(ch||[]).find(c=>c.id===b.closest('.chk').dataset.c),itByChk,cargarTiempos));
 
   const {data:c}=await sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle();
   if(c){
@@ -903,25 +927,7 @@ async function cargarAreas(){
       ${d.items.map(tarjeta).join('')}`;
   }).join('')||'<div class="empty">No hay zonas comunes dadas de alta.</div>';
 
-  // Checklists del dormitorio (no cuelgan de un área concreta: valen para todos)
-  const dorms=(inv||[]).filter(a=>a.tipo==='dorm');
-  const porCamas={};dorms.forEach(a=>{const k=a.metadata?.camas;if(k)porCamas[k]=(porCamas[k]||0)+1;});
-  const prof=(camas)=>dorms.find(a=>String(a.metadata?.camas)===String(camas))?.metadata?.profunda_min;
-  $('chkDorm').innerHTML=(ch||[]).filter(c=>!c.area_id).map(c=>{
-    const items=itByChk[c.id]||[];
-    const esProf=c.frecuencia==='profunda';
-    return `<div class="chk" data-c="${c.id}">
-      <div class="t">${esc(c.nombre)}
-        <span class="pill">${esProf?'a programar':'diaria'}</span>
-        ${esProf
-          ? `<span class="pill">${Object.keys(porCamas).sort((a,b)=>b-a).map(k=>`${k} camas · ${prof(k)??c.minutos_estimados} min`).join(' · ')}</span>`
-          : `<input class="min" type="number" min="0" step="5" value="${c.minutos_estimados??''}" data-orig="${c.minutos_estimados??''}" data-chk="${c.id}"> <span style="font-size:12px;color:var(--soft)">min</span>`}
-        <span style="margin-left:auto"><button class="b edc">✎ Checklist</button></span></div>
-      ${items.length?`<ol>${items.map(i=>`<li>${esc(i.tarea)}</li>`).join('')}</ol>`:''}
-    </div>`;}).join('')||'<div class="empty">Sin checklists de dormitorio.</div>';
-
   $('zonas').querySelectorAll('button.ed').forEach(b=>b.onclick=()=>editarChecklist(b.closest('.chk').dataset.a,(zn||[]).find(x=>x.id===b.closest('.chk').dataset.a),chByArea,itByChk));
-  $('chkDorm').querySelectorAll('button.edc').forEach(b=>b.onclick=()=>editarChecklistSuelto(b.closest('.chk').dataset.c,(ch||[]).find(c=>c.id===b.closest('.chk').dataset.c),itByChk));
   $('zonas').querySelectorAll('button.del').forEach(b=>b.onclick=async()=>{
     if(!confirm('¿Eliminar esta zona y su checklist?\n\nSi solo quieres dejarla en stand by, desmarca la casilla de la izquierda.'))return;
     const {error}=await sb.from('hk_areas').delete().eq('id',b.closest('.chk').dataset.a);
@@ -936,7 +942,7 @@ async function cargarAreas(){
 }
 
 // Un solo guardado para toda la pestaña, igual que en tiempos estándar.
-function inputsZonas(){ return [...document.querySelectorAll('#zonas .min, #zonas .act, #zonas .vec, #zonas .obl, #chkDorm .min')]; }
+function inputsZonas(){ return [...document.querySelectorAll('#zonas .min, #zonas .act, #zonas .vec, #zonas .obl')]; }
 const valZ=i=>i.type==='checkbox'?(i.checked?'1':'0'):String(i.value);
 function suciosZ(){ return inputsZonas().filter(i=>valZ(i)!==String(i.dataset.orig)); }
 function marcarSuciosZ(){
@@ -1012,14 +1018,14 @@ async function editarChecklist(areaId,z,chByArea,itByChk){
   if(mins) await sb.from('hk_areas').update({minutos_override:mins}).eq('id',areaId);
   st('Checklist guardado','ok');cargarAreas();
 }
-async function editarChecklistSuelto(chkId,c,itByChk){
+async function editarChecklistSuelto(chkId,c,itByChk,repintar){
   const prev=(itByChk[chkId]||[]).map(i=>i.tarea).join('\n');
   const txt=prompt(`${c.nombre}\n\nUna tarea por línea.`,prev);
   if(txt===null)return;
   const lineas=txt.split('\n').map(s=>s.trim()).filter(Boolean).map((s,i)=>({orden:(i+1)*10,tarea:s,checklist_id:chkId}));
   await sb.from('hk_checklist_items').delete().eq('checklist_id',chkId);
   if(lineas.length){const {error}=await sb.from('hk_checklist_items').insert(lineas);if(error)return st(error.message,'err');}
-  st('Checklist guardado','ok');cargarAreas();
+  st('Checklist guardado','ok');(repintar||cargarAreas)();
 }
 $('btnNuevaZona').onclick=async()=>{
   const nombre=prompt('Nombre de la zona (ej. Baños del segundo piso)');if(!nombre)return;

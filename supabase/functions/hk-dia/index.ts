@@ -108,7 +108,7 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 
 // `lote` agrupa lo que no se puede partir entre dos personas: un dormitorio entero
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
-interface Tarea { area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean }
+interface Tarea { area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
 async function reparto(propKey: string, fecha: string) {
@@ -119,7 +119,7 @@ async function reparto(propKey: string, fecha: string) {
     rest(`hk_config?property_id=eq.${P}&select=*`),
     rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,orden,veces_dia,metadata,obligatoria&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
-    rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos`),
+    rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
     rest(`horarios?property_id=eq.${P}&fecha=eq.${fecha}&select=employee_id,nombre_display,puesto_id,hora_inicio,hora_fin`),
     rest('hk_puestos_map?activo=eq.true&select=puesto_id,turno'),
@@ -133,7 +133,11 @@ async function reparto(propKey: string, fecha: string) {
   if (bloqueadas.length) return { ok: false, ya_validado: true, mensaje: 'El reparto de este día ya fue validado; no se regenera.', asignaciones: bloqueadas.length };
   for (const a of existentes) await rest(`hk_asignaciones?id=eq.${a.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
 
-  const tiempo = new Map(tiemposArr.map((t) => [`${t.tipo_area}|${t.estatus}`, Number(t.minutos)]));
+  // Los dormitorios tienen tiempo propio por tamaño (8, 6 y 4 camas), tanto en la
+  // limpieza general como en la profunda.
+  const tiempo = new Map(tiemposArr.map((t) => [`${t.tipo_area}|${t.estatus}${t.variante ? `|${t.variante}` : ''}`, Number(t.minutos)]));
+  const minDe = (tipo: string, est: string, camas?: number | null) =>
+    (camas != null ? tiempo.get(`${tipo}|${est}|${camas}`) : undefined) ?? tiempo.get(`${tipo}|${est}`);
   const chkPorArea = new Map(checklists.map((c) => [String(c.area_id), c]));
   const estPorArea = new Map(estatus.map((e) => [String(e.area_id), e]));
 
@@ -156,7 +160,7 @@ async function reparto(propKey: string, fecha: string) {
       // La limpieza general del dorm se hace a diario en cuanto la habitación estuvo
       // ocupada, aunque ninguna cama concreta dé trabajo (una cama ocupada son 0 min).
       if (tipo === 'cama' && a.parent_id && est !== 'vacia_limpia') dormsTocados.add(String(a.parent_id));
-      const min = (a.minutos_override as number | null) ?? tiempo.get(`${tipo}|${est}`) ?? 0;
+      const min = (a.minutos_override as number | null) ?? minDe(tipo, est) ?? 0;
       if (!min) continue; // p.ej. cama ocupada = 0 min -> no se toca
       cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: tipo === 'cama' && a.parent_id ? `dorm:${a.parent_id}` : `area:${a.id}` });
     } else {
@@ -165,7 +169,7 @@ async function reparto(propKey: string, fecha: string) {
       // solo entra en el reparto el día que le toca.
       const frec = String(chk?.frecuencia ?? 'diaria');
       if (frec !== 'diaria' && frec !== diaSemana) continue;
-      const min = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? tiempo.get(`${tipo}|rutina`) ?? 0;
+      const min = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? minDe(tipo, 'rutina') ?? 0;
       if (!min) continue;
       // La cocina de huéspedes y los baños comunes se limpian dos veces al día:
       // cada pase es una tarea aparte, para que se puedan repartir entre personas y turnos.
@@ -181,11 +185,18 @@ async function reparto(propKey: string, fecha: string) {
   // Limpieza general del dormitorio: baño, habitación, balcón y ventana. Se hace a diario
   // en cuanto la habitación estuvo ocupada y se cobra una sola vez por dormitorio; va junto
   // a sus camas y en la misma persona, para no entrar dos veces al mismo cuarto.
-  const minDorm = tiempo.get('dorm|rutina') ?? 0;
   const chkDorm = checklists.find((c) => !c.area_id && String(c.frecuencia) === 'diaria');
+  const chkProf = checklists.find((c) => !c.area_id && String(c.frecuencia) === 'profunda');
+  const profundas: Tarea[] = [];
   for (const a of areas) {
-    if (String(a.tipo) !== 'dorm' || !dormsTocados.has(String(a.id))) continue;
-    const min = (a.minutos_override as number | null) ?? minDorm;
+    if (String(a.tipo) !== 'dorm') continue;
+    const camas = Number((a.metadata as Record<string, unknown> | null)?.camas ?? 0) || null;
+    // La profunda de cada dormitorio viaja siempre SIN ASIGNAR, con su número de
+    // habitación, para programarla el día que toque.
+    const minProf = minDe('dorm', 'profunda', camas);
+    if (minProf) profundas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: `${a.nombre} · limpieza profunda`, piso: Number(a.piso ?? 0), tipo: 'dorm', estatus: 'profunda', minutos: minProf, checklist_id: chkProf ? String(chkProf.id) : null, orden: Number(a.orden ?? 0), lote: `prof:${a.id}`, profunda: true });
+    if (!dormsTocados.has(String(a.id))) continue;
+    const min = (a.minutos_override as number | null) ?? minDe('dorm', 'rutina', camas) ?? 0;
     if (!min) continue;
     cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo: 'dorm', estatus: 'rutina', minutos: min, checklist_id: chkDorm ? String(chkDorm.id) : null, orden: Number(a.orden ?? 0) - 1, lote: `dorm:${a.id}` });
   }
@@ -353,13 +364,13 @@ async function reparto(propKey: string, fecha: string) {
       metadata: { capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
-    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true } : (t.opcional ? { opcional: true } : {}), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
+    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : {})), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
     for (let i = 0; i < filas.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
 
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
-  const bolsa = [...opcionales, ...libres];
+  const bolsa = [...profundas, ...opcionales, ...libres];
   if (bolsa.length) await crear(null, bolsa, 'SIN ASIGNAR', true);
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
   if (rc.sobra.length) await crear(null, rc.sobra, 'SIN CUBRIR · cuartos');
@@ -367,7 +378,7 @@ async function reparto(propKey: string, fecha: string) {
 
   return {
     ok: true, fecha, propiedad: propKey,
-    carga: { cuartos_tareas: cuartos.filter((t) => !t.sinTrabajo).length, cuartos_sin_trabajo: libres.length, cuartos_min: cuartos.reduce((s, t) => s + t.minutos, 0), publicas_tareas: publicas.length, publicas_min: publicas.reduce((s, t) => s + t.minutos, 0), opcionales_tareas: opcionales.length, opcionales_min: opcionales.reduce((s, t) => s + t.minutos, 0), operativas_tareas: operativas.length, operativas_min: operativas.reduce((s, t) => s + t.minutos, 0) },
+    carga: { cuartos_tareas: cuartos.filter((t) => !t.sinTrabajo).length, cuartos_sin_trabajo: libres.length, cuartos_min: cuartos.reduce((s, t) => s + t.minutos, 0), publicas_tareas: publicas.length, publicas_min: publicas.reduce((s, t) => s + t.minutos, 0), opcionales_tareas: opcionales.length, opcionales_min: opcionales.reduce((s, t) => s + t.minutos, 0), profundas_tareas: profundas.length, operativas_tareas: operativas.length, operativas_min: operativas.reduce((s, t) => s + t.minutos, 0) },
     personal: personas.map((p) => ({ nombre: p.nombre, turno: p.turno, horario: `${p.hi}-${p.hf}`, capacidad_min: p.cap, admin_min: p.admin, jornada_min: p.bruta })),
     reparto: salida,
     sin_cubrir_min: rc.sobra.reduce((s, t) => s + t.minutos, 0) + rp.sobra.reduce((s, t) => s + t.minutos, 0),
