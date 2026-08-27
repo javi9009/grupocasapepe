@@ -121,6 +121,17 @@ tr.op .who{color:#5b4bab}
 .caja .d{font-size:13px;margin-top:6px;line-height:1.55}
 .caja ul{margin:9px 0 0;padding-left:20px;font-size:13px;line-height:1.7}
 .caja ul b{font-variant-numeric:tabular-nums}
+.res2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.res2{grid-template-columns:1fr}}
+.res2 .col{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:13px 15px}
+.res2 h4{margin:0 0 9px;font-size:14px}
+.res2 .sub{margin:9px 0 0}
+table.mini{width:100%;border-collapse:collapse;font-size:12.5px}
+table.mini th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--soft);
+  padding:0 6px 5px 0;border-bottom:1px solid var(--bg3);font-weight:800}
+table.mini td{padding:5px 6px 5px 0;border-bottom:1px solid var(--bg3);font-variant-numeric:tabular-nums}
+table.mini .num{text-align:right}
+table.mini tr:last-child td{border-bottom:0}
 .alerta{background:#fff3f3;border:1px solid #e0a3a3;border-radius:12px;padding:11px 13px;margin-bottom:12px;color:#8f2020;font-size:13px;line-height:1.5}
 .alerta b{font-weight:800}
 .alerta .q{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
@@ -384,6 +395,9 @@ td.grab:hover{color:var(--gold)}
     </div>
     <div id="pvVacLista"></div>
   </div>
+
+  <h3>Qué fechas aprietan</h3>
+  <div id="pvResumen"></div>
 
   <h3>Cuándo contratar</h3>
   <div id="pvPlan"></div>
@@ -1186,20 +1200,21 @@ async function cargarPrevision(){
   const e=$('stP'); e.className='status'; e.textContent='Leyendo el histórico…';
   const hoy=F();
   const desdeHist=masDias(hoy,-370), hastaHist=masDias(hoy,-1);
-  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac}]=await Promise.all([
+  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac},{data:fest}]=await Promise.all([
     sb.from('hk_ocupacion_hist').select('*').eq('property_id',P()).gte('fecha',desdeHist).lte('fecha',hastaHist).order('fecha'),
     sb.from('hk_tiempos').select('tipo_area,estatus,variante,minutos').eq('property_id',P()).eq('activo',true),
     sb.from('hk_areas').select('tipo,minutos_override,veces_dia,obligatoria').eq('property_id',P()).eq('activo',true).eq('tipo','zona_comun'),
     sb.from('hk_tareas_op').select('minutos,dia_semana').eq('property_id',P()).eq('activo',true),
     sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle(),
     sb.from('hk_vacaciones').select('*').eq('property_id',P()).order('desde'),
+    sb.from('hk_festivos').select('fecha,nombre').eq('property_id',P()),
   ]);
   if(!hist||!hist.length){
     e.className='status err';
     e.textContent='Todavía no hay histórico de ocupación. Hay que traerlo de Cloudbeds antes de poder prever.';
     $('pvGraf').innerHTML='<div class="empty">Sin histórico.</div>'; return;
   }
-  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{},vac:vac||[]};
+  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{},vac:vac||[],fest:fest||[]};
   e.textContent=''; calcularPrevision();
 }
 
@@ -1219,7 +1234,7 @@ function calcularPrevision(){
   const porDow={};
   document.querySelectorAll('#p-prev .dow').forEach(i=>porDow[Number(i.dataset.d)]=Math.max(0,Number(i.value)||0));
   const semana=Object.values(porDow).reduce((a,b)=>a+b,0);
-  $('pvSemTot').textContent=`${semana} turnos a la semana · ${(semana/7).toFixed(1)} personas al día de media`;
+  $('pvSemTot').textContent=`${semana} turnos a la semana · ${(semana/7).toFixed(1)} al día de media · en festivo trabaja el equipo completo`;
   const t=PV.tiempos;
   const mCamaSal=tmin(t,'cama','vacia_sucia'), mCamaLim=tmin(t,'cama','vacia_limpia'), mCamaBl=tmin(t,'cama','ocupada_blancos');
   const mPrivSal=tmin(t,'privada','vacia_sucia'), mPrivEc=tmin(t,'privada','ocupada'), mPrivBl=tmin(t,'privada','ocupada_blancos');
@@ -1255,13 +1270,18 @@ function calcularPrevision(){
   // Las ausencias cargadas bajan el equipo disponible esos días
   const vac=(PV.vac||[]);
   const cobertura=semana/(7*Math.max(1,equipo));   // qué parte de la plantilla trabaja de media
+  // En festivo no se dan descansos: trabaja el equipo completo. Y quien está de
+  // vacaciones no vuelve por un festivo: sus descansos ya van dentro del periodo.
+  const festivos={}; (PV.fest||[]).forEach(x=>festivos[x.fecha]=x.nombre);
   dias.forEach(d=>{
     const dow=new Date(d.fecha+'T12:00:00').getDay();
     d.dow=dow;
+    d.festivo=festivos[d.fecha]||null;
     d.necesarias=d.fte;                              // personas en turno que pediría ese día
     d.plantilla=d.fte/(cobertura||1);                // su equivalente en plantilla
     d.fuera=vac.filter(v=>d.fecha>=v.desde&&d.fecha<=v.hasta);
-    d.enTurno=Math.max(0,(porDow[dow]??0)-d.fuera.length);
+    const base=d.festivo?equipo:(porDow[dow]??0);
+    d.enTurno=Math.max(0,base-d.fuera.length);
   });
 
   PV.dias=dias; PV.equipo=equipo; PV.minimo=minimo; PV.jornada=jornada;
@@ -1317,6 +1337,29 @@ function pintarPrevision(){
     ['Horas extra',`${Math.round(extra)}`,'en los seis meses, si no se contrata'],
   ].map(([t,v,x])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join('');
 
+  // ---- tramos concretos en los que falta gente (días seguidos) ----
+  const tramos=[];
+  let cur=null;
+  conDato.forEach(d=>{
+    const falta=d.necesarias-d.enTurno;
+    if(falta>0.001){
+      if(cur && cur.fin===masDias(d.fecha,-1)) { cur.fin=d.fecha; cur.dias++; cur.horas+=falta*PV.jornada/60; cur.pico=Math.max(cur.pico,falta); }
+      else { if(cur) tramos.push(cur); cur={ini:d.fecha,fin:d.fecha,dias:1,horas:falta*PV.jornada/60,pico:falta}; }
+    }
+  });
+  if(cur) tramos.push(cur);
+  const gordos=tramos.filter(t=>t.dias>=3).sort((a,b)=>b.horas-a.horas);
+  const sueltos=tramos.filter(t=>t.dias<3);
+
+  // ---- por día de la semana, para saber dónde poner los descansos ----
+  const dow={};
+  conDato.forEach(d=>{
+    if(!dow[d.dow]) dow[d.dow]={n:0,nec:0,turno:0,cortos:0};
+    const x=dow[d.dow]; x.n++; x.nec+=d.necesarias; x.turno+=d.enTurno;
+    if(d.necesarias>d.enTurno+0.001) x.cortos++;
+  });
+  const ordenDow=[1,2,3,4,5,6,0];
+
   // ---- caja de temporadas ----
   $('pvAviso').innerHTML = ventanas.length
     ? `<div class="caja rojo"><div class="t">⚠ ${ventanas.length===1?'Una temporada pide':`${ventanas.length} temporadas piden`} contratar</div>
@@ -1342,7 +1385,7 @@ function pintarPrevision(){
     const h=d.sin?0:Math.max(1,alto-(yP(d.necesarias)-PADT));
     const col=d.sin?'#e6e1d6':d.necesarias>d.enTurno+0.001?'#b03434':d.necesarias>d.enTurno-0.5?'#c9a227':'#1d9e75';
     const tip=d.sin?'sin dato del año pasado'
-      :`${DOWL[d.dow]} · ${d.ocup} cuartos · ${Math.round(d.min/60*10)/10} h de trabajo · hacen falta ${d.necesarias.toFixed(1)} y trabajan ${d.enTurno}`
+      :`${DOWL[d.dow]}${d.festivo?' · '+d.festivo:''} · ${d.ocup} cuartos · ${Math.round(d.min/60*10)/10} h de trabajo · hacen falta ${d.necesarias.toFixed(1)} y trabajan ${d.enTurno}`
        +(d.fuera&&d.fuera.length?` · fuera: ${d.fuera.map(v=>v.nombre).join(', ')}`:'');
     barras+=`<rect x="${x.toFixed(1)}" y="${(H-PADB-h).toFixed(1)}" width="${Math.max(1,bw-0.6).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"><title>${d.fecha} · ${tip}</title></rect>`;
     if(!d.sin) lineaOc+=`${lineaOc?'L':'M'}${(x+bw/2).toFixed(1)},${yO(d.ocup||0).toFixed(1)}`;
@@ -1396,6 +1439,40 @@ function pintarPrevision(){
         Se propone la contratación un mes antes para que llegue formada: la curva de una camarista es de seis semanas.</div>
     </div>`).join('') : `<div class="plan ok"><div class="t">No hace falta contratar en estos seis meses</div>
       <div class="d">Con ${equipo} personas y las ausencias cargadas, ninguna ventana de 30 días pide gente extra más de 15.</div></div>`;
+
+  // ---- resumen de fechas ----
+  const fmtR=(a,b)=>{
+    const d1=new Date(a+'T12:00:00'), d2=new Date(b+'T12:00:00');
+    if(a===b) return `${d1.getDate()} de ${MESL[d1.getMonth()]}`;
+    if(d1.getMonth()===d2.getMonth()) return `${d1.getDate()}–${d2.getDate()} de ${MESL[d1.getMonth()]}`;
+    return `${d1.getDate()} de ${MESL[d1.getMonth()]} → ${d2.getDate()} de ${MESL[d2.getMonth()]}`;
+  };
+  $('pvResumen').innerHTML=`
+    <div class="res2">
+      <div class="col">
+        <h4>Los tramos que aprietan</h4>
+        ${gordos.length?`<table class="mini"><thead><tr><th>Fechas</th><th class="num">Días</th><th class="num">Faltan</th><th class="num">Horas extra</th></tr></thead><tbody>
+          ${gordos.slice(0,12).map(t=>`<tr><td>${fmtR(t.ini,t.fin)}</td><td class="num">${t.dias}</td>
+            <td class="num">${t.pico<1?'media':Math.ceil(t.pico)}</td><td class="num">${Math.round(t.horas)}</td></tr>`).join('')}
+          </tbody></table>
+          ${gordos.length>12?`<p class="sub">Y ${gordos.length-12} tramos más.</p>`:''}
+          ${sueltos.length?`<p class="sub">Además hay ${sueltos.length} ${sueltos.length===1?'día suelto':'días sueltos'} de uno o dos días, que se absorben moviendo el reparto.</p>`:''}`
+        :'<p class="sub">No hay ningún tramo de tres días o más en el que falte gente.</p>'}
+      </div>
+      <div class="col">
+        <h4>Dónde poner los descansos</h4>
+        <table class="mini"><thead><tr><th>Día</th><th class="num">Hacen falta</th><th class="num">Trabajan</th><th class="num">Días cortos</th></tr></thead><tbody>
+        ${ordenDow.filter(k=>dow[k]).map(k=>{
+          const x=dow[k], nec=x.nec/x.n, tur=x.turno/x.n;
+          const mal=x.cortos>x.n*0.5;
+          return `<tr><td>${DOWL[k]}</td><td class="num">${nec.toFixed(1)}</td><td class="num">${tur.toFixed(1)}</td>
+            <td class="num" style="${mal?'color:var(--bad);font-weight:700':''}">${x.cortos} de ${x.n}</td></tr>`;
+        }).join('')}
+        </tbody></table>
+        <p class="sub">El trabajo sigue a las <b>salidas</b>, no a la ocupación: un cuarto en casa no se toca y una salida son 40 minutos.
+        Los días con más días cortos son los peores para descansar.</p>
+      </div>
+    </div>`;
 
   // ---- tabla por mes ----
   const meses2=new Map();
