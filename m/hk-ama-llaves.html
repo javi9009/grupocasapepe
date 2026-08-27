@@ -78,6 +78,20 @@ tr.op td{background:#f4f1ff}
 tr.op .who{color:#5b4bab}
 .achip.op{background:#ece8ff;border-color:#c6bcf0;color:#4a3d94}
 .achip.libre{background:transparent;border-style:dashed;color:var(--soft);opacity:.7}
+.cp{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--soft);font-weight:600}
+.cp input{width:64px;padding:5px 7px;border:1px solid var(--bd);border-radius:8px;background:var(--surface);
+  color:var(--txt);font:inherit;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+.graf{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:14px 12px 10px;margin:12px 0 6px;overflow-x:auto}
+.graf svg{display:block;min-width:640px}
+.graf .lg{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:11.5px;color:var(--soft)}
+.graf .lg span{display:inline-flex;align-items:center;gap:6px}
+.graf .lg i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.plan{background:var(--surface);border:1px solid var(--bd);border-left:3px solid var(--gold);border-radius:12px;
+  padding:13px 15px;margin-bottom:10px}
+.plan .t{font-weight:800;font-size:14.5px}
+.plan .d{font-size:12.5px;color:var(--soft);margin-top:5px;line-height:1.55}
+.plan .d b{color:var(--txt)}
+.plan.ok{border-left-color:var(--accent)}
 .alerta{background:#fff3f3;border:1px solid #e0a3a3;border-radius:12px;padding:11px 13px;margin-bottom:12px;color:#8f2020;font-size:13px;line-height:1.5}
 .alerta b{font-weight:800}
 .alerta .q{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
@@ -217,6 +231,7 @@ td.grab:hover{color:var(--gold)}
   <button class="tab" data-p="informe">Informe de productividad</button>
   <button class="tab" data-p="tiempos">Tiempos estándar</button>
   <button class="tab" data-p="areas">Áreas y checklists</button>
+  <button class="tab" data-p="prev">Previsión de personal</button>
 </div>
 
 <!-- ================= REPARTO ================= -->
@@ -288,6 +303,33 @@ td.grab:hover{color:var(--gold)}
 </div>
 
 <!-- ================= ÁREAS ================= -->
+<!-- ================= PREVISIÓN DE PERSONAL ================= -->
+<div class="pane" id="p-prev">
+  <div class="bar">
+    <label class="cp">Equipo de cuartos hoy <input type="number" id="pvEquipo" min="1" max="20" step="1" value="3"></label>
+    <label class="cp">Días de trabajo por semana <input type="number" id="pvDias" min="4" max="7" step="1" value="6"></label>
+    <label class="cp">Jornada (h) <input type="number" id="pvJornada" min="4" max="12" step="0.5" value="8"></label>
+    <button class="b" id="pvRecalc">Recalcular</button>
+    <span class="status" id="stP"></span>
+  </div>
+  <p class="sub">Día a día de los próximos seis meses, con la ocupación que tuvimos el año pasado en ese mismo día de la semana.
+  Las barras son las <b>recamaristas que harían falta</b>; la línea, el equipo que hay. Solo se propone contratar cuando la temporada
+  pide esa persona <b>más de 15 días de cada 30</b>: los picos sueltos se absorben, una temporada no.</p>
+
+  <div class="kpis" id="pvKpis"></div>
+
+  <div class="graf" id="pvGraf"></div>
+
+  <h3>Cuándo contratar</h3>
+  <div id="pvPlan"></div>
+
+  <h3>Detalle por mes</h3>
+  <div class="wrap"><table id="pvTbl"><thead><tr>
+    <th>Mes</th><th class="num">Ocupación media</th><th class="num">Horas de cuartos al día</th>
+    <th class="num">Recamaristas necesarias</th><th class="num">Días por encima del equipo</th><th>Lectura</th>
+  </tr></thead><tbody></tbody></table></div>
+</div>
+
 <div class="pane" id="p-areas">
   <div class="bar">
     <button class="b pri" id="btnGuardarZ" disabled>💾 Guardar y recalcular el día</button>
@@ -331,7 +373,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.pane').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');$('p-'+t.dataset.p).classList.add('active');
-  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[t.dataset.p]||(()=>{}))();
+  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas,prev:cargarPrevision}[t.dataset.p]||(()=>{}))();
 });
 $('sede').onchange=()=>recargarTodo();
 $('fecha').onchange=()=>recargarTodo();
@@ -1065,10 +1107,205 @@ $('btnSyncCB').onclick=async()=>{
   st(j.ok?'Inventario sincronizado':'Error al sincronizar',j.ok?'ok':'err');cargarAreas();
 };
 
+// ---------------- PREVISIÓN DE PERSONAL ----------------
+// La ocupación del mismo día del año pasado (a 364 días, para caer en el mismo día
+// de la semana) se convierte en minutos de trabajo con los tiempos estándar de hoy.
+// De ahí sale cuántas recamaristas hacen falta cada día de los próximos seis meses.
+let PV = null;
+const DIAS_ADELANTO = 180;
+const MESL = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const fISO = d => d.toISOString().slice(0,10);
+const masDias = (iso,n) => fISO(new Date(Date.parse(iso+'T00:00:00Z')+n*86400000));
+
+async function cargarPrevision(){
+  const e=$('stP'); e.className='status'; e.textContent='Leyendo el histórico…';
+  const hoy=F();
+  const desdeHist=masDias(hoy,-370), hastaHist=masDias(hoy,-1);
+  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf}]=await Promise.all([
+    sb.from('hk_ocupacion_hist').select('*').eq('property_id',P()).gte('fecha',desdeHist).lte('fecha',hastaHist).order('fecha'),
+    sb.from('hk_tiempos').select('tipo_area,estatus,variante,minutos').eq('property_id',P()).eq('activo',true),
+    sb.from('hk_areas').select('tipo,minutos_override,veces_dia,obligatoria').eq('property_id',P()).eq('activo',true).eq('tipo','zona_comun'),
+    sb.from('hk_tareas_op').select('minutos,dia_semana').eq('property_id',P()).eq('activo',true),
+    sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle(),
+  ]);
+  if(!hist||!hist.length){
+    e.className='status err';
+    e.textContent='Todavía no hay histórico de ocupación. Hay que traerlo de Cloudbeds antes de poder prever.';
+    $('pvGraf').innerHTML='<div class="empty">Sin histórico.</div>'; return;
+  }
+  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{}};
+  e.textContent=''; calcularPrevision();
+}
+
+function tmin(t,tipo,est,variante){
+  const f=(t||[]).filter(x=>x.tipo_area===tipo&&x.estatus===est);
+  return (variante!=null && f.find(x=>String(x.variante)===String(variante))?.minutos)
+    ?? f.find(x=>!x.variante)?.minutos ?? f[0]?.minutos ?? 0;
+}
+
+function calcularPrevision(){
+  if(!PV) return;
+  const equipo=Math.max(1,Number($('pvEquipo').value)||3);
+  const diasSem=Math.min(7,Math.max(4,Number($('pvDias').value)||6));
+  const jornada=(Number($('pvJornada').value)||8)*60;
+  const t=PV.tiempos;
+  const mCamaSal=tmin(t,'cama','vacia_sucia'), mCamaLim=tmin(t,'cama','vacia_limpia'), mCamaBl=tmin(t,'cama','ocupada_blancos');
+  const mPrivSal=tmin(t,'privada','vacia_sucia'), mPrivEc=tmin(t,'privada','ocupada'), mPrivBl=tmin(t,'privada','ocupada_blancos');
+  const blancos=Number(PV.conf.dias_cambio_blancos||4);
+
+  // Lo que no depende de la ocupación: las tareas operativas del turno de cuartos.
+  const minOps=(PV.ops||[]).filter(o=>!o.dia_semana).reduce((s,o)=>s+Number(o.minutos||0),0);
+  // Las zonas comunes obligadas van al turno de áreas públicas, aparte del de cuartos.
+  const minZonas=(PV.zonas||[]).filter(z=>z.obligatoria!==false)
+    .reduce((s,z)=>s+Number(z.minutos_override||0)*Math.max(1,z.veces_dia||1),0);
+
+  const porFecha={}; PV.hist.forEach(h=>porFecha[h.fecha]=h);
+  const hoy=F();
+  const dias=[];
+  for(let i=0;i<DIAS_ADELANTO;i++){
+    const f=masDias(hoy,i);
+    // 364 días atrás = mismo día de la semana del año pasado
+    let ref=porFecha[masDias(f,-364)] || porFecha[masDias(f,-371)] || porFecha[masDias(f,-357)];
+    if(!ref){ dias.push({fecha:f,sin:true,min:0,fte:0}); continue; }
+    const camasEc=Math.max(0,ref.camas_ocupadas-ref.camas_salida);
+    const privEc=Math.max(0,ref.privadas_ocupadas-ref.privadas_salida);
+    const min =
+        ref.camas_salida*mCamaSal
+      + ref.llegadas*0                                   // la llegada a cama limpia ya va en la salida
+      + (camasEc/blancos)*mCamaBl                        // cambio de blancos a quien sigue en casa
+      + ref.dorms_tocados*tmin(t,'dorm','rutina',null)   // limpieza general del dormitorio
+      + ref.privadas_salida*mPrivSal
+      + privEc*mPrivEc + (privEc/blancos)*(mPrivBl-mPrivEc)
+      + minOps;
+    dias.push({fecha:f,min,fte:min/jornada,ocup:ref.unidades_ocupadas,ref:ref.fecha,sin:false});
+  }
+  // Con descansos, una persona de plantilla solo cubre diasSem/7 de cada día
+  const cobertura=diasSem/7;
+  dias.forEach(d=>{ d.plantilla=d.fte/cobertura; });
+
+  PV.dias=dias; PV.equipo=equipo; PV.jornada=jornada; PV.minZonas=minZonas; PV.cobertura=cobertura;
+  pintarPrevision();
+}
+
+// Regla de contratación: no se contrata por un pico. Se contrata cuando en una
+// ventana de 30 días hay más de 15 en los que el equipo actual no alcanza.
+function ventanasDeContratacion(dias,equipo){
+  const falta=dias.map(d=>d.plantilla>equipo+0.001);
+  const out=[]; let i=0;
+  while(i<dias.length-29){
+    let c=0; for(let k=i;k<i+30;k++) if(falta[k]) c++;
+    if(c>15){
+      // se extiende mientras la ventana siga pidiendo la persona
+      let fin=i+29;
+      while(fin+1<dias.length){
+        let c2=0; for(let k=fin-28;k<=fin+1;k++) if(falta[k]) c2++;
+        if(c2>15) fin++; else break;
+      }
+      const tramo=dias.slice(i,fin+1);
+      const pico=Math.max(...tramo.map(d=>d.plantilla));
+      const diasFalta=tramo.filter(d=>d.plantilla>equipo+0.001).length;
+      out.push({desde:dias[i].fecha, hasta:dias[fin].fecha, dias:tramo.length, diasFalta,
+        pico, faltan:Math.max(1,Math.ceil(pico-equipo))});
+      i=fin+1;
+    } else i++;
+  }
+  return out;
+}
+
+function pintarPrevision(){
+  const {dias,equipo}=PV;
+  const conDato=dias.filter(d=>!d.sin);
+  const maxP=Math.max(equipo+1,...conDato.map(d=>d.plantilla));
+  const medias=conDato.reduce((s,d)=>s+d.plantilla,0)/(conDato.length||1);
+  const diasSobre=conDato.filter(d=>d.plantilla>equipo+0.001).length;
+  const ventanas=ventanasDeContratacion(dias,equipo);
+
+  $('pvKpis').innerHTML=[
+    ['Equipo de cuartos hoy',`${equipo}`,'personas en plantilla'],
+    ['Necesidad media',`${medias.toFixed(1)}`,'personas, contando descansos'],
+    ['Días por encima',`${diasSobre}`,`de ${conDato.length} en seis meses`],
+    ['Contrataciones',`${ventanas.length}`,ventanas.length?'temporadas que la piden':'no hace falta contratar'],
+  ].map(([t,v,s])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+
+  // ---- gráfica ----
+  const W=Math.max(700,dias.length*5.2), H=230, PADL=34, PADB=26, PADT=10;
+  const bw=(W-PADL-6)/dias.length;
+  const y=v=>PADT+(H-PADT-PADB)*(1-v/maxP);
+  let barras='',meses='';
+  let mesAct=null;
+  dias.forEach((d,i)=>{
+    const x=PADL+i*bw;
+    const alto=d.sin?0:Math.max(1,(H-PADT-PADB)-(y(d.plantilla)-PADT));
+    const col=d.sin?'#e6e1d6':d.plantilla>equipo+0.001?'#b03434':d.plantilla>equipo-0.5?'#c9a227':'#1d9e75';
+    barras+=`<rect x="${x.toFixed(1)}" y="${(H-PADB-alto).toFixed(1)}" width="${Math.max(1,bw-0.6).toFixed(1)}" height="${alto.toFixed(1)}" fill="${col}"><title>${d.fecha} · ${d.sin?'sin dato':`${d.plantilla.toFixed(1)} personas · ${Math.round(d.min/60*10)/10} h`}</title></rect>`;
+    const m=d.fecha.slice(0,7);
+    if(m!==mesAct){ mesAct=m;
+      meses+=`<line x1="${x.toFixed(1)}" y1="${PADT}" x2="${x.toFixed(1)}" y2="${H-PADB}" stroke="#e6e1d6" stroke-width="1"/>`
+        +`<text x="${(x+3).toFixed(1)}" y="${H-8}" font-size="10.5" fill="#8e8c85">${MESL[Number(m.slice(5,7))-1].slice(0,3)}${m.slice(5,7)==='01'?' '+m.slice(2,4):''}</text>`;
+    }
+  });
+  let ejes='';
+  for(let v=0;v<=Math.ceil(maxP);v++){
+    ejes+=`<line x1="${PADL}" y1="${y(v).toFixed(1)}" x2="${W-4}" y2="${y(v).toFixed(1)}" stroke="#f1efe8" stroke-width="1"/>`
+      +`<text x="4" y="${(y(v)+3.5).toFixed(1)}" font-size="10.5" fill="#8e8c85">${v}</text>`;
+  }
+  const yEq=y(equipo);
+  $('pvGraf').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+    ${ejes}${meses}${barras}
+    <line x1="${PADL}" y1="${yEq.toFixed(1)}" x2="${W-4}" y2="${yEq.toFixed(1)}" stroke="#16130f" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="${W-6}" y="${(yEq-6).toFixed(1)}" font-size="10.5" fill="#16130f" text-anchor="end" font-weight="700">equipo actual: ${equipo}</text>
+  </svg>
+  <div class="lg">
+    <span><i style="background:#1d9e75"></i>alcanza de sobra</span>
+    <span><i style="background:#c9a227"></i>al límite</span>
+    <span><i style="background:#b03434"></i>falta gente</span>
+    <span><i style="background:#e6e1d6"></i>sin dato del año pasado</span>
+    <span style="margin-left:auto">Las áreas públicas (${Math.round(PV.minZonas/60*10)/10} h al día) van aparte, en su propio turno.</span>
+  </div>`;
+
+  // ---- plan de contratación ----
+  $('pvPlan').innerHTML = ventanas.length ? ventanas.map(v=>{
+    const contratar=masDias(v.desde,-30);
+    const fmt=f=>{const d=new Date(f+'T12:00:00');return `${d.getDate()} de ${MESL[d.getMonth()]}`;};
+    return `<div class="plan">
+      <div class="t">Contratar ${v.faltan} ${v.faltan===1?'recamarista':'recamaristas'} a partir del ${fmt(contratar)}</div>
+      <div class="d">La temporada apretada va del <b>${fmt(v.desde)}</b> al <b>${fmt(v.hasta)}</b>:
+        ${v.diasFalta} de esos ${v.dias} días piden más de ${equipo} personas, con un pico de <b>${v.pico.toFixed(1)}</b>.
+        Se propone la contratación un mes antes para que llegue formada: la curva de una camarista es de seis semanas.</div>
+    </div>`;
+  }).join('') : `<div class="plan ok"><div class="t">Con ${equipo} recamaristas alcanza los próximos seis meses</div>
+      <div class="d">Hay ${diasSobre} ${diasSobre===1?'día suelto':'días sueltos'} por encima del equipo, pero ninguna temporada pide
+      esa persona más de 15 días de cada 30. Los picos se cubren moviendo el reparto o con horas extra puntuales.</div></div>`;
+
+  // ---- tabla por mes ----
+  const meses2=new Map();
+  conDato.forEach(d=>{
+    const k=d.fecha.slice(0,7);
+    if(!meses2.has(k)) meses2.set(k,{min:0,n:0,ocup:0,sobre:0,max:0});
+    const m=meses2.get(k);
+    m.min+=d.min; m.n++; m.ocup+=d.ocup||0; m.max=Math.max(m.max,d.plantilla);
+    if(d.plantilla>equipo+0.001) m.sobre++;
+  });
+  $('pvTbl').tBodies[0].innerHTML=[...meses2.entries()].map(([k,m])=>{
+    const fte=(m.min/m.n)/PV.jornada/PV.cobertura;
+    const lectura = m.sobre>15 ? 'Temporada: hace falta otra persona'
+      : m.sobre>0 ? `${m.sobre} días apretados, se absorben`
+      : 'Holgado';
+    return `<tr><td>${MESL[Number(k.slice(5,7))-1]} ${k.slice(0,4)}</td>
+      <td class="num">${Math.round(m.ocup/m.n)} cuartos</td>
+      <td class="num">${Math.round(m.min/m.n/60*10)/10} h</td>
+      <td class="num" style="font-weight:700">${fte.toFixed(1)}</td>
+      <td class="num" style="${m.sobre>15?'color:var(--bad);font-weight:700':''}">${m.sobre}</td>
+      <td style="font-size:12.5px;color:var(--soft)">${lectura}</td></tr>`;
+  }).join('');
+}
+$('pvRecalc').onclick=()=>calcularPrevision();
+['pvEquipo','pvDias','pvJornada'].forEach(id=>$(id).onchange=()=>calcularPrevision());
+
 function recargarTodo(){
   const act=document.querySelector('.tab.active').dataset.p;
   cargarReparto();
-  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas}[act]||(()=>{}))();
+  ({informe:cargarInforme,tiempos:cargarTiempos,areas:cargarAreas,prev:cargarPrevision}[act]||(()=>{}))();
 }
 cargarReparto();
 </script></body></html>
