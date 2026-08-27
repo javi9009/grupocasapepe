@@ -37,6 +37,24 @@ button{font-family:inherit}
 .pila .val{font-size:12px;font-weight:800;width:62px;text-align:right;font-variant-numeric:tabular-nums}
 .pila .pie{font-size:12px;margin-top:4px;font-weight:700}
 .pila .pie.bien{color:var(--accent)}.pila .pie.mal{color:var(--bad)}.pila .pie.neutro{color:var(--txt3);font-weight:500}
+.card.opc{border-left:3px solid #b8adf0}
+.card.opc .cod{color:#4a3d94}
+.cuarto.op .cod{color:#4a3d94}
+.cuarto.op{border-left:3px solid #b8adf0}
+.cuarto.extra{border-left:3px solid var(--gold)}
+.chip.op{background:#ece8ff;color:#4a3d94}
+.chip.ext{background:#fff0d6;color:#8a6212}
+.addbox{background:var(--surface);border:1px dashed var(--bd);border-radius:14px;padding:14px;margin:14px 0}
+.addbox h4{margin:0 0 3px;font-size:15px}
+.addbox p{margin:0 0 11px;font-size:12.5px;color:var(--txt3);line-height:1.45}
+.addbox .fila{display:flex;gap:8px;flex-wrap:wrap}
+.addbox select,.addbox input{flex:1;min-width:130px;padding:10px;border:1px solid var(--bd);border-radius:10px;
+  background:var(--bg);color:var(--txt);font:inherit;font-size:14px}
+.addbox .btn{margin-top:10px}
+.inc{background:#fff8ec;border:1px solid #e8d4a8;border-radius:12px;padding:11px 12px;margin-bottom:9px}
+.inc .q{font-weight:700;font-size:14px}
+.inc .d{font-size:12px;color:var(--txt3);margin-top:2px}
+.inc .btn{margin-top:9px;padding:9px}
 .crono{display:inline-flex;align-items:center;gap:5px;background:#e4eefb;color:#1f5b96;border-radius:99px;padding:3px 9px;font-size:11.5px;font-weight:800;margin-top:7px}
 .crono b{font-variant-numeric:tabular-nums}
 .prog i{display:block;height:100%;background:var(--accent);border-radius:99px;transition:width .3s}
@@ -259,7 +277,7 @@ function vigilarCambios(){
 
 async function cargar(){
   const {data:mias}=await sb.from('hk_asignaciones')
-    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso),hk_checklists:checklist_id(id,nombre,hk_checklist_items(id,orden,tarea,minutos)))')
+    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso),hk_tareas_op(codigo,nombre,hora_sugerida,metadata),hk_checklists:checklist_id(id,nombre,hk_checklist_items(id,orden,tarea,minutos)))')
     .eq('fecha',FECHA).eq('employee_id',EMP);
   const antes = MIA ? MIA.estado : null;
   MIA=(mias||[])[0]||null;
@@ -267,10 +285,11 @@ async function cargar(){
   if(antes && MIA && (MIA.hk_tareas||[]).length!==ANTES_N) toast('Tu lista de hoy cambió');
   ANTES_N=(MIA&&MIA.hk_tareas)?MIA.hk_tareas.length:0;
   if(!PROP && MIA) PROP=MIA.property_id;
+  await cargarZonasYExtras();
   const veTodas = ES_SUPER || (MIA&&MIA.turno==='ama_llaves');
   if(veTodas && PROP){
     const {data:t}=await sb.from('hk_asignaciones')
-      .select('*,hk_tareas(id,orden,estatus_area,minutos_estimados,estado,hk_areas(codigo,nombre,piso))')
+      .select('*,hk_tareas(id,orden,estatus_area,minutos_estimados,minutos_reales,estado,iniciado_at,comentario,pase,pases,partes,es_extra,tarea_op_id,hk_areas(codigo,nombre,piso),hk_tareas_op(nombre,hora_sugerida))')
       .eq('fecha',FECHA).eq('property_id',PROP).order('turno');
     TODAS=t||[];
     if(!MIA) VISTA='rep';
@@ -361,11 +380,14 @@ function pintar(){
   if(pendiente)html+=`<div class="ph" style="padding:14px;background:#fff8ea;border-radius:14px;margin-bottom:12px;color:#8a6212">El ama de llaves todavía no valida el reparto. Puedes verlo, pero espera antes de arrancar.</div>`;
 
   html+=ts.map(t=>{
-    const a=t.hk_areas||{};const c=CH[t.estatus_area]||['rut','—'];
+    const a=t.hk_areas||{}, op=t.hk_tareas_op;
+    const c=op?['op',op.hora_sugerida?String(op.hora_sugerida).slice(0,5):'tarea']:(CH[t.estatus_area]||['rut','—']);
     const dif=t.minutos_reales!=null?(t.minutos_estimados-Number(t.minutos_reales)):null;
-    return `<div class="card ${t.estado==='terminada'?'done':''} ${t.estado==='en_curso'?'now':''}" data-t="${t.id}">
+    const propia=t.es_extra&&!t.reasignada_desde&&!op;
+    return `<div class="card ${op?'opc':''} ${t.estado==='terminada'?'done':''} ${t.estado==='en_curso'?'now':''}" data-t="${t.id}">
       <div class="top">
-        <div><div class="cod">${esc(a.codigo||'')}</div><div class="nm">${esc(a.nombre||'')}</div></div>
+        <div><div class="cod">${esc(op?op.nombre:(a.codigo||t.titulo||''))}</div>
+          <div class="nm">${esc(op?'Tarea operativa':(a.nombre||''))}${t.pases>1?` · pase ${t.pase} de ${t.pases}`:''}${t.partes>1?` · repartida entre ${t.partes}`:''}${propia?' · añadida por ti':''}</div></div>
         <div class="mn"><b>${t.minutos_estimados} min</b><span class="chip ${c[0]}">${c[1]}</span></div>
       </div>
       ${chklHtml(t)}
@@ -379,9 +401,11 @@ function pintar(){
     </div>`;}).join('');
 
   if(!ts.length)html+='<div class="ph">No hay tareas en tu orden de hoy.</div>';
+  html+=bloqueAnadir();
   w.innerHTML=html;
   engancharTabs();
   engancharChecklists(w);
+  engancharAnadir(w);
   pintarPila();
   arrancarReloj();
   w.querySelectorAll('[data-ini]').forEach(b=>b.onclick=()=>iniciar(b.dataset.ini));
@@ -417,8 +441,8 @@ function engancharChecklists(root){
 }
 // Una fila de cuarto que se abre al tocarla y trae Iniciar / Terminar / el tiempo.
 function tarjetaCuarto(t,a){
-  const ar=t.hk_areas||{};
-  const c=CH[t.estatus_area]||['rut','—'];
+  const ar=t.hk_areas||{}, op=t.hk_tareas_op;
+  const c=op?['op',op.hora_sugerida?String(op.hora_sugerida).slice(0,5):'tarea']:(CH[t.estatus_area]||['rut','—']);
   const dif=t.minutos_reales!=null?(t.minutos_estimados-Number(t.minutos_reales)):null;
   const mio = a && EMP && a.employee_id===EMP;
   const puede = ES_SUPER || mio;
@@ -434,10 +458,13 @@ function tarjetaCuarto(t,a){
     caja=puede?`<button class="btn go" data-ini="${t.id}">Empezar limpieza</button>`
               :`<div class="hecho">Sin empezar · ${t.minutos_estimados} min estimados</div>`;
   }
-  return `<div class="cuarto ${t.estado==='en_curso'?'curso':''} ${t.estado==='terminada'?'hecha':''}" data-c="${t.id}">
+  return `<div class="cuarto ${op?'op':''} ${t.es_extra&&!t.reasignada_desde?'extra':''} ${t.estado==='en_curso'?'curso':''} ${t.estado==='terminada'?'hecha':''}" data-c="${t.id}">
     <div class="lin">
-      <span class="cod">${esc(ar.codigo||'')}</span>
+      <span class="cod">${esc(op?op.nombre:(ar.codigo||''))}</span>
       <span class="chip ${c[0]}">${c[1]}</span>
+      ${t.pases>1?`<span class="chip">pase ${t.pase}/${t.pases}</span>`:''}
+      ${t.partes>1?`<span class="chip">entre ${t.partes}</span>`:''}
+      ${t.es_extra&&!t.reasignada_desde?'<span class="chip ext">extra</span>':''}
       <span class="min">${t.minutos_reales!=null?`${t.minutos_reales}m / ${t.minutos_estimados}m`:`${t.minutos_estimados}m`}</span>
       <span class="fle">▸</span>
     </div>
@@ -509,6 +536,84 @@ function arrancarReloj(){
   };
   tic();
   if(hay) RELOJ=setInterval(tic,20000);
+}
+
+// Añadir una limpieza que no venía en el reparto: un segundo repaso de baños,
+// o una extraordinaria (un derrame, un vómito). Cuenta como trabajo real.
+let ZONAS=[], EXTRAS=[];
+async function cargarZonasYExtras(){
+  const [{data:z},{data:x}]=await Promise.all([
+    sb.from('hk_areas').select('id,codigo,nombre,tipo,piso,minutos_override').eq('property_id',PROP).eq('activo',true).order('grupo_orden').order('orden'),
+    sb.from('hk_extras').select('*,hk_areas(codigo,nombre)').eq('property_id',PROP).eq('fecha',FECHA).order('reportado_at',{ascending:false}),
+  ]);
+  ZONAS=z||[]; EXTRAS=x||[];
+}
+function bloqueAnadir(){
+  if(!MIA) return '';
+  const zonas=ZONAS.filter(a=>a.tipo==='zona_comun');
+  const cuartos=ZONAS.filter(a=>a.tipo==='privada'||a.tipo==='dorm');
+  const abiertas=EXTRAS.filter(e=>e.estado==='abierta');
+  return `${abiertas.length?`<div class="addbox" style="border-style:solid;border-color:#e8d4a8">
+    <h4>Pendientes de resolver</h4>
+    <p>Algo que salió fuera de programa. Si lo resuelves tú, márcalo y se te cuenta.</p>
+    ${abiertas.map(e=>`<div class="inc">
+      <div class="q">${esc(e.hk_areas?.nombre||e.lugar||'—')}</div>
+      <div class="d">${esc(e.motivo)} · lo reportó ${esc(e.reportado_nombre||'—')}</div>
+      <button class="btn go" data-res="${e.id}">Lo resolví yo${e.minutos?` · ${e.minutos} min`:''}</button>
+    </div>`).join('')}</div>`:''}
+  <div class="addbox">
+    <h4>Añadir una limpieza</h4>
+    <p>Un segundo repaso de los baños, una cocina que hubo que rehacer, o algo extraordinario como un derrame. Se suma a tu día y queda registrado.</p>
+    <div class="fila">
+      <select id="addArea">
+        <option value="">¿Qué limpiaste?</option>
+        ${zonas.length?`<optgroup label="Zonas comunes">${zonas.map(a=>`<option value="${a.id}" data-min="${a.minutos_override||30}">${esc(a.nombre)}</option>`).join('')}</optgroup>`:''}
+        ${cuartos.length?`<optgroup label="Cuartos">${cuartos.map(a=>`<option value="${a.id}" data-min="${a.minutos_override||20}">${esc(a.codigo)} · ${esc(a.nombre)}</option>`).join('')}</optgroup>`:''}
+      </select>
+      <input id="addMot" placeholder="Motivo (segundo repaso, derrame…)">
+    </div>
+    <button class="btn go" id="addBtn">＋ Añadirla a mi día</button>
+  </div>`;
+}
+function engancharAnadir(root){
+  const b=root.querySelector('#addBtn');
+  if(b) b.onclick=async()=>{
+    const sel=root.querySelector('#addArea'), mot=root.querySelector('#addMot');
+    if(!sel.value) return toast('Elige qué limpiaste');
+    const op=sel.options[sel.selectedIndex];
+    const min=Number(op.dataset.min||30);
+    b.disabled=true;
+    const {data:nt,error}=await sb.from('hk_tareas').insert({
+      asignacion_id:MIA.id, property_id:PROP, fecha:FECHA, area_id:sel.value,
+      estatus_area:'rutina', minutos_estimados:min, orden:9000, estado:'pendiente',
+      es_extra:true, comentario:mot.value||null,
+    }).select('*,hk_areas(codigo,nombre,tipo,piso)').single();
+    b.disabled=false;
+    if(error) return toast('No se pudo añadir');
+    if(mot.value) await sb.from('hk_extras').insert({
+      property_id:PROP, fecha:FECHA, area_id:sel.value, motivo:mot.value, minutos:min,
+      reportado_por:USER?.email||null, reportado_nombre:NOMBRE, estado:'resuelta',
+      resuelto_por:USER?.email||null, resuelto_nombre:NOMBRE, resuelto_at:new Date().toISOString(), tarea_id:nt.id,
+    });
+    toast('Añadida a tu día');
+    cargar();
+  };
+  root.querySelectorAll('[data-res]').forEach(x=>x.onclick=async()=>{
+    x.disabled=true;
+    const e=EXTRAS.find(y=>y.id===x.dataset.res);
+    const {error}=await sb.from('hk_extras').update({estado:'resuelta',resuelto_por:USER?.email||null,
+      resuelto_nombre:NOMBRE,resuelto_at:new Date().toISOString()}).eq('id',x.dataset.res);
+    if(error){ x.disabled=false; return toast('No se pudo marcar'); }
+    // El trabajo cuenta: entra como tarea extra ya cerrada en el día de quien la resolvió
+    if(MIA) await sb.from('hk_tareas').insert({
+      asignacion_id:MIA.id, property_id:PROP, fecha:FECHA, area_id:e?.area_id||null,
+      titulo:e?.area_id?null:(e?.lugar||'Limpieza extraordinaria'),
+      estatus_area:'rutina', minutos_estimados:e?.minutos||15, orden:9000, estado:'pendiente',
+      es_extra:true, comentario:e?.motivo||null,
+    });
+    toast('Gracias · queda registrado');
+    cargar();
+  });
 }
 
 function engancharTabs(){
