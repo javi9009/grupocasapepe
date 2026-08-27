@@ -411,6 +411,7 @@
   /* Estatus de limpieza por cuarto (modulo Ama de Llaves) */
   .hkgrid{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
   .hkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid;border-radius:8px;padding:4px 8px;font-size:12px;font-weight:700;line-height:1}
+  .hkchip .hkaud{margin-left:2px;font-size:12.5px;font-weight:900}
   .hkchip small{font-weight:500;opacity:.75;font-size:10.5px}
   .hkleg{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px;padding-top:9px;border-top:1px solid var(--bg3);font-size:11px;color:var(--txt3)}
   .hkleg span{display:inline-flex;align-items:center;gap:5px}
@@ -599,6 +600,7 @@
         <button class="circle" data-soon="Valoraciones"><span class="b">⭐</span><span class="t">Valoraciones</span></button>
         <button class="circle" data-soon="Guías"><span class="b">📖</span><span class="t">Guías</span></button>
         <button class="circle" id="cirLimpieza" hidden><span class="b">🧹</span><span class="t">Mi limpieza</span></button>
+        <button class="circle" id="cirAudit" hidden><span class="b">🔍</span><span class="t">Room audit</span></button>
         <button class="circle" id="cirGasto" hidden><span class="b">🧾</span><span class="t">Gasto de caja</span></button>
       </div>
 
@@ -1154,8 +1156,42 @@ async function refrescarBotonLimpieza(){
   }catch(e){ /* módulo aún no disponible para este usuario */ }
 }
 
+// El room audit lo hacen el ama de llaves, el equipo de front y gerencia.
+// Aparece desde las 11 de la mañana, con el contador de lo que falta por revisar.
+const AUDIT_CORREOS=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casapepe.mx',
+  'housekeeping.cdmx@casapepe.mx','housekeeping.puebla@casapepe.mx'];
+async function refrescarBotonAudit(){
+  const b=$('cirAudit'); if(!b) return;
+  try{
+    const correo=((await sb.auth.getUser()).data?.user?.email||'').toLowerCase();
+    let puede=AUDIT_CORREOS.includes(correo);
+    if(!puede){
+      const hoy=hkHoyMX();
+      const {data:a}=await sb.from('hk_asignaciones').select('turno').eq('fecha',hoy).eq('employee_id',EMP).maybeSingle();
+      puede=!!a && ['ama_llaves','recamarista'].includes(a.turno);
+    }
+    if(!puede){ b.hidden=true; return; }
+    const hora=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'America/Mexico_City',hour:'2-digit',hour12:false}).format(new Date()));
+    if(hora<11){ b.hidden=true; return; }
+    b.hidden=false;
+    const prop=await resolverProp(); if(!prop) return;
+    const hoy=hkHoyMX();
+    const [{data:est},{data:aud}]=await Promise.all([
+      sb.from('hk_estatus_dia').select('area_id,check_in,hk_areas(tipo)').eq('property_id',prop).eq('fecha',hoy),
+      sb.from('hk_auditoria').select('area_id').eq('property_id',prop).eq('fecha',hoy),
+    ]);
+    const hechas=new Set((aud||[]).map(a=>a.area_id));
+    const faltan=(est||[]).filter(e=>e.check_in && ['privada','dorm'].includes(e.hk_areas?.tipo) && !hechas.has(e.area_id)).length;
+    const t=b.querySelector('.t');
+    if(t) t.innerHTML = faltan ? 'Room audit <b style="color:var(--gold)">'+faltan+'</b>' : 'Room audit ✓';
+  }catch(e){ /* módulo aún no disponible para este usuario */ }
+}
+
 function setupLimpieza(){
   refrescarBotonLimpieza();
+  refrescarBotonAudit();
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonAudit(); });
+  setInterval(refrescarBotonAudit, 300000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonLimpieza(); });
   setInterval(refrescarBotonLimpieza, 180000);
   try{
@@ -1163,11 +1199,12 @@ function setupLimpieza(){
     HK_CANAL = sb.channel('hk-mi-orden')
       .on('postgres_changes',{event:'*',schema:'public',table:'hk_asignaciones'},()=>refrescarBotonLimpieza())
       .on('postgres_changes',{event:'*',schema:'public',table:'hk_tareas'},()=>{ refrescarBotonLimpieza(); refrescarEstatusCuartos(); })
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_auditoria'},()=>{ refrescarBotonAudit(); refrescarEstatusCuartos(); })
       .subscribe();
   }catch(e){ /* sin realtime: quedan el intervalo y el visibilitychange */ }
 }
 function openSoon(title){ $('soonTitle').textContent=title+' · Próximamente'; $('soonSheet').classList.add('show'); }
-document.querySelectorAll('.circle').forEach(c=>c.onclick=()=>{ if(c.dataset.href){ location.href=c.dataset.href; return; } if(c.id==='cirLimpieza'){ location.href='/soypepe/limpieza.html'; return; } if(c.dataset.soon==='Mensajes'){ location.href='/m/mensajes.html'; return; } if(c.dataset.soon==='Guías'){ openGuias(); return; }
+document.querySelectorAll('.circle').forEach(c=>c.onclick=()=>{ if(c.dataset.href){ location.href=c.dataset.href; return; } if(c.id==='cirLimpieza'){ location.href='/soypepe/limpieza.html'; return; } if(c.id==='cirAudit'){ location.href='/soypepe/room-audit.html'; return; } if(c.dataset.soon==='Mensajes'){ location.href='/m/mensajes.html'; return; } if(c.dataset.soon==='Guías'){ openGuias(); return; }
   // Módulos activos; el resto sigue como "Próximamente".
   if(c.dataset.soon==='Mi horario'){ openHorario(); return; }
   if(c.dataset.soon==='Mis Vacaciones'){ openVacaciones(); return; }
@@ -1407,6 +1444,12 @@ const HK_COL = {
   sin:      {bg:'#ffffff',bd:'#ddd8cd',fg:'#8e8c85',t:'Hoy no entraron'}
 };
 const HK_ORDEN=['bloqueada','sucia','limpiando','limpia','sin'];
+// Marcas del room audit de las 12
+const HK_AUD={
+  ok:        {i:'✓', fg:'#12694d', t:'Revisada y lista'},
+  incidencia:{i:'!', fg:'#8a6212', t:'Con un detalle por resolver'},
+  no_apta:   {i:'✱', fg:'#b03434', t:'Conviene cambiar de habitación'}
+};
 const hkEsc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let HK_CACHE=null;
 
@@ -1416,15 +1459,20 @@ async function hkCargarEstatus(){
   if(!prop) return null;
   const hoy = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);
   try{
-    const [est, tar] = await Promise.all([
+    const [est, tar, aud] = await Promise.all([
       sb.from('hk_estatus_dia')
         .select('area_id,estatus,check_in,check_out,hk_areas(codigo,nombre,tipo,piso)')
         .eq('property_id',prop).eq('fecha',hoy),
-      sb.from('hk_tareas').select('area_id,estado').eq('property_id',prop).eq('fecha',hoy)
+      sb.from('hk_tareas').select('area_id,estado').eq('property_id',prop).eq('fecha',hoy),
+      sb.from('hk_auditoria').select('area_id,estado,nota,destino').eq('property_id',prop).eq('fecha',hoy)
     ]);
     if(est.error || !est.data || !est.data.length) return null;
     const porArea={};
     (tar.data||[]).forEach(t=>{ porArea[t.area_id]=t.estado; });
+    // Room audit: ✓ revisada · ! tiene un detalle que alguien resuelve antes de la
+    // entrada · ✱ conviene cambiar al huésped de habitación.
+    const audArea={};
+    ((aud&&aud.data)||[]).forEach(a=>{ audArea[a.area_id]=a; });
     HK_CACHE=est.data.map(e=>{
       const a=e.hk_areas||{};
       let color='sin';
@@ -1435,8 +1483,10 @@ async function hkCargarEstatus(){
         else if(t==='en_curso') color='limpiando';
         else if(t) color='sucia';
       }
+      const au=audArea[e.area_id]||null;
       return {codigo:a.codigo||'?', nombre:a.nombre||'', tipo:a.tipo, piso:a.piso||0,
-              encasa:(e.estatus==='ocupada'||e.estatus==='ocupada_blancos'), llegada:!!e.check_in, salida:!!e.check_out, color:color};
+              encasa:(e.estatus==='ocupada'||e.estatus==='ocupada_blancos'), llegada:!!e.check_in, salida:!!e.check_out, color:color,
+              aud:au?au.estado:null, audNota:au?(au.nota||''):'', audDest:au?(au.destino||''):''};
     });
     return HK_CACHE;
   }catch(e){ return null; }
@@ -1452,12 +1502,19 @@ function hkPinta(el, filas, titulo){
   filas.forEach(f=>{
     if(f.piso!==pisoAct){ pisoAct=f.piso; html+='<div class="hkpiso">'+(pisoAct?('Piso '+pisoAct):'Sin piso')+'</div>'; }
     const c=HK_COL[f.color];
-    html+='<span class="hkchip" style="background:'+c.bg+';border-color:'+c.bd+';color:'+c.fg+'" title="'+hkEsc(f.nombre)+' — '+c.t+'">'+hkEsc(f.codigo)+
-          (f.tipo==='cama'?' <small>cama</small>':'')+'</span>';
+    const m=HK_AUD[f.aud];
+    const tit=hkEsc(f.nombre)+' — '+c.t+(m?(' · '+m.t+(f.audNota?': '+hkEsc(f.audNota):'')+(f.audDest?' → '+hkEsc(f.audDest):'')):'');
+    html+='<span class="hkchip" style="background:'+c.bg+';border-color:'+c.bd+';color:'+c.fg+'" title="'+tit+'">'+hkEsc(f.codigo)+
+          (f.tipo==='cama'?' <small>cama</small>':'')+
+          (m?'<b class="hkaud" style="color:'+m.fg+'">'+m.i+'</b>':'')+'</span>';
   });
   html+='</div><div class="hkleg">';
   HK_ORDEN.forEach(k=>{ const c=HK_COL[k];
     html+='<span><i style="background:'+c.bg+';border-color:'+c.bd+'"></i>'+c.t+(cuenta[k]?' ('+cuenta[k]+')':'')+'</span>'; });
+  const ca={}; filas.forEach(f=>{ if(f.aud) ca[f.aud]=(ca[f.aud]||0)+1; });
+  Object.keys(HK_AUD).forEach(k=>{ if(ca[k]) html+='<span><b style="color:'+HK_AUD[k].fg+';margin-right:4px">'+HK_AUD[k].i+'</b>'+HK_AUD[k].t+' ('+ca[k]+')</span>'; });
+  const pend=filas.filter(f=>f.llegada&&!f.aud).length;
+  if(pend) html+='<span style="color:var(--txt3)">'+pend+' con llegada sin revisar</span>';
   html+='</div>';
   el.innerHTML=html;
 }
