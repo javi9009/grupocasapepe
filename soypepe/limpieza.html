@@ -25,6 +25,20 @@ button{font-family:inherit}
 .hero .n{font-size:17px;font-weight:800}
 .hero .s{font-size:12.5px;color:var(--txt3);margin-top:2px}
 .prog{height:9px;background:var(--bg3);border-radius:99px;margin-top:11px;overflow:hidden}
+.pila{margin-top:12px;padding-top:11px;border-top:1px solid var(--bg3)}
+.pila .fila{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.pila .et{font-size:10.5px;font-weight:800;color:var(--txt3);width:56px;text-transform:uppercase;letter-spacing:.03em}
+.pila .barra{flex:1;height:14px;background:var(--bg3);border-radius:7px;overflow:hidden}
+.pila .barra i{display:block;height:100%;border-radius:7px;transition:width .4s}
+.pila .est i{background:#c9c3b4}
+.pila .rea i{background:var(--accent)}
+.pila .rea.lento i{background:var(--bad)}
+.pila .rea.curso i{background:linear-gradient(90deg,var(--accent),#5ec49a)}
+.pila .val{font-size:12px;font-weight:800;width:62px;text-align:right;font-variant-numeric:tabular-nums}
+.pila .pie{font-size:12px;margin-top:4px;font-weight:700}
+.pila .pie.bien{color:var(--accent)}.pila .pie.mal{color:var(--bad)}.pila .pie.neutro{color:var(--txt3);font-weight:500}
+.crono{display:inline-flex;align-items:center;gap:5px;background:#e4eefb;color:#1f5b96;border-radius:99px;padding:3px 9px;font-size:11.5px;font-weight:800;margin-top:7px}
+.crono b{font-variant-numeric:tabular-nums}
 .prog i{display:block;height:100%;background:var(--accent);border-radius:99px;transition:width .3s}
 .stats{display:flex;gap:14px;margin-top:9px;font-size:12px;color:var(--txt2)}
 .stats b{font-size:15px;display:block;color:var(--txt)}
@@ -270,9 +284,9 @@ function pintar(){
     <div class="stats">
       <div><b>${hechas}/${ts.length}</b>cuartos</div>
       <div><b>${Math.round(estim/60*10)/10} h</b>asignadas</div>
-      <div><b>${real?Math.round(real)+' m':'—'}</b>trabajadas</div>
-      ${real&&estimHechas?`<div><b style="color:${estimHechas>=real?'var(--accent)':'var(--bad)'}">${Math.round(estimHechas/real*100)}%</b>ritmo</div>`:''}
-    </div></div>`;
+    </div>
+    <div class="pila" id="pilaBox"></div>
+  </div>`;
 
   if(pendiente)html+=`<div class="ph" style="padding:14px;background:#fff8ea;border-radius:14px;margin-bottom:12px;color:#8a6212">El ama de llaves todavía no valida el reparto. Puedes verlo, pero espera antes de arrancar.</div>`;
 
@@ -289,7 +303,7 @@ function pintar(){
         ? `<div class="res">Hecho en <b>${t.minutos_reales} min</b> ${dif>0?`<span class="fast">· ${dif} min menos de lo previsto</span>`:dif<0?`<span class="slow">· ${-dif} min más</span>`:''}${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`
         : `<div class="act">
             ${t.estado==='en_curso'
-              ? `<button class="end" data-fin="${t.id}">Terminar limpieza</button>`
+              ? `<button class="end" data-fin="${t.id}">Terminar limpieza · <b data-crono="${t.iniciado_at}">0 min</b></button>`
               : `<button class="go" data-ini="${t.id}" ${(pendiente||enCurso)?'disabled':''} style="${(pendiente||enCurso)?'background:var(--bg3);color:var(--txt3)':''}">Iniciar limpieza</button>`}
           </div>`}
     </div>`;}).join('');
@@ -298,6 +312,8 @@ function pintar(){
   w.innerHTML=html;
   engancharTabs();
   engancharChecklists(w);
+  pintarPila();
+  arrancarReloj();
   w.querySelectorAll('[data-ini]').forEach(b=>b.onclick=()=>iniciar(b.dataset.ini));
   w.querySelectorAll('[data-fin]').forEach(b=>b.onclick=()=>abrirFin(b.dataset.fin));
 }
@@ -329,6 +345,60 @@ function engancharChecklists(root){
     det.querySelector('.cnt').textContent=`(${arr.length}/${tot})`;
   });
 }
+// Pila de estimado vs real: lo que se esperaba de los cuartos que ya cerró,
+// contra lo que de verdad tardó. El cuarto en curso cuenta en vivo.
+function minutosEnCurso(){
+  const t=(MIA?.hk_tareas||[]).find(x=>x.estado==='en_curso');
+  if(!t||!t.iniciado_at) return {min:0,tarea:null};
+  return {min:(Date.now()-new Date(t.iniciado_at))/60000, tarea:t};
+}
+function pintarPila(){
+  const box=$('pilaBox'); if(!box||!MIA) return;
+  const ts=MIA.hk_tareas||[];
+  const hechas=ts.filter(t=>t.minutos_reales!=null);
+  const enCurso=minutosEnCurso();
+  const estHechas=hechas.reduce((s,t)=>s+(t.minutos_estimados||0),0) + (enCurso.tarea?.minutos_estimados||0);
+  const real=hechas.reduce((s,t)=>s+Number(t.minutos_reales||0),0) + enCurso.min;
+  const estDia=ts.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+
+  if(!hechas.length && !enCurso.tarea){
+    box.innerHTML=`<div class="pie neutro">Cuando pulses «Iniciar limpieza» empezamos a contar. Hoy tienes ${Math.round(estDia/60*10)/10} h estimadas.</div>`;
+    return;
+  }
+  const tope=Math.max(estHechas,real,1);
+  const lento=real>estHechas;
+  const dif=Math.round(Math.abs(estHechas-real));
+  const hm=m=>m>=60?`${Math.floor(m/60)}h ${Math.round(m%60)}m`:`${Math.round(m)} min`;
+  box.innerHTML=`
+    <div class="fila"><span class="et">Estimado</span>
+      <span class="barra est"><i style="width:${Math.round(estHechas/tope*100)}%"></i></span>
+      <span class="val">${hm(estHechas)}</span></div>
+    <div class="fila"><span class="et">Real</span>
+      <span class="barra rea ${lento?'lento':''} ${enCurso.tarea?'curso':''}"><i style="width:${Math.round(real/tope*100)}%"></i></span>
+      <span class="val">${hm(real)}</span></div>
+    <div class="pie ${lento?'mal':'bien'}">${lento
+      ? `Llevas ${dif} min de más sobre lo estimado`
+      : `Vas ${dif} min por delante de lo estimado`}${enCurso.tarea?' · contando el cuarto en curso':''}</div>
+    ${hechas.length===ts.length?`<div class="pie neutro" style="margin-top:2px">Día cerrado: ${hm(real)} reales contra ${hm(estDia)} estimadas.</div>`:''}`;
+}
+
+// Refresca el cronómetro y la pila cada 20 s mientras hay un cuarto abierto,
+// sin repintar la pantalla (para no cerrar los checklists desplegados).
+let RELOJ=null;
+function arrancarReloj(){
+  clearInterval(RELOJ);
+  const hay=(MIA?.hk_tareas||[]).some(t=>t.estado==='en_curso');
+  const tic=()=>{
+    document.querySelectorAll('[data-crono]').forEach(el=>{
+      const ini=el.getAttribute('data-crono'); if(!ini)return;
+      el.textContent=Math.round((Date.now()-new Date(ini))/60000)+' min';
+    });
+    pintarPila();
+  };
+  tic();
+  if(hay) RELOJ=setInterval(tic,20000);
+}
+
 function engancharTabs(){
   document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{VISTA=b.dataset.v;pintar();});
 }
