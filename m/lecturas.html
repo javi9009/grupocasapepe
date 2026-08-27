@@ -76,7 +76,7 @@
         <input type="date" id="fecha">
       </label>
     </div>
-    <div class="hint">Toma la foto de cada medidor. Eloy los lee y tú solo confirmas o corriges.</div>
+    <div class="hint">Toma la foto de cada medidor. En cuanto las subes, Eloy las lee y actualiza la bitácora solo; tú nada más revisas y corriges si algo salió mal.</div>
 
     <div class="slots" id="slots"></div>
 
@@ -151,6 +151,7 @@ $('picker').onchange=async()=>{
   }catch(e){ take.textContent='Reintentar foto'; showMsg('No se pudo subir la foto: '+(e.message||e), false); }
   $('picker').value='';
   $('btnRead').disabled = !(fotos.agua||fotos.luz||fotos.gas);
+  scheduleAuto();
 };
 
 function setSt(k, estado){
@@ -167,7 +168,8 @@ async function call(action, extra){
   return data;
 }
 
-$('btnRead').onclick=async()=>{
+// ---- lee las fotos con Eloy y llena los campos ----
+async function doRead(){
   $('btnRead').disabled=true; $('btnRead').textContent='Eloy está leyendo…';
   try{
     const d=await call('leer', { fotos });
@@ -180,12 +182,12 @@ $('btnRead').onclick=async()=>{
       }
     });
     $('btnSave').disabled=false;
-    showMsg('Listo, revisa los valores y guarda. '+(d.previa?('Día previo: '+d.previa.fecha):'Primer registro de la bitácora')+'.', true);
-  }catch(e){ showMsg('No pude leer: '+e.message, false); }
-  $('btnRead').disabled=false; $('btnRead').textContent='Leer con Eloy 👓';
-};
-
-$('btnSave').onclick=async()=>{
+    $('btnRead').disabled=false; $('btnRead').textContent='Volver a leer 👓';
+    return d;
+  }catch(e){ showMsg('No pude leer: '+e.message, false); $('btnRead').disabled=false; $('btnRead').textContent='Leer con Eloy 👓'; return null; }
+}
+// ---- guarda / actualiza la bitácora ----
+async function doSave(auto){
   $('btnSave').disabled=true; $('btnSave').textContent='Guardando…';
   try{
     const d=await call('guardar', {
@@ -193,12 +195,26 @@ $('btnSave').onclick=async()=>{
       gas_pct: $('val-gas').value.trim(), huespedes: $('hues').value.trim(),
       fotos, foto_url: fotos.agua||fotos.luz||fotos.gas
     });
-    let t='✅ Guardado en la bitácora de Lecturas ('+d.row.fecha+').';
+    let t=(auto?'✅ Actualizado solo en la bitácora ('+d.row.fecha+'). Revisa y corrige si algo está mal.':'✅ Guardado en la bitácora ('+d.row.fecha+').');
     if(d.aviso_gas) t+=' 🔥 El gas está por debajo del umbral: avisé para llenar.';
     showMsg(t, true);
-    $('btnSave').textContent='Guardado ✓';
+    $('btnSave').disabled=false; $('btnSave').textContent='Guardar corrección';
   }catch(e){ showMsg('No se pudo guardar: '+e.message, false); $('btnSave').disabled=false; $('btnSave').textContent='Guardar en bitácora ✅'; }
-};
+}
+
+// ---- automático: al subir las fotos, lee y guarda solo (con margen para subir las 3) ----
+let autoTimer=null, autoBusy=false;
+function scheduleAuto(){ clearTimeout(autoTimer); autoTimer=setTimeout(autoRun, 2200); }
+async function autoRun(){
+  if(autoBusy || !(fotos.agua||fotos.luz||fotos.gas)) return;
+  autoBusy=true; showMsg('Eloy está leyendo las fotos y actualizando la bitácora…', true);
+  const d=await doRead();
+  if(d) await doSave(true);
+  autoBusy=false;
+}
+
+$('btnRead').onclick=()=>doRead();
+$('btnSave').onclick=()=>doSave(false);
 
 async function boot(){
   const { data:{session} } = await sb.auth.getSession();
