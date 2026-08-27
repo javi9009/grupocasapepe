@@ -349,7 +349,7 @@ async function fn(accion){
 let ASIG=[];
 async function cargarReparto(){
   const {data,error}=await sb.from('hk_asignaciones')
-    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden),hk_tareas_op(codigo,nombre,hora_sugerida))')
+    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden,metadata),hk_tareas_op(codigo,nombre,hora_sugerida))')
     .eq('property_id',P()).eq('fecha',F()).order('turno');
   if(error){st(error.message,'err');return;}
   ASIG=data||[];
@@ -743,11 +743,32 @@ async function repartirTarea(orig,asigOrig,destinos){
   }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo repartir'; }
 }
 
+// Al asignarle un cuarto a alguien, un área que hoy no daba trabajo deja de ser
+// "por si acaso": toma su tiempo estándar y cuenta como cualquier otra.
+async function tiempoEstandarDe(t){
+  const ar=t.hk_areas||{};
+  const camas=ar.tipo==='dorm'?(ar.metadata?.camas??null):null;
+  const {data}=await sb.from('hk_tiempos').select('minutos,variante')
+    .eq('property_id',P()).eq('tipo_area',ar.tipo).eq('estatus',t.estatus_area||'rutina');
+  const filas=data||[];
+  return (camas!=null && filas.find(x=>String(x.variante)===String(camas))?.minutos)
+    || filas.find(x=>!x.variante)?.minutos || filas[0]?.minutos
+    || (ar.tipo==='privada'?20:ar.tipo==='dorm'?30:15);
+}
+
 async function moverTarea(tareaId,desde,hacia){
   const e=$('stA'); e.className='status'; e.textContent='Moviendo…';
-  const {error}=await sb.from('hk_tareas').update({asignacion_id:hacia,es_extra:true,updated_at:new Date().toISOString()}).eq('id',tareaId);
-  if(error){ e.className='status err'; e.textContent=error.message; return; }
   const a1=ASIG.find(x=>x.id===desde), a2=ASIG.find(x=>x.id===hacia);
+  const tt=(a1.hk_tareas||[]).find(x=>x.id===tareaId);
+  const campos={asignacion_id:hacia,es_extra:true,updated_at:new Date().toISOString()};
+  const aPersona=!!(a2&&a2.employee_id);
+  if(aPersona && tt && tt.metadata?.sin_trabajo && !tt.minutos_estimados){
+    campos.minutos_estimados=await tiempoEstandarDe(tt);
+    campos.metadata={...(tt.metadata||{}),sin_trabajo:false,asignada_a_mano:true};
+    if(tt){ tt.minutos_estimados=campos.minutos_estimados; tt.metadata=campos.metadata; }
+  }
+  const {error}=await sb.from('hk_tareas').update(campos).eq('id',tareaId);
+  if(error){ e.className='status err'; e.textContent=error.message; return; }
   const i=a1.hk_tareas.findIndex(t=>t.id===tareaId);
   const [t]=a1.hk_tareas.splice(i,1);
   a2.hk_tareas.push(t);
