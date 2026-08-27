@@ -376,6 +376,18 @@ td.grab:hover{color:var(--gold)}
 
   <div id="pvAviso"></div>
 
+  <div class="bar sem" id="pvZoom">
+    <button class="b" id="pvIzq" title="Un mes atrás">◀</button>
+    <label class="cp">Ver <select id="pvVentana">
+      <option value="1">1 mes</option>
+      <option value="3">3 meses</option>
+      <option value="6" selected>6 meses</option>
+      <option value="0">todo</option>
+    </select></label>
+    <button class="b" id="pvDer" title="Un mes adelante">▶</button>
+    <button class="b" id="pvHoy">Volver a hoy</button>
+    <span class="et" id="pvRango"></span>
+  </div>
   <div class="graf" id="pvGraf"></div>
 
   <div class="vac">
@@ -399,6 +411,28 @@ td.grab:hover{color:var(--gold)}
       <button class="b" id="vfX">Cancelar</button>
     </div>
     <div id="pvVacLista"></div>
+  </div>
+
+  <div class="vac">
+    <div class="vh">
+      <b>Contrataciones a modelar</b>
+      <span>Mete una entrada y mira cómo queda el año. Cuenta la curva de formación: seis semanas hasta el 100%.</span>
+      <button class="b pri" id="pvAltaAdd">＋ Añadir contratación</button>
+    </div>
+    <div class="vform" id="pvAltaForm" hidden>
+      <label class="cp">Cuántas <input type="number" id="afN" min="1" max="5" value="1"></label>
+      <label class="cp">Entra el <input type="date" id="afDesde"></label>
+      <label class="cp">Cómo la llamamos <input type="text" id="afNombre" placeholder="Recamarista nueva"></label>
+      <label class="cp">Descansa <select id="afDow">
+        <option value="">la elige el sistema</option>
+        <option value="1">lunes</option><option value="2">martes</option><option value="3">miércoles</option>
+        <option value="4">jueves</option><option value="5">viernes</option><option value="6">sábado</option>
+        <option value="0">domingo</option>
+      </select></label>
+      <button class="b pri" id="afOk">Guardar</button>
+      <button class="b" id="afX">Cancelar</button>
+    </div>
+    <div id="pvAltaLista"></div>
   </div>
 
   <h3>Qué fechas aprietan</h3>
@@ -1195,7 +1229,7 @@ $('btnSyncCB').onclick=async()=>{
 // La ocupación del mismo día del año pasado (a 364 días, para caer en el mismo día
 // de la semana) se convierte en minutos de trabajo con los tiempos estándar de hoy.
 // De ahí sale cuántas recamaristas hacen falta cada día de los próximos seis meses.
-let PV = null;
+let PV = null, ZOOM = {meses:6, offset:0};   // ventana visible de la gráfica
 const DIAS_ADELANTO = 365;   // por defecto; el selector de arriba manda
 const MESL = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const fISO = d => d.toISOString().slice(0,10);
@@ -1205,7 +1239,7 @@ async function cargarPrevision(){
   const e=$('stP'); e.className='status'; e.textContent='Leyendo el histórico…';
   const hoy=F();
   const desdeHist=masDias(hoy,-400), hastaHist=masDias(hoy,-1);
-  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac},{data:fest}]=await Promise.all([
+  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac},{data:fest},{data:altas}]=await Promise.all([
     sb.from('hk_ocupacion_hist').select('*').eq('property_id',P()).gte('fecha',desdeHist).lte('fecha',hastaHist).order('fecha'),
     sb.from('hk_tiempos').select('tipo_area,estatus,variante,minutos').eq('property_id',P()).eq('activo',true),
     sb.from('hk_areas').select('tipo,minutos_override,veces_dia,obligatoria').eq('property_id',P()).eq('activo',true).eq('tipo','zona_comun'),
@@ -1213,13 +1247,14 @@ async function cargarPrevision(){
     sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle(),
     sb.from('hk_vacaciones').select('*').eq('property_id',P()).order('desde'),
     sb.from('hk_festivos').select('fecha,nombre').eq('property_id',P()),
+    sb.from('hk_altas').select('*').eq('property_id',P()).order('desde'),
   ]);
   if(!hist||!hist.length){
     e.className='status err';
     e.textContent='Todavía no hay histórico de ocupación. Hay que traerlo de Cloudbeds antes de poder prever.';
     $('pvGraf').innerHTML='<div class="empty">Sin histórico.</div>'; return;
   }
-  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{},vac:vac||[],fest:fest||[]};
+  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{},vac:vac||[],fest:fest||[],altas:altas||[]};
   e.textContent=''; calcularPrevision();
 }
 
@@ -1290,12 +1325,44 @@ function calcularPrevision(){
     d.plantilla=d.fte/(cobertura||1);                // su equivalente en plantilla
     d.fuera=vac.filter(v=>d.fecha>=v.desde&&d.fecha<=v.hasta);
     const base=d.festivo?equipo:(porDow[dow]??0);
-    d.enTurno=Math.max(0,base-d.fuera.length);
+    d.base=Math.max(0,base-d.fuera.length);
+    d.enTurno=d.base;
   });
+
+  // Contrataciones: cada persona nueva suma en los días que trabaja. Si no se le
+  // marca descanso, se le da el día de la semana que hoy va más holgado.
+  const altas=(PV.altas||[]);
+  if(altas.length){
+    const holgura={};
+    dias.forEach(d=>{ if(d.sin)return; holgura[d.dow]=(holgura[d.dow]??0)+(d.base-d.necesarias); });
+    const ranking=Object.keys(holgura).map(Number).sort((a,b)=>holgura[b]-holgura[a]);
+    let i=0;
+    altas.forEach(a=>{
+      a._dows=[];
+      for(let k=0;k<a.personas;k++){
+        a._dows.push(a.descanso!=null?Number(a.descanso):(ranking[i%ranking.length]??5));
+        if(a.descanso==null) i++;
+      }
+    });
+    dias.forEach(d=>{
+      if(d.sin) return;
+      let suma=0;
+      altas.forEach(a=>{
+        if(d.fecha<a.desde) return;
+        // Curva de formación de seis semanas: 60% las tres primeras, 80% hasta la sexta.
+        const sem=Math.floor((Date.parse(d.fecha)-Date.parse(a.desde))/(7*86400000));
+        const rend=sem<3?0.6:sem<6?0.8:1;
+        a._dows.forEach(dw=>{ if(d.festivo || dw!==d.dow) suma+=rend; });
+      });
+      d.nuevas=suma;
+      d.enTurno=d.base+suma;
+    });
+  }
 
   PV.dias=dias; PV.equipo=equipo; PV.minimo=minimo; PV.jornada=jornada;
   PV.minZonas=minZonas; PV.minOps=minOps; PV.cobertura=cobertura; PV.porDow=porDow; PV.semana=semana;
-  pintarPrevision(); pintarVacaciones();
+  PV.altasCalc=altas;
+  pintarPrevision(); pintarVacaciones(); pintarAltas();
 }
 
 // Regla de contratación: no se contrata por un pico. Se contrata cuando en una
@@ -1333,6 +1400,15 @@ const colorCarga=dif=>dif<CARGA.verde?'#1d9e75':dif<=CARGA.rojo?'#c9a227':'#b034
 function pintarPrevision(){
   const {dias,equipo,minimo}=PV;
   const conDato=dias.filter(d=>!d.sin);
+  // La ventana visible: los KPIs y las tablas siguen siendo de todo el horizonte,
+  // la gráfica se mueve mes a mes para poder leerla.
+  const ventana=ZOOM.meses?Math.min(dias.length,Math.round(ZOOM.meses*30.4)):dias.length;
+  const maxOff=Math.max(0,dias.length-ventana);
+  ZOOM.offset=Math.min(maxOff,Math.max(0,ZOOM.offset));
+  const vista=dias.slice(ZOOM.offset,ZOOM.offset+ventana);
+  $('pvIzq').disabled=ZOOM.offset<=0;
+  $('pvDer').disabled=ZOOM.offset>=maxOff;
+  $('pvRango').textContent = vista.length ? `${fmtF(vista[0].fecha)} → ${fmtF(vista[vista.length-1].fecha)}` : '';
   const maxP=Math.max(equipo+1,...conDato.map(d=>d.necesarias));
   const maxO=Math.max(1,...conDato.map(d=>d.ocup||0));
   const media=conDato.reduce((s,d)=>s+d.necesarias,0)/(conDato.length||1);
@@ -1390,33 +1466,38 @@ function pintarPrevision(){
         <div class="d">Con las ausencias cargadas hay días en los que el equipo baja del mínimo operativo. Esos días no se cubren ni con horas extra.</div></div>`:'');
 
   // ---- gráfica: ocupación, horas y personas ----
-  const W=Math.max(760,dias.length*(dias.length>250?3.4:5.4)), H=270, PADL=36, PADR=44, PADB=28, PADT=12;
-  const bw=(W-PADL-PADR)/dias.length;
+  const W=Math.max(760,vista.length*(vista.length>250?3.4:vista.length>150?5.4:9)), H=270, PADL=36, PADR=44, PADB=32, PADT=12;
+  const bw=(W-PADL-PADR)/Math.max(1,vista.length);
   const alto=H-PADT-PADB;
   const yP=v=>PADT+alto*(1-v/maxP);
   const yO=v=>PADT+alto*(1-v/maxO);
-  let barras='',meses='',lineaOc='',mesAct=null;
-  dias.forEach((d,i)=>{
+  let barras='',meses='',lineaOc='',domingos='',mesAct=null;
+  vista.forEach((d,i)=>{
     const x=PADL+i*bw;
     const h=d.sin?0:Math.max(1,alto-(yP(d.necesarias)-PADT));
     const col=d.sin?'#e6e1d6':colorCarga(d.necesarias-d.enTurno);
     const tip=d.sin?'sin dato del año pasado'
-      :`${DOWL[d.dow]}${d.festivo?' · '+d.festivo:''} · ${d.ocup} cuartos · ${Math.round(d.min/60*10)/10} h de trabajo · hacen falta ${d.necesarias.toFixed(1)} y trabajan ${d.enTurno}`
+      :`${DOWL[d.dow]}${d.festivo?' · '+d.festivo:''} · ${d.ocup} cuartos · ${Math.round(d.min/60*10)/10} h de trabajo · hacen falta ${d.necesarias.toFixed(1)} y trabajan ${d.enTurno.toFixed(1)}${d.nuevas?` (${d.nuevas.toFixed(1)} de las nuevas)`:''}`
        +(d.fuera&&d.fuera.length?` · fuera: ${d.fuera.map(v=>v.nombre).join(', ')}`:'');
     barras+=`<rect x="${x.toFixed(1)}" y="${(H-PADB-h).toFixed(1)}" width="${Math.max(1,bw-0.6).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"><title>${d.fecha} · ${tip}</title></rect>`;
     if(!d.sin) lineaOc+=`${lineaOc?'L':'M'}${(x+bw/2).toFixed(1)},${yO(d.ocup||0).toFixed(1)}`;
+    // Los domingos, marcados: son los días con más salidas y los más pesados
+    if(d.dow===0){
+      domingos+=`<rect x="${x.toFixed(1)}" y="${PADT}" width="${Math.max(1,bw).toFixed(1)}" height="${alto}" fill="#16130f" opacity="0.045"/>`
+        +(bw>6?`<text x="${(x+bw/2).toFixed(1)}" y="${H-PADB+11}" font-size="8.5" fill="#8e8c85" text-anchor="middle">D</text>`:'');
+    }
     const m=d.fecha.slice(0,7);
     if(m!==mesAct){ mesAct=m;
       meses+=`<line x1="${x.toFixed(1)}" y1="${PADT}" x2="${x.toFixed(1)}" y2="${H-PADB}" stroke="#e6e1d6" stroke-width="1"/>`
-        +`<text x="${(x+3).toFixed(1)}" y="${H-9}" font-size="10.5" fill="#8e8c85">${MESL[Number(m.slice(5,7))-1].slice(0,3)}${m.slice(5,7)==='01'?' '+m.slice(2,4):''}</text>`;
+        +`<text x="${(x+3).toFixed(1)}" y="${H-4}" font-size="10.5" fill="#8e8c85" font-weight="700">${MESL[Number(m.slice(5,7))-1].slice(0,3)}${m.slice(5,7)==='01'?' '+m.slice(2,4):''}</text>`;
     }
   });
   // Las ausencias, sombreadas al fondo
   let sombras='';
   (PV.vac||[]).forEach(v=>{
-    const i0=dias.findIndex(d=>d.fecha>=v.desde), i1=dias.findIndex(d=>d.fecha>v.hasta);
-    if(i0<0) return;
-    const a=PADL+i0*bw, b=PADL+((i1<0?dias.length:i1))*bw;
+    const i0=vista.findIndex(d=>d.fecha>=v.desde), i1=vista.findIndex(d=>d.fecha>v.hasta);
+    if(i0<0 || vista[i0].fecha>v.hasta) return;
+    const a=PADL+i0*bw, b=PADL+((i1<0?vista.length:i1))*bw;
     sombras+=`<rect x="${a.toFixed(1)}" y="${PADT}" width="${Math.max(1,b-a).toFixed(1)}" height="${alto}" fill="#16130f" opacity="0.05"><title>${v.nombre} · ${v.tipo}</title></rect>`;
   });
   let ejes='';
@@ -1429,10 +1510,10 @@ function pintarPrevision(){
   });
   // La línea del equipo sigue las ausencias
   let lineaEq='';
-  dias.forEach((d,i)=>{ const x=PADL+i*bw; lineaEq+=`${i?'L':'M'}${x.toFixed(1)},${yP(d.enTurno).toFixed(1)}L${(x+bw).toFixed(1)},${yP(d.enTurno).toFixed(1)}`; });
+  vista.forEach((d,i)=>{ const x=PADL+i*bw; lineaEq+=`${i?'L':'M'}${x.toFixed(1)},${yP(d.enTurno).toFixed(1)}L${(x+bw).toFixed(1)},${yP(d.enTurno).toFixed(1)}`; });
 
   $('pvGraf').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
-    ${ejes}${sombras}${meses}${barras}
+    ${ejes}${domingos}${sombras}${meses}${barras}
     <path d="${lineaOc}" fill="none" stroke="#7fa0c0" stroke-width="1.6" opacity="0.9"/>
     <path d="${lineaEq}" fill="none" stroke="#16130f" stroke-width="1.8" stroke-dasharray="5 4"/>
     <text x="${W-PADR+6}" y="${PADT+9}" font-size="9.5" fill="#7fa0c0">cuartos</text>
@@ -1445,6 +1526,7 @@ function pintarPrevision(){
     <span><i style="background:#7fa0c0;height:3px;border-radius:2px"></i>ocupación del año pasado (eje derecho)</span>
     <span><i style="background:#16130f;height:3px;border-radius:2px"></i>personas trabajando ese día</span>
     <span><i style="background:#16130f;opacity:.12"></i>ausencias</span>
+    <span><i style="background:#16130f;opacity:.06"></i>domingos · el día de más salidas</span>
   </div>`;
 
   // ---- plan de contratación ----
@@ -1552,6 +1634,45 @@ function vfDiasTxt(){
   const n=Math.round((Date.parse(h)-Date.parse(d))/86400000)+1;
   $('vfDias').textContent=`${n} ${n===1?'día':'días'} corridos`;
 }
+function pintarAltas(){
+  const a=PV.altas||[];
+  $('pvAltaLista').innerHTML = a.length ? a.map(x=>{
+    const dows=(x._dows||[]).map(d=>DOWL[d]).join(', ');
+    return `<div class="fila"><span class="n">${esc(x.nombre)}</span>
+      <span class="r">entra el ${fmtF(x.desde)} · ${x.personas} ${x.personas===1?'persona':'personas'}</span>
+      ${dows?`<span class="pill">descansa ${esc(dows)}</span>`:''}
+      <span class="pill">al 100% desde el ${fmtF(masDias(x.desde,42))}</span>
+      <button class="x" data-alta="${x.id}">Quitar</button></div>`;
+  }).join('') : '<div class="nada">Sin contrataciones. La previsión es con el equipo de hoy.</div>';
+
+  $('pvAltaLista').querySelectorAll('[data-alta]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const {error}=await sb.from('hk_altas').delete().eq('id',b.dataset.alta);
+    if(error){ b.disabled=false; return st(error.message,'err'); }
+    PV.altas=PV.altas.filter(x=>x.id!==b.dataset.alta);
+    calcularPrevision();
+  });
+}
+$('pvAltaAdd').onclick=()=>{
+  $('afDesde').value=masDias(F(),30); $('afN').value=1; $('afNombre').value=''; $('afDow').value='';
+  $('pvAltaForm').hidden=false; $('pvAltaAdd').disabled=true;
+};
+$('afX').onclick=()=>{ $('pvAltaForm').hidden=true; $('pvAltaAdd').disabled=false; };
+$('afOk').onclick=async()=>{
+  const desde=$('afDesde').value; if(!desde) return st('Falta la fecha de entrada','err');
+  const personas=Math.max(1,Number($('afN').value)||1);
+  const nombre=($('afNombre').value||'').trim()||(personas>1?`${personas} recamaristas nuevas`:'Recamarista nueva');
+  const descanso=$('afDow').value===''?null:Number($('afDow').value);
+  $('afOk').disabled=true;
+  const {data,error}=await sb.from('hk_altas').insert({property_id:P(),nombre,desde,personas,descanso}).select().single();
+  $('afOk').disabled=false;
+  if(error) return st(error.message,'err');
+  PV.altas=[...(PV.altas||[]),data].sort((a,b)=>a.desde.localeCompare(b.desde));
+  $('pvAltaForm').hidden=true; $('pvAltaAdd').disabled=false;
+  st(`${nombre} desde el ${desde}`,'ok');
+  calcularPrevision();
+};
+
 $('pvVacAdd').onclick=async()=>{
   const g=await cargarGente();
   $('vfQuien').innerHTML=g.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('')
@@ -1583,6 +1704,10 @@ $('vfOk').onclick=async()=>{
 $('pvRecalc').onclick=()=>calcularPrevision();
 ['pvEquipo','pvMinimo','pvJornada','pvHoriz'].forEach(id=>$(id).onchange=()=>calcularPrevision());
 document.querySelectorAll('#p-prev .dow').forEach(i=>i.onchange=()=>calcularPrevision());
+$('pvVentana').onchange=()=>{ ZOOM.meses=Number($('pvVentana').value)||0; ZOOM.offset=0; pintarPrevision(); };
+$('pvIzq').onclick=()=>{ ZOOM.offset=Math.max(0,ZOOM.offset-30); pintarPrevision(); };
+$('pvDer').onclick=()=>{ ZOOM.offset+=30; pintarPrevision(); };
+$('pvHoy').onclick=()=>{ ZOOM.offset=0; pintarPrevision(); };
 const DOWL=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
 
 function recargarTodo(){
