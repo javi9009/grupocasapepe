@@ -86,6 +86,9 @@ tr.arow.libre td.rep{opacity:1}
 .modal .quien .tk{width:20px;height:20px;border:1.5px solid var(--bd);border-radius:6px;display:flex;
   align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#12694d;flex:none}
 .modal .quien.on .tk{background:#12694d;border-color:#12694d;color:#fff}
+.modal .quien.libre{margin-top:11px;border-style:dashed;color:var(--soft)}
+.modal .quien.libre .tk{border-style:dashed;color:var(--soft);font-weight:700}
+.modal .quien.libre:hover{border-color:var(--gold);color:var(--txt)}
 .modal .quien .n{font-weight:700;flex:1}
 .modal .quien .c{font-size:11.5px;color:var(--soft);font-variant-numeric:tabular-nums}
 .modal .pie{display:flex;gap:8px;margin-top:14px}
@@ -557,6 +560,10 @@ function abrirRepartir(tareaId){
         <span class="tk">${sel.has(a.id)?'✓':''}</span>
         <span class="n">${esc(a.nombre_display)}</span>
         <span class="c">${k.pct}% · ${Math.round((k.jornada-k.total)/60*10)/10} h libres</span></button>`;}).join('')}</div>
+      <button type="button" class="quien libre" id="repNadie">
+        <span class="tk">↩</span>
+        <span class="n">Dejar sin asignar</span>
+        <span class="c">vuelve a la lista</span></button>
       <div class="aviso" id="repAviso"></div>
       <div class="pie"><button class="b" id="repCancel">Cancelar</button>
         <button class="b pri" id="repOk">Repartir</button></div>
@@ -584,6 +591,12 @@ function abrirRepartir(tareaId){
     refresca();
     d.onclick=e=>{ if(e.target===d) d.remove(); };
     d.querySelector('#repCancel').onclick=()=>d.remove();
+    d.querySelector('#repNadie').onclick=async(e)=>{
+      e.preventDefault();
+      d.querySelector('#repNadie').disabled=true;
+      await dejarSinAsignar(orig,asigOrig);
+      d.remove();
+    };
     d.querySelector('#repOk').onclick=async()=>{
       if(!sel.size)return;
       d.querySelector('#repOk').disabled=true;
@@ -592,6 +605,30 @@ function abrirRepartir(tareaId){
     };
   });
 }
+// Devolver una tarea a la lista: va a la caja "Sin asignar" del día, que se crea
+// sola si no existe y desaparece cuando se vacía.
+async function cajaSinAsignar(){
+  const ya=ASIG.find(a=>!a.employee_id && a.metadata?.sin_asignar);
+  if(ya) return ya.id;
+  const {data,error}=await sb.from('hk_asignaciones').insert({
+    property_id:P(), fecha:F(), employee_id:null, nombre_display:'SIN ASIGNAR',
+    turno:'recamarista', estado:'propuesta', minutos_estimados:0, pisos:[],
+    generado_por:'ama_llaves', metadata:{sin_asignar:true,etiqueta:'Devueltas a la lista'},
+  }).select().single();
+  if(error) throw error;
+  data.hk_tareas=[]; ASIG.push(data);
+  return data.id;
+}
+async function dejarSinAsignar(orig,asigOrig){
+  const e=$('stA'); e.className='status'; e.textContent='Devolviendo a la lista…';
+  try{
+    const destino=await cajaSinAsignar();
+    if(destino===asigOrig.id){ e.textContent=''; return; }
+    await moverTarea(orig.id,asigOrig.id,destino);
+    e.className='status ok'; e.textContent='Sin asignar · queda en la lista';
+  }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo devolver'; }
+}
+
 async function repartirTarea(orig,asigOrig,destinos){
   const e=$('stA'); e.className='status'; e.textContent='Repartiendo…';
   try{
@@ -631,6 +668,12 @@ async function moverTarea(tareaId,desde,hacia){
     a.minutos_estimados=tt;
     a.pisos=[...new Set((a.hk_tareas||[]).map(x=>x.hk_areas?.piso).filter(Boolean))].sort((x,y)=>x-y);
     await sb.from('hk_asignaciones').update({minutos_estimados:tt,pisos:a.pisos,updated_at:new Date().toISOString()}).eq('id',a.id);
+  }
+  // Si la caja de "Sin asignar" se queda vacía, se retira sola
+  if(a1 && !a1.employee_id && a1.metadata?.sin_asignar && !(a1.hk_tareas||[]).length){
+    await sb.from('hk_asignaciones').delete().eq('id',a1.id);
+    const i2=ASIG.findIndex(x=>x.id===a1.id); if(i2>=0) ASIG.splice(i2,1);
+    pintarAsignar();
   }
   e.className='status ok'; e.textContent='Movido';
 }
