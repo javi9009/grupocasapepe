@@ -74,6 +74,7 @@ h3{margin:18px 0 8px;font-size:14px}
 .alist tr.asignada td:first-child{font-weight:700}
 .alist tr.sin td{background:#fbe9e9}
 .alist .who{color:var(--soft);font-size:11.5px}
+.alist tr.agrupo td{background:#2b2017;color:var(--gold);font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:7px 8px;position:sticky;top:26px}
 .arow{cursor:grab;touch-action:none}
 .arow.mov{opacity:.35}
 .asigcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;align-items:start}
@@ -247,7 +248,7 @@ async function fn(accion){
 let ASIG=[];
 async function cargarReparto(){
   const {data,error}=await sb.from('hk_asignaciones')
-    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso))')
+    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden))')
     .eq('property_id',P()).eq('fecha',F()).order('turno');
   if(error){st(error.message,'err');return;}
   ASIG=data||[];
@@ -343,17 +344,29 @@ function pintarAsignar(){
     // ---- listado de la izquierda ----
     const filas=[];
     ASIG.forEach(a=>(a.hk_tareas||[]).forEach(t=>filas.push({t,a})));
-    filas.sort((x,y)=>(x.t.hk_areas?.piso||0)-(y.t.hk_areas?.piso||0)
-      || String(x.t.hk_areas?.codigo||'').localeCompare(String(y.t.hk_areas?.codigo||''),'es',{numeric:true}));
-    tb.innerHTML=filas.map(({t,a})=>{
-      const ar=t.hk_areas||{};
-      const fijo=validado||t.estado!=='pendiente';
-      return `<tr class="arow ${a.employee_id?'asignada':'sin'}" data-t="${t.id}" data-fijo="${fijo?1:0}">
-        <td>${esc(ar.codigo||'')} <span class="who">${ar.tipo==='cama'?'cama':ar.tipo==='dorm'?'dorm':ar.tipo==='privada'?'hab':'área'}</span></td>
-        <td><span class="pill">${ABREV[t.estatus_area]||t.estatus_area||''}</span></td>
-        <td class="who">${esc(a.nombre_display||'')}</td>
-        <td class="num">${t.minutos_estimados}</td></tr>`;
-    }).join('');
+    // agrupado por área principal: Piso 1..4, Áreas públicas piso 2, Terraza,
+    // Áreas públicas escaleras y lobby
+    const grupos=new Map();
+    filas.forEach(f=>{
+      const g=f.t.hk_areas?.grupo||'Otras áreas';
+      if(!grupos.has(g)) grupos.set(g,{orden:f.t.hk_areas?.grupo_orden??50,items:[]});
+      grupos.get(g).items.push(f);
+    });
+    tb.innerHTML=[...grupos.entries()].sort((a,b)=>a[1].orden-b[1].orden||a[0].localeCompare(b[0],'es'))
+      .map(([g,info])=>{
+        info.items.sort((x,y)=>String(x.t.hk_areas?.codigo||'').localeCompare(String(y.t.hk_areas?.codigo||''),'es',{numeric:true}));
+        const min=info.items.reduce((s,f)=>s+(f.t.minutos_estimados||0),0);
+        return `<tr class="agrupo"><td colspan="3">${esc(g)}</td><td class="num">${min}</td></tr>`
+          + info.items.map(({t,a})=>{
+            const ar=t.hk_areas||{};
+            const fijo=validado||t.estado!=='pendiente';
+            return `<tr class="arow ${a.employee_id?'asignada':'sin'}" data-t="${t.id}" data-fijo="${fijo?1:0}">
+              <td>${esc(ar.codigo||'')} <span class="who">${ar.tipo==='cama'?'cama':ar.tipo==='dorm'?'dorm':ar.tipo==='privada'?'hab':'área'}</span></td>
+              <td><span class="pill">${ABREV[t.estatus_area]||t.estatus_area||''}</span></td>
+              <td class="who">${esc(a.nombre_display||'')}</td>
+              <td class="num">${t.minutos_estimados}</td></tr>`;
+          }).join('');
+      }).join('');
 
     // ---- cajones de la derecha ----
     let tot=0,sin=0,alerta=0;
