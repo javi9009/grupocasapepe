@@ -92,6 +92,26 @@ tr.op .who{color:#5b4bab}
 .plan .d{font-size:12.5px;color:var(--soft);margin-top:5px;line-height:1.55}
 .plan .d b{color:var(--txt)}
 .plan.ok{border-left-color:var(--accent)}
+.vac{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:13px 15px;margin:12px 0}
+.vac .vh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.vac .vh b{font-size:14px}
+.vac .vh span{font-size:12px;color:var(--soft)}
+.vac .vh .b{margin-left:auto}
+.vac .fila{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--bg3);font-size:13px;flex-wrap:wrap}
+.vac .fila:first-of-type{border-top:0}
+.vac .fila .n{font-weight:700;min-width:130px}
+.vac .fila .r{color:var(--soft);font-variant-numeric:tabular-nums}
+.vac .fila .x{margin-left:auto;background:none;border:1px solid var(--bd);border-radius:8px;color:var(--soft);
+  cursor:pointer;font-size:12px;padding:3px 9px}
+.vac .fila .x:hover{border-color:var(--bad);color:var(--bad)}
+.vac .nada{font-size:12.5px;color:var(--soft);padding:6px 0}
+.caja{border-radius:14px;padding:14px 16px;margin:12px 0}
+.caja.rojo{background:#fff3f3;border:1px solid #e0a3a3;color:#8f2020}
+.caja.verde{background:#eef8f3;border:1px solid #a5d5be;color:#12694d}
+.caja .t{font-weight:800;font-size:15px}
+.caja .d{font-size:13px;margin-top:6px;line-height:1.55}
+.caja ul{margin:9px 0 0;padding-left:20px;font-size:13px;line-height:1.7}
+.caja ul b{font-variant-numeric:tabular-nums}
 .alerta{background:#fff3f3;border:1px solid #e0a3a3;border-radius:12px;padding:11px 13px;margin-bottom:12px;color:#8f2020;font-size:13px;line-height:1.5}
 .alerta b{font-weight:800}
 .alerta .q{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
@@ -306,19 +326,31 @@ td.grab:hover{color:var(--gold)}
 <!-- ================= PREVISIÓN DE PERSONAL ================= -->
 <div class="pane" id="p-prev">
   <div class="bar">
-    <label class="cp">Equipo de cuartos hoy <input type="number" id="pvEquipo" min="1" max="20" step="1" value="3"></label>
+    <label class="cp">Equipo completo <input type="number" id="pvEquipo" min="1" max="20" step="1" value="4"></label>
+    <label class="cp">Umbral mínimo <input type="number" id="pvMinimo" min="1" max="20" step="1" value="4"></label>
     <label class="cp">Días de trabajo por semana <input type="number" id="pvDias" min="4" max="7" step="1" value="6"></label>
     <label class="cp">Jornada (h) <input type="number" id="pvJornada" min="4" max="12" step="0.5" value="8"></label>
     <button class="b" id="pvRecalc">Recalcular</button>
     <span class="status" id="stP"></span>
   </div>
   <p class="sub">Día a día de los próximos seis meses, con la ocupación que tuvimos el año pasado en ese mismo día de la semana.
-  Las barras son las <b>recamaristas que harían falta</b>; la línea, el equipo que hay. Solo se propone contratar cuando la temporada
-  pide esa persona <b>más de 15 días de cada 30</b>: los picos sueltos se absorben, una temporada no.</p>
+  El equipo se cuenta completo porque se cubren entre todas: cuartos, áreas públicas y tareas operativas entran en la misma cuenta.
+  Solo se propone contratar cuando la temporada pide esa persona <b>más de 15 días de cada 30</b>: los picos sueltos se absorben, una temporada no.</p>
 
   <div class="kpis" id="pvKpis"></div>
 
+  <div id="pvAviso"></div>
+
   <div class="graf" id="pvGraf"></div>
+
+  <div class="vac">
+    <div class="vh">
+      <b>Vacaciones, incapacidades y permisos</b>
+      <span>Cada ausencia baja el equipo esos días y la previsión se recalcula sola.</span>
+      <button class="b pri" id="pvVacAdd">＋ Añadir ausencia</button>
+    </div>
+    <div id="pvVacLista"></div>
+  </div>
 
   <h3>Cuándo contratar</h3>
   <div id="pvPlan"></div>
@@ -1121,19 +1153,20 @@ async function cargarPrevision(){
   const e=$('stP'); e.className='status'; e.textContent='Leyendo el histórico…';
   const hoy=F();
   const desdeHist=masDias(hoy,-370), hastaHist=masDias(hoy,-1);
-  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf}]=await Promise.all([
+  const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac}]=await Promise.all([
     sb.from('hk_ocupacion_hist').select('*').eq('property_id',P()).gte('fecha',desdeHist).lte('fecha',hastaHist).order('fecha'),
     sb.from('hk_tiempos').select('tipo_area,estatus,variante,minutos').eq('property_id',P()).eq('activo',true),
     sb.from('hk_areas').select('tipo,minutos_override,veces_dia,obligatoria').eq('property_id',P()).eq('activo',true).eq('tipo','zona_comun'),
     sb.from('hk_tareas_op').select('minutos,dia_semana').eq('property_id',P()).eq('activo',true),
     sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle(),
+    sb.from('hk_vacaciones').select('*').eq('property_id',P()).order('desde'),
   ]);
   if(!hist||!hist.length){
     e.className='status err';
     e.textContent='Todavía no hay histórico de ocupación. Hay que traerlo de Cloudbeds antes de poder prever.';
     $('pvGraf').innerHTML='<div class="empty">Sin histórico.</div>'; return;
   }
-  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{}};
+  PV={hist,tiempos:tiempos||[],zonas:zonas||[],ops:ops||[],conf:conf||{},vac:vac||[]};
   e.textContent=''; calcularPrevision();
 }
 
@@ -1145,7 +1178,8 @@ function tmin(t,tipo,est,variante){
 
 function calcularPrevision(){
   if(!PV) return;
-  const equipo=Math.max(1,Number($('pvEquipo').value)||3);
+  const equipo=Math.max(1,Number($('pvEquipo').value)||4);
+  const minimo=Math.max(1,Number($('pvMinimo').value)||4);
   const diasSem=Math.min(7,Math.max(4,Number($('pvDias').value)||6));
   const jornada=(Number($('pvJornada').value)||8)*60;
   const t=PV.tiempos;
@@ -1169,113 +1203,158 @@ function calcularPrevision(){
     if(!ref){ dias.push({fecha:f,sin:true,min:0,fte:0}); continue; }
     const camasEc=Math.max(0,ref.camas_ocupadas-ref.camas_salida);
     const privEc=Math.max(0,ref.privadas_ocupadas-ref.privadas_salida);
-    const min =
+    // El equipo se cuenta completo porque se cubren entre todas: en la misma bolsa
+    // entran los cuartos, las áreas públicas y las tareas operativas del día.
+    const minCuartos =
         ref.camas_salida*mCamaSal
-      + ref.llegadas*0                                   // la llegada a cama limpia ya va en la salida
       + (camasEc/blancos)*mCamaBl                        // cambio de blancos a quien sigue en casa
       + ref.dorms_tocados*tmin(t,'dorm','rutina',null)   // limpieza general del dormitorio
       + ref.privadas_salida*mPrivSal
-      + privEc*mPrivEc + (privEc/blancos)*(mPrivBl-mPrivEc)
-      + minOps;
-    dias.push({fecha:f,min,fte:min/jornada,ocup:ref.unidades_ocupadas,ref:ref.fecha,sin:false});
+      + privEc*mPrivEc + (privEc/blancos)*(mPrivBl-mPrivEc);
+    const min=minCuartos+minZonas+minOps;
+    dias.push({fecha:f,min,minCuartos,fte:min/jornada,ocup:ref.unidades_ocupadas,ref:ref.fecha,sin:false});
   }
   // Con descansos, una persona de plantilla solo cubre diasSem/7 de cada día
   const cobertura=diasSem/7;
-  dias.forEach(d=>{ d.plantilla=d.fte/cobertura; });
+  // Las ausencias cargadas bajan el equipo disponible esos días
+  const vac=(PV.vac||[]);
+  dias.forEach(d=>{
+    d.plantilla=d.fte/cobertura;
+    d.fuera=vac.filter(v=>d.fecha>=v.desde&&d.fecha<=v.hasta);
+    d.equipoDia=Math.max(0,equipo-d.fuera.length);
+  });
 
-  PV.dias=dias; PV.equipo=equipo; PV.jornada=jornada; PV.minZonas=minZonas; PV.cobertura=cobertura;
-  pintarPrevision();
+  PV.dias=dias; PV.equipo=equipo; PV.minimo=minimo; PV.jornada=jornada;
+  PV.minZonas=minZonas; PV.minOps=minOps; PV.cobertura=cobertura;
+  pintarPrevision(); pintarVacaciones();
 }
 
 // Regla de contratación: no se contrata por un pico. Se contrata cuando en una
-// ventana de 30 días hay más de 15 en los que el equipo actual no alcanza.
-function ventanasDeContratacion(dias,equipo){
-  const falta=dias.map(d=>d.plantilla>equipo+0.001);
+// ventana de 30 días hay más de 15 en los que el equipo no alcanza.
+function ventanasDeContratacion(dias){
+  const falta=dias.map(d=>!d.sin && d.plantilla>d.equipoDia+0.001);
   const out=[]; let i=0;
   while(i<dias.length-29){
     let c=0; for(let k=i;k<i+30;k++) if(falta[k]) c++;
     if(c>15){
-      // se extiende mientras la ventana siga pidiendo la persona
       let fin=i+29;
       while(fin+1<dias.length){
         let c2=0; for(let k=fin-28;k<=fin+1;k++) if(falta[k]) c2++;
         if(c2>15) fin++; else break;
       }
       const tramo=dias.slice(i,fin+1);
-      const pico=Math.max(...tramo.map(d=>d.plantilla));
-      const diasFalta=tramo.filter(d=>d.plantilla>equipo+0.001).length;
+      const pico=Math.max(...tramo.map(d=>d.plantilla||0));
+      const diasFalta=tramo.filter((d,k)=>falta[i+k]).length;
+      const equipoMin=Math.min(...tramo.map(d=>d.equipoDia));
       out.push({desde:dias[i].fecha, hasta:dias[fin].fecha, dias:tramo.length, diasFalta,
-        pico, faltan:Math.max(1,Math.ceil(pico-equipo))});
+        pico, equipoMin, faltan:Math.max(1,Math.ceil(pico-equipoMin))});
       i=fin+1;
     } else i++;
   }
   return out;
 }
 
+const fmtF=f=>{const d=new Date(f+'T12:00:00');return `${d.getDate()} de ${MESL[d.getMonth()]}`;};
+
 function pintarPrevision(){
-  const {dias,equipo}=PV;
+  const {dias,equipo,minimo}=PV;
   const conDato=dias.filter(d=>!d.sin);
   const maxP=Math.max(equipo+1,...conDato.map(d=>d.plantilla));
-  const medias=conDato.reduce((s,d)=>s+d.plantilla,0)/(conDato.length||1);
-  const diasSobre=conDato.filter(d=>d.plantilla>equipo+0.001).length;
-  const ventanas=ventanasDeContratacion(dias,equipo);
+  const maxO=Math.max(1,...conDato.map(d=>d.ocup||0));
+  const media=conDato.reduce((s,d)=>s+d.plantilla,0)/(conDato.length||1);
+  const mediaOc=conDato.reduce((s,d)=>s+(d.ocup||0),0)/(conDato.length||1);
+  const mediaH=conDato.reduce((s,d)=>s+d.min,0)/(conDato.length||1)/60;
+  const diasSobre=conDato.filter(d=>d.plantilla>d.equipoDia+0.001).length;
+  const bajoMin=conDato.filter(d=>d.equipoDia<minimo).length;
+  const ventanas=ventanasDeContratacion(dias);
+  const extra=conDato.reduce((s,d)=>s+Math.max(0,(d.plantilla-d.equipoDia))*PV.cobertura*PV.jornada,0)/60;
 
   $('pvKpis').innerHTML=[
-    ['Equipo de cuartos hoy',`${equipo}`,'personas en plantilla'],
-    ['Necesidad media',`${medias.toFixed(1)}`,'personas, contando descansos'],
-    ['Días por encima',`${diasSobre}`,`de ${conDato.length} en seis meses`],
-    ['Contrataciones',`${ventanas.length}`,ventanas.length?'temporadas que la piden':'no hace falta contratar'],
-  ].map(([t,v,s])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+    ['Ocupación media',`${Math.round(mediaOc)}`,'cuartos y camas al día'],
+    ['Trabajo medio',`${mediaH.toFixed(1)} h`,'al día, todo incluido'],
+    ['Personas necesarias',`${media.toFixed(1)}`,'de plantilla, con descansos'],
+    ['Horas extra',`${Math.round(extra)}`,'en los seis meses, si no se contrata'],
+  ].map(([t,v,x])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join('');
 
-  // ---- gráfica ----
-  const W=Math.max(700,dias.length*5.2), H=230, PADL=34, PADB=26, PADT=10;
-  const bw=(W-PADL-6)/dias.length;
-  const y=v=>PADT+(H-PADT-PADB)*(1-v/maxP);
-  let barras='',meses='';
-  let mesAct=null;
+  // ---- caja de temporadas ----
+  $('pvAviso').innerHTML = ventanas.length
+    ? `<div class="caja rojo"><div class="t">⚠ ${ventanas.length===1?'Una temporada pide':`${ventanas.length} temporadas piden`} contratar</div>
+        <div class="d">En estos tramos el equipo no alcanza más de 15 días de cada 30. No es un pico: es temporada.</div>
+        <ul>${ventanas.map(v=>`<li><b>${fmtF(v.desde)} → ${fmtF(v.hasta)}</b> · ${v.diasFalta} de ${v.dias} días por encima ·
+          pico de <b>${v.pico.toFixed(1)}</b> personas contra ${v.equipoMin} · faltan <b>${v.faltan}</b> ·
+          contratar desde el <b>${fmtF(masDias(v.desde,-30))}</b></li>`).join('')}</ul></div>`
+    : `<div class="caja verde"><div class="t">✓ Con ${equipo} personas alcanza los próximos seis meses</div>
+        <div class="d">Hay ${diasSobre} ${diasSobre===1?'día suelto':'días sueltos'} por encima del equipo, pero ninguna ventana de 30 días
+        pide esa persona más de 15. Los picos se cubren moviendo el reparto.</div></div>`
+    + (bajoMin?`<div class="caja rojo" style="margin-top:8px"><div class="t">⚠ ${bajoMin} días por debajo del umbral de ${minimo}</div>
+        <div class="d">Con las ausencias cargadas hay días en los que el equipo baja del mínimo operativo. Esos días no se cubren ni con horas extra.</div></div>`:'');
+
+  // ---- gráfica: ocupación, horas y personas ----
+  const W=Math.max(760,dias.length*5.4), H=270, PADL=36, PADR=44, PADB=28, PADT=12;
+  const bw=(W-PADL-PADR)/dias.length;
+  const alto=H-PADT-PADB;
+  const yP=v=>PADT+alto*(1-v/maxP);
+  const yO=v=>PADT+alto*(1-v/maxO);
+  let barras='',meses='',lineaOc='',mesAct=null;
   dias.forEach((d,i)=>{
     const x=PADL+i*bw;
-    const alto=d.sin?0:Math.max(1,(H-PADT-PADB)-(y(d.plantilla)-PADT));
-    const col=d.sin?'#e6e1d6':d.plantilla>equipo+0.001?'#b03434':d.plantilla>equipo-0.5?'#c9a227':'#1d9e75';
-    barras+=`<rect x="${x.toFixed(1)}" y="${(H-PADB-alto).toFixed(1)}" width="${Math.max(1,bw-0.6).toFixed(1)}" height="${alto.toFixed(1)}" fill="${col}"><title>${d.fecha} · ${d.sin?'sin dato':`${d.plantilla.toFixed(1)} personas · ${Math.round(d.min/60*10)/10} h`}</title></rect>`;
+    const h=d.sin?0:Math.max(1,alto-(yP(d.plantilla)-PADT));
+    const col=d.sin?'#e6e1d6':d.plantilla>d.equipoDia+0.001?'#b03434':d.plantilla>d.equipoDia-0.5?'#c9a227':'#1d9e75';
+    const tip=d.sin?'sin dato del año pasado'
+      :`${d.ocup} cuartos ocupados · ${Math.round(d.min/60*10)/10} h de trabajo · ${d.plantilla.toFixed(1)} personas`
+       +(d.fuera&&d.fuera.length?` · fuera: ${d.fuera.map(v=>v.nombre).join(', ')}`:'');
+    barras+=`<rect x="${x.toFixed(1)}" y="${(H-PADB-h).toFixed(1)}" width="${Math.max(1,bw-0.6).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"><title>${d.fecha} · ${tip}</title></rect>`;
+    if(!d.sin) lineaOc+=`${lineaOc?'L':'M'}${(x+bw/2).toFixed(1)},${yO(d.ocup||0).toFixed(1)}`;
     const m=d.fecha.slice(0,7);
     if(m!==mesAct){ mesAct=m;
       meses+=`<line x1="${x.toFixed(1)}" y1="${PADT}" x2="${x.toFixed(1)}" y2="${H-PADB}" stroke="#e6e1d6" stroke-width="1"/>`
-        +`<text x="${(x+3).toFixed(1)}" y="${H-8}" font-size="10.5" fill="#8e8c85">${MESL[Number(m.slice(5,7))-1].slice(0,3)}${m.slice(5,7)==='01'?' '+m.slice(2,4):''}</text>`;
+        +`<text x="${(x+3).toFixed(1)}" y="${H-9}" font-size="10.5" fill="#8e8c85">${MESL[Number(m.slice(5,7))-1].slice(0,3)}${m.slice(5,7)==='01'?' '+m.slice(2,4):''}</text>`;
     }
+  });
+  // Las ausencias, sombreadas al fondo
+  let sombras='';
+  (PV.vac||[]).forEach(v=>{
+    const i0=dias.findIndex(d=>d.fecha>=v.desde), i1=dias.findIndex(d=>d.fecha>v.hasta);
+    if(i0<0) return;
+    const a=PADL+i0*bw, b=PADL+((i1<0?dias.length:i1))*bw;
+    sombras+=`<rect x="${a.toFixed(1)}" y="${PADT}" width="${Math.max(1,b-a).toFixed(1)}" height="${alto}" fill="#16130f" opacity="0.05"><title>${v.nombre} · ${v.tipo}</title></rect>`;
   });
   let ejes='';
   for(let v=0;v<=Math.ceil(maxP);v++){
-    ejes+=`<line x1="${PADL}" y1="${y(v).toFixed(1)}" x2="${W-4}" y2="${y(v).toFixed(1)}" stroke="#f1efe8" stroke-width="1"/>`
-      +`<text x="4" y="${(y(v)+3.5).toFixed(1)}" font-size="10.5" fill="#8e8c85">${v}</text>`;
+    ejes+=`<line x1="${PADL}" y1="${yP(v).toFixed(1)}" x2="${W-PADR}" y2="${yP(v).toFixed(1)}" stroke="#f1efe8" stroke-width="1"/>`
+      +`<text x="4" y="${(yP(v)+3.5).toFixed(1)}" font-size="10.5" fill="#8e8c85">${v}</text>`;
   }
-  const yEq=y(equipo);
+  [0,Math.round(maxO/2),Math.round(maxO)].forEach(v=>{
+    ejes+=`<text x="${W-PADR+6}" y="${(yO(v)+3.5).toFixed(1)}" font-size="10.5" fill="#7fa0c0">${v}</text>`;
+  });
+  // La línea del equipo sigue las ausencias
+  let lineaEq='';
+  dias.forEach((d,i)=>{ const x=PADL+i*bw; lineaEq+=`${i?'L':'M'}${x.toFixed(1)},${yP(d.equipoDia).toFixed(1)}L${(x+bw).toFixed(1)},${yP(d.equipoDia).toFixed(1)}`; });
+
   $('pvGraf').innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
-    ${ejes}${meses}${barras}
-    <line x1="${PADL}" y1="${yEq.toFixed(1)}" x2="${W-4}" y2="${yEq.toFixed(1)}" stroke="#16130f" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <text x="${W-6}" y="${(yEq-6).toFixed(1)}" font-size="10.5" fill="#16130f" text-anchor="end" font-weight="700">equipo actual: ${equipo}</text>
+    ${ejes}${sombras}${meses}${barras}
+    <path d="${lineaOc}" fill="none" stroke="#7fa0c0" stroke-width="1.6" opacity="0.9"/>
+    <path d="${lineaEq}" fill="none" stroke="#16130f" stroke-width="1.8" stroke-dasharray="5 4"/>
+    <text x="${W-PADR+6}" y="${PADT+9}" font-size="9.5" fill="#7fa0c0">cuartos</text>
   </svg>
   <div class="lg">
     <span><i style="background:#1d9e75"></i>alcanza de sobra</span>
     <span><i style="background:#c9a227"></i>al límite</span>
     <span><i style="background:#b03434"></i>falta gente</span>
-    <span><i style="background:#e6e1d6"></i>sin dato del año pasado</span>
-    <span style="margin-left:auto">Las áreas públicas (${Math.round(PV.minZonas/60*10)/10} h al día) van aparte, en su propio turno.</span>
+    <span><i style="background:#e6e1d6"></i>sin dato</span>
+    <span><i style="background:#7fa0c0;height:3px;border-radius:2px"></i>ocupación del año pasado (eje derecho)</span>
+    <span><i style="background:#16130f;height:3px;border-radius:2px"></i>equipo disponible</span>
+    <span><i style="background:#16130f;opacity:.12"></i>ausencias</span>
   </div>`;
 
   // ---- plan de contratación ----
-  $('pvPlan').innerHTML = ventanas.length ? ventanas.map(v=>{
-    const contratar=masDias(v.desde,-30);
-    const fmt=f=>{const d=new Date(f+'T12:00:00');return `${d.getDate()} de ${MESL[d.getMonth()]}`;};
-    return `<div class="plan">
-      <div class="t">Contratar ${v.faltan} ${v.faltan===1?'recamarista':'recamaristas'} a partir del ${fmt(contratar)}</div>
-      <div class="d">La temporada apretada va del <b>${fmt(v.desde)}</b> al <b>${fmt(v.hasta)}</b>:
-        ${v.diasFalta} de esos ${v.dias} días piden más de ${equipo} personas, con un pico de <b>${v.pico.toFixed(1)}</b>.
+  $('pvPlan').innerHTML = ventanas.length ? ventanas.map(v=>`<div class="plan">
+      <div class="t">Contratar ${v.faltan} ${v.faltan===1?'persona':'personas'} a partir del ${fmtF(masDias(v.desde,-30))}</div>
+      <div class="d">La temporada apretada va del <b>${fmtF(v.desde)}</b> al <b>${fmtF(v.hasta)}</b>:
+        ${v.diasFalta} de esos ${v.dias} días piden más de ${v.equipoMin} personas, con un pico de <b>${v.pico.toFixed(1)}</b>.
         Se propone la contratación un mes antes para que llegue formada: la curva de una camarista es de seis semanas.</div>
-    </div>`;
-  }).join('') : `<div class="plan ok"><div class="t">Con ${equipo} recamaristas alcanza los próximos seis meses</div>
-      <div class="d">Hay ${diasSobre} ${diasSobre===1?'día suelto':'días sueltos'} por encima del equipo, pero ninguna temporada pide
-      esa persona más de 15 días de cada 30. Los picos se cubren moviendo el reparto o con horas extra puntuales.</div></div>`;
+    </div>`).join('') : `<div class="plan ok"><div class="t">No hace falta contratar en estos seis meses</div>
+      <div class="d">Con ${equipo} personas y las ausencias cargadas, ninguna ventana de 30 días pide gente extra más de 15.</div></div>`;
 
   // ---- tabla por mes ----
   const meses2=new Map();
@@ -1284,13 +1363,12 @@ function pintarPrevision(){
     if(!meses2.has(k)) meses2.set(k,{min:0,n:0,ocup:0,sobre:0,max:0});
     const m=meses2.get(k);
     m.min+=d.min; m.n++; m.ocup+=d.ocup||0; m.max=Math.max(m.max,d.plantilla);
-    if(d.plantilla>equipo+0.001) m.sobre++;
+    if(d.plantilla>d.equipoDia+0.001) m.sobre++;
   });
   $('pvTbl').tBodies[0].innerHTML=[...meses2.entries()].map(([k,m])=>{
     const fte=(m.min/m.n)/PV.jornada/PV.cobertura;
     const lectura = m.sobre>15 ? 'Temporada: hace falta otra persona'
-      : m.sobre>0 ? `${m.sobre} días apretados, se absorben`
-      : 'Holgado';
+      : m.sobre>0 ? `${m.sobre} días apretados, se absorben` : 'Holgado';
     return `<tr><td>${MESL[Number(k.slice(5,7))-1]} ${k.slice(0,4)}</td>
       <td class="num">${Math.round(m.ocup/m.n)} cuartos</td>
       <td class="num">${Math.round(m.min/m.n/60*10)/10} h</td>
@@ -1299,8 +1377,41 @@ function pintarPrevision(){
       <td style="font-size:12.5px;color:var(--soft)">${lectura}</td></tr>`;
   }).join('');
 }
+
+// ---- ausencias: bajan el equipo esos días ----
+function pintarVacaciones(){
+  const v=PV.vac||[];
+  $('pvVacLista').innerHTML = v.length ? v.map(x=>{
+    const d=Math.round((Date.parse(x.hasta)-Date.parse(x.desde))/86400000)+1;
+    return `<div class="fila"><span class="n">${esc(x.nombre)}</span>
+      <span class="r">${fmtF(x.desde)} → ${fmtF(x.hasta)} · ${d} ${d===1?'día':'días'}</span>
+      <span class="pill">${esc(x.tipo)}</span>
+      ${x.nota?`<span class="r">${esc(x.nota)}</span>`:''}
+      <button class="x" data-vac="${x.id}">Quitar</button></div>`;
+  }).join('') : '<div class="nada">Sin ausencias cargadas. El equipo se cuenta completo todos los días.</div>';
+
+  $('pvVacLista').querySelectorAll('[data-vac]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const {error}=await sb.from('hk_vacaciones').delete().eq('id',b.dataset.vac);
+    if(error){ b.disabled=false; return st(error.message,'err'); }
+    PV.vac=PV.vac.filter(x=>x.id!==b.dataset.vac);
+    calcularPrevision();
+  });
+}
+$('pvVacAdd').onclick=async()=>{
+  const nombre=(prompt('¿Quién se ausenta?')||'').trim(); if(!nombre)return;
+  const desde=(prompt('Desde (AAAA-MM-DD)',F())||'').trim(); if(!/^\d{4}-\d{2}-\d{2}$/.test(desde))return st('Fecha no válida','err');
+  const hasta=(prompt('Hasta (AAAA-MM-DD)',masDias(desde,13))||'').trim(); if(!/^\d{4}-\d{2}-\d{2}$/.test(hasta))return st('Fecha no válida','err');
+  if(hasta<desde) return st('La fecha de fin va después del inicio','err');
+  const tipo=(prompt('Tipo: vacaciones, incapacidad, permiso o baja','vacaciones')||'vacaciones').trim();
+  const {data,error}=await sb.from('hk_vacaciones').insert({property_id:P(),nombre,desde,hasta,
+    tipo:['vacaciones','incapacidad','permiso','baja'].includes(tipo)?tipo:'vacaciones'}).select().single();
+  if(error) return st(error.message,'err');
+  PV.vac=[...(PV.vac||[]),data].sort((a,b)=>a.desde.localeCompare(b.desde));
+  calcularPrevision();
+};
 $('pvRecalc').onclick=()=>calcularPrevision();
-['pvEquipo','pvDias','pvJornada'].forEach(id=>$(id).onchange=()=>calcularPrevision());
+['pvEquipo','pvMinimo','pvDias','pvJornada'].forEach(id=>$(id).onchange=()=>calcularPrevision());
 
 function recargarTodo(){
   const act=document.querySelector('.tab.active').dataset.p;
