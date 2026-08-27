@@ -64,6 +64,14 @@ h3{margin:18px 0 8px;font-size:14px}
 .chk li{padding:2px 0}
 .pill{font-size:10.5px;background:#efe6d4;border-radius:6px;padding:2px 7px;color:var(--soft);font-weight:600}
 .pill.prov{background:#fff0d6;color:#8a6212}
+.chk.off{opacity:.55}
+.chk .min{width:64px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.chk .min.dirty{border-color:var(--gold);background:#fffaf0}
+.chk .act{width:16px;height:16px;accent-color:#12694d}
+.gz{margin:18px 0 8px;display:flex;align-items:baseline;gap:10px}
+.gz h4{margin:0;font-size:14px;letter-spacing:.02em}
+.gz .tot{font-size:12px;color:var(--soft);font-weight:600}
+.gz .tot b{color:var(--txt)}
 /* ---- Vista de asignación para iPad ---- */
 .asigwrap{display:grid;grid-template-columns:minmax(260px,320px) 1fr;gap:12px;align-items:start}
 @media(max-width:900px){.asigwrap{grid-template-columns:1fr}}
@@ -195,11 +203,19 @@ h3{margin:18px 0 8px;font-size:14px}
 <!-- ================= ÁREAS ================= -->
 <div class="pane" id="p-areas">
   <div class="bar">
-    <button class="b pri" id="btnNuevaZona">＋ Nueva zona común</button>
-    <button class="b" id="btnSyncCB">⟳ Sincronizar cuartos con Cloudbeds</button>
+    <button class="b pri" id="btnGuardarZ" disabled>💾 Guardar y recalcular el día</button>
+    <button class="b" id="btnDeshacerZ" disabled>Deshacer</button>
+    <span class="status" id="stZ"></span>
+    <span style="margin-left:auto;display:flex;gap:8px">
+      <button class="b" id="btnNuevaZona">＋ Nueva zona</button>
+      <button class="b" id="btnSyncCB">⟳ Sincronizar cuartos con Cloudbeds</button>
+    </span>
   </div>
-  <p class="sub">Las habitaciones, camas y dormitorios se leen de Cloudbeds. Las zonas comunes y sus checklists se administran aquí.</p>
+  <p class="sub">Aquí se miden los minutos de cada zona común, uno por uno. Cambia el número, pulsa guardar y el reparto del día se vuelve a calcular. La casilla de la izquierda activa o deja en stand by la zona.</p>
   <div id="zonas"></div>
+  <h3>Limpiezas del dormitorio</h3>
+  <p class="sub">La general se hace a diario en cuanto la habitación estuvo ocupada e incluye baño, habitación, balcón y ventana; la misma persona hace el cuarto completo. La profunda se programa aparte.</p>
+  <div id="chkDorm"></div>
   <h3>Inventario de cuartos (Cloudbeds)</h3>
   <div class="wrap"><table id="tblInv"><thead><tr>
     <th>Tipo</th><th class="num">Piso 1</th><th class="num">Piso 2</th><th class="num">Piso 3</th><th class="num">Piso 4</th><th class="num">Otros</th><th class="num">Total</th>
@@ -214,7 +230,7 @@ const sb=createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
 const PROPS={cdmx:'45e69775-d877-4507-a9e1-a45bd3400dc5',puebla:'febfbef6-7fd1-4b45-84d9-13533e8dcb72'};
 const ESTLBL={vacia_limpia:['VL','vl','Vacía limpia · refresco'],vacia_sucia:['VS','vs','Vacía sucia · salida'],ocupada:['EC','oc','En casa'],ocupada_blancos:['EC+B','bl','En casa · cambio de blancos'],rutina:['RUT','','Rutina diaria']};
-const TIPOLBL={privada:'Privada',cama:'Cama de dorm',dorm:'Dormitorio completo',bano_publico:'Baño público',zona_comun:'Zona común'};
+const TIPOLBL={privada:'Privada',cama:'Cama de dorm',dorm:'Dormitorio (limpieza general)',zona_comun:'Zona común'};
 const hoyMX=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const P=()=>PROPS[$('sede').value];
 const F=()=>$('fecha').value;
@@ -327,7 +343,7 @@ function calcPila(a,c){
   return {limpieza,traslado,admin,jornada,total,pct:Math.round(total/jornada*100),pisos,
     camas:ts.filter(t=>t.hk_areas?.tipo==='cama').length,
     privadas:ts.filter(t=>t.hk_areas?.tipo==='privada').length,
-    comunes:ts.filter(t=>t.hk_areas?.tipo==='zona_comun'||t.hk_areas?.tipo==='bano_publico').length,
+    comunes:ts.filter(t=>t.hk_areas?.tipo==='zona_comun').length,
     extra:Math.max(0,total-jornada)};
 }
 const nivel=(p,ex)=>ex>0?'extra':p>=95?'bad':p>=75?'warn':'ok';
@@ -594,65 +610,166 @@ $('btnGuardarT').onclick=async()=>{
 // ---------------- ÁREAS Y CHECKLISTS ----------------
 async function cargarAreas(){
   const [{data:zn},{data:ch},{data:it},{data:inv}]=await Promise.all([
-    sb.from('hk_areas').select('*').eq('property_id',P()).in('tipo',['zona_comun','bano_publico']).order('orden'),
+    sb.from('hk_areas').select('*').eq('property_id',P()).eq('tipo','zona_comun').order('grupo_orden').order('orden'),
     sb.from('hk_checklists').select('*').eq('property_id',P()),
     sb.from('hk_checklist_items').select('*').order('orden'),
-    sb.from('hk_areas').select('tipo,piso').eq('property_id',P()),
+    sb.from('hk_areas').select('tipo,piso,metadata').eq('property_id',P()),
   ]);
-  const chByArea={};(ch||[]).forEach(c=>chByArea[c.area_id]=c);
+  const chByArea={};(ch||[]).forEach(c=>{ if(c.area_id) chByArea[c.area_id]=c; });
   const itByChk={};(it||[]).forEach(i=>(itByChk[i.checklist_id]=itByChk[i.checklist_id]||[]).push(i));
-  $('zonas').innerHTML=(zn||[]).map(z=>{
+
+  // Las zonas se agrupan por área principal, igual que el listado del reparto.
+  const grupos=new Map();
+  (zn||[]).forEach(z=>{
+    const g=z.grupo||'Otras áreas';
+    if(!grupos.has(g)) grupos.set(g,{orden:z.grupo_orden??50,items:[]});
+    grupos.get(g).items.push(z);
+  });
+  const tarjeta=z=>{
     const c=chByArea[z.id];const items=c?(itByChk[c.id]||[]):[];
-    return `<div class="chk" data-a="${z.id}">
-      <div class="t">${esc(z.nombre)} <span class="pill">${esc(z.codigo)}</span>
-        ${z.metadata?.provisional?'<span class="pill prov">provisional · falta checklist</span>':''}
-        <span class="pill">${c?.minutos_estimados??z.minutos_override??'—'} min</span>
+    const min=z.minutos_override??c?.minutos_estimados??'';
+    return `<div class="chk ${z.activo?'':'off'}" data-a="${z.id}">
+      <div class="t">
+        <input type="checkbox" class="act" ${z.activo?'checked':''} data-orig="${z.activo?1:0}" title="Activa o deja en stand by esta zona">
+        ${esc(z.nombre)} <span class="pill">${esc(z.codigo)}</span>
+        ${z.piso?`<span class="pill">piso ${z.piso}</span>`:''}
+        ${z.activo?'':'<span class="pill prov">stand by</span>'}
+        <input class="min" type="number" min="0" step="5" value="${min}" data-orig="${min}"> <span style="font-size:12px;color:var(--soft)">min</span>
         <span style="margin-left:auto;display:flex;gap:6px">
           <button class="b ed">✎ Checklist</button>
           <button class="b danger del">Eliminar</button></span></div>
       ${items.length?`<ol>${items.map(i=>`<li>${esc(i.tarea)}${i.minutos?` <span style="opacity:.6">(${i.minutos} min)</span>`:''}</li>`).join('')}</ol>`
         :'<p class="sub" style="margin:8px 0 0">Sin checklist. Pulsa «✎ Checklist» y pega las tareas, una por línea.</p>'}
-    </div>`;}).join('')||'<div class="empty">No hay zonas comunes dadas de alta.</div>';
+    </div>`;};
+  $('zonas').innerHTML=[...grupos.entries()].sort((a,b)=>a[1].orden-b[1].orden).map(([g,d])=>{
+    const act=d.items.filter(z=>z.activo);
+    const tot=act.reduce((s,z)=>s+(z.minutos_override??chByArea[z.id]?.minutos_estimados??0),0);
+    return `<div class="gz"><h4>${esc(g)}</h4>
+      <span class="tot"><b>${tot}</b> min al día · ${act.length} zona${act.length===1?'':'s'}${d.items.length>act.length?` · ${d.items.length-act.length} en stand by`:''}</span></div>
+      ${d.items.map(tarjeta).join('')}`;
+  }).join('')||'<div class="empty">No hay zonas comunes dadas de alta.</div>';
 
-  $('zonas').querySelectorAll('button.ed').forEach(b=>b.onclick=async()=>{
-    const areaId=b.closest('.chk').dataset.a;
-    const z=(zn||[]).find(x=>x.id===areaId);const c=chByArea[areaId];
-    const prev=(c?(itByChk[c.id]||[]):[]).map(i=>i.minutos?`${i.tarea} | ${i.minutos}`:i.tarea).join('\n');
-    const txt=prompt(`Checklist de ${z.nombre}\n\nUna tarea por línea. Opcional: "tarea | minutos".`,prev);
-    if(txt===null)return;
-    const lineas=txt.split('\n').map(s=>s.trim()).filter(Boolean).map((s,i)=>{
-      const [t,m]=s.split('|').map(x=>(x||'').trim());
-      return {orden:(i+1)*10,tarea:t,minutos:m?Number(m):null};});
-    const mins=lineas.reduce((s,l)=>s+(l.minutos||0),0);
-    let chkId=c?.id;
-    if(chkId){
-      await sb.from('hk_checklists').update({minutos_estimados:mins||null,version:(c.version||1)+1,updated_at:new Date().toISOString()}).eq('id',chkId);
-      await sb.from('hk_checklist_items').delete().eq('checklist_id',chkId);
-    }else{
-      const {data:nc,error}=await sb.from('hk_checklists').insert({property_id:P(),area_id:areaId,nombre:'Checklist '+z.nombre,minutos_estimados:mins||null}).select().single();
-      if(error)return st(error.message,'err');chkId=nc.id;
-    }
-    if(lineas.length){const {error}=await sb.from('hk_checklist_items').insert(lineas.map(l=>({...l,checklist_id:chkId})));if(error)return st(error.message,'err');}
-    await sb.from('hk_areas').update({metadata:{...(z.metadata||{}),provisional:false}}).eq('id',areaId);
-    st('Checklist guardado','ok');cargarAreas();
-  });
+  // Checklists del dormitorio (no cuelgan de un área concreta: valen para todos)
+  const dorms=(inv||[]).filter(a=>a.tipo==='dorm');
+  const porCamas={};dorms.forEach(a=>{const k=a.metadata?.camas;if(k)porCamas[k]=(porCamas[k]||0)+1;});
+  const prof=(camas)=>dorms.find(a=>String(a.metadata?.camas)===String(camas))?.metadata?.profunda_min;
+  $('chkDorm').innerHTML=(ch||[]).filter(c=>!c.area_id).map(c=>{
+    const items=itByChk[c.id]||[];
+    const esProf=c.frecuencia==='profunda';
+    return `<div class="chk" data-c="${c.id}">
+      <div class="t">${esc(c.nombre)}
+        <span class="pill">${esProf?'a programar':'diaria'}</span>
+        ${esProf
+          ? `<span class="pill">${Object.keys(porCamas).sort((a,b)=>b-a).map(k=>`${k} camas · ${prof(k)??c.minutos_estimados} min`).join(' · ')}</span>`
+          : `<input class="min" type="number" min="0" step="5" value="${c.minutos_estimados??''}" data-orig="${c.minutos_estimados??''}" data-chk="${c.id}"> <span style="font-size:12px;color:var(--soft)">min</span>`}
+        <span style="margin-left:auto"><button class="b edc">✎ Checklist</button></span></div>
+      ${items.length?`<ol>${items.map(i=>`<li>${esc(i.tarea)}</li>`).join('')}</ol>`:''}
+    </div>`;}).join('')||'<div class="empty">Sin checklists de dormitorio.</div>';
+
+  $('zonas').querySelectorAll('button.ed').forEach(b=>b.onclick=()=>editarChecklist(b.closest('.chk').dataset.a,(zn||[]).find(x=>x.id===b.closest('.chk').dataset.a),chByArea,itByChk));
+  $('chkDorm').querySelectorAll('button.edc').forEach(b=>b.onclick=()=>editarChecklistSuelto(b.closest('.chk').dataset.c,(ch||[]).find(c=>c.id===b.closest('.chk').dataset.c),itByChk));
   $('zonas').querySelectorAll('button.del').forEach(b=>b.onclick=async()=>{
-    if(!confirm('¿Eliminar esta zona y su checklist?'))return;
+    if(!confirm('¿Eliminar esta zona y su checklist?\n\nSi solo quieres dejarla en stand by, desmarca la casilla de la izquierda.'))return;
     const {error}=await sb.from('hk_areas').delete().eq('id',b.closest('.chk').dataset.a);
     st(error?error.message:'Zona eliminada',error?'err':'ok');cargarAreas();
   });
+  marcarSuciosZ();
 
   const g={};(inv||[]).forEach(a=>{const k=a.tipo;g[k]=g[k]||{1:0,2:0,3:0,4:0,o:0,t:0};const p=[1,2,3,4].includes(a.piso)?a.piso:'o';g[k][p]++;g[k].t++;});
   $('tblInv').tBodies[0].innerHTML=Object.entries(g).map(([k,v])=>`<tr><td>${TIPOLBL[k]||k}</td>
     <td class="num">${v[1]}</td><td class="num">${v[2]}</td><td class="num">${v[3]}</td><td class="num">${v[4]}</td>
     <td class="num">${v.o}</td><td class="num" style="font-weight:700">${v.t}</td></tr>`).join('');
 }
+
+// Un solo guardado para toda la pestaña, igual que en tiempos estándar.
+function inputsZonas(){ return [...document.querySelectorAll('#zonas .min, #zonas .act, #chkDorm .min')]; }
+const valZ=i=>i.type==='checkbox'?(i.checked?'1':'0'):String(i.value);
+function suciosZ(){ return inputsZonas().filter(i=>valZ(i)!==String(i.dataset.orig)); }
+function marcarSuciosZ(){
+  inputsZonas().forEach(i=>{ i.oninput=marcarSuciosZ; i.onchange=marcarSuciosZ; i.classList.toggle('dirty', valZ(i)!==String(i.dataset.orig)); });
+  const n=suciosZ().length;
+  $('btnGuardarZ').disabled=!n; $('btnDeshacerZ').disabled=!n;
+  $('btnGuardarZ').textContent = n ? `💾 Guardar ${n} cambio${n>1?'s':''} y recalcular el día` : '💾 Guardar y recalcular el día';
+  const e=$('stZ'); if(e&&!e.classList.contains('ok')) e.textContent = n ? 'Sin guardar' : '';
+  if(n&&$('stZ')) { $('stZ').className='status'; $('stZ').textContent='Sin guardar'; }
+}
+$('btnDeshacerZ').onclick=()=>{ inputsZonas().forEach(i=>{ if(i.type==='checkbox') i.checked=i.dataset.orig==='1'; else i.value=i.dataset.orig; }); marcarSuciosZ(); };
+$('btnGuardarZ').onclick=async()=>{
+  const cambios=suciosZ(); if(!cambios.length)return;
+  const b=$('btnGuardarZ'); b.disabled=true;
+  const e=$('stZ'); e.className='status'; e.textContent='Guardando…';
+  try{
+    // Se agrupan los cambios por zona para no mandar dos updates al mismo registro
+    const porArea=new Map();
+    for(const i of cambios){
+      if(i.dataset.chk){
+        const {error}=await sb.from('hk_checklists').update({minutos_estimados:i.value===''?null:Number(i.value),updated_at:new Date().toISOString()}).eq('id',i.dataset.chk);
+        if(error)throw error;
+        i.dataset.orig=i.value; continue;
+      }
+      const id=i.closest('.chk').dataset.a;
+      const o=porArea.get(id)||{};
+      if(i.type==='checkbox') o.activo=i.checked; else o.minutos_override=i.value===''?null:Number(i.value);
+      porArea.set(id,o);
+      i.dataset.orig=valZ(i);
+    }
+    for(const [id,campos] of porArea){
+      const {error}=await sb.from('hk_areas').update(campos).eq('id',id);
+      if(error)throw error;
+    }
+    e.textContent='Guardado · recalculando el reparto…';
+    const j=await fn('reparto');
+    if(j && j.ya_validado){
+      e.className='status err';
+      e.textContent='Tiempos guardados, pero el reparto de este día ya está validado y no se regenera.';
+    }else if(j && j.ok){
+      const c=j.carga||{};
+      e.className='status ok';
+      e.textContent=`Recalculado: ${Math.round(((c.cuartos_min||0)+(c.publicas_min||0))/60*10)/10} h de trabajo`;
+      cargarReparto();
+    }else{ e.className='status err'; e.textContent='Guardado, pero no se pudo recalcular.'; }
+  }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo guardar'; }
+  finally{ cargarAreas(); }
+};
+
+async function editarChecklist(areaId,z,chByArea,itByChk){
+  const c=chByArea[areaId];
+  const prev=(c?(itByChk[c.id]||[]):[]).map(i=>i.minutos?`${i.tarea} | ${i.minutos}`:i.tarea).join('\n');
+  const txt=prompt(`Checklist de ${z.nombre}\n\nUna tarea por línea. Opcional: "tarea | minutos".`,prev);
+  if(txt===null)return;
+  const lineas=txt.split('\n').map(s=>s.trim()).filter(Boolean).map((s,i)=>{
+    const [t,m]=s.split('|').map(x=>(x||'').trim());
+    return {orden:(i+1)*10,tarea:t,minutos:m?Number(m):null};});
+  const mins=lineas.reduce((s,l)=>s+(l.minutos||0),0);
+  let chkId=c?.id;
+  if(chkId){
+    await sb.from('hk_checklists').update({minutos_estimados:mins||null,version:(c.version||1)+1,updated_at:new Date().toISOString()}).eq('id',chkId);
+    await sb.from('hk_checklist_items').delete().eq('checklist_id',chkId);
+  }else{
+    const {data:nc,error}=await sb.from('hk_checklists').insert({property_id:P(),area_id:areaId,nombre:'Checklist '+z.nombre,minutos_estimados:mins||null}).select().single();
+    if(error)return st(error.message,'err');chkId=nc.id;
+  }
+  if(lineas.length){const {error}=await sb.from('hk_checklist_items').insert(lineas.map(l=>({...l,checklist_id:chkId})));if(error)return st(error.message,'err');}
+  await sb.from('hk_areas').update({metadata:{...(z.metadata||{}),provisional:false}}).eq('id',areaId);
+  // Si el checklist trae minutos, se toman como el tiempo de la zona.
+  if(mins) await sb.from('hk_areas').update({minutos_override:mins}).eq('id',areaId);
+  st('Checklist guardado','ok');cargarAreas();
+}
+async function editarChecklistSuelto(chkId,c,itByChk){
+  const prev=(itByChk[chkId]||[]).map(i=>i.tarea).join('\n');
+  const txt=prompt(`${c.nombre}\n\nUna tarea por línea.`,prev);
+  if(txt===null)return;
+  const lineas=txt.split('\n').map(s=>s.trim()).filter(Boolean).map((s,i)=>({orden:(i+1)*10,tarea:s,checklist_id:chkId}));
+  await sb.from('hk_checklist_items').delete().eq('checklist_id',chkId);
+  if(lineas.length){const {error}=await sb.from('hk_checklist_items').insert(lineas);if(error)return st(error.message,'err');}
+  st('Checklist guardado','ok');cargarAreas();
+}
 $('btnNuevaZona').onclick=async()=>{
   const nombre=prompt('Nombre de la zona (ej. Baños del segundo piso)');if(!nombre)return;
   const codigo=(prompt('Código corto (ej. BANOS_P2)',nombre.toUpperCase().replace(/[^A-Z0-9]+/g,'_').slice(0,20))||'').trim();if(!codigo)return;
   const piso=prompt('Piso (deja vacío si no aplica)','');
-  const tipo=confirm('¿Es un baño público?\n\nAceptar = baño público · Cancelar = zona común')?'bano_publico':'zona_comun';
-  const {error}=await sb.from('hk_areas').insert({property_id:P(),tipo,codigo,nombre,piso:piso?Number(piso):null,orden:900,metadata:{creado_en:'dashboard'}});
+  const min=Number(prompt('Minutos que lleva limpiarla','30')||0);
+  const {error}=await sb.from('hk_areas').insert({property_id:P(),tipo:'zona_comun',codigo,nombre,piso:piso?Number(piso):null,minutos_override:min||null,orden:900,grupo:piso?`Áreas públicas piso ${piso}`:'Otras áreas',grupo_orden:piso?10:50,metadata:{creado_en:'dashboard'}});
   st(error?error.message:'Zona creada',error?'err':'ok');cargarAreas();
 };
 $('btnSyncCB').onclick=async()=>{
