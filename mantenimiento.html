@@ -535,18 +535,71 @@ async function saveProv(anualId,provId){
 }
 
 /* LECTURAS */
+let CC=null;
 async function renderLect(){
-  const {data}=await sb.from("mtto_lecturas").select("*").eq("property_id",PROP.id).order("fecha",{ascending:false}).limit(30);
+  const [{data},{data:cc}]=await Promise.all([
+    sb.from("mtto_lecturas").select("*").eq("property_id",PROP.id).order("fecha",{ascending:false}).limit(60),
+    sb.from("mtto_consumo_config").select("*").eq("property_id",PROP.id).maybeSingle()
+  ]);
   const rows=data||[]; const today=hoyMX();
-  $("#view").innerHTML=`<div class="card"><h3>Captura por foto (Eloy)</h3><div class="pad"><p style="margin:0 0 10px;color:var(--muted);font-size:.9rem">Manuel/Juan toman la foto de los medidores y Eloy los lee: agua y luz solo suben, el gas puede bajar y avisa si baja del umbral.</p><a class="btn sm" href="/m/lecturas.html">📷 Capturar lecturas con foto</a></div></div>
+  CC=cc||{gas_tanque_litros:1600,agua_factor_litros:1000,luz_factor_kwh:1,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
+  // consumo por huésped (deltas entre días consecutivos)
+  const asc=[...rows].sort((a,b)=>a.fecha<b.fecha?-1:1), cons=[];
+  for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i];const g=c.huespedes||null;const mes=parseInt(c.fecha.slice(5,7))-1;
+    const aguaC=(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura)?(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros):null;
+    const luzC=(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura)?(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh):null;
+    const gasC=(c.gas_pct!=null&&p.gas_pct!=null&&p.gas_pct>=c.gas_pct)?(p.gas_pct-c.gas_pct)/100*Number(CC.gas_tanque_litros):null;
+    cons.push({fecha:c.fecha,g,mes,aguaH:(g&&aguaC!=null)?aguaC/g:null,luzH:(g&&luzC!=null)?luzC/g:null,gasH:(g&&gasC!=null)?gasC/g:null});}
+  cons.reverse();
+  const oa=CC.obj_agua,ol=CC.obj_luz,og=CC.obj_gas;
+  const cell=(v,obj,dec)=>{if(v==null)return '<td class="num muted">—</td>';const r=v/obj;const cls=r<=1?'c-prev':(r<=1.25?'c-correc':'c-react');
+    return `<td class="num"><span class="chip ${cls}">${v.toFixed(dec)}</span> <span class="muted" style="font-size:11px">/${obj}</span></td>`;};
+  const last=cons.find(x=>x.aguaH!=null||x.luzH!=null||x.gasH!=null);
+  const m=new Date().getMonth();
+  const kpi=(lbl,v,obj,unit,dec)=>{const val=v==null?"—":v.toFixed(dec);const r=v==null?null:v/obj;const col=r==null?"var(--muted)":(r<=1?"var(--ok)":(r<=1.25?"var(--warn)":"var(--bad)"));
+    return `<div class="kpi"><div class="n" style="color:${col}">${val}<span style="font-size:13px;color:var(--muted)"> ${unit}</span></div><div class="l">${lbl} · objetivo ${obj} ${unit}</div></div>`;};
+  $("#view").innerHTML=`
+    <div class="card"><h3>Consumo por huésped / noche <span class="muted" style="font-weight:500;font-size:12px">· vs objetivo de industria por temporada</span>
+      <button class="btn ghost sm" style="float:right;margin-top:-2px" onclick="editConsumo()">⚙︎ Ajustar objetivos</button></h3>
+      <div class="pad">
+        ${last?`<div class="kpis" style="margin-bottom:6px">
+          ${kpi('💧 Agua ('+last.fecha+')',last.aguaH,oa[m],'L',0)}
+          ${kpi('⚡ Luz ('+last.fecha+')',last.luzH,ol[m],'kWh',1)}
+          ${kpi('🔥 Gas ('+last.fecha+')',last.gasH,og[m],'L',1)}
+        </div>`:'<p class="muted" style="margin:0">Aún no hay dos días con lecturas y número de huéspedes para calcular el consumo. Captura las lecturas y el número de huéspedes por día.</p>'}
+        <div class="scroll"><table><thead><tr><th>Fecha</th><th class="num">Huésp.</th><th class="num">Agua L/h</th><th class="num">Luz kWh/h</th><th class="num">Gas L/h</th></tr></thead>
+        <tbody>${cons.length?cons.slice(0,21).map(c=>`<tr><td>${c.fecha}</td><td class="num">${c.g??'<span class=muted>falta</span>'}</td>${cell(c.aguaH,oa[c.mes],0)}${cell(c.luzH,ol[c.mes],1)}${cell(c.gasH,og[c.mes],1)}</tr>`).join(""):'<tr><td colspan="5" class="center">Sin datos suficientes</td></tr>'}</tbody></table></div>
+        <p class="muted" style="font-size:11.5px;margin:10px 0 0">Verde ≤ objetivo · ámbar hasta +25% · rojo arriba. Agua en litros (medidor ×${CC.agua_factor_litros}), gas en litros de LP (tanque ${CC.gas_tanque_litros} L). Ajusta factores y objetivos con ⚙︎ si los números no cuadran con tu realidad.</p>
+      </div></div>
+    <div class="card"><h3>Captura por foto (Eloy)</h3><div class="pad"><p style="margin:0 0 10px;color:var(--muted);font-size:.9rem">Manuel/Juan toman la foto de los medidores y Eloy los lee: agua y luz solo suben, el gas puede bajar y avisa si baja del umbral.</p><a class="btn sm" href="/m/lecturas.html">📷 Capturar lecturas con foto</a></div></div>
     <div class="card"><h3>Registrar lectura del día (manual)</h3><div class="pad"><div class="form-grid">
-      <div><label>Fecha</label><input id="lF" type="date" value="${today}"></div><div><label>Huéspedes</label><input id="lH" type="number" min="0"></div>
+      <div><label>Fecha</label><input id="lF" type="date" value="${today}"></div><div><label>Huéspedes (noche)</label><input id="lH" type="number" min="0"></div>
       <div><label>Agua (lectura)</label><input id="lA" type="number" step="0.01"></div><div><label>Luz kWh</label><input id="lL" type="number" step="0.01"></div>
       <div><label>Gas %</label><input id="lG" type="number" step="0.1"></div><div><label>Foto (URL)</label><input id="lFoto"></div>
       <div class="full"><button class="btn sm" onclick="saveLect()">Guardar lectura</button></div>
     </div></div></div>
     <div class="card"><h3>Últimas lecturas</h3><div class="scroll"><table><thead><tr><th>Fecha</th><th class="num">Agua</th><th class="num">Luz kWh</th><th class="num">Gas %</th><th class="num">Huésp.</th></tr></thead>
     <tbody>${rows.length?rows.map(r=>`<tr><td>${r.fecha}</td><td class="num">${r.agua_lectura??"—"}</td><td class="num">${r.luz_lectura??"—"}</td><td class="num">${r.gas_pct??"—"}</td><td class="num">${r.huespedes??"—"}</td></tr>`).join(""):'<tr><td colspan="5" class="center">Sin lecturas</td></tr>'}</tbody></table></div></div>`;
+}
+function editConsumo(){const m=new Date().getMonth();const mn=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][m];
+  modal(`<h3>Ajustar consumo · objetivos</h3><div class="pad"><div class="form-grid">
+    <div><label>Tanque de gas (litros)</label><input id="cGT" type="number" value="${CC.gas_tanque_litros}"></div>
+    <div><label>Litros por unidad de agua</label><input id="cAF" type="number" value="${CC.agua_factor_litros}"></div>
+    <div><label>kWh por unidad de luz</label><input id="cLF" type="number" step="0.01" value="${CC.luz_factor_kwh}"></div>
+    <div></div>
+    <div class="full"><label style="color:var(--ink)">Objetivos por huésped/noche para ${mn}</label></div>
+    <div><label>💧 Agua (L)</label><input id="cOA" type="number" value="${CC.obj_agua[m]}"></div>
+    <div><label>⚡ Luz (kWh)</label><input id="cOL" type="number" step="0.1" value="${CC.obj_luz[m]}"></div>
+    <div><label>🔥 Gas (L)</label><input id="cOG" type="number" step="0.1" value="${CC.obj_gas[m]}"></div>
+  </div><p class="muted" style="font-size:12px;margin-top:10px">Los objetivos se guardan por mes (temporada). Aquí editas los de ${mn}; puedes ajustar cada mes cuando toque.</p>
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button><button class="btn sm" onclick="saveConsumo(${m})">Guardar</button></div>`);
+}
+async function saveConsumo(m){
+  const oa=[...CC.obj_agua],ol=[...CC.obj_luz],og=[...CC.obj_gas];
+  oa[m]=parseFloat($("#cOA").value)||oa[m]; ol[m]=parseFloat($("#cOL").value)||ol[m]; og[m]=parseFloat($("#cOG").value)||og[m];
+  const {error}=await sb.from("mtto_consumo_config").upsert({property_id:PROP.id,gas_tanque_litros:parseFloat($("#cGT").value)||1600,
+    agua_factor_litros:parseFloat($("#cAF").value)||1000,luz_factor_kwh:parseFloat($("#cLF").value)||1,obj_agua:oa,obj_luz:ol,obj_gas:og,updated_at:new Date().toISOString()},{onConflict:"property_id"});
+  if(error)return toast(error.message);closeModal();toast("Objetivos actualizados");renderLect();
 }
 async function saveLect(){
   const {error}=await sb.from("mtto_lecturas").upsert({property_id:PROP.id,fecha:$("#lF").value,huespedes:parseInt($("#lH").value)||null,agua_lectura:parseFloat($("#lA").value)||null,luz_lectura:parseFloat($("#lL").value)||null,gas_pct:parseFloat($("#lG").value)||null,foto_url:$("#lFoto").value.trim()||null,subido_por:USER.id,subido_por_nombre:USER.email},{onConflict:"property_id,fecha"});
