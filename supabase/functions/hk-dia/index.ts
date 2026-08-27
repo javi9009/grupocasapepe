@@ -125,8 +125,8 @@ async function reparto(propKey: string, fecha: string) {
     rest('hk_puestos_map?activo=eq.true&select=puesto_id,turno'),
     rest(`hk_admin_turno?property_id=eq.${P}&activo=eq.true&select=turno,dia_semana,minutos,concepto`),
     rest(`hk_asignaciones?property_id=eq.${P}&fecha=eq.${fecha}&select=id,estado`),
-    rest(`hk_tareas_op?property_id=eq.${P}&activo=eq.true&select=id,codigo,nombre,minutos,turno,hora_sugerida,dia_semana,orden&order=orden`),
-  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number }>];
+    rest(`hk_tareas_op?property_id=eq.${P}&activo=eq.true&select=id,codigo,nombre,minutos,turno,hora_sugerida,dia_semana,orden,obligatoria&order=orden`),
+  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>];
 
   const conf = confArr[0] ?? { horas_turno: 8, minutos_traslado_piso: 5, no_mezclar_pisos: true, factor_ama_llaves: 0.5, minutos_comida: 30 };
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
@@ -211,7 +211,7 @@ async function reparto(propKey: string, fecha: string) {
       estatus: 'operativa', minutos: Number(o.minutos || 0), checklist_id: null,
       orden: Number(o.orden ?? 0), lote: `op:${o.id}`, op_id: String(o.id),
       titulo: o.hora_sugerida ? `${o.nombre} · ${String(o.hora_sugerida).slice(0, 5)}` : String(o.nombre),
-      turnoPref: o.turno,
+      turnoPref: o.turno, opcional: o.obligatoria === false,
     } as Tarea & { turnoPref: string | null }))
     .filter((t) => t.minutos > 0);
 
@@ -290,10 +290,15 @@ async function reparto(propKey: string, fecha: string) {
   // quien vaya más descargado. El ama de llaves puede moverlas después con el botón <>.
   const opsPorPersona = new Map<string, Tarea[]>();
   const sobraOps: Tarea[] = [];
+  const opsLibres: Tarea[] = [];
+  const poraOps = personas.filter((p) => p.turno !== 'front');
   for (const t of operativas) {
+    // Una operativa no obligatoria (el room audit, que puede hacer front) no se
+    // reparte sola: viaja a SIN ASIGNAR para que el ama de llaves la coloque.
+    if (t.opcional) { opsLibres.push(t); continue; }
     const pref = (t as Tarea & { turnoPref?: string | null }).turnoPref;
-    const cand = (pref ? personas.filter((p) => p.turno === pref) : personas);
-    const lista = (cand.length ? cand : personas).slice().sort((a, b) =>
+    const cand = (pref ? personas.filter((p) => p.turno === pref) : poraOps);
+    const lista = (cand.length ? cand : (poraOps.length ? poraOps : personas)).slice().sort((a, b) =>
       ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)));
     const p = lista[0];
     if (!p) { sobraOps.push(t); continue; }
@@ -353,7 +358,7 @@ async function reparto(propKey: string, fecha: string) {
   const salida: Array<Record<string, unknown>> = [];
   const esPublica = (t: Tarea) => t.tipo === 'zona_comun';
   async function crear(p: Persona | null, tareas: Tarea[], etiqueta?: string, sinAsignar = false) {
-    if (!tareas.length) return;
+    if (!tareas.length && !(p && p.turno === 'front')) return;
     tareas.sort((a, b) => (a.tipo === 'operativa' ? 0 : 1) - (b.tipo === 'operativa' ? 0 : 1) || (esPublica(a) ? 1 : 0) - (esPublica(b) ? 1 : 0) || a.piso - b.piso || a.orden - b.orden);
     const pisos = [...new Set(tareas.map((t) => t.piso))].filter((x) => x > 0).sort((a, b) => a - b);
     const total = tareas.reduce((s, t) => s + t.minutos, 0);
@@ -369,8 +374,13 @@ async function reparto(propKey: string, fecha: string) {
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
 
+  // Front tiene su propia caja del día aunque el motor no le asigne nada: ahí se
+  // arrastra el room audit.
+  for (const p of personas) {
+    if (p.turno === 'front' && !porPersona.has(kp(p))) porPersona.set(kp(p), { p, tareas: [] });
+  }
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
-  const bolsa = [...profundas, ...opcionales, ...libres];
+  const bolsa = [...opsLibres, ...profundas, ...opcionales, ...libres];
   if (bolsa.length) await crear(null, bolsa, 'SIN ASIGNAR', true);
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
   if (rc.sobra.length) await crear(null, rc.sobra, 'SIN CUBRIR · cuartos');
