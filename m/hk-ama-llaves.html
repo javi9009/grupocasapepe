@@ -349,6 +349,11 @@ td.grab:hover{color:var(--gold)}
     <label class="cp">Equipo completo <input type="number" id="pvEquipo" min="1" max="20" step="1" value="4"></label>
     <label class="cp">Umbral mínimo <input type="number" id="pvMinimo" min="1" max="20" step="1" value="4"></label>
     <label class="cp">Jornada (h) <input type="number" id="pvJornada" min="4" max="12" step="0.5" value="8"></label>
+    <label class="cp">Horizonte <select id="pvHoriz">
+      <option value="90">3 meses</option>
+      <option value="180">6 meses</option>
+      <option value="365" selected>1 año</option>
+    </select></label>
     <button class="b" id="pvRecalc">Recalcular</button>
     <span class="status" id="stP"></span>
   </div>
@@ -363,7 +368,7 @@ td.grab:hover{color:var(--gold)}
     <label class="cp">D <input type="number" class="dow" data-d="0" min="0" max="20" value="4"></label>
     <span class="et" id="pvSemTot"></span>
   </div>
-  <p class="sub">Día a día de los próximos seis meses, con la ocupación que tuvimos el año pasado en ese mismo día de la semana.
+  <p class="sub">Día a día del periodo que elijas —hasta un año vista—, con la ocupación que tuvimos el año pasado en ese mismo día de la semana.
   El equipo se cuenta completo porque se cubren entre todas: cuartos, áreas públicas y tareas operativas entran en la misma cuenta.
   Solo se propone contratar cuando la temporada pide esa persona <b>más de 15 días de cada 30</b>: los picos sueltos se absorben, una temporada no.</p>
 
@@ -1191,7 +1196,7 @@ $('btnSyncCB').onclick=async()=>{
 // de la semana) se convierte en minutos de trabajo con los tiempos estándar de hoy.
 // De ahí sale cuántas recamaristas hacen falta cada día de los próximos seis meses.
 let PV = null;
-const DIAS_ADELANTO = 180;
+const DIAS_ADELANTO = 365;   // por defecto; el selector de arriba manda
 const MESL = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const fISO = d => d.toISOString().slice(0,10);
 const masDias = (iso,n) => fISO(new Date(Date.parse(iso+'T00:00:00Z')+n*86400000));
@@ -1199,7 +1204,7 @@ const masDias = (iso,n) => fISO(new Date(Date.parse(iso+'T00:00:00Z')+n*86400000
 async function cargarPrevision(){
   const e=$('stP'); e.className='status'; e.textContent='Leyendo el histórico…';
   const hoy=F();
-  const desdeHist=masDias(hoy,-370), hastaHist=masDias(hoy,-1);
+  const desdeHist=masDias(hoy,-400), hastaHist=masDias(hoy,-1);
   const [{data:hist},{data:tiempos},{data:zonas},{data:ops},{data:conf},{data:vac},{data:fest}]=await Promise.all([
     sb.from('hk_ocupacion_hist').select('*').eq('property_id',P()).gte('fecha',desdeHist).lte('fecha',hastaHist).order('fecha'),
     sb.from('hk_tiempos').select('tipo_area,estatus,variante,minutos').eq('property_id',P()).eq('activo',true),
@@ -1249,10 +1254,14 @@ function calcularPrevision(){
   const porFecha={}; PV.hist.forEach(h=>porFecha[h.fecha]=h);
   const hoy=F();
   const dias=[];
-  for(let i=0;i<DIAS_ADELANTO;i++){
+  const horizonte=Number($('pvHoriz').value)||DIAS_ADELANTO;
+  for(let i=0;i<horizonte;i++){
     const f=masDias(hoy,i);
     // 364 días atrás = mismo día de la semana del año pasado
-    let ref=porFecha[masDias(f,-364)] || porFecha[masDias(f,-371)] || porFecha[masDias(f,-357)];
+    // 364 días atrás cae en el mismo día de la semana; si ese día no está en el
+    // histórico (el último tramo del año), se busca la semana anterior o la siguiente.
+    let ref=porFecha[masDias(f,-364)] || porFecha[masDias(f,-371)]
+         || porFecha[masDias(f,-378)] || porFecha[masDias(f,-357)];
     if(!ref){ dias.push({fecha:f,sin:true,min:0,fte:0}); continue; }
     const camasEc=Math.max(0,ref.camas_ocupadas-ref.camas_salida);
     const privEc=Math.max(0,ref.privadas_ocupadas-ref.privadas_salida);
@@ -1341,7 +1350,7 @@ function pintarPrevision(){
     ['Trabajo medio',`${mediaH.toFixed(1)} h`,'al día, todo incluido'],
     ['Personas por día',`${media.toFixed(1)}`,`en turno · equivalen a ${mediaPlantilla.toFixed(1)} de plantilla`],
     ['Días al límite',`${diasNaranja}`,`en naranja · ${diasSobre} en rojo`],
-    ['Horas extra',`${Math.round(extra)}`,'en los seis meses, si no se contrata'],
+    ['Horas extra',`${Math.round(extra)}`,'en el periodo, si no se contrata'],
   ].map(([t,v,x])=>`<div class="kpi"><div class="t">${t}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join('');
 
   // ---- tramos concretos en los que falta gente (días seguidos) ----
@@ -1374,14 +1383,14 @@ function pintarPrevision(){
         <ul>${ventanas.map(v=>`<li><b>${fmtF(v.desde)} → ${fmtF(v.hasta)}</b> · ${v.diasFalta} de ${v.dias} días por encima ·
           pico de <b>${v.pico.toFixed(1)}</b> personas contra ${v.equipoMin} · faltan <b>${v.faltan}</b> ·
           contratar desde el <b>${fmtF(masDias(v.desde,-30))}</b></li>`).join('')}</ul></div>`
-    : `<div class="caja verde"><div class="t">✓ Con ${equipo} personas alcanza los próximos seis meses</div>
+    : `<div class="caja verde"><div class="t">✓ Con ${equipo} personas alcanza todo el periodo</div>
         <div class="d">Hay ${diasSobre} ${diasSobre===1?'día suelto':'días sueltos'} por encima del equipo, pero ninguna ventana de 30 días
         pide esa persona más de 15. Los picos se cubren moviendo el reparto.</div></div>`
     + (bajoMin?`<div class="caja rojo" style="margin-top:8px"><div class="t">⚠ ${bajoMin} días por debajo del umbral de ${minimo}</div>
         <div class="d">Con las ausencias cargadas hay días en los que el equipo baja del mínimo operativo. Esos días no se cubren ni con horas extra.</div></div>`:'');
 
   // ---- gráfica: ocupación, horas y personas ----
-  const W=Math.max(760,dias.length*5.4), H=270, PADL=36, PADR=44, PADB=28, PADT=12;
+  const W=Math.max(760,dias.length*(dias.length>250?3.4:5.4)), H=270, PADL=36, PADR=44, PADB=28, PADT=12;
   const bw=(W-PADL-PADR)/dias.length;
   const alto=H-PADT-PADB;
   const yP=v=>PADT+alto*(1-v/maxP);
@@ -1444,7 +1453,7 @@ function pintarPrevision(){
       <div class="d">La temporada apretada va del <b>${fmtF(v.desde)}</b> al <b>${fmtF(v.hasta)}</b>:
         ${v.diasFalta} de esos ${v.dias} días piden más de ${v.equipoMin} personas, con un pico de <b>${v.pico.toFixed(1)}</b>.
         Se propone la contratación un mes antes para que llegue formada: la curva de una camarista es de seis semanas.</div>
-    </div>`).join('') : `<div class="plan ok"><div class="t">No hace falta contratar en estos seis meses</div>
+    </div>`).join('') : `<div class="plan ok"><div class="t">No hace falta contratar en el periodo</div>
       <div class="d">Con ${equipo} personas y las ausencias cargadas, ninguna ventana de 30 días pide gente extra más de 15.</div></div>`;
 
   // ---- resumen de fechas ----
@@ -1459,10 +1468,10 @@ function pintarPrevision(){
       <div class="col">
         <h4>Los tramos que aprietan</h4>
         ${gordos.length?`<table class="mini"><thead><tr><th>Fechas</th><th class="num">Días</th><th class="num">Faltan</th><th class="num">Horas extra</th></tr></thead><tbody>
-          ${gordos.slice(0,12).map(t=>`<tr><td>${fmtR(t.ini,t.fin)}</td><td class="num">${t.dias}</td>
+          ${gordos.slice(0,16).map(t=>`<tr><td>${fmtR(t.ini,t.fin)}</td><td class="num">${t.dias}</td>
             <td class="num">${t.pico<1?'media':Math.ceil(t.pico)}</td><td class="num">${Math.round(t.horas)}</td></tr>`).join('')}
           </tbody></table>
-          ${gordos.length>12?`<p class="sub">Y ${gordos.length-12} tramos más.</p>`:''}
+          ${gordos.length>16?`<p class="sub">Y ${gordos.length-16} tramos más.</p>`:''}
           ${sueltos.length?`<p class="sub">Además hay ${sueltos.length} ${sueltos.length===1?'día suelto':'días sueltos'} de uno o dos días, que se absorben moviendo el reparto.</p>`:''}`
         :'<p class="sub">No hay ningún tramo de tres días o más en el que falte gente.</p>'}
       </div>
@@ -1572,7 +1581,7 @@ $('vfOk').onclick=async()=>{
   calcularPrevision();
 };
 $('pvRecalc').onclick=()=>calcularPrevision();
-['pvEquipo','pvMinimo','pvJornada'].forEach(id=>$(id).onchange=()=>calcularPrevision());
+['pvEquipo','pvMinimo','pvJornada','pvHoriz'].forEach(id=>$(id).onchange=()=>calcularPrevision());
 document.querySelectorAll('#p-prev .dow').forEach(i=>i.onchange=()=>calcularPrevision());
 const DOWL=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
 
