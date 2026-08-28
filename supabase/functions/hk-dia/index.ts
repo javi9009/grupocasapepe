@@ -88,19 +88,36 @@ async function syncEstatus(propKey: string, fecha: string) {
   const diasBlancos = Number(confArr?.[0]?.dias_cambio_blancos ?? 4);
   const areas = await rest(`hk_areas?property_id=eq.${cfg.supaId}&select=id,tipo,codigo,cloudbeds_room_id&limit=1000`) as Array<{ id: string; tipo: string; codigo: string; cloudbeds_room_id: string | null }>;
   const porCb = new Map(areas.filter((a) => a.cloudbeds_room_id).map((a) => [a.cloudbeds_room_id!, a]));
+
+  // Un cuarto que quedó limpio y en el que nadie durmió sigue limpio hoy: la limpieza
+  // no se borra por cambiar de día. Solo se hereda si no hubo salida.
+  const ayer = new Date(Date.parse(fecha + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
+  const previo = await rest(`hk_estatus_dia?property_id=eq.${cfg.supaId}&fecha=eq.${ayer}&limpieza=eq.limpia&select=area_id,limpieza_por,limpieza_fuente&limit=1000`) as Array<{ area_id: string; limpieza_por: string | null; limpieza_fuente: string | null }>;
+  const limpioAyer = new Map(previo.map((x) => [x.area_id, x]));
   const filas: Array<Record<string, unknown>> = [];
+  const heredadas: Array<Record<string, unknown>> = [];
   let sinMatch = 0;
   for (const r of rows) {
     const a = porCb.get(r.roomID);
     if (!a) { sinMatch++; continue; }
     const m = mapEstatus(r, fecha, diasBlancos);
-    filas.push({ property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } });
+    // Herencia de la limpieza de ayer: solo si hoy no hay salida y el cuarto no
+    // estuvo ocupado, es decir, nadie lo ha vuelto a usar.
+    const hered = (!m.co && (m.estatus === 'vacia_limpia')) ? limpioAyer.get(a.id) : undefined;
+    const base = { property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } };
+    // Los lotes de PostgREST exigen las mismas claves en todas las filas: las que
+    // heredan la limpieza de ayer van en su propio lote.
+    if (hered) heredadas.push({ ...base, limpieza: 'limpia', limpieza_por: hered.limpieza_por, limpieza_fuente: hered.limpieza_fuente });
+    else filas.push(base);
   }
-  for (let i = 0; i < filas.length; i += 100) {
-    await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
+  for (const lote of [filas, heredadas]) {
+    for (let i = 0; i < lote.length; i += 100) {
+      await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(lote.slice(i, i + 100)) });
+    }
   }
-  const conBlancos = filas.filter((f) => f.estatus === 'ocupada_blancos').length;
-  return { ok: true, cloudbeds_rows: rows.length, guardadas: filas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
+  const todas = [...filas, ...heredadas];
+  const conBlancos = todas.filter((f) => f.estatus === 'ocupada_blancos').length;
+  return { ok: true, cloudbeds_rows: rows.length, guardadas: todas.length, heredadas: heredadas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
 }
 
 // ---------- 2. REPARTO ----------
