@@ -337,6 +337,13 @@ td.grab:hover{color:var(--gold)}
   <div class="wrap"><table id="tblT"><thead><tr>
     <th>Tipo de área</th><th>Estatus</th><th>Qué significa</th><th class="num">Minutos</th>
   </tr></thead><tbody></tbody></table></div>
+  <h3>Cuartos con tiempo propio</h3>
+  <p class="sub">Las suites y los cuartos que no se parecen al estándar llevan su propio minutaje por estatus. Lo que se deje vacío usa el tiempo estándar de arriba.</p>
+  <div class="wrap"><table id="tblProp"><thead><tr>
+    <th>Cuarto</th><th class="num">Vacía limpia</th><th class="num">Vacía sucia</th><th class="num">En casa</th><th class="num">En casa + blancos</th><th></th>
+  </tr></thead><tbody></tbody></table></div>
+  <div class="bar" style="margin-top:8px"><button class="b" id="btnCuartoProp">＋ Dar tiempo propio a un cuarto</button></div>
+
   <h3>Limpiezas del dormitorio</h3>
   <p class="sub">La general se hace a diario en cuanto la habitación estuvo ocupada e incluye baño, habitación, balcón y ventana; la misma persona hace el cuarto completo. La profunda de cada dormitorio sale todos los días en «Sin asignar» con su número de habitación, para programarla el día que toque.</p>
   <div id="chkDorm"></div>
@@ -509,7 +516,7 @@ async function fn(accion){
 }
 
 // ---------------- REPARTO ----------------
-let ASIG=[], SUELTAS=[];
+let ASIG=[], SUELTAS=[], CUARTOS_T=[];
 async function cargarReparto(){
   const [{data,error},{data:sueltas}]=await Promise.all([
     sb.from('hk_asignaciones')
@@ -646,7 +653,9 @@ function pintarAsignar(){
         return `<tr class="agrupo" data-g="${esc(g)}"><td colspan="4"><span class="tg">${cerrado?'+':'–'}</span>${esc(g)}<span class="n">${info.items.length}</span></td><td class="num">${min||''}</td><td></td></tr>`
           + (cerrado?'':info.items.map(({t,a})=>{
             const ar=t.hk_areas||{}, op=t.hk_tareas_op;
-            const fijo=validado||t.estado!=='pendiente';
+            // Validar cierra la propuesta, no la mano del ama de llaves: se puede
+            // seguir moviendo lo que nadie ha empezado.
+            const fijo=t.estado!=='pendiente';
             const nom=op?esc(op.nombre):`${esc(ar.codigo||'')} <span class="who">${t.estatus_area==='profunda'?'profunda':ar.tipo==='cama'?'cama':ar.tipo==='dorm'?'dorm':ar.tipo==='privada'?'hab':'área'}</span>`;
             const et=op?(op.hora_sugerida?String(op.hora_sugerida).slice(0,5):'op'):(ABREV[t.estatus_area]||t.estatus_area||'');
             const libre=t.metadata?.sin_trabajo, opc=t.metadata?.opcional, prof=t.metadata?.profunda;
@@ -721,7 +730,7 @@ function pintarAsignar(){
         </div>
         <div class="achips ${abierto?'on':''}" data-drop="${a.id}">${ts.map(t=>{
           const ar=t.hk_areas||{}, op=t.hk_tareas_op;
-          const fijo=validado||t.estado!=='pendiente';
+          const fijo=t.estado!=='pendiente';
           return `<span class="achip ${t.metadata?.sin_trabajo?'libre':(op?'op':(ar.tipo==='dorm'?'dorm':(CLS[t.estatus_area]||'')))} ${fijo?'done':''} ${t.partes>1?'part':''}" data-t="${t.id}" data-fijo="${fijo?1:0}"
             title="${esc(op?op.nombre:(ar.nombre||''))} · ${t.minutos_estimados} min${t.partes>1?` · repartida entre ${t.partes}`:''}">${esc(op?op.nombre.split(' ')[0]:(ar.codigo||''))}</span>`;}).join('')}</div>
       </div>`;
@@ -730,7 +739,7 @@ function pintarAsignar(){
     $('asigResumen').textContent=`${Math.round(tot/60*10)/10} h repartidas`
       +(sin?` · ${Math.round(sin/60*10)/10} h sin asignar, fuera del total`:'')
       +(alerta?` · ${alerta} con horas extra`:'');
-    if(validado){ const e=$('stA'); e.className='status err'; e.textContent='Reparto validado: ya no se puede mover'; }
+    if(validado){ const e=$('stA'); e.className='status ok'; e.textContent='Reparto validado · se puede seguir moviendo lo que no ha empezado'; }
 
     cont.querySelectorAll('button.mas').forEach(b=>b.onclick=()=>{
       const id=b.dataset.a; ABIERTAS.has(id)?ABIERTAS.delete(id):ABIERTAS.add(id); pintarAsignar();
@@ -1026,6 +1035,25 @@ async function cargarTiempos(){
   $('chkDorm').querySelectorAll('button.edc').forEach(b=>b.onclick=()=>
     editarChecklistSuelto(b.closest('.chk').dataset.c,(ch||[]).find(c=>c.id===b.closest('.chk').dataset.c),itByChk,cargarTiempos));
 
+  // Cuartos con minutaje propio
+  const {data:cu}=await sb.from('hk_areas').select('id,codigo,nombre,tipo,minutos_por_estatus')
+    .eq('property_id',P()).in('tipo',['privada','dorm']).order('codigo');
+  CUARTOS_T=(cu||[]);
+  const conProp=CUARTOS_T.filter(x=>x.minutos_por_estatus);
+  const ESTS=['vacia_limpia','vacia_sucia','ocupada','ocupada_blancos'];
+  $('tblProp').tBodies[0].innerHTML=conProp.length?conProp.map(x=>`<tr data-area="${x.id}">
+    <td><b>${esc(x.codigo)}</b> <span style="color:var(--soft);font-size:12px">${esc(x.nombre)}</span></td>
+    ${ESTS.map(e=>`<td class="num"><input class="prop" type="number" min="0" max="480" data-e="${e}"
+      value="${x.minutos_por_estatus?.[e]??''}" data-orig="${x.minutos_por_estatus?.[e]??''}"></td>`).join('')}
+    <td><button class="b danger quitarProp">Quitar</button></td></tr>`).join('')
+    :'<tr><td colspan="6" style="color:var(--soft);font-size:12.5px">Ningún cuarto tiene tiempo propio: todos usan el estándar.</td></tr>';
+  $('tblProp').querySelectorAll('.quitarProp').forEach(b=>b.onclick=async()=>{
+    const id=b.closest('tr').dataset.area;
+    if(!confirm('¿Quitarle el tiempo propio? Volverá al estándar de su tipo.'))return;
+    const {error}=await sb.from('hk_areas').update({minutos_por_estatus:null}).eq('id',id);
+    st(error?error.message:'Vuelve al estándar',error?'err':'ok'); cargarTiempos();
+  });
+
   const {data:c}=await sb.from('hk_config').select('*').eq('property_id',P()).maybeSingle();
   if(c){
     const campos=[['horas_turno','Horas de jornada','number'],['minutos_comida','Minutos de comida','number'],
@@ -1040,7 +1068,7 @@ async function cargarTiempos(){
 }
 
 // Un solo guardado para toda la pestaña: escribe lo que cambió y vuelve a calcular el día.
-function inputsTiempos(){ return [...document.querySelectorAll('#tblT input, #tblC input')]; }
+function inputsTiempos(){ return [...document.querySelectorAll('#tblT input, #tblC input, #tblProp input')]; }
 function sucios(){ return inputsTiempos().filter(i=>String(i.value)!==String(i.dataset.orig)); }
 function marcarSucios(){
   inputsTiempos().forEach(i=>{ i.oninput=marcarSucios; i.classList.toggle('dirty', String(i.value)!==String(i.dataset.orig)); });
@@ -1063,6 +1091,11 @@ $('btnGuardarT').onclick=async()=>{
         if(error)throw error;
       }else if(tr.dataset.k){
         const {error}=await sb.from('hk_config').update({[tr.dataset.k]:i.value,updated_at:new Date().toISOString()}).eq('property_id',P());
+        if(error)throw error;
+      }else if(tr.dataset.area){
+        const m={};
+        tr.querySelectorAll('input.prop').forEach(x=>{ if(x.value!=='') m[x.dataset.e]=Number(x.value); });
+        const {error}=await sb.from('hk_areas').update({minutos_por_estatus:Object.keys(m).length?m:null}).eq('id',tr.dataset.area);
         if(error)throw error;
       }
       i.dataset.orig=i.value;
@@ -1236,6 +1269,18 @@ async function editarChecklistSuelto(chkId,c,itByChk,repintar){
   if(lineas.length){const {error}=await sb.from('hk_checklist_items').insert(lineas);if(error)return st(error.message,'err');}
   st('Checklist guardado','ok');(repintar||cargarAreas)();
 }
+$('btnCuartoProp').onclick=async()=>{
+  const sin=CUARTOS_T.filter(x=>!x.minutos_por_estatus);
+  if(!sin.length) return st('Todos los cuartos ya tienen tiempo propio','err');
+  const cod=(prompt('¿Qué cuarto?\n\n'+sin.map(x=>x.codigo).join(', '))||'').trim();
+  const x=sin.find(y=>String(y.codigo)===cod);
+  if(!x) return cod?st('No encuentro ese cuarto','err'):undefined;
+  const base=x.tipo==='dorm'?{vacia_limpia:5,vacia_sucia:10,ocupada:0,ocupada_blancos:5}
+    :{vacia_limpia:10,vacia_sucia:40,ocupada:20,ocupada_blancos:30};
+  const {error}=await sb.from('hk_areas').update({minutos_por_estatus:base}).eq('id',x.id);
+  st(error?error.message:`${x.codigo} ya tiene tiempo propio · ajústalo en la tabla`,error?'err':'ok');
+  cargarTiempos();
+};
 $('btnNuevaZona').onclick=async()=>{
   const nombre=prompt('Nombre de la zona (ej. Baños del segundo piso)');if(!nombre)return;
   const codigo=(prompt('Código corto (ej. BANOS_P2)',nombre.toUpperCase().replace(/[^A-Z0-9]+/g,'_').slice(0,20))||'').trim();if(!codigo)return;

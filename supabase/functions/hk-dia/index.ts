@@ -134,7 +134,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
-    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,orden,veces_dia,metadata,obligatoria&limit=1000`),
+    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
@@ -178,7 +178,10 @@ async function reparto(propKey: string, fecha: string) {
       // La limpieza general del dorm se hace a diario en cuanto la habitación estuvo
       // ocupada, aunque ninguna cama concreta dé trabajo (una cama ocupada son 0 min).
       if (tipo === 'cama' && a.parent_id && est !== 'vacia_limpia') dormsTocados.add(String(a.parent_id));
-      const min = (a.minutos_override as number | null) ?? minDe(tipo, est) ?? 0;
+      // Un cuarto puede tener su propio tiempo por estatus (las suites tardan más
+      // que una privada normal); si no, manda el estándar del tipo.
+      const propio = (a.minutos_por_estatus as Record<string, number> | null)?.[est];
+      const min = propio ?? (a.minutos_override as number | null) ?? minDe(tipo, est) ?? 0;
       if (!min) continue; // p.ej. cama ocupada = 0 min -> no se toca
       cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: tipo === 'cama' && a.parent_id ? `dorm:${a.parent_id}` : `area:${a.id}` });
     } else {
