@@ -538,25 +538,32 @@ async function saveProv(anualId,provId){
 let CC=null;
 async function renderLect(){
   const win=new Date(Date.now()-30*864e5).toISOString().slice(0,10);
+  const win60=new Date(Date.now()-70*864e5).toISOString().slice(0,10);
   const [{data},{data:cc},{data:recs},{data:occ}]=await Promise.all([
     sb.from("mtto_lecturas").select("*").eq("property_id",PROP.id).order("fecha",{ascending:false}).limit(60),
     sb.from("mtto_consumo_config").select("*").eq("property_id",PROP.id).maybeSingle(),
     sb.from("mtto_gas_recargas").select("*").eq("property_id",PROP.id).order("fecha",{ascending:false}).limit(24),
-    sb.from("hk_ocupacion_hist").select("fecha,camas_ocupadas,privadas_ocupadas").eq("property_id",PROP.id).gte("fecha",win)
+    sb.from("hk_ocupacion_hist").select("fecha,camas_ocupadas,privadas_ocupadas").eq("property_id",PROP.id).gte("fecha",win60)
   ]);
   const rows=data||[]; const today=hoyMX();
-  CC=cc||{gas_tanque_litros:1600,agua_factor_litros:1000,luz_factor_kwh:1,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
-  // consumo por huésped (deltas entre días consecutivos)
+  CC=cc||{gas_tanque_litros:1600,agua_factor_litros:1000,luz_factor_kwh:1,privada_pax:2,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
+  const ppax=Number(CC.privada_pax??2);
+  // huéspedes por NOCHE (ocupación real; cubre días sin lectura, p.ej. el descanso de Manuel)
+  const gmap={}; (occ||[]).forEach(o=>{gmap[String(o.fecha)]=Number(o.camas_ocupadas||0)+Number(o.privadas_ocupadas||0)*ppax;});
+  const lecByDate={}; rows.forEach(r=>{lecByDate[String(r.fecha)]=r;});
+  const dISO=(iso,n)=>{const d=new Date(iso+"T00:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
+  const diffDays=(a,b)=>Math.round((new Date(b+"T00:00:00Z")-new Date(a+"T00:00:00Z"))/864e5);
+  const guestNights=(fromExcl,toIncl)=>{let s=0,any=false,d=dISO(fromExcl,1),guard=0;while(d<=toIncl&&guard++<400){let g=gmap[d];if(g==null){const lr=lecByDate[d];g=lr&&lr.huespedes!=null?Number(lr.huespedes):null;}if(g!=null){s+=g;any=true;}d=dISO(d,1);}return any?s:null;};
+  // consumo por huésped-noche: delta entre lecturas / huésped-noches del periodo cubierto (aunque sean 2+ días)
   const asc=[...rows].sort((a,b)=>a.fecha<b.fecha?-1:1), cons=[];
-  for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i];const g=c.huespedes||null;const mes=parseInt(c.fecha.slice(5,7))-1;
+  for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i];const mes=parseInt(c.fecha.slice(5,7))-1;
+    const dias=Math.max(1,diffDays(p.fecha,c.fecha)); const gn=guestNights(p.fecha,c.fecha);
     const aguaC=(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura)?(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros):null;
     const luzC=(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura)?(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh):null;
-    const gasC=(c.gas_pct!=null&&p.gas_pct!=null&&p.gas_pct>=c.gas_pct)?(p.gas_pct-c.gas_pct)/100*Number(CC.gas_tanque_litros):null;
-    cons.push({fecha:c.fecha,g,mes,aguaH:(g&&aguaC!=null)?aguaC/g:null,luzH:(g&&luzC!=null)?luzC/g:null,gasH:(g&&gasC!=null)?gasC/g:null});}
+    cons.push({fecha:c.fecha,gn,dias,mes,aguaH:(gn&&aguaC!=null)?aguaC/gn:null,luzH:(gn&&luzC!=null)?luzC/gn:null});}
   cons.reverse();
   // ---- gas por costo (recargas + huésped-noches últimos 30 días) ----
-  const ppax=Number(CC.privada_pax??2);
-  let hn30=(occ||[]).reduce((s,o)=>s+Number(o.camas_ocupadas||0)+Number(o.privadas_ocupadas||0)*ppax,0);
+  let hn30=(occ||[]).filter(o=>String(o.fecha)>=win).reduce((s,o)=>s+Number(o.camas_ocupadas||0)+Number(o.privadas_ocupadas||0)*ppax,0);
   if(!hn30) hn30=asc.filter(r=>r.fecha>=win).reduce((s,r)=>s+(Number(r.huespedes)||0),0);
   const recArr=recs||[];
   const rec30=recArr.filter(r=>r.fecha>=win);
@@ -581,9 +588,9 @@ async function renderLect(){
           ${kpi('💧 Agua ('+last.fecha+')',last.aguaH,oa[m],'L',0)}
           ${kpi('⚡ Luz ('+last.fecha+')',last.luzH,ol[m],'kWh',1)}
         </div>`:'<p class="muted" style="margin:0">Aún no hay dos días con lecturas y número de huéspedes para calcular el consumo. Captura las lecturas y el número de huéspedes por día.</p>'}
-        <div class="scroll"><table><thead><tr><th>Fecha</th><th class="num">Huésp.</th><th class="num">Agua L/h</th><th class="num">Luz kWh/h</th></tr></thead>
-        <tbody>${cons.length?cons.slice(0,21).map(c=>`<tr><td>${c.fecha}</td><td class="num">${c.g??'<span class=muted>falta</span>'}</td>${cell(c.aguaH,oa[c.mes],0)}${cell(c.luzH,ol[c.mes],1)}</tr>`).join(""):'<tr><td colspan="4" class="center">Sin datos suficientes</td></tr>'}</tbody></table></div>
-        <p class="muted" style="font-size:11.5px;margin:10px 0 0">Verde ≤ objetivo · ámbar hasta +25% · rojo arriba. Agua en litros (medidor ×${CC.agua_factor_litros}). El gas se mide por costo (recargas), ver abajo. Ajusta con ⚙︎.</p>
+        <div class="scroll"><table><thead><tr><th>Fecha</th><th class="num">Huésp-noches</th><th class="num">Agua L/h</th><th class="num">Luz kWh/h</th></tr></thead>
+        <tbody>${cons.length?cons.slice(0,21).map(c=>`<tr><td>${c.fecha}${c.dias>1?` <span class="muted" style="font-size:11px">(${c.dias} días)</span>`:''}</td><td class="num">${c.gn??'<span class=muted>falta</span>'}</td>${cell(c.aguaH,oa[c.mes],0)}${cell(c.luzH,ol[c.mes],1)}</tr>`).join(""):'<tr><td colspan="4" class="center">Sin datos suficientes</td></tr>'}</tbody></table></div>
+        <p class="muted" style="font-size:11.5px;margin:10px 0 0">Verde ≤ objetivo · ámbar hasta +25% · rojo arriba. El consumo de cada lectura se divide entre los huésped-noches que cubre, así que si pasan 2 días (p.ej. el descanso de Manuel) se reparte solo. Agua en litros (medidor ×${CC.agua_factor_litros}). El gas se mide por costo (abajo). Ajusta con ⚙︎.</p>
       </div></div>
     <div class="card"><h3>🔥 Gas por costo <span class="muted" style="font-weight:500;font-size:12px">· recargas de pipa, últimos 30 días</span></h3>
       <div class="pad">
