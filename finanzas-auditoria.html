@@ -371,6 +371,15 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
 .fzfila{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;font-size:13px;
   padding:7px 0;border-top:1px solid var(--rule)}
 .fzmot{font-style:italic;color:var(--ink-2)}
+/* Un aviso se lee de un golpe: el tipo arriba y debajo lo que paso, sin repetir en
+   cada fila el criterio ni que hacer con el. Eso vive en la pestana de Alertas. */
+.avgrupo{border:1px solid var(--rule);border-radius:8px;background:var(--surface);
+  padding:12px 14px;margin:0 0 12px}
+.avcab{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px}
+.avfila{padding:9px 0;border-top:1px solid var(--rule)}
+.avcab + .avfila{border-top:0}
+.avfila p{margin:0 0 7px;font-size:13.5px;line-height:1.45;color:var(--ink)}
+.avacc{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 </style>
 </head>
 <body>
@@ -1760,31 +1769,51 @@ function vistaExc(){
   // no manda aquí: cuando lleva importe la fila ya se fue a Faltantes.
   // Si la categoría sólo aparece en una familia que no es alerta (el cierre forzado,
   // que vive en el punto del calendario), no es un aviso y no se lista.
+  const alertaDe = cat => (ALERTAS||[]).find(x=>x.familia==='alerta'&&(x.categorias||[]).indexOf(cat)>=0);
   const nivelDe = cat => {
-    const a=(ALERTAS||[]).find(x=>x.familia==='alerta'&&(x.categorias||[]).indexOf(cat)>=0);
+    const a=alertaDe(cat);
     if(a) return a.activa ? (a.nivel||'azul') : null;
     const otra=(ALERTAS||[]).find(x=>(x.categorias||[]).indexOf(cat)>=0);
     return otra ? null : 'azul';
   };
   const ORDEN={roja:0,naranja:1,azul:2};
-  const avisosVivos = avisos.map(e=>({e:e,n:nivelDe(e[1])}))
-    .filter(x=>x.n && x.n!=='nada')
-    .sort((a,b)=>(ORDEN[a.n]-ORDEN[b.n])||(Number(b.e[2])-Number(a.e[2])));
 
   const b1=faltantes.length?pinta1(faltantes)
     :'<div class="empty">No falta dinero este día.</div>';
 
-  const NIV_ET={roja:['bad','Rojas','graves: alguien tiene que responder'],
-                naranja:['warn','Naranjas','hay que mirarlas con inquietud'],
-                azul:['info','Azules','hay que arreglarlo, sin culpable']};
-  let bAvisos='', ultimo=null;
-  avisosVivos.forEach(x=>{
-    if(x.n!==ultimo){const t=NIV_ET[x.n];
-      bAvisos+='<div class="nivsep"><span class="chip '+t[0]+'">'+esc(t[1])+'</span>'
-              +'<span class="sub" style="margin:0">'+esc(t[2])+'</span></div>'; ultimo=x.n;}
-    bAvisos+=pinta1([x.e]);
+  // Los avisos se agrupan por tipo de alerta, no de uno en uno: tres cortes sin
+  // recolectar son el mismo problema tres veces y se leen juntos. Dentro de cada
+  // grupo va lo justo —qué pasó y poco más—; el criterio y qué hacer viven en la
+  // pestaña de Alertas, que es donde se decide, no repetidos en cada fila.
+  const CHIPN={roja:'bad',naranja:'warn',azul:'info'};
+  const grupos={};
+  avisos.forEach(e=>{
+    const n=nivelDe(e[1]); if(!n||n==='nada') return;
+    const a=alertaDe(e[1]), k=a?a.clave:('cat:'+e[1]);
+    const tit=a?a.titulo:((CAT[e[1]]||[e[1]])[0]);
+    (grupos[k]=grupos[k]||{tit:tit,niv:n,ls:[]}).ls.push(e);
   });
-  if(!bAvisos) bAvisos='<div class="empty">Ningún aviso este día.</div>';
+  const gs=Object.keys(grupos).map(k=>grupos[k])
+    .sort((a,b)=>(ORDEN[a.niv]-ORDEN[b.niv])||String(a.tit).localeCompare(String(b.tit)));
+  const bAvisos = gs.length ? gs.map(g=>
+      '<section class="avgrupo"><div class="avcab">'
+      +'<span class="chip '+CHIPN[g.niv]+'">'+esc(g.tit)+'</span>'
+      +(g.ls.length>1?'<span class="sub" style="margin:0">'+g.ls.length+' veces</span>':'')
+      +'</div>'
+      +g.ls.map(e=>{const id='e:'+e[0], env=enviados[id]; CTXD[id]=datosExc(e);
+        return '<div class="avfila"><p>'+esc(e[3])+'</p>'
+          + respuestaHTML(e)
+          +'<div class="avacc">'
+          +(env?'<span class="chip ok">Preguntado</span>'
+               :'<button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'
+                +esc(quienDe(e).split(' (')[0])+'" data-ctx="'+esc(e[3])+'">Preguntar por SoyPepe</button>')
+          +'<button class="mini" type="button" data-exp="'+esc(e[0])+'">Explicar aquí</button></div>'
+          +(env?'<div class="res ok">'+esc(env)+'</div>':'')
+          +(redactando===id?panelMensaje(id,quienDe(e).split(' \u2014')[0],e[3],CTXD[id]):'')
+          +(redactando==='exp:'+e[0]?panelExplicar(e[0]):'')
+          +'</div>';}).join('')
+      +'</section>').join('')
+    : '<div class="empty">Ningún aviso este día.</div>';
 
   return '<section class="sec"><div class="sechead"><h2>Faltantes</h2>'
     +'<p class="lede">Lo único que impide cerrar el día. Cada uno tiene dueño y reloj: a los 3 días hábiles sin '
@@ -1792,9 +1821,11 @@ function vistaExc(){
     +'de esa persona con la referencia del cobro.</p></div>'
     +'<div class="sec">'+b1+'</div></section>'
     +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Avisos</h2>'
-    +'<p class="lede">No mueven la caja ni pintan el día de rojo. Van por orden de inquietud: primero las rojas, '
-    +'luego las naranjas y al final las azules. El color de cada una se decide en la pestaña de Alertas.</p></div>'
+    +'<p class="lede">No mueven la caja ni pintan el día de rojo. Van agrupados por tipo de alerta y por '
+    +'orden de inquietud: primero las rojas, luego las naranjas y al final las azules. El color de cada '
+    +'tipo, y el criterio con que se levanta, se deciden en la pestaña de Alertas.</p></div>'
     +'<div class="sec">'+bAvisos+'</div></section>'
+    +bloqueMovimientos()
     +bloqueCortesias()
     +turnos;
 }
@@ -1839,6 +1870,50 @@ function bloqueForzados(){
       +'<span class="sub" style="margin:0">Lo firmo '+esc(c[4]||'—')
       +(c[5]?' ('+esc(c[5])+')':'')+(c[6]?' el '+esc(c[6]):'')+'</span></div>').join('')
     +'</div>';
+}
+// Lo que se toco dentro de una cuenta: cancelaciones, cambios de mesa, descuentos y
+// cambios de cantidad. No es una alerta —la mayoria es como se trabaja en la terraza—
+// pero tiene nombre y hora, y es lo primero que se mira cuando algo no cuadra. Estaba
+// en el panel desde el principio y se me fue al reordenar Revisiones.
+function bloqueMovimientos(){
+  const inc=D.incidencias||[];
+  if(!inc.length) return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Movimientos de cuenta</h2><p class="lede">Cancelaciones, cambios de mesa, descuentos y '
+    +'cambios de cantidad, tal y como quedaron en Poster.</p></div>'
+    +'<div class="empty">Ninguna cuenta se canceló, se movió de mesa ni se descontó este día. '
+    +'Si el día es anterior al 21 de agosto, la historia cuenta por cuenta todavía no está cargada.</div></section>';
+  const filas=inc.map((x,i)=>{
+    const t=INC_ET[x[0]]||[x[0],'none'], id='i:'+fecha+'|'+i, env=enviados[id];
+    const cambio=x[10]||'', momento=x[8]||'', mins=(x[9]==null?null:Number(x[9]));
+    const tarde = momento && momento.indexOf('con la cuenta abierta')<0;
+    const det=(x[0]==='mueve_mesa'&&x[7]?'pasó a la mesa '+x[7]:'')
+             +(x[6]?(x[0]==='mueve_mesa'&&x[7]?' · ':'')+x[6]:'')
+             +(cambio?' · '+cambio:'');
+    const cuando = mins==null?'—'
+      :(mins>=60?Math.floor(mins/60)+' h '+(mins%60)+' min':mins+' min')+(momento?' · '+momento:'');
+    const dI={concepto:(t[0]||'')+(x[6]?' · '+x[6]:''), cuenta:x[1]||'', hora:x[3]||'',
+              monto:(x[4]==null?null:Number(x[4])), captura:x[2]||'', punto:'Poster · A&B',
+              cambio:cambio, momento:momento, minutos:mins};
+    CTXD[id]=dI;
+    return '<tr><td class="stripe '+(tarde?'bad':t[1])+'">'+chip(tarde?'bad':t[1],t[0])
+      +(det?'<span class="sub">'+esc(det)+'</span>':'')+'</td>'
+      +'<td class="n mono">'+esc(x[1])+'</td><td>'+esc(x[2]||'—')+'</td>'
+      +'<td class="n mono">'+esc(x[3]||'—')+'</td>'
+      +'<td'+(tarde?' style="color:var(--bad);font-weight:600"':'')+'>'+esc(cuando)+'</td>'
+      +'<td class="n">'+(x[4]==null?'—':m(x[4]))+'</td>'
+      +'<td>'+(env?chip('ok','Preguntado')
+        :'<button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'+esc(x[2]||'')
+         +'" data-ctx="'+esc(det||t[0])+'">Preguntar</button>')+'</td></tr>'
+      +(redactando===id?'<tr class="lv3"><td colspan="7">'+panelMensaje(id,x[2],(det||t[0])+'.',dI)+'</td></tr>':'')
+      +(env?'<tr class="lv3"><td colspan="7"><div class="res ok">'+esc(env)+'</div></td></tr>':'');}).join('');
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Movimientos de cuenta <span class="chip none">'+inc.length+'</span></h2>'
+    +'<p class="lede">Cancelaciones, cambios de mesa, descuentos y cambios de cantidad, tal y como '
+    +'quedaron en Poster. Casi todo esto es la operación normal de la terraza; lo que se mira es '
+    +'el momento, y por eso se marca en rojo lo que pasó después de imprimir la cuenta.</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Qué pasó</th><th class="n">Cuenta</th>'
+    +'<th>Quién</th><th class="n">Hora</th><th>Cuándo, desde la primera venta</th>'
+    +'<th class="n">Importe</th><th></th></tr></thead><tbody>'+filas+'</tbody></table></div></section>';
 }
 function panelExplicar(id){
   const v=borrador['exp:'+id]!==undefined?borrador['exp:'+id]:'';
