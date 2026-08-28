@@ -1414,6 +1414,7 @@ $('desaySave').onclick=async ()=>{
    ============================================================ */
 const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false };
 const CH_ANTES_ENT=30, CH_ANTES_SAL=5, CH_DESP_SAL=180; // minutos
+const CH_MIN_SALIDA_MIN=60; // minutos: no permitir salida antes de 60 min desde la entrada (anti doble-tap)
 const CH_RODAJE=true; // semana de ajuste de horario: no bloquea por geo/teléfono
 let CH_CFG={lat:19.43033,lng:-99.13449,radio_m:50,tolerancia_min:15};
 let CH_BUSY=false;
@@ -1595,6 +1596,8 @@ async function chMark(){
       else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
       try{ await sb.from('incidencias').insert({ employee_id:empId, nombre_display:(HZ.nombreDisplay||NOMBRE||null), tipo:'validacion_asistencia', severidad:'media', fecha:ds, descripcion:'Salida sin marcar entrada — el jefe de área debe validar la hora de llegada.', resuelto:false, metadata:{ asistencia_id:(CH.asis&&CH.asis.id)||null, motivo:'sin_entrada', hora_turno:CH.shift.hora_inicio, salida_turno:CH.shift.hora_fin } }); }catch(e){}
     }else if(esEntrada){
+      try{ const {data:ex}=await sb.from('asistencias').select('id,check_in').eq('employee_id',empId).eq('fecha',ds).not('check_in','is',null).order('created_at',{ascending:false}).limit(1);
+        if(ex&&ex[0]&&ex[0].check_in){ CH.asis=ex[0]; CH_BUSY=false; await chLoad(); return; } }catch(e){}
       const retraso=Math.max(0,Math.round((today.getTime()-ent.getTime())/60000));
       const estatus=retraso>(CH_CFG.tolerancia_min||15)?'retardo':'a_tiempo';
       const fila={ employee_id:empId, property_id:propId, fecha:ds, nombre_display:(HZ.nombreDisplay||NOMBRE||null),
@@ -1603,6 +1606,8 @@ async function chMark(){
       if(CH.asis && CH.asis.id){ const {error}=await sb.from('asistencias').update(fila).eq('id',CH.asis.id); if(error) throw error; }
       else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
     }else{
+      const _ciMs = CH.asis && CH.asis.check_in ? new Date(CH.asis.check_in).getTime() : 0;
+      if(_ciMs && (Date.now()-_ciMs)/60000 < CH_MIN_SALIDA_MIN){ CH_BUSY=false; btn.disabled=false; btn.textContent=prev; chRender&&chRender(); return; }
       const minSal=Math.round((today.getTime()-sal.getTime())/60000);
       const msg=CH_MSGS[Math.floor(Math.random()*CH_MSGS.length)];
       const upd={ check_out:new Date().toISOString(), salida_turno:CH.shift.hora_fin, min_salida:minSal, mensaje_salida:msg };
