@@ -136,7 +136,7 @@ async function arranca(){
 
 async function cargar(){
   const [{data:est},{data:aud}]=await Promise.all([
-    sb.from('hk_estatus_dia').select('area_id,estatus,check_in,check_out,metadata,hk_areas(id,codigo,nombre,tipo,piso)')
+    sb.from('hk_estatus_dia').select('area_id,estatus,check_in,check_out,limpieza,limpieza_por,metadata,hk_areas(id,codigo,nombre,tipo,piso)')
       .eq('property_id',PROP).eq('fecha',FECHA),
     sb.from('hk_auditoria').select('*').eq('property_id',PROP).eq('fecha',FECHA),
   ]);
@@ -187,12 +187,14 @@ function pintar(){
     const ar=c.hk_areas, a=AUD[c.area_id];
     let cab='';
     if(ar.piso!==pisoAct){ pisoAct=ar.piso; cab=`<div class="grupo">Piso ${ar.piso||'—'}</div>`; }
-    const el=ESTLBL[c.estatus]||['',c.estatus];
+    // Se muestra cómo está de limpieza ahora mismo, no el estatus de la reserva
+    const LIMP={limpia:['limpia','Limpia'],limpiando:['limpiando','Limpiándose'],sucia:['sucia','Por limpiar']};
+    const el=LIMP[c.limpieza]||ESTLBL[c.estatus]||['',c.estatus];
     return cab+`<div class="hb ${a?a.estado:''}" data-a="${c.area_id}">
       <div class="lin">
         <span class="cod">${esc(ar.codigo)}</span>
         <span class="nm">${esc(ar.nombre)}${c.check_out?' · salió hoy':''}</span>
-        <span class="est ${el[0]}">${el[1]}</span>
+        <span class="est ${el[0]}">${el[1]}${c.limpieza_por?` · ${esc(String(c.limpieza_por).split(' ')[0])}`:''}</span>
       </div>
       <div class="marcas">
         <button class="v ${a?.estado==='ok'?'on':''}" data-m="ok">✓<span class="et">Lista</span></button>
@@ -260,6 +262,18 @@ async function guardar(areaId,estado,nota,destino,clasificacion){
     auditor_email:USER?.email||null,auditor_nombre:NOMBRE,auditada_at:new Date().toISOString()};
   const {data,error}=await sb.from('hk_auditoria').upsert(fila,{onConflict:'fecha,area_id'}).select().single();
   if(error){ toast('No se pudo guardar'); return; }
+
+  // El audit también deja la habitación limpia: si el ama de llaves la da por lista,
+  // vale igual que si la recamarista acabara de salir. Y si la rechaza, vuelve a sucia.
+  try{
+    if(estado==='ok'){
+      await sb.from('hk_estatus_dia').update({limpieza:'limpia',limpieza_at:new Date().toISOString(),
+        limpieza_por:NOMBRE,limpieza_fuente:'room_audit'}).eq('property_id',PROP).eq('fecha',FECHA).eq('area_id',areaId);
+    }else if(estado==='no_apta'){
+      await sb.from('hk_estatus_dia').update({limpieza:'sucia',limpieza_at:new Date().toISOString(),
+        limpieza_por:NOMBRE,limpieza_fuente:'room_audit'}).eq('property_id',PROP).eq('fecha',FECHA).eq('area_id',areaId);
+    }
+  }catch(e){ /* la auditoría queda guardada igual */ }
 
   if(estado!=='ok' && destino==='mantenimiento' && !data.mtto_ticket_id){
     const cuarto=CUARTOS.find(c=>c.area_id===areaId)?.hk_areas;

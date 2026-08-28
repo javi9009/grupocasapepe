@@ -677,6 +677,29 @@ async function tiempoEstandar(t){
   return data?.minutos || (ar.tipo==='privada'?20:ar.tipo==='dorm'?30:15);
 }
 
+// El estado de limpieza del cuarto se guarda en nuestra base, no en Cloudbeds.
+// Lo escribe quien limpia (al entrar y al salir) y también el room audit.
+// Una cama que se cierra deja limpio su dormitorio cuando ya no queda nada del cuarto.
+async function marcarLimpieza(areaId, estado){
+  if(!areaId) return;
+  try{
+    await sb.from('hk_estatus_dia').update({limpieza:estado, limpieza_at:new Date().toISOString(),
+      limpieza_por:NOMBRE, limpieza_fuente:'recamarista'}).eq('property_id',PROP).eq('fecha',FECHA).eq('area_id',areaId);
+    if(estado!=='limpia') return;
+    // Si era una cama y ya no queda trabajo abierto en su dormitorio, el dorm queda limpio
+    const {data:ar}=await sb.from('hk_areas').select('tipo,parent_id').eq('id',areaId).maybeSingle();
+    if(!ar||ar.tipo!=='cama'||!ar.parent_id) return;
+    const {data:hermanas}=await sb.from('hk_areas').select('id').eq('parent_id',ar.parent_id);
+    const ids=[ar.parent_id,...(hermanas||[]).map(x=>x.id)];
+    const {data:abiertas}=await sb.from('hk_tareas').select('id')
+      .eq('fecha',FECHA).in('area_id',ids).neq('estado','terminada').gt('minutos_estimados',0);
+    if(!abiertas||!abiertas.length){
+      await sb.from('hk_estatus_dia').update({limpieza:'limpia', limpieza_at:new Date().toISOString(),
+        limpieza_por:NOMBRE, limpieza_fuente:'recamarista'}).eq('property_id',PROP).eq('fecha',FECHA).eq('area_id',ar.parent_id);
+    }
+  }catch(e){ /* el cierre de la tarea no depende de esto */ }
+}
+
 async function iniciar(id){
   const now=new Date().toISOString();
   const {t,a}=buscarTarea(id);
@@ -688,6 +711,7 @@ async function iniciar(id){
   }
   const {error}=await sb.from('hk_tareas').update(campos).eq('id',id);
   if(error)return toast('No se pudo iniciar');
+  await marcarLimpieza(t?.area_id, 'limpiando');
   await sb.from('hk_eventos').insert({tarea_id:id,tipo:'inicio',employee_id:EMP,employee_nombre:NOMBRE});
   if(a&&a.estado==='validada')await sb.from('hk_asignaciones').update({estado:'en_curso'}).eq('id',a.id);
   mensaje('inicio');
@@ -714,6 +738,8 @@ $('shOk').onclick=async()=>{
   btn.disabled=false;
   if(error)return toast('No se pudo cerrar');
   const pal=palGet(FIN);
+  const {t:tFin}=buscarTarea(FIN);
+  await marcarLimpieza(tFin?.area_id, 'limpia');
   await sb.from('hk_eventos').insert({tarea_id:FIN,tipo:'fin',employee_id:EMP,employee_nombre:NOMBRE,nota:com,metadata:{motivo,checklist_palomeado:pal.length}});
   try{ localStorage.removeItem(PAL+FIN); }catch(e){}
   // ¿fue rápido, justo o largo? el mensaje cambia según eso
