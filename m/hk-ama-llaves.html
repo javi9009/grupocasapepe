@@ -123,6 +123,10 @@ tr.op .who{color:#5b4bab}
 .caja .d{font-size:13px;margin-top:6px;line-height:1.55}
 .caja ul{margin:9px 0 0;padding-left:20px;font-size:13px;line-height:1.7}
 .caja ul b{font-variant-numeric:tabular-nums}
+th.ord{cursor:pointer;user-select:none;white-space:nowrap}
+th.ord:hover{color:var(--tinta,#16130f)}
+th.ord .fl{opacity:.35;font-size:10px;margin-left:3px}
+th.ord.act .fl{opacity:1}
 .res2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:900px){.res2{grid-template-columns:1fr}}
 .res2 .col{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:13px 15px}
@@ -319,10 +323,21 @@ td.grab:hover{color:var(--gold)}
     <th class="num">Estimado día</th><th class="num">Estimado hecho</th><th class="num">Real</th><th class="num">Diferencia</th><th class="num">Eficiencia</th><th class="num">Tarde</th><th>Entrada · Salida</th>
   </tr></thead><tbody></tbody></table></div>
   <h3>Tiempo real por área (histórico)</h3>
-  <p class="sub">Sirve para recalibrar los tiempos estándar con lo que de verdad tarda cada cuarto.</p>
+  <p class="sub">Sirve para recalibrar los tiempos estándar con lo que de verdad tarda cada cuarto.
+  Filtra por persona y por fechas, y pincha en cualquier columna para ordenar.</p>
+  <div class="bar">
+    <label class="cp">Desde <input type="date" id="hDesde"></label>
+    <label class="cp">Hasta <input type="date" id="hHasta"></label>
+    <label class="cp">Persona <select id="hQuien"><option value="">Todas</option></select></label>
+    <label class="cp">Área <input type="search" id="hBusca" placeholder="cuarto o zona" style="width:150px"></label>
+    <label class="cp"><input type="checkbox" id="hAgrupa"> Agrupar por área</label>
+    <span class="status" id="stH"></span>
+  </div>
   <div class="wrap"><table id="tblArea"><thead><tr>
-    <th>Área</th><th>Tipo</th><th class="num">Piso</th><th>Estatus</th><th class="num">Veces</th>
-    <th class="num">Estimado</th><th class="num">Real</th><th class="num">Dif.</th>
+    <th class="ord" data-o="fecha">Fecha</th><th class="ord" data-o="area">Área</th><th class="ord" data-o="tipo">Tipo</th>
+    <th class="num ord" data-o="piso">Piso</th><th class="ord" data-o="estatus">Estatus</th><th class="ord" data-o="quien">Persona</th>
+    <th class="num ord" data-o="veces">Veces</th>
+    <th class="num ord" data-o="est">Estimado</th><th class="num ord" data-o="real">Real</th><th class="num ord" data-o="dif">Dif.</th>
   </tr></thead><tbody></tbody></table></div>
 </div>
 
@@ -1002,14 +1017,93 @@ async function cargarInforme(){
       <td>${r.primera_entrada?new Date(r.primera_entrada).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'—'} · ${r.ultima_salida?new Date(r.ultima_salida).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'—'}</td></tr>`;
   }).join(''):'<tr><td colspan="12" style="text-align:center;color:var(--soft);padding:20px">Sin datos para este día.</td></tr>';
 
-  const {data:ar}=await sb.from('hk_v_eficiencia_area').select('*').eq('property_id',P()).order('diferencia_prom',{ascending:true}).limit(120);
-  $('tblArea').tBodies[0].innerHTML=(ar||[]).length?ar.map(r=>`<tr>
-    <td>${esc(r.codigo)} · ${esc((r.nombre||'').slice(0,28))}</td><td>${TIPOLBL[r.tipo]||r.tipo}</td><td class="num">${r.piso??'—'}</td>
-    <td>${(ESTLBL[r.estatus_area]||['—'])[2]||r.estatus_area}</td><td class="num">${r.veces_limpiada}</td>
-    <td class="num">${r.min_estimado_prom??'—'}</td><td class="num">${r.min_real_prom??'—'}</td>
-    <td class="num" style="font-weight:700;color:${Number(r.diferencia_prom)<0?'var(--bad)':'var(--accent)'}">${r.diferencia_prom??'—'}</td></tr>`).join('')
-    :'<tr><td colspan="8" style="text-align:center;color:var(--soft);padding:20px">Aún no hay limpiezas medidas. Aparecerán en cuanto el equipo empiece a marcar inicio y fin en Soy Pepe.</td></tr>';
+  await cargarHistorico();
 }
+
+// ---------------- HISTÓRICO POR ÁREA ----------------
+// Una fila por limpieza medida. Se puede filtrar por persona y por fechas, y
+// ordenar por cualquier columna; agrupado enseña el promedio de cada área.
+let HIST=[], HORD={col:'fecha',asc:false};
+
+async function cargarHistorico(){
+  if(!$('hDesde').value){ $('hDesde').value=masDias(F(),-29); $('hHasta').value=F(); }
+  const e=$('stH'); e.className='status'; e.textContent='Cargando…';
+  const {data,error}=await sb.from('hk_v_limpiezas').select('*')
+    .eq('property_id',P()).gte('fecha',$('hDesde').value).lte('fecha',$('hHasta').value)
+    .order('fecha',{ascending:false}).limit(3000);
+  if(error){ e.className='status err'; e.textContent=error.message; return; }
+  HIST=(data||[]).filter(r=>r.turno!=='front');
+  const gente=[...new Set(HIST.map(r=>r.colaborador).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const sel=$('hQuien'), antes=sel.value;
+  sel.innerHTML='<option value="">Todas</option>'+gente.map(g=>`<option>${esc(g)}</option>`).join('');
+  sel.value=gente.includes(antes)?antes:'';
+  e.className='status'; e.textContent='';
+  pintarHistorico();
+}
+
+function pintarHistorico(){
+  const quien=$('hQuien').value, busca=($('hBusca').value||'').trim().toLowerCase();
+  let filas=HIST.filter(r=>(!quien||r.colaborador===quien)
+    && (!busca || `${r.codigo} ${r.nombre}`.toLowerCase().includes(busca)));
+  const agrupa=$('hAgrupa').checked;
+
+  let vista;
+  if(agrupa){
+    const m=new Map();
+    filas.forEach(r=>{
+      const k=r.area_id+'|'+r.estatus_area;
+      if(!m.has(k)) m.set(k,{codigo:r.codigo,nombre:r.nombre,tipo:r.tipo,piso:r.piso,estatus:r.estatus_area,
+        quien:new Set(),n:0,est:0,real:0,fecha:r.fecha});
+      const x=m.get(k); x.n++; x.est+=Number(r.minutos_estimados||0); x.real+=Number(r.minutos_reales||0);
+      if(r.colaborador) x.quien.add(r.colaborador);
+      if(r.fecha>x.fecha) x.fecha=r.fecha;
+    });
+    vista=[...m.values()].map(x=>({fecha:x.fecha,codigo:x.codigo,nombre:x.nombre,tipo:x.tipo,piso:x.piso,
+      estatus:x.estatus,quien:x.quien.size===1?[...x.quien][0]:`${x.quien.size} personas`,
+      veces:x.n,est:Math.round(x.est/x.n*10)/10,real:Math.round(x.real/x.n*10)/10,
+      dif:Math.round((x.est-x.real)/x.n*10)/10}));
+  }else{
+    vista=filas.map(r=>({fecha:r.fecha,codigo:r.codigo,nombre:r.nombre,tipo:r.tipo,piso:r.piso,
+      estatus:r.estatus_area,quien:r.colaborador||'—',veces:1,
+      est:Number(r.minutos_estimados||0),real:Number(r.minutos_reales||0),dif:Number(r.diferencia||0)}));
+  }
+
+  const val=(r,c)=>c==='area'?`${r.codigo} ${r.nombre}`:c==='quien'?r.quien:c==='tipo'?(TIPOLBL[r.tipo]||r.tipo)
+    :c==='estatus'?((ESTLBL[r.estatus]||[])[2]||r.estatus):r[c];
+  const {col,asc}=HORD;
+  vista.sort((a,b)=>{
+    const x=val(a,col), y=val(b,col);
+    const n=(typeof x==='number'&&typeof y==='number')?x-y:String(x??'').localeCompare(String(y??''),'es',{numeric:true});
+    return asc?n:-n;
+  });
+
+  document.querySelectorAll('#tblArea th.ord').forEach(th=>{
+    th.classList.toggle('act',th.dataset.o===col);
+    th.querySelector('.fl')?.remove();
+    th.insertAdjacentHTML('beforeend',`<span class="fl">${th.dataset.o===col?(asc?'▲':'▼'):'▾'}</span>`);
+  });
+
+  const tot=vista.reduce((s,r)=>s+r.veces,0);
+  $('stH').textContent=`${tot} limpieza${tot===1?'':'s'} medidas${agrupa?` en ${vista.length} áreas`:''}`;
+  $('tblArea').tBodies[0].innerHTML=vista.length?vista.slice(0,600).map(r=>`<tr>
+    <td>${agrupa?'—':fmtF(r.fecha)}</td>
+    <td>${esc(r.codigo)} · ${esc((r.nombre||'').slice(0,26))}</td><td>${TIPOLBL[r.tipo]||r.tipo}</td>
+    <td class="num">${r.piso??'—'}</td><td>${(ESTLBL[r.estatus]||['—'])[2]||r.estatus}</td>
+    <td>${esc(r.quien)}</td><td class="num">${r.veces}</td>
+    <td class="num">${r.est}</td><td class="num">${r.real}</td>
+    <td class="num" style="font-weight:700;color:${r.dif<0?'var(--bad)':'var(--accent)'}">${r.dif>0?'+':''}${r.dif}</td></tr>`).join('')
+    :'<tr><td colspan="10" style="text-align:center;color:var(--soft);padding:20px">Sin limpiezas medidas con estos filtros.</td></tr>';
+  if(vista.length>600) $('stH').textContent+=' · se muestran las primeras 600';
+}
+
+['hDesde','hHasta'].forEach(id=>$(id).onchange=()=>cargarHistorico());
+['hQuien','hAgrupa'].forEach(id=>$(id).onchange=()=>pintarHistorico());
+$('hBusca').oninput=()=>pintarHistorico();
+document.querySelectorAll('#tblArea th.ord').forEach(th=>th.onclick=()=>{
+  const c=th.dataset.o;
+  HORD = HORD.col===c ? {col:c,asc:!HORD.asc} : {col:c,asc:(c==='area'||c==='quien'||c==='tipo'||c==='estatus')};
+  pintarHistorico();
+});
 
 // ---------------- TIEMPOS ----------------
 async function cargarTiempos(){
