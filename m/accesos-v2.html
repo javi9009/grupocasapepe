@@ -68,6 +68,7 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <button class="tab on" id="tab-lista" onclick="setTab('lista')">Personas</button>
   <button class="tab" id="tab-rol" onclick="setTab('rol')">Por rol</button>
   <button class="tab" id="tab-user" onclick="setTab('user')">Por usuario</button>
+  <button class="tab" id="tab-cat" onclick="setTab('cat')">Categorías</button>
 </div>
 
 <div class="fbar">
@@ -90,6 +91,10 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <label>Usuario: </label>
   <select id="userSel" onchange="loadUser()"></select>
   <div id="userGrid"></div>
+</div>
+
+<div id="pane-cat" style="display:none">
+  <div id="catGrid"></div>
 </div>
 
 <div class="bar" id="bar" style="display:none">
@@ -147,6 +152,7 @@ async function boot(){
   fillRolSel(); fillUserSel();
   banner(); renderLista();
   initPw();
+  const _t=new URLSearchParams(location.search).get('tab'); if(_t && ['lista','rol','user','cat'].includes(_t)) setTab(_t);
 }
 
 function _genPass(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<10;i++) s+=a[Math.floor(Math.random()*a.length)]; return s+'#'+Math.floor(Math.random()*90+10); }
@@ -233,23 +239,39 @@ async function toggleProj(empId, proj){
 }
 function verFunciones(id){ setTab('user'); $('userSel').value=id; loadUser(); }
 
+function nuevasPags(){ const a=new Set(); Object.values(ROLPERM).forEach(m=>Object.entries(m).forEach(([c,n])=>{ if(n&&n!=='none') a.add(c); })); return PAG.filter(p=>!a.has(p.codigo)); }
 function banner(){
-  // páginas sin ningún permiso asignado en ningún rol (nuevas / sin configurar)
-  const assigned=new Set(); Object.values(ROLPERM).forEach(m=>Object.entries(m).forEach(([c,n])=>{ if(n&&n!=='none') assigned.add(c); }));
-  const nuevas=PAG.filter(p=>!assigned.has(p.codigo));
-  if(nuevas.length){ $('newbanner').style.display='block'; $('newbanner').innerHTML='⚠️ <b>'+nuevas.length+' página(s) nueva(s) sin permisos:</b> '+nuevas.map(p=>p.nombre).join(', ')+'. Asígnalas por rol abajo.'; }
-  else $('newbanner').style.display='none';
+  const nuevas=nuevasPags(); const el=$('newbanner');
+  if(!nuevas.length){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='block';
+  const rolOpts=ROLES.map(r=>'<option'+(r==='Director'?' selected':'')+'>'+r+'</option>').join('');
+  let h='⚠️ <b>'+nuevas.length+' página(s) sin permiso por rol.</b> Asígnalas aquí o déjalas solo para Dirección.<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">';
+  nuevas.forEach(p=>{
+    h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:8px">'
+      +'<span style="flex:1;min-width:150px;color:var(--txt)">'+p.nombre+' <small style="color:var(--mut)">'+(p.area||'')+'</small></span>'
+      +'<select data-bcod="'+p.codigo+'" style="min-width:150px">'+rolOpts+'</select>'
+      +'<select data-bniv="'+p.codigo+'"><option value="editar">Editar</option><option value="ver">Ver</option></select>'
+      +'<button class="btn primary fbtn" onclick="asignarBanner(\''+p.codigo+'\')">Asignar</button></div>';
+  });
+  h+='</div><div style="margin-top:10px"><button class="btn ghost fbtn" onclick="asignarTodoDireccion()">Todo a Dirección (editar)</button></div>';
+  el.innerHTML=h;
+}
+async function asignarBanner(cod){
+  const rol=document.querySelector('[data-bcod="'+cod+'"]').value;
+  const niv=document.querySelector('[data-bniv="'+cod+'"]').value;
+  const {error}=await sb.rpc('pagina_asignar_rol',{p_codigo:cod,p_rol:rol,p_nivel:niv});
+  if(error){ alert('Error: '+error.message); return; }
+  ROLPERM[rol]=ROLPERM[rol]||{}; ROLPERM[rol][cod]=niv; banner();
+}
+async function asignarTodoDireccion(){
+  for(const p of nuevasPags()){ const {error}=await sb.rpc('pagina_asignar_rol',{p_codigo:p.codigo,p_rol:'Director',p_nivel:'editar'}); if(!error){ ROLPERM['Director']=ROLPERM['Director']||{}; ROLPERM['Director'][p.codigo]='editar'; } }
+  banner();
 }
 
 function setTab(t){ TAB=t;
-  $('tab-lista').classList.toggle('on',t==='lista');
-  $('tab-rol').classList.toggle('on',t==='rol');
-  $('tab-user').classList.toggle('on',t==='user');
-  $('pane-lista').style.display=t==='lista'?'':'none';
-  $('pane-rol').style.display=t==='rol'?'':'none';
-  $('pane-user').style.display=t==='user'?'':'none';
+  ['lista','rol','user','cat'].forEach(x=>{ const tb=$('tab-'+x); if(tb) tb.classList.toggle('on',t===x); const pn=$('pane-'+x); if(pn) pn.style.display=t===x?'':'none'; });
   $('bar').style.display='none';
-  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else fillUserSel();
+  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else if(t==='user') fillUserSel(); else if(t==='cat') renderCat();
 }
 
 function grpRender(container, getNivel, opts){
@@ -331,6 +353,43 @@ async function applyRol(all, changed, conOverride, email){
   banner(); done();
 }
 function done(){ draft={}; $('saveMsg').style.display='inline'; $('saveMsg').textContent='✓ Guardado'; setTimeout(()=>{ $('bar').style.display='none'; },1200); }
+
+async function reloadPag(){ const r=await sb.from('paginas').select('*').eq('activo',true).order('app').order('area_orden').order('orden'); if(!r.error) PAG=r.data||[]; }
+function _esc(x){ return (x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+function _q(x){ return (x||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function renderCat(){
+  const apps=[...new Set(PAG.map(p=>p.app))];
+  let h='<p style="color:var(--mut);font-size:13px">Renombra, reordena o mueve páginas entre categorías. Se guarda al instante.</p>';
+  apps.forEach(app=>{
+    const label=app==='dashboard'?'📊 Dashboard':(app==='soypepe'?'📱 SoyPepe':app);
+    h+='<div class="area-h" style="font-size:14px;color:var(--txt);margin-top:18px">'+label+'</div>';
+    let areas=[...new Set(PAG.filter(p=>p.app===app).map(p=>p.area))];
+    areas.sort((a,b)=>{ const oa=(PAG.find(p=>p.app===app&&p.area===a)||{}).area_orden||0, ob=(PAG.find(p=>p.app===app&&p.area===b)||{}).area_orden||0; return oa-ob; });
+    areas.forEach(area=>{
+      const pages=PAG.filter(p=>p.app===app&&p.area===area);
+      const ord=(pages[0]||{}).area_orden||0;
+      h+='<div style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0">'
+        +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        +'<b style="flex:1;min-width:120px">'+_esc(area)+' <small style="color:var(--mut)">('+pages.length+')</small></b>'
+        +'<input type="number" value="'+ord+'" style="width:74px" onchange="catOrden(\''+_q(app)+'\',\''+_q(area)+'\',this.value)" title="orden de la categoría">'
+        +'<button class="btn ghost fbtn" onclick="catRenombrar(\''+_q(app)+'\',\''+_q(area)+'\')">✏️ Renombrar</button></div>';
+      pages.forEach(p=>{
+        const parentOpts='<option value="">— sin sub —</option>'+pages.filter(x=>x.codigo!==p.codigo).map(x=>'<option value="'+x.codigo+'"'+(p.parent_codigo===x.codigo?' selected':'')+'>'+_esc(x.nombre)+'</option>').join('');
+        const areaOpts=areas.map(a=>'<option value="'+_esc(a)+'"'+(a===area?' selected':'')+'>'+_esc(a)+'</option>').join('');
+        h+='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:7px 0">'
+          +'<span style="flex:1;min-width:140px;font-size:13.5px">'+_esc(p.nombre)+' <small style="color:var(--mut)">'+p.codigo+'</small></span>'
+          +'<label style="font-size:11px;color:var(--mut)">categoría</label><select onchange="catMoverArea(\''+p.codigo+'\',this.value)">'+areaOpts+'</select>'
+          +'<label style="font-size:11px;color:var(--mut)">sub de</label><select onchange="catParent(\''+p.codigo+'\',this.value)">'+parentOpts+'</select></div>';
+      });
+      h+='</div>';
+    });
+  });
+  $('catGrid').innerHTML=h;
+}
+async function catRenombrar(app,area){ const nv=prompt('Nuevo nombre de la categoría "'+area+'":',area); if(!nv||nv===area) return; const {error}=await sb.rpc('area_renombrar',{p_app:app,p_old:area,p_new:nv}); if(error){alert('Error: '+error.message);return;} await reloadPag(); renderCat(); }
+async function catOrden(app,area,v){ const {error}=await sb.rpc('area_orden',{p_app:app,p_area:area,p_orden:parseInt(v)||0}); if(error){alert('Error: '+error.message);return;} await reloadPag(); }
+async function catMoverArea(cod,area){ const {error}=await sb.rpc('pagina_mover',{p_codigo:cod,p_area:area,p_parent:''}); if(error){alert('Error: '+error.message);return;} await reloadPag(); renderCat(); }
+async function catParent(cod,parent){ const {error}=await sb.rpc('pagina_mover',{p_codigo:cod,p_parent:parent||''}); if(error){alert('Error: '+error.message);return;} await reloadPag(); }
 boot();
 </script>
 </body></html>
