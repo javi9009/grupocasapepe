@@ -455,6 +455,31 @@ function celdas(entro,comp,espera){
 function celdasBloque(entro){
   return '<td class="n">'+m(entro)+'</td><td class="n">—</td><td class="n">—</td>';}
 
+/* El banco confirma un total, no cobro por cobro. Pero dejarlo todo en guiones esconde
+   lo único que importa: CUÁL cobro no llegó. Casi siempre el hueco es un solo cobro, o
+   la cola de la noche que cayó del otro lado del corte de la terminal. Eso sí se puede
+   señalar, y entonces los demás quedan comprobados por eliminación —que es como se
+   cuadra de verdad—. Si el hueco no se puede atribuir, se callan los guiones: más vale
+   no señalar a nadie que señalar mal. */
+function repartoBloque(rs, falta){
+  const clave=r=>r[3]+'|'+r[6];
+  if(Math.abs(falta)<0.005) return {};              // llegó todo: todos comprobados
+  if(falta<0) return null;                          // llegó de más: eso se explica arriba
+  const orden=rs.slice().sort((a,b)=>a[3]<b[3]?-1:1);
+  const solo=orden.filter(r=>Math.abs(Number(r[6])-falta)<0.005);
+  if(solo.length===1){ const f={}; f[clave(solo[0])]=true; return f; }
+  let acum=0; const cola=[];
+  for(let i=orden.length-1;i>=0;i--){
+    acum+=Number(orden[i][6]); cola.push(orden[i]);
+    if(Math.abs(acum-falta)<0.005){ const f={}; cola.forEach(r=>f[clave(r)]=true); return f; }
+    if(acum>falta+0.005) break;
+  }
+  return null;                                      // no se puede señalar
+}
+const faltaEste=(rep,r)=>!!(rep && rep[r[3]+'|'+r[6]]);
+// lo comprobado de un cobro cuando el reparto ya dijo cuáles llegaron y cuáles no
+const compReparto=(rep,r)=>faltaEste(rep,r)?0:Number(r[6]);
+
 // Cuánto de un método de cobro está comprobado, contado igual que el cajón del día:
 // manda el liquidador (banco, pasarela, caja fuerte), no la suma de los movimientos.
 function cuadreDe(rs,c){
@@ -1275,6 +1300,9 @@ function vistaDia(){
         && Math.abs(rs.reduce((a,r)=>a+Number(r[10]||0),0))<0.005
         && !/efectivo|caja/i.test(String(pt)+' '+String(etPt||''));
       const gapMovs=rs.reduce((a,r)=>a+(Number(r[10]||0)-Number(r[6])),0);
+      // Con el estado de cuenta ya en la mano, se reparte la comprobación entre los
+      // cobros: los que llegaron quedan en verde y se señala el que falta.
+      const reparto = (enBloque && q.esp<=0) ? repartoBloque(rs, sum-compPt) : null;
       const soloBanco=hayGap && esDelLiquidador(pt,etPt,res?res.e:0)
         && (enBloque || Math.abs(gapMovs)<0.01);
       const ctxPt='En '+etPt+' entraron $'+m(sum)+' y sólo están comprobados $'+m(compPt)
@@ -1300,12 +1328,14 @@ function vistaDia(){
         const us=fusiona(rt.map(r=>norm(r[7])));
         filas+='<tr class="lv3"><td class="ind2"><button class="tg" type="button" data-k="'+ku+'" aria-expanded="'+(au?'true':'false')+'">'+(au?'−':'+')+'</button>'
           +esc(TURNO_ET[tu]||tu)+(us.length?'<span class="sub">Cobró: '+esc(us.join(' · '))+'</span>':'')+'</td>'
-          +(enBloque?celdasBloque(stt):celdas(stt,ct,q.esp>0?stt:0))
+          +(reparto?celdas(stt, rt.reduce((a,r)=>a+compReparto(reparto,r),0), 0)
+            :(enBloque?celdasBloque(stt):celdas(stt,ct,q.esp>0?stt:0)))
           +'<td class="n">'+rt.length+'</td><td></td></tr>';
         if(!au)return;
         rt.slice().sort((a,b)=>a[3]<b[3]?-1:1).forEach(r=>{
-          const cf=Number(r[10]||0);
-          const nvR=(q.esp>0||enBloque)?0:nivel(cf-Number(r[6]));
+          const cf=reparto?compReparto(reparto,r):Number(r[10]||0);
+          const nvR=reparto?(faltaEste(reparto,r)?nivel(Number(r[6])):0)
+                           :((q.esp>0||enBloque)?0:nivel(cf-Number(r[6])));
           const uu=norm(r[7]);
           let linea=uu?'Capturó '+esc(uu):'';
           // Una cuenta de Poster la levanta la terraza, no el front. Si no sabemos quién
@@ -1333,7 +1363,8 @@ function vistaDia(){
             +(nvR?'<span class="difacc">'+(enviados[idMsg]?'<span class="chip ok">Preguntado a '+esc((enviadoInfo[idMsg]||{}).quien||resp||'—')+((enviadoInfo[idMsg]||{}).cuando?' · '+esc(enviadoInfo[idMsg].cuando):'')+'</span>'
                :(resp?'<button class="mini" type="button" data-notif="'+esc(idMsg)+'" data-nom="'+esc(resp)+'" data-ctx="'+esc(ctx)+'">Preguntar a '+esc(resp.split(' ')[0])+' por SoyPepe</button>'
                      :'<span class="sub" style="margin:0">No hay nadie identificado en ese turno para preguntarle.</span>'))+'</span>':'')
-            +'</td>'+(enBloque?celdasBloque(Number(r[6])):celdas(Number(r[6]),cf,q.esp>0?Number(r[6]):0))
+            +'</td>'+(reparto?celdas(Number(r[6]),cf,0)
+              :(enBloque?celdasBloque(Number(r[6])):celdas(Number(r[6]),cf,q.esp>0?Number(r[6]):0)))
             +'<td class="n mono">'+esc(r[3])+'</td><td></td></tr>';
           const rev=revisionDe(r[13]);
           if(rev){
