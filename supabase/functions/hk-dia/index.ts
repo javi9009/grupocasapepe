@@ -149,6 +149,7 @@ async function reparto(propKey: string, fecha: string) {
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
   if (bloqueadas.length) return { ok: false, ya_validado: true, mensaje: 'El reparto de este día ya fue validado; no se regenera.', asignaciones: bloqueadas.length };
   for (const a of existentes) await rest(`hk_asignaciones?id=eq.${a.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+  await rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${fecha}&asignacion_id=is.null`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
 
   // Los dormitorios tienen tiempo propio por tamaño (8, 6 y 4 camas), tanto en la
   // limpieza general como en la profunda.
@@ -391,14 +392,21 @@ async function reparto(propKey: string, fecha: string) {
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
 
-  // Front tiene su propia caja del día aunque el motor no le asigne nada: ahí se
-  // arrastra el room audit.
-  for (const p of personas) {
-    if (p.turno === 'front' && !porPersona.has(kp(p))) porPersona.set(kp(p), { p, tareas: [] });
-  }
+  // Front tiene una sola caja al día, para el room audit: la de la jefa de front.
+  // El día que descansa, la del turno de front de la mañana.
+  const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
+  const frontDia = personas.filter((p) => p.turno === 'front');
+  const front = frontDia.find((p) => p.employee_id === JEFA_FRONT)
+    ?? frontDia.slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0];
+  if (front && !porPersona.has(kp(front))) porPersona.set(kp(front), { p: front, tareas: [] });
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
-  const bolsa = [...opsLibres, ...profundas, ...opcionales, ...libres];
-  if (bolsa.length) await crear(null, bolsa, 'SIN ASIGNAR', true);
+  // El motor no mueve nada por su cuenta: lo que no se reparte queda suelto en el
+  // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
+  const sueltas = [...opsLibres, ...profundas, ...opcionales, ...libres];
+  if (sueltas.length) {
+    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : {})), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
+    for (let i = 0; i < filasS.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filasS.slice(i, i + 100)) });
+  }
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
   if (rc.sobra.length) await crear(null, rc.sobra, 'SIN CUBRIR · cuartos');
   if (rp.sobra.length) await crear(null, rp.sobra, 'SIN CUBRIR · áreas públicas');

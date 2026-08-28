@@ -509,13 +509,21 @@ async function fn(accion){
 }
 
 // ---------------- REPARTO ----------------
-let ASIG=[];
+let ASIG=[], SUELTAS=[];
 async function cargarReparto(){
-  const {data,error}=await sb.from('hk_asignaciones')
-    .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden,metadata),hk_tareas_op(codigo,nombre,hora_sugerida))')
-    .eq('property_id',P()).eq('fecha',F()).order('turno');
+  const [{data,error},{data:sueltas}]=await Promise.all([
+    sb.from('hk_asignaciones')
+      .select('*,hk_tareas(*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden,metadata),hk_tareas_op(codigo,nombre,hora_sugerida))')
+      .eq('property_id',P()).eq('fecha',F()).order('turno'),
+    // Lo que el motor no reparte no se le cuelga a nadie: queda suelto y solo
+    // aparece en el listado de la izquierda, listo para arrastrar si hace falta.
+    sb.from('hk_tareas')
+      .select('*,hk_areas(codigo,nombre,tipo,piso,grupo,grupo_orden,metadata),hk_tareas_op(codigo,nombre,hora_sugerida)')
+      .eq('property_id',P()).eq('fecha',F()).is('asignacion_id',null),
+  ]);
   if(error){st(error.message,'err');return;}
   ASIG=data||[];
+  SUELTAS=sueltas||[];
   pintarKpis();
   pintarAsignar();
 }
@@ -615,11 +623,13 @@ function pintarAsignar(){
     // ---- listado de la izquierda ----
     const filas=[];
     ASIG.forEach(a=>(a.hk_tareas||[]).forEach(t=>filas.push({t,a})));
+    // Las sueltas no pertenecen a nadie: se listan igual, en su propio grupo
+    SUELTAS.forEach(t=>filas.push({t,a:{id:null,nombre_display:'',employee_id:null,suelta:true}}));
     // agrupado por área principal: Piso 1..4, Áreas públicas piso 2, Terraza,
     // Áreas públicas escaleras y lobby
     const grupos=new Map();
     filas.forEach(f=>{
-      const suelta=!f.a.employee_id && f.a.metadata?.bolsa_libre;
+      const suelta=f.a.suelta || (!f.a.employee_id && f.a.metadata?.bolsa_libre);
       const g=suelta?'Sin asignar':(f.t.tarea_op_id?'Tareas operativas':(f.t.hk_areas?.grupo||'Otras áreas'));
       if(!grupos.has(g)) grupos.set(g,{orden:suelta?99:(f.t.tarea_op_id?0:(f.t.hk_areas?.grupo_orden??50)),items:[]});
       grupos.get(g).items.push(f);
@@ -644,7 +654,7 @@ function pintarAsignar(){
               <td class="grab" ${fijo?'':'data-grab="1"'} title="Arrastra desde aquí">${fijo?'':'⠿'}</td>
               <td>${nom}</td>
               <td><span class="pill est ${op?'':(CLS[t.estatus_area]||'')}">${et}</span></td>
-              <td class="who">${esc(a.nombre_display||'')}${t.partes>1?` <span class="pill">1 de ${t.partes}</span>`:''}${t.pases>1?` <span class="pill">pase ${t.pase}/${t.pases}</span>`:''}${t.es_extra&&!t.reasignada_desde?' <span class="pill prov">extra</span>':''}${opc?' <span class="pill">opcional</span>':''}${prof?' <span class="pill prov">profunda</span>':''}</td>
+              <td class="who">${a.suelta?'<span style="opacity:.55">sin asignar</span>':esc(a.nombre_display||'')}${t.partes>1?` <span class="pill">1 de ${t.partes}</span>`:''}${t.pases>1?` <span class="pill">pase ${t.pase}/${t.pases}</span>`:''}${t.es_extra&&!t.reasignada_desde?' <span class="pill prov">extra</span>':''}${opc?' <span class="pill">opcional</span>':''}${prof?' <span class="pill prov">profunda</span>':''}</td>
               <td class="num">${libre?'—':t.minutos_estimados}</td>
               <td class="rep">${fijo?'':`<button class="rep" data-rep="${t.id}" title="Repartir esta tarea entre una o varias personas">&lt;&gt;</button>`}</td></tr>`;
           }).join(''));
@@ -802,6 +812,7 @@ function engancharDrag(){
 function abrirRepartir(tareaId){
   let orig=null,asigOrig=null;
   ASIG.forEach(a=>(a.hk_tareas||[]).forEach(t=>{ if(t.id===tareaId){orig=t;asigOrig=a;} }));
+  if(!orig){ const t=SUELTAS.find(x=>x.id===tareaId); if(t){orig=t;asigOrig={id:null,suelta:true};} }
   if(!orig)return;
   document.querySelectorAll('.modal').forEach(x=>x.remove());
   const op=orig.hk_tareas_op, ar=orig.hk_areas||{};
@@ -878,10 +889,17 @@ async function cajaSinAsignar(){
 }
 async function dejarSinAsignar(orig,asigOrig){
   const e=$('stA'); e.className='status'; e.textContent='Devolviendo a la lista…';
+  if(asigOrig.suelta){ e.textContent=''; return; }
   try{
-    const destino=await cajaSinAsignar();
-    if(destino===asigOrig.id){ e.textContent=''; return; }
-    await moverTarea(orig.id,asigOrig.id,destino);
+    const {error}=await sb.from('hk_tareas').update({asignacion_id:null,updated_at:new Date().toISOString()}).eq('id',orig.id);
+    if(error)throw error;
+    const a1=ASIG.find(x=>x.id===asigOrig.id);
+    if(a1){ const i=a1.hk_tareas.findIndex(x=>x.id===orig.id); if(i>=0) SUELTAS.push(a1.hk_tareas.splice(i,1)[0]);
+      const tt=(a1.hk_tareas||[]).reduce((s,x)=>s+(x.minutos_estimados||0),0);
+      a1.minutos_estimados=tt;
+      await sb.from('hk_asignaciones').update({minutos_estimados:tt,updated_at:new Date().toISOString()}).eq('id',a1.id);
+    }
+    pintarAsignar();
     e.className='status ok'; e.textContent='Sin asignar · queda en la lista';
   }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo devolver'; }
 }
@@ -926,8 +944,9 @@ async function tiempoEstandarDe(t){
 
 async function moverTarea(tareaId,desde,hacia){
   const e=$('stA'); e.className='status'; e.textContent='Moviendo…';
-  const a1=ASIG.find(x=>x.id===desde), a2=ASIG.find(x=>x.id===hacia);
-  const tt=(a1.hk_tareas||[]).find(x=>x.id===tareaId);
+  const suelta = desde===null || desde===undefined || desde==='null';
+  const a1=suelta?null:ASIG.find(x=>x.id===desde), a2=ASIG.find(x=>x.id===hacia);
+  const tt=suelta?SUELTAS.find(x=>x.id===tareaId):(a1.hk_tareas||[]).find(x=>x.id===tareaId);
   const campos={asignacion_id:hacia,es_extra:true,updated_at:new Date().toISOString()};
   const aPersona=!!(a2&&a2.employee_id);
   if(aPersona && tt && tt.metadata?.sin_trabajo && !tt.minutos_estimados){
@@ -937,11 +956,12 @@ async function moverTarea(tareaId,desde,hacia){
   }
   const {error}=await sb.from('hk_tareas').update(campos).eq('id',tareaId);
   if(error){ e.className='status err'; e.textContent=error.message; return; }
-  const i=a1.hk_tareas.findIndex(t=>t.id===tareaId);
-  const [t]=a1.hk_tareas.splice(i,1);
+  let t;
+  if(suelta){ const i=SUELTAS.findIndex(x=>x.id===tareaId); [t]=SUELTAS.splice(i,1); }
+  else { const i=a1.hk_tareas.findIndex(x=>x.id===tareaId); [t]=a1.hk_tareas.splice(i,1); }
   a2.hk_tareas.push(t);
   pintarAsignar();
-  for(const a of [a1,a2]){
+  for(const a of [a1,a2].filter(Boolean)){
     const tt=(a.hk_tareas||[]).reduce((s,x)=>s+(x.minutos_estimados||0),0);
     a.minutos_estimados=tt;
     a.pisos=[...new Set((a.hk_tareas||[]).map(x=>x.hk_areas?.piso).filter(Boolean))].sort((x,y)=>x-y);
