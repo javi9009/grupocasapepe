@@ -193,6 +193,7 @@ table.mini tr:last-child td{border-bottom:0}
 tr.arow.libre td{opacity:.5}
 tr.arow.libre td.rep{opacity:1}
 .achip.part::after{content:' ½';opacity:.7;font-size:10px}
+.achip .ncam{font-style:normal;font-size:10px;font-weight:800;opacity:.6;margin-left:3px;vertical-align:super}
 .modal{position:fixed;inset:0;background:rgba(30,26,20,.45);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px}
 .modal .caja{background:var(--surface);border-radius:16px;max-width:420px;width:100%;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25)}
 .modal h4{margin:0 0 4px;font-size:16px}
@@ -209,6 +210,9 @@ tr.arow.libre td.rep{opacity:1}
 .modal .quien.libre:hover{border-color:var(--gold);color:var(--txt)}
 .modal .quien .n{font-weight:700;flex:1}
 .modal .quien .c{font-size:11.5px;color:var(--soft);font-variant-numeric:tabular-nums}
+.modal .acciones{display:flex;flex-direction:column;gap:6px;margin-bottom:4px}
+.modal .acciones .b{justify-content:flex-start;text-align:left;font-weight:700}
+.modal .minfila{display:flex;gap:8px;align-items:center;margin-top:8px}
 .modal .pie{display:flex;gap:8px;margin-top:14px}
 .modal .pie .b{flex:1;justify-content:center}
 .modal .aviso{font-size:12px;color:var(--soft);margin-top:10px;line-height:1.45}
@@ -699,7 +703,9 @@ function calcPila(a,c){
   const jornada=jornadaDe(a,c)||1;
   const total=limpieza+traslado+admin;
   return {limpieza,traslado,admin,jornada,total,pct:Math.round(total/jornada*100),pisos,
-    camas:ts.filter(t=>t.hk_areas?.tipo==='cama').length,
+    // Un dormitorio entra entero: sus camas se cuentan desde el detalle de la tarea.
+    camas:ts.reduce((n,t)=>n+(t.hk_areas?.tipo==='cama'?1:(t.metadata?.camas?.length||0)),0),
+    dorms:ts.filter(t=>t.hk_areas?.tipo==='dorm'&&!t.metadata?.sin_trabajo).length,
     privadas:ts.filter(t=>t.hk_areas?.tipo==='privada'&&!t.metadata?.sin_trabajo).length,
     comunes:ts.filter(t=>t.hk_areas?.tipo==='zona_comun').length,
     operativas:ts.filter(t=>t.tarea_op_id).length,
@@ -806,6 +812,7 @@ function pintarAsignar(){
             <span class="amin">${Math.round(k.total/60*10)/10} h de ${Math.round(k.jornada/60*10)/10} h</span></div>
           ${k.extra>0?`<div class="aextra">⚠ ${Math.round(k.extra/60*10)/10} h extra</div>`:''}
           <div class="acnt">
+            <div><b>${k.dorms}</b><span>Dorms</span></div>
             <div><b>${k.camas}</b><span>Camas</span></div>
             <div><b>${k.privadas}</b><span>Priv.</span></div>
             <div><b>${k.comunes}</b><span>Comunes</span></div>
@@ -821,7 +828,7 @@ function pintarAsignar(){
           const ar=t.hk_areas||{}, op=t.hk_tareas_op;
           const fijo=t.estado!=='pendiente';
           return `<span class="achip ${t.metadata?.sin_trabajo?'libre':(op?'op':(ar.tipo==='dorm'?'dorm':(CLS[t.estatus_area]||'')))} ${fijo?'done':''} ${t.partes>1?'part':''}" data-t="${t.id}" data-fijo="${fijo?1:0}"
-            title="${esc(op?op.nombre:(ar.nombre||''))} · ${t.minutos_estimados} min${t.partes>1?` · repartida entre ${t.partes}`:''}">${esc(op?op.nombre.split(' ')[0]:(ar.codigo||''))}</span>`;}).join('')}</div>
+            title="${esc(op?op.nombre:(ar.nombre||''))} · ${t.minutos_estimados} min${t.metadata?.camas?.length?` · ${t.metadata.camas.length} camas dentro`:''}${t.partes>1?` · repartida entre ${t.partes}`:''}">${esc(op?op.nombre.split(' ')[0]:(ar.codigo||''))}${t.metadata?.camas?.length?`<i class="ncam">${t.metadata.camas.length}</i>`:''}</span>`;}).join('')}</div>
       </div>`;
     }).join('');
 
@@ -885,7 +892,9 @@ function engancharDrag(){
       (fila||el).classList.add('mov');
       try{ el.setPointerCapture(ev.pointerId); }catch(_e){}
       const dx=ev.clientX-r.left, dy=ev.clientY-r.top;
+      const x0=ev.clientX, y0=ev.clientY; let movido=false;
       el.onpointermove=(e)=>{
+        if(Math.abs(e.clientX-x0)>6||Math.abs(e.clientY-y0)>6) movido=true;
         ghost.style.left=(e.clientX-dx)+'px'; ghost.style.top=(e.clientY-dy)+'px';
         document.querySelectorAll('.acol.sobre').forEach(x=>x.classList.remove('sobre'));
         const bajo=document.elementFromPoint(e.clientX,e.clientY);
@@ -898,11 +907,92 @@ function engancharDrag(){
         const c2=(bajo&&bajo.closest)?bajo.closest('.acol'):null;
         ghost.remove(); (fila||el).classList.remove('mov');
         document.querySelectorAll('.acol.sobre').forEach(x=>x.classList.remove('sobre'));
+        // Un toque sin arrastre abre el menú de la tarea.
+        if(!movido){ abrirMenuTarea(tareaId); return; }
         if(!c2||!desde||c2.dataset.a===desde) return;
         await moverTarea(tareaId,desde,c2.dataset.a);
       };
     };
   });
+}
+
+// Menú de una tarea ya colocada: quitarla, cambiarle los minutos, partirla
+// entre varias o mandarla a otra persona sin tener que arrastrarla.
+function buscarTarea(tareaId){
+  let t=null,a=null;
+  ASIG.forEach(x=>(x.hk_tareas||[]).forEach(y=>{ if(y.id===tareaId){t=y;a=x;} }));
+  if(!t){ const y=SUELTAS.find(z=>z.id===tareaId); if(y){t=y;a={id:null,suelta:true,nombre_display:'Sin asignar'};} }
+  return {t,a};
+}
+
+function abrirMenuTarea(tareaId){
+  const {t,a}=buscarTarea(tareaId); if(!t) return;
+  if(t.estado!=='pendiente'){ const e=$('stA'); e.className='status'; e.textContent='Esa limpieza ya empezó: no se mueve'; return; }
+  document.querySelectorAll('.modal').forEach(x=>x.remove());
+  const op=t.hk_tareas_op, ar=t.hk_areas||{};
+  const nombre=op?op.nombre:`${ar.codigo||''} · ${ar.nombre||''}`;
+  const gente=ASIG.filter(x=>x.employee_id && x.id!==a.id);
+  confA().then(c=>{
+    const d=document.createElement('div'); d.className='modal';
+    d.innerHTML=`<div class="caja">
+      <h4>${esc(nombre)}</h4>
+      <p class="sub">${t.minutos_estimados||0} min${a.suelta?' · sin asignar':` · ahora la tiene ${esc(a.nombre_display)}`}</p>
+      <div class="acciones">
+        ${a.suelta?'':'<button type="button" class="b" data-acc="quitar">↩ Quitar de la persona · vuelve a la lista</button>'}
+        <button type="button" class="b" data-acc="min">⏱ Ajustar los minutos</button>
+        <button type="button" class="b" data-acc="div">&lt;&gt; Dividir entre varias</button>
+      </div>
+      <div class="minfila" id="minFila" hidden>
+        <label class="cp">Minutos <input type="number" id="minVal" min="0" max="600" step="5" value="${t.minutos_estimados||0}"></label>
+        <button class="b pri" id="minOk">Guardar</button>
+      </div>
+      <p class="sub" style="margin:14px 0 6px"><b>Mover a</b></p>
+      <div id="menuGente">${gente.length?gente.map(x=>{const k=calcPila(x,c);return `<button type="button" class="quien" data-mv="${x.id}">
+        <span class="tk">→</span><span class="n">${esc(x.nombre_display)}</span>
+        <span class="c">${k.pct}% · ${Math.round((k.jornada-k.total)/60*10)/10} h libres</span></button>`;}).join('')
+        :'<p class="sub">No hay nadie más en el turno.</p>'}</div>
+      <div class="pie"><button class="b" id="menuCerrar">Cerrar</button></div>
+    </div>`;
+    document.body.appendChild(d);
+    d.onclick=e=>{ if(e.target===d) d.remove(); };
+    d.querySelector('#menuCerrar').onclick=()=>d.remove();
+    d.querySelectorAll('[data-acc]').forEach(b=>b.onclick=async()=>{
+      const acc=b.dataset.acc;
+      if(acc==='quitar'){ b.disabled=true; await dejarSinAsignar(t,a); d.remove(); }
+      else if(acc==='min'){ const f=d.querySelector('#minFila'); f.hidden=!f.hidden; if(!f.hidden) d.querySelector('#minVal').focus(); }
+      else { d.remove(); abrirRepartir(tareaId); }
+    });
+    d.querySelector('#minOk').onclick=async()=>{
+      const v=Math.max(0,Number(d.querySelector('#minVal').value)||0);
+      d.querySelector('#minOk').disabled=true;
+      await cambiarMinutos(t,a,v);
+      d.remove();
+    };
+    d.querySelectorAll('[data-mv]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true;
+      await moverTarea(tareaId, a.suelta?null:a.id, b.dataset.mv);
+      d.remove();
+    });
+  });
+}
+
+// Cambiar los minutos de una tarea concreta (un cuarto que hoy pide más trabajo).
+async function cambiarMinutos(t,a,min){
+  const e=$('stA'); e.className='status'; e.textContent='Guardando…';
+  try{
+    const meta={...(t.metadata||{}), minutos_a_mano:true};
+    if(meta.sin_trabajo && min>0) meta.sin_trabajo=false;
+    const {error}=await sb.from('hk_tareas').update({minutos_estimados:min,metadata:meta,updated_at:new Date().toISOString()}).eq('id',t.id);
+    if(error)throw error;
+    t.minutos_estimados=min; t.metadata=meta;
+    if(!a.suelta){
+      const tt=(a.hk_tareas||[]).reduce((s,x)=>s+(x.minutos_estimados||0),0);
+      a.minutos_estimados=tt;
+      await sb.from('hk_asignaciones').update({minutos_estimados:tt,updated_at:new Date().toISOString()}).eq('id',a.id);
+    }
+    pintarAsignar();
+    e.className='status ok'; e.textContent=`${min} min`;
+  }catch(err){ e.className='status err'; e.textContent=err.message||'No se pudo guardar'; }
 }
 
 // Repartir una tarea: se elige a una persona (se mueve) o a varias (se parte
