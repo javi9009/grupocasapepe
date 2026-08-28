@@ -89,6 +89,23 @@
       <button class="btn save" id="btnSave" disabled>Guardar en bitácora ✅</button>
     </div>
     <div class="msg" id="msg"></div>
+
+    <details style="margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px">
+      <summary style="cursor:pointer;font-weight:700;color:#ffb45e">🔥 Registrar recarga de gas (cuando llega la pipa)</summary>
+      <div class="hint" style="margin-top:8px">Toma foto del ticket de la pipa. Eloy lee los litros y el monto; tú confirmas y guardas.</div>
+      <div class="cam" style="margin-top:8px">
+        <div class="thumb ph" id="th-tik">🧾</div>
+        <button type="button" class="take" id="take-tik">Foto del ticket</button>
+      </div>
+      <div id="gwrap" style="display:none;margin-top:10px">
+        <div class="row"><label>Litros<input type="text" inputmode="decimal" id="gLit"></label>
+          <label>Monto $<input type="text" inputmode="decimal" id="gMon"></label></div>
+        <div class="row"><label>Fecha<input type="date" id="gFec"></label>
+          <label>$/litro (auto)<input type="text" inputmode="decimal" id="gPre" placeholder="auto"></label></div>
+        <button class="btn save" id="gSave" style="margin-top:8px">Guardar recarga 🔥</button>
+      </div>
+      <div class="msg" id="gmsg"></div>
+    </details>
   </div>
 </main>
 
@@ -136,23 +153,51 @@ async function resize(file){
   c.getContext('2d').drawImage(bmp,0,0,w,h);
   return await new Promise(res=>c.toBlob(res,'image/jpeg',0.85));
 }
+let gasTicketFoto=null;
 $('picker').onchange=async()=>{
   const f=$('picker').files[0]; if(!f||!curSlot) return;
   const k=curSlot; const take=$('take-'+k); take.textContent='Subiendo…';
+  let url=null;
   try{
     const blob=await resize(f);
-    const path='mtto/lect-'+Date.now()+'-'+k+'.jpg';
+    const path='mtto/'+(k==='tik'?'gasticket':'lect')+'-'+Date.now()+'-'+k+'.jpg';
     const { error }=await sb.storage.from('buzon').upload(path, blob, { contentType:'image/jpeg', upsert:false });
     if(error) throw error;
-    const url=sb.storage.from('buzon').getPublicUrl(path).data.publicUrl;
-    fotos[k]=url;
+    url=sb.storage.from('buzon').getPublicUrl(path).data.publicUrl;
     const th=$('th-'+k); th.classList.remove('ph'); th.outerHTML=`<img class="thumb" id="th-${k}" src="${esc(url)}" alt="${k}">`;
     take.textContent='Cambiar foto'; take.classList.add('on');
-  }catch(e){ take.textContent='Reintentar foto'; showMsg('No se pudo subir la foto: '+(e.message||e), false); }
+  }catch(e){ take.textContent='Reintentar foto'; (k==='tik'?gmsg:showMsg)('No se pudo subir la foto: '+(e.message||e), false); }
   $('picker').value='';
+  if(k==='tik'){ if(url){ gasTicketFoto=url; leerTicket(); } return; }
+  fotos[k]=url;
   $('btnRead').disabled = !(fotos.agua||fotos.luz||fotos.gas);
   scheduleAuto();
 };
+function gmsg(t,ok){ const m=$('gmsg'); m.className='msg show '+(ok?'ok':'bad'); m.textContent=t; }
+async function leerTicket(){
+  gmsg('Eloy está leyendo el ticket…', true);
+  try{
+    const d=await call('leer_ticket_gas',{ foto:gasTicketFoto });
+    $('gwrap').style.display='';
+    if(d.litros!=null) $('gLit').value=d.litros;
+    if(d.monto!=null) $('gMon').value=d.monto;
+    if(d.precio_litro!=null) $('gPre').value=d.precio_litro;
+    if(!$('gFec').value) $('gFec').value=$('fecha').value;
+    gmsg('Revisa litros y monto y dale Guardar recarga.', true);
+  }catch(e){ $('gwrap').style.display=''; if(!$('gFec').value)$('gFec').value=$('fecha').value; gmsg('No pude leer el ticket, captúralo a mano: '+e.message, false); }
+}
+$('gSave')?.addEventListener('click', async ()=>{
+  const lit=$('gLit').value.trim(), mon=$('gMon').value.trim();
+  if(!lit && !mon){ gmsg('Pon al menos litros o monto', false); return; }
+  $('gSave').disabled=true; $('gSave').textContent='Guardando…';
+  try{
+    const { data, error } = await sb.functions.invoke('eloy-lecturas', { body:{ action:'guardar_recarga', property_id:$('prop').value, fecha:$('gFec').value||$('fecha').value, litros:lit, monto:mon, precio_litro:$('gPre').value.trim(), foto_url:gasTicketFoto } });
+    if(error) throw new Error(error.message); if(data&&data.error) throw new Error(data.error);
+    gmsg('✅ Recarga guardada ('+(data.recarga?.litros||'?')+' L · $'+(data.recarga?.monto||'?')+').', true);
+    $('gSave').textContent='Guardado ✓';
+  }catch(e){ gmsg('No se pudo guardar: '+e.message, false); $('gSave').disabled=false; $('gSave').textContent='Guardar recarga 🔥'; }
+});
+$('take-tik')?.addEventListener('click', ()=>{ curSlot='tik'; $('picker').click(); });
 
 function setSt(k, estado){
   const el=$('st-'+k); if(!el) return;
