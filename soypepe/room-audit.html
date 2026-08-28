@@ -22,6 +22,7 @@ button,select,input,textarea{font-family:inherit}
 .appbar .d{margin-left:auto;font-size:12px;color:#cdbf9c}
 .appbar select{background:#2b2620;color:#f4ecdd;border:1px solid #3a3228;border-radius:9px;padding:5px 8px;font-size:12px}
 .wrap{max-width:520px;margin:0 auto;padding:14px 14px calc(30px + var(--safe-b))}
+.ph .reint{margin-top:2px;padding:9px 16px;border:1px solid var(--bd,#d9d2c4);border-radius:10px;background:var(--surface,#fff);font:inherit;font-weight:700;cursor:pointer}
 .ph{background:#fff;border:1px dashed var(--bd);border-radius:14px;padding:22px 16px;text-align:center;color:var(--txt3);font-size:14px;line-height:1.55}
 
 .hero{background:#fff;border:1px solid var(--bd);border-radius:16px;padding:14px;box-shadow:var(--shadow);margin-bottom:12px}
@@ -108,12 +109,35 @@ $('hoy').textContent=new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{wee
 function toast(t){const e=$('tst');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2400);}
 const horaMX=()=>Number(new Intl.DateTimeFormat('en-GB',{timeZone:'America/Mexico_City',hour:'2-digit',hour12:false}).format(new Date()));
 
-async function arranca(){
+// Si el token está caducado o a punto, se renueva antes de pedir nada. Si la
+// renovación falla (token ya usado, sesión vieja), se cierra y se vuelve a entrar:
+// mejor pedir la contraseña que dejar la app en blanco.
+async function sesionViva(){
   const {data:{session}}=await sb.auth.getSession();
+  if(!session) return null;
+  const faltan=(session.expires_at||0)*1000-Date.now();
+  if(faltan>60000) return session;
+  const {data,error}=await sb.auth.refreshSession();
+  if(error||!data?.session){ try{ await sb.auth.signOut(); }catch(e){} return null; }
+  return data.session;
+}
+function esFalloDeSesion(e){
+  const c=String(e?.code||''), m=String(e?.message||'').toLowerCase();
+  return c==='PGRST301'||c==='PGRST302'||e?.status===401||m.includes('jwt')||m.includes('token');
+}
+
+async function arranca(){
+  const session=await sesionViva();
   if(!session){location.href='/soypepe/';return;}
   USER=session.user;
   const correo=(USER.email||'').toLowerCase();
-  const {data:link}=await sb.from('empleado_login').select('employee_id,nombre_display,nombre_completo').eq('user_id',USER.id).maybeSingle();
+  const {data:link,error:eLink}=await sb.from('empleado_login').select('employee_id,nombre_display,nombre_completo').eq('user_id',USER.id).maybeSingle();
+  if(eLink){
+    if(esFalloDeSesion(eLink)){ try{ await sb.auth.signOut(); }catch(e){} location.href='/soypepe/'; return; }
+    $('wrap').innerHTML='<div class="ph">No se pudo conectar con el servidor.<br>Revisa tu señal y vuelve a intentar.<br><br><button class="reint">Reintentar</button></div>';
+    $('wrap').querySelector('.reint').onclick=()=>location.reload();
+    return;
+  }
   if(!link){$('wrap').innerHTML='<div class="ph">Tu usuario todavía no está ligado a un colaborador.<br>Avísale a tu jefe de área.</div>';return;}
   EMP=link.employee_id;NOMBRE=link.nombre_display||link.nombre_completo;
 
