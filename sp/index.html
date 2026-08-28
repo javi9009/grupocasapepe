@@ -1414,10 +1414,14 @@ $('desaySave').onclick=async ()=>{
    ============================================================ */
 const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false };
 const CH_ANTES_ENT=30, CH_ANTES_SAL=5, CH_DESP_SAL=180; // minutos
+const CH_MIN_SALIDA_MIN=60; // minutos: no permitir salida antes de 60 min desde la entrada (anti doble-tap)
 const CH_RODAJE=true; // semana de ajuste de horario: no bloquea por geo/teléfono
 let CH_CFG={lat:19.43033,lng:-99.13449,radio_m:50,tolerancia_min:15};
 let CH_BUSY=false;
 const CH_MSGS=['¡Descansa! Te lo ganaste 😌','Disfruta tu tarde 🌇','Ve por unos buenos tacos 🌮','Gracias por tu energía de hoy 💚','A descansar — mañana, otro gran día ☀️','Disfruta tu tiempo libre 🎉'];
+const CH_CANTINFLAS=['¡Ahí está el detalle! 🎩','Hay momentos en la vida que son verdaderamente momentáneos.','No sospecho de nadie, pero desconfío de todos.','No tema, vaya no más, sin vergüenza.','Algo malo ha de tener el trabajo, o los ricos ya lo habrían acaparado.','Las prisas son del diablo.','No por mucho madrugar amanece más temprano.','Vísteme despacio que llevo prisa.','Despacito, que llevo prisa.','El que se enoja, pierde.'];
+function chToast(t){ let el=document.getElementById('ch-toast'); if(!el){ el=document.createElement('div'); el.id='ch-toast'; el.style.cssText='position:fixed;left:50%;top:14px;transform:translateX(-50%) translateY(-20px);background:#2c2c2a;color:#fff;padding:11px 16px;border-radius:12px;font-size:14px;font-weight:600;line-height:1.3;box-shadow:0 8px 30px rgba(0,0,0,.28);z-index:99999;opacity:0;transition:opacity .2s,transform .2s;max-width:88vw;text-align:center'; document.body.appendChild(el);} el.textContent=t; requestAnimationFrame(function(){el.style.opacity='1';el.style.transform='translateX(-50%) translateY(0)';}); clearTimeout(el._t); el._t=setTimeout(function(){el.style.opacity='0';el.style.transform='translateX(-50%) translateY(-20px)';},3400); }
+function chCantinflas(){ chToast(CH_CANTINFLAS[Math.floor(Math.random()*CH_CANTINFLAS.length)]); }
 
 function chDeviceId(){
   let d=localStorage.getItem('cp_device_id');
@@ -1560,7 +1564,9 @@ function chRender(){
 
 async function chMark(){
   const btn=$('ch-btn');
-  if(CH_BUSY || !btn || btn.disabled || !CH.shift) return;
+  if(!btn) return;
+  if(CH_BUSY){ chCantinflas(); return; }
+  if(btn.disabled || !CH.shift) return;
   const empId = EMP || HZ.empId;
   if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
   const esEntrada = !(CH.asis && CH.asis.check_in);
@@ -1595,6 +1601,8 @@ async function chMark(){
       else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
       try{ await sb.from('incidencias').insert({ employee_id:empId, nombre_display:(HZ.nombreDisplay||NOMBRE||null), tipo:'validacion_asistencia', severidad:'media', fecha:ds, descripcion:'Salida sin marcar entrada — el jefe de área debe validar la hora de llegada.', resuelto:false, metadata:{ asistencia_id:(CH.asis&&CH.asis.id)||null, motivo:'sin_entrada', hora_turno:CH.shift.hora_inicio, salida_turno:CH.shift.hora_fin } }); }catch(e){}
     }else if(esEntrada){
+      try{ const {data:ex}=await sb.from('asistencias').select('id,check_in').eq('employee_id',empId).eq('fecha',ds).not('check_in','is',null).order('created_at',{ascending:false}).limit(1);
+        if(ex&&ex[0]&&ex[0].check_in){ CH.asis=ex[0]; CH_BUSY=false; await chLoad(); return; } }catch(e){}
       const retraso=Math.max(0,Math.round((today.getTime()-ent.getTime())/60000));
       const estatus=retraso>(CH_CFG.tolerancia_min||15)?'retardo':'a_tiempo';
       const fila={ employee_id:empId, property_id:propId, fecha:ds, nombre_display:(HZ.nombreDisplay||NOMBRE||null),
@@ -1603,6 +1611,8 @@ async function chMark(){
       if(CH.asis && CH.asis.id){ const {error}=await sb.from('asistencias').update(fila).eq('id',CH.asis.id); if(error) throw error; }
       else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
     }else{
+      const _ciMs = CH.asis && CH.asis.check_in ? new Date(CH.asis.check_in).getTime() : 0;
+      if(_ciMs && (Date.now()-_ciMs)/60000 < CH_MIN_SALIDA_MIN){ CH_BUSY=false; btn.disabled=false; btn.textContent=prev; chCantinflas(); chRender&&chRender(); return; }
       const minSal=Math.round((today.getTime()-sal.getTime())/60000);
       const msg=CH_MSGS[Math.floor(Math.random()*CH_MSGS.length)];
       const upd={ check_out:new Date().toISOString(), salida_turno:CH.shift.hora_fin, min_salida:minSal, mensaje_salida:msg };

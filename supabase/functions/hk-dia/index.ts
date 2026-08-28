@@ -88,19 +88,36 @@ async function syncEstatus(propKey: string, fecha: string) {
   const diasBlancos = Number(confArr?.[0]?.dias_cambio_blancos ?? 4);
   const areas = await rest(`hk_areas?property_id=eq.${cfg.supaId}&select=id,tipo,codigo,cloudbeds_room_id&limit=1000`) as Array<{ id: string; tipo: string; codigo: string; cloudbeds_room_id: string | null }>;
   const porCb = new Map(areas.filter((a) => a.cloudbeds_room_id).map((a) => [a.cloudbeds_room_id!, a]));
+
+  // Un cuarto que quedó limpio y en el que nadie durmió sigue limpio hoy: la limpieza
+  // no se borra por cambiar de día. Solo se hereda si no hubo salida.
+  const ayer = new Date(Date.parse(fecha + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
+  const previo = await rest(`hk_estatus_dia?property_id=eq.${cfg.supaId}&fecha=eq.${ayer}&limpieza=eq.limpia&select=area_id,limpieza_por,limpieza_fuente&limit=1000`) as Array<{ area_id: string; limpieza_por: string | null; limpieza_fuente: string | null }>;
+  const limpioAyer = new Map(previo.map((x) => [x.area_id, x]));
   const filas: Array<Record<string, unknown>> = [];
+  const heredadas: Array<Record<string, unknown>> = [];
   let sinMatch = 0;
   for (const r of rows) {
     const a = porCb.get(r.roomID);
     if (!a) { sinMatch++; continue; }
     const m = mapEstatus(r, fecha, diasBlancos);
-    filas.push({ property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } });
+    // Herencia de la limpieza de ayer: solo si hoy no hay salida y el cuarto no
+    // estuvo ocupado, es decir, nadie lo ha vuelto a usar.
+    const hered = (!m.co && (m.estatus === 'vacia_limpia')) ? limpioAyer.get(a.id) : undefined;
+    const base = { property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } };
+    // Los lotes de PostgREST exigen las mismas claves en todas las filas: las que
+    // heredan la limpieza de ayer van en su propio lote.
+    if (hered) heredadas.push({ ...base, limpieza: 'limpia', limpieza_por: hered.limpieza_por, limpieza_fuente: hered.limpieza_fuente });
+    else filas.push(base);
   }
-  for (let i = 0; i < filas.length; i += 100) {
-    await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
+  for (const lote of [filas, heredadas]) {
+    for (let i = 0; i < lote.length; i += 100) {
+      await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(lote.slice(i, i + 100)) });
+    }
   }
-  const conBlancos = filas.filter((f) => f.estatus === 'ocupada_blancos').length;
-  return { ok: true, cloudbeds_rows: rows.length, guardadas: filas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
+  const todas = [...filas, ...heredadas];
+  const conBlancos = todas.filter((f) => f.estatus === 'ocupada_blancos').length;
+  return { ok: true, cloudbeds_rows: rows.length, guardadas: todas.length, heredadas: heredadas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
 }
 
 // ---------- 2. REPARTO ----------
@@ -117,7 +134,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
-    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,orden,veces_dia,metadata,obligatoria&limit=1000`),
+    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
@@ -132,6 +149,7 @@ async function reparto(propKey: string, fecha: string) {
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
   if (bloqueadas.length) return { ok: false, ya_validado: true, mensaje: 'El reparto de este día ya fue validado; no se regenera.', asignaciones: bloqueadas.length };
   for (const a of existentes) await rest(`hk_asignaciones?id=eq.${a.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+  await rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${fecha}&asignacion_id=is.null`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
 
   // Los dormitorios tienen tiempo propio por tamaño (8, 6 y 4 camas), tanto en la
   // limpieza general como en la profunda.
@@ -160,7 +178,10 @@ async function reparto(propKey: string, fecha: string) {
       // La limpieza general del dorm se hace a diario en cuanto la habitación estuvo
       // ocupada, aunque ninguna cama concreta dé trabajo (una cama ocupada son 0 min).
       if (tipo === 'cama' && a.parent_id && est !== 'vacia_limpia') dormsTocados.add(String(a.parent_id));
-      const min = (a.minutos_override as number | null) ?? minDe(tipo, est) ?? 0;
+      // Un cuarto puede tener su propio tiempo por estatus (las suites tardan más
+      // que una privada normal); si no, manda el estándar del tipo.
+      const propio = (a.minutos_por_estatus as Record<string, number> | null)?.[est];
+      const min = propio ?? (a.minutos_override as number | null) ?? minDe(tipo, est) ?? 0;
       if (!min) continue; // p.ej. cama ocupada = 0 min -> no se toca
       cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: tipo === 'cama' && a.parent_id ? `dorm:${a.parent_id}` : `area:${a.id}` });
     } else {
@@ -374,14 +395,21 @@ async function reparto(propKey: string, fecha: string) {
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
 
-  // Front tiene su propia caja del día aunque el motor no le asigne nada: ahí se
-  // arrastra el room audit.
-  for (const p of personas) {
-    if (p.turno === 'front' && !porPersona.has(kp(p))) porPersona.set(kp(p), { p, tareas: [] });
-  }
+  // Front tiene una sola caja al día, para el room audit: la de la jefa de front.
+  // El día que descansa, la del turno de front de la mañana.
+  const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
+  const frontDia = personas.filter((p) => p.turno === 'front');
+  const front = frontDia.find((p) => p.employee_id === JEFA_FRONT)
+    ?? frontDia.slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0];
+  if (front && !porPersona.has(kp(front))) porPersona.set(kp(front), { p: front, tareas: [] });
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
-  const bolsa = [...opsLibres, ...profundas, ...opcionales, ...libres];
-  if (bolsa.length) await crear(null, bolsa, 'SIN ASIGNAR', true);
+  // El motor no mueve nada por su cuenta: lo que no se reparte queda suelto en el
+  // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
+  const sueltas = [...opsLibres, ...profundas, ...opcionales, ...libres];
+  if (sueltas.length) {
+    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : {})), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
+    for (let i = 0; i < filasS.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filasS.slice(i, i + 100)) });
+  }
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
   if (rc.sobra.length) await crear(null, rc.sobra, 'SIN CUBRIR · cuartos');
   if (rp.sobra.length) await crear(null, rp.sobra, 'SIN CUBRIR · áreas públicas');
