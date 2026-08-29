@@ -476,19 +476,17 @@ function pintaTabs(){
  $("#tabs").innerHTML=SECS.map(([k,t])=>`<button role="tab" data-k="${k}" aria-selected="${k===tab}">${t}</button>`).join("");
  $("#tabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{tab=b.dataset.k;pinta();});
 }
-let dirQ="",dirSede="";
+let dirQ="";
 function pintaDir(){
  $("#hero").innerHTML="";$("#nav").hidden=true;
  try{history.replaceState(null,"",location.pathname);}catch(_){}
  const q=dirQ.trim().toLowerCase();
  const rows=F.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre,"es"))
-  .filter(p=>{const e=E[p.id];
-   if(dirSede&&sedeCol((e&&e.sede)||p.sede||"").n!==dirSede)return false;
-   const hay=[p.nombre,p.rol,e&&e.puesto,e&&e.sede,p.sede].filter(Boolean).join(" ").toLowerCase();return !q||hay.includes(q);});
+  .filter(p=>{const e=E[p.id];const hay=[p.nombre,p.rol,e&&e.puesto,e&&e.sede,p.sede].filter(Boolean).join(" ").toLowerCase();return !q||hay.includes(q);});
  $("#pane").innerHTML=`
   <div class="dirbar">
    <input id="dirq" type="search" placeholder="buscar por nombre, puesto o sede…" value="${esc(dirQ)}">
-   <div class="sleyenda">${SEDEC.map(([re,v])=>`<button data-sede="${esc(v.n)}" style="border:1px solid ${dirSede===v.n?v.c:'transparent'};background:${dirSede===v.n?v.bg:'transparent'};border-radius:999px;padding:2px 9px;cursor:pointer;font:inherit;color:${dirSede===v.n?v.c:'var(--muted)'};font-weight:${dirSede===v.n?'700':'400'}"><i style="background:${v.c};width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px"></i>${v.n}</button>`).join("")}${dirSede?`<button data-sede="" style="border:none;background:none;cursor:pointer;font:inherit;color:var(--faint);text-decoration:underline">todas</button>`:''}</div>
+   <div class="sleyenda">${SEDEC.map(([re,v])=>`<span><i style="background:${v.c}"></i>${v.n}</span>`).join("")}</div>
   </div>
   <div class="dir">${rows.map(p=>{
    const e=E[p.id];const sede=(e&&e.sede)||p.sede||"";const sc=sedeCol(sede);
@@ -507,7 +505,6 @@ function pintaDir(){
    </button>`;}).join("")||'<p class="vacia">Nadie coincide con la búsqueda.</p>'}</div>`;
  const inp=$("#dirq");
  inp.oninput=()=>{const pos=inp.selectionStart;dirQ=inp.value;pintaDir();const n=$("#dirq");n.focus();try{n.setSelectionRange(pos,pos);}catch(_){}};
- $("#pane").querySelectorAll("[data-sede]").forEach(b=>b.onclick=()=>{const s=b.dataset.sede;dirSede=(dirSede===s)?"":s;pintaDir();});
  $("#pane").querySelectorAll(".cajon").forEach(b=>b.onclick=()=>{cur=b.dataset.id;$("#sel").value=cur;tab="resumen";pinta();});
 }
 function pinta(){
@@ -550,26 +547,17 @@ function llenaSel(){
  try{NOM=await sb("/rpc/nomina_resumen",{method:"POST",body:"{}"})||{};}catch(e){NOM={};}
  try{const rec=await sb("/nomina_quincenal?select=employee_id,quincena,neto,estatus,papel_trabajo&estatus=in.(pagada,validada)&order=quincena.desc");
   rec.forEach(r=>{(REC[r.employee_id]=REC[r.employee_id]||[]).push(r);});}catch(e){}
- /* Las vacantes no son Pepes: viven solo en el Organigrama. Aquí solo gente real (activo / alta pendiente). */
- if(Object.keys(E).length)F=F.filter(p=>E[p.id]&&!/^\s*\(?vacante/i.test(p.nombre||""));
- /* Ámbito por ubicación: quien tiene proyectos asignados en usuario_proyectos solo ve a la gente de sus sedes.
-    Sin proyectos asignados (dirección/corp) se ve todo. */
  try{
-  if(ME){
-   const me=await sb("/employees?select=id&email=eq."+encodeURIComponent(ME));
-   const meId=me&&me[0]&&me[0].id;
-   if(meId){
-    const up=await sb("/usuario_proyectos?select=proyecto&employee_id=eq."+meId)||[];
-    const P2S={cdmx:"CDMX",puebla:"Puebla",virreyes:"Virreyes",sincretico:"Virreyes",corp:"Corporativo"};
-    const sedes=[...new Set(up.map(x=>P2S[(x.proyecto||"").toLowerCase()]).filter(Boolean))];
-    if(sedes.length){
-     const ok=p=>{const e=E[p.id];return sedes.includes(sedeCol((e&&e.sede)||p.sede||"").n)||p.id===meId;};
-     F=F.filter(ok);
-     for(const k of Object.keys(E)){if(!F.some(p=>p.id===k)&&k!==meId)delete E[k];}
-    }
+  let _em='';try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&/sb-.*-auth-token/.test(k)){const v=JSON.parse(localStorage.getItem(k)||'null');const ss=v&&(v.currentSession||v);const e=ss&&ss.user&&ss.user.email;if(e){_em=String(e).toLowerCase();break;}}}}catch(_){}
+  if(_em){
+   const ub=await sb("/rpc/mis_ubicaciones",{method:"POST",body:JSON.stringify({p_email:_em})});
+   if(Array.isArray(ub)&&ub.length){
+    const toProy=x=>{x=(x||'').toString().toLowerCase();if(x.includes('cdmx')||x.includes('mexico')||x.includes('m\u00e9xico'))return'cdmx';if(x.includes('puebla'))return'puebla';if(x.includes('virrey'))return'virreyes';if(x.includes('corp'))return'corp';if(x.includes('sincr'))return'sincretico';return'';};
+    F=F.filter(p=>{const pr=toProy((E[p.id]&&E[p.id].sede)||p.sede);return !pr||ub.indexOf(pr)>=0;});
+    Object.keys(E).forEach(id=>{const pr=toProy(E[id].sede);if(pr&&ub.indexOf(pr)<0&&!F.some(x=>x.id===id))delete E[id];});
    }
   }
- }catch(e){}
+ }catch(_){}
  llenaSel();
  $("#sel").onchange=()=>{cur=$("#sel").value;tab="resumen";pinta();};
  const q=new URLSearchParams(location.search);
