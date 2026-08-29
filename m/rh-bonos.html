@@ -102,6 +102,7 @@ const KPIS={
  pace_yoy:        {n:'Pace vs año anterior',               u:'%',   f:'Pricing · pricing_forecast (pace_yoy_pct)', g:'Ventas'},
  revpar_pct:      {n:'RevPAR vs año anterior',             u:'%',   f:'Pricing · pricing_forecast (revpar_pct)', g:'Ventas'},
  ocupacion_prom:  {n:'Ocupación promedio (unid/día)',      u:'',    f:'Plataforma · histórico diario de ocupación', g:'Ventas'},
+ ocupacion_pct:   {n:'Ocupación % promedio del mes',        u:'%',   f:'Reporte del día (occ por propiedad, Cloudbeds)', g:'Ventas'},
  dif_efectivo:    {n:'Descuadre de efectivo acumulado',    u:'$',   f:'Poster · diferencia_efectivo por turno', g:'Finanzas', menor:true},
  pl_partida:      {n:'P&L: real vs plan por cuenta',       u:'$',   f:'Finanzas · fin_pl (real, plan, año anterior por cuenta y plaza)', g:'Finanzas', param:true},
  puntualidad_pct: {n:'% de checadas a tiempo',             u:'%',   f:'Reloj checador · asistencias del mes', g:'Personas'},
@@ -164,6 +165,11 @@ async function medirTodos(mes){
     v._forecast=r;}}),
   t(async()=>{const r=await sb('/hk_ocupacion_hist?select=unidades_ocupadas&fecha=gte.'+d0+'&fecha=lte.'+d1)||[];
    if(r.length)v.ocupacion_prom=Math.round(r.reduce((s,x)=>s+(+x.unidades_ocupadas||0),0)/r.length*10)/10;}),
+  t(async()=>{const r=await sb('/reporte_dia_cache?select=payload&fecha=gte.'+d0+'&fecha=lte.'+d1)||[];
+   const occs=r.map(x=>{let o=x.payload&&x.payload.occ;if(typeof o==='string')o=parseFloat(o);return +o||null;}).filter(x=>x!=null&&x>0);
+   if(occs.length)v.ocupacion_pct=Math.round(occs.reduce((s,x)=>s+x,0)/occs.length*10)/10;}),
+  t(async()=>{const r=await sb('/fin_pl?select=loc,cuenta,real,plan&anio=eq.'+y+'&mes=eq.'+mo)||[];
+   if(r.length)v._pl=r;}),
   t(async()=>{const r=await sb('/asistencias?select=estatus&fecha=gte.'+d0+'&fecha=lte.'+d1)||[];
    const at=r.filter(x=>x.estatus==='a_tiempo').length,re=r.filter(x=>x.estatus==='retardo').length,fa=r.filter(x=>x.estatus==='falta').length;
    if(at+re>0)v.puntualidad_pct=Math.round(at/(at+re)*1000)/10;
@@ -286,6 +292,21 @@ $('addArea').onclick=async()=>{
  try{const r=await sb('/bonos_config',{method:'POST',headers:{...H,Prefer:'return=representation'},body:JSON.stringify({area:a,tipo:'proceso',nombre,orden:1,updated_by:ME})});
   if(r&&r[0])CFG.push(r[0]);pinta();}catch(e){status('⚠','err');}
 };
+/* valor del KPI para UN bono: afina por plaza (sedes) y por cuenta de P&L (variable) */
+function valorKpiDe(x){
+ const k=x.indicador;
+ if(['forecast_cump','pace_yoy','revpar_pct'].includes(k)&&VALS._forecast&&x.sedes){
+  const sede=String(x.sedes).toLowerCase();
+  const row=VALS._forecast.find(f=>sede.includes(String(f.plaza||'').toLowerCase())||String(f.plaza||'').toLowerCase().includes(sede.split(/[,;]/)[0].trim()));
+  if(row){const m={forecast_cump:'pct_cump',pace_yoy:'pace_yoy_pct',revpar_pct:'revpar_pct'}[k];if(row[m]!=null)return Math.round(+row[m]*10)/10;}
+ }
+ if(k==='pl_partida'&&VALS._pl&&x.variable){
+  const q=String(x.variable).toLowerCase();
+  const rows=VALS._pl.filter(r=>String(r.cuenta||'').toLowerCase().includes(q));
+  if(rows.length)return Math.round(rows.reduce((s,r)=>s+(+r.real||0),0));
+ }
+ return VALS[k]!=null?VALS[k]:'';
+}
 /* ===== informe mensual ===== */
 async function evaluar(){
  const mes=$('mes').value; if(!mes){alert('Elige el mes.');return;}
@@ -306,7 +327,7 @@ async function evaluar(){
    const prev=BM[x.id]||{};
    const K=KPIS[x.indicador||'manual']||KPIS.manual;
    const auto=(x.indicador&&x.indicador!=='manual');
-   const val=prev.valor!=null?prev.valor:(auto&&VALS[x.indicador]!=null?VALS[x.indicador]:'');
+   const val=prev.valor!=null?prev.valor:(auto?valorKpiDe(x):'');
    let sug=null;
    if(auto&&x.umbral!=null&&val!==''&&!isNaN(+val))sug=K.menor?(+val<=+x.umbral):(+val>=+x.umbral);
    const logrado=prev.id?!!prev.logrado:(sug===true);
@@ -315,7 +336,7 @@ async function evaluar(){
    const sel=prev.personas?new Set(prev.personas):new Set(elegibles.map(e=>e.id));
    return `<tr data-bc="${x.id}" class="${auto?'':'sinkpi'}">
     <td class="tl" style="min-width:230px">${esc(x.nombre)}${x.detalle?'<div class="fuente">Se valida con: '+esc(x.detalle)+'</div>':'<div class="fuente" style="color:var(--bad)">sin fuente definida</div>'}</td>
-    <td style="font-size:11px">${esc(K.n)}${K.menor?'<div class="fuente">menor es mejor</div>':''}</td>
+    <td style="font-size:11px">${esc(K.n)}${x.indicador==='pl_partida'&&x.variable?'<div class="fuente">cuenta: '+esc(x.variable)+(VALS._pl?(()=>{const q=String(x.variable).toLowerCase();const rs=VALS._pl.filter(r=>String(r.cuenta||'').toLowerCase().includes(q));const pl=rs.reduce((s,r)=>s+(+r.plan||0),0);return pl?' · plan '+money(Math.round(pl)):'';})():'')+'</div>':''}${K.menor?'<div class="fuente">menor es mejor</div>':''}</td>
     <td><input data-i="valor" value="${esc(val)}" style="max-width:110px" placeholder="${auto?'—':'a mano'}"></td>
     <td>${x.umbral!=null?esc(x.umbral):'—'}</td>
     <td style="text-align:center"><input data-i="logrado" type="checkbox" ${logrado?'checked':''}></td>
