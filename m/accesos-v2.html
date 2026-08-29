@@ -70,6 +70,7 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <button class="tab" id="tab-rango" onclick="setTab('rango')">Por rango</button>
   <button class="tab" id="tab-user" onclick="setTab('user')">Por usuario</button>
   <button class="tab" id="tab-cat" onclick="setTab('cat')">Categorías</button>
+  <button class="tab" id="tab-equipo" onclick="setTab('equipo')">Mi equipo</button>
 </div>
 
 <div class="fbar">
@@ -115,6 +116,10 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <div id="catGrid"></div>
 </div>
 
+<div id="pane-equipo" style="display:none">
+  <div id="eqGrid"></div>
+</div>
+
 <div class="bar" id="bar" style="display:none">
   <button class="btn primary" id="saveBtn">Guardar</button>
   <button class="btn ghost" onclick="reload()">Descartar</button>
@@ -144,6 +149,7 @@ let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], PROJMAP={}, AREAS=[];
 const PROJS_DEF=[['cdmx','CDMX'],['puebla','Puebla'],['virreyes','Virreyes'],['sincretico','Sincrético'],['corp','Corp']];
 let TAB='lista', curRol=null, curUser=null, draft={};
 let FQ='', FUBIC='', FAREA='';
+let LEADER=false, MYTEAM=null;
 
 async function boot(){
   const s=await sb.auth.getSession();
@@ -156,7 +162,7 @@ async function boot(){
     sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol,area').not('email','is',null),
     sb.from('usuario_proyectos').select('employee_id,proyecto')
   ]);
-  if(pg.error){ $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
+  if(pg.error){ try{ const _eq=await sb.rpc('deleg_mi_equipo'); if(!_eq.error && _eq.data && _eq.data.length){ LEADER=true; MYTEAM=_eq.data; ['tab-lista','tab-rol','tab-rango','tab-user','tab-cat'].forEach(function(id){var bt=$(id); if(bt) bt.style.display='none';}); var _pw=$('pwPanel'); if(_pw) _pw.style.display='none'; var _te=$('tab-equipo'); if(_te) _te.className='tab on'; setTab('equipo'); return; } }catch(_){} $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
   PAG=pg.data||[];
   ROLPERM={}; (rp.data||[]).forEach(r=>{ (ROLPERM[r.rol]=ROLPERM[r.rol]||{})[r.pagina_codigo]=r.nivel; });
   USERPERM={}; (up.data||[]).forEach(r=>{ (USERPERM[r.email.toLowerCase()]=USERPERM[r.email.toLowerCase()]||{})[r.pagina_codigo]=r.nivel; });
@@ -170,7 +176,7 @@ async function boot(){
   fillRolSel(); fillUserSel(); fillRangoSel();
   banner(); renderLista();
   initPw();
-  const _t=new URLSearchParams(location.search).get('tab'); if(_t && ['lista','rol','rango','user','cat'].includes(_t)) setTab(_t);
+  const _t=new URLSearchParams(location.search).get('tab'); if(_t && ['lista','rol','rango','user','cat','equipo'].includes(_t)) setTab(_t);
 }
 
 function _genPass(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<10;i++) s+=a[Math.floor(Math.random()*a.length)]; return s+'#'+Math.floor(Math.random()*90+10); }
@@ -315,10 +321,61 @@ async function aplicarRango(){
   btn.disabled=false;
 }
 
+async function renderEquipo(){
+  if(MYTEAM===null){ try{ const r=await sb.rpc('deleg_mi_equipo'); MYTEAM=(r.data)||[]; }catch(e){ MYTEAM=[]; } }
+  let h='';
+  if(!LEADER){
+    h+='<div style="margin-bottom:12px"><button class="btn ghost" onclick="toggleCrear()">＋ Amigo Pepe / Socio (sin alta)</button>'
+      +'<div id="crearBox" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px">'
+      +'<div class="fbar" style="flex-wrap:wrap;gap:8px;margin:0">'
+      +'<input id="cpNom" placeholder="Nombre" style="flex:1;min-width:140px">'
+      +'<input id="cpMail" placeholder="correo (opcional)" style="flex:1;min-width:160px">'
+      +'<select id="cpCat"><option value="amigo_pepe">Amigo Pepe</option><option value="socio">Socio</option></select>'
+      +'<select id="cpProy"><option value="">— ubicación —</option>'+PROJS_DEF.map(function(p){return '<option value="'+p[0]+'">'+p[1]+'</option>';}).join('')+'</select>'
+      +'<button class="btn primary" onclick="crearPersona()">Crear</button></div>'
+      +'<div id="cpMsg" class="msg" style="display:none;margin-top:6px"></div></div></div>';
+  }
+  h+='<p style="color:var(--mut);font-size:13px">Ajusta el acceso de tu gente. Solo puedes dar hasta tu propio nivel; se guarda al instante.</p>';
+  if(!MYTEAM.length){ h+='<p style="color:var(--mut)">No tienes colaboradores a tu cargo dentro de tu ubicación.</p>'; $('eqGrid').innerHTML=h; return; }
+  h+='<div style="display:flex;flex-direction:column;gap:6px">'+MYTEAM.map(function(m){return '<button class="btn ghost" style="justify-content:flex-start;text-align:left" onclick="openMiembro(\''+_q(m.email)+'\')">'+_esc(m.nombre)+' <small style="color:var(--mut)">· '+_esc(m.rol||'')+' · '+_esc(m.sede||'')+'</small></button>';}).join('')+'</div>';
+  h+='<div id="eqDetail" style="margin-top:12px"></div>';
+  $('eqGrid').innerHTML=h;
+}
+async function openMiembro(email){
+  const box=$('eqDetail'); if(box) box.innerHTML='<p style="color:var(--mut)">Cargando…</p>';
+  const r=await sb.rpc('deleg_paginas_de',{p_target_email:email});
+  if(r.error){ if(box) box.innerHTML='<p style="color:#c0392b">'+r.error.message+'</p>'; return; }
+  const rows=r.data||[]; const byArea={}; rows.forEach(function(p){(byArea[p.area]=byArea[p.area]||[]).push(p);});
+  let h='<h3 style="margin:6px 0">'+_esc(email)+'</h3>';
+  Object.keys(byArea).forEach(function(area){
+    h+='<div style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0"><b>'+_esc(area)+'</b>';
+    byArea[area].forEach(function(p){
+      const eff=(p.override||p.efectivo||'none'); const capr=p.cap==='editar'?3:(p.cap==='ver'?2:1);
+      const sel='<select onchange="setDeleg(\''+_q(email)+'\',\''+p.codigo+'\',this.value)">'
+        +'<option value="editar"'+(eff==='editar'?' selected':'')+(capr<3?' disabled':'')+'>Editar</option>'
+        +'<option value="ver"'+(eff==='ver'?' selected':'')+(capr<2?' disabled':'')+'>Ver</option>'
+        +'<option value="none"'+((eff==='none'||!eff)?' selected':'')+'>Sin acceso</option></select>';
+      h+='<div style="display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:6px 0"><span style="flex:1;font-size:13px">'+_esc(p.nombre)+'</span><small style="color:var(--mut)">tu tope: '+p.cap+'</small>'+sel+'</div>';
+    });
+    h+='</div>';
+  });
+  box.innerHTML=h;
+}
+async function setDeleg(email,cod,niv){ const r=await sb.rpc('deleg_set_permiso',{p_target_email:email,p_pagina:cod,p_nivel:niv}); if(r.error){ alert('No se pudo: '+r.error.message); openMiembro(email); } }
+function toggleCrear(){ const b=$('crearBox'); if(b) b.style.display=(b.style.display==='none'?'block':'none'); }
+async function crearPersona(){
+  const nom=($('cpNom').value||'').trim(), mail=($('cpMail').value||'').trim(), cat=$('cpCat').value, proy=$('cpProy').value;
+  const m=$('cpMsg'); m.style.display='block'; if(!nom){ m.textContent='Escribe el nombre'; return; } m.textContent='Creando…';
+  const r=await sb.rpc('crear_persona_rapida',{p_nombre:nom,p_email:mail,p_categoria:cat,p_proyecto:proy});
+  if(r.error){ m.textContent='Error: '+r.error.message; return; }
+  m.textContent='✓ Creado ('+cat.replace('_',' ')+'). Si necesita login, usa el recuadro de contraseña de arriba.';
+  $('cpNom').value=''; $('cpMail').value='';
+}
+
 function setTab(t){ TAB=t;
-  ['lista','rol','rango','user','cat'].forEach(x=>{ const tb=$('tab-'+x); if(tb) tb.classList.toggle('on',t===x); const pn=$('pane-'+x); if(pn) pn.style.display=t===x?'':'none'; });
+  ['lista','rol','rango','user','cat','equipo'].forEach(x=>{ const tb=$('tab-'+x); if(tb) tb.classList.toggle('on',t===x); const pn=$('pane-'+x); if(pn) pn.style.display=t===x?'':'none'; });
   $('bar').style.display='none';
-  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else if(t==='rango') fillRangoSel(); else if(t==='user') fillUserSel(); else if(t==='cat') renderCat();
+  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else if(t==='rango') fillRangoSel(); else if(t==='user') fillUserSel(); else if(t==='cat') renderCat(); else if(t==='equipo') renderEquipo();
 }
 
 function grpRender(container, getNivel, opts){
