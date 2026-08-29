@@ -193,6 +193,9 @@ button{font-family:inherit}
 .auditcard .t{font-weight:800;font-size:15px;margin-bottom:3px}
 .auditcard .s{font-size:12.5px;color:var(--txt3,#8e8c85);line-height:1.5;margin-bottom:10px}
 .auditcard .btn{display:block;text-align:center;text-decoration:none}
+.btn.nomol{background:var(--surface,#fff);color:#8a6212;border:1px solid #e8d4a8;margin-top:7px;font-weight:700}
+.hecho.nom{background:#fff8ea;color:#8a6212}
+.hecho.nom .tk{color:#a58348}
 </style></head><body>
 
 <div class="appbar">
@@ -217,6 +220,21 @@ button{font-family:inherit}
   <label>Comentario (opcional)</label>
   <textarea id="shC" placeholder="Ej. la habitación estaba muy sucia, había fiesta…"></textarea>
   <div class="btns"><button class="no" id="shX">Cancelar</button><button class="ok" id="shOk">Terminar</button></div>
+</div></div>
+
+<!-- Sheet: el cuarto no quiso limpieza -->
+<div class="sheet" id="shNom"><div class="bx">
+  <h3 id="nomT">No quisieron limpieza</h3>
+  <div class="s">El cuarto se queda como está. No cuenta como trabajo tuyo y se te descuenta de lo asignado del día. Front lo verá marcado.</div>
+  <label>¿Por qué?</label>
+  <select id="nomM">
+    <option value="NO_MOLESTAR">Letrero de No Molestar</option>
+    <option value="NO_SOLICITA">El huésped no pidió limpieza</option>
+    <option value="HUESPED_DENTRO">El huésped estaba dentro y no quiso</option>
+  </select>
+  <label>Algo que añadir (opcional)</label>
+  <textarea id="nomC" placeholder="Ej. tocamos dos veces, pidió que volviéramos mañana"></textarea>
+  <div class="btns"><button class="no" id="nomX">Cancelar</button><button class="ok" id="nomOk">Marcar</button></div>
 </div></div>
 
 <!-- Sheet añadir limpieza -->
@@ -568,8 +586,13 @@ function tarjetaCuarto(t,a){
     // El segundo repaso del día no se abre hasta cerrar el primero.
     caja=`<div class="hecho">Este es el repaso de la <b>${esc(etiquetaPase(t))}</b>.
       Se abre en cuanto quede cerrado el de la ${esc(etiquetaPase({...t,pase:t.pase-1}))}.</div>`;
+  }else if(t.estado==='no_realizada'){
+    caja=`<div class="hecho nom">🚫 No se limpió · ${esc(MOTIVOS.find(m=>m.codigo===t.motivo_codigo)?.nombre||'el huésped no quiso')}
+      ${t.comentario?`<br>“${esc(t.comentario)}”`:''}
+      <span class="tk">No cuenta en tu día: se te descontó de lo asignado.</span></div>`;
   }else{
-    caja=puede?`<button class="btn go" data-ini="${t.id}">Empezar limpieza</button>`
+    caja=puede?`<button class="btn go" data-ini="${t.id}">Empezar limpieza</button>
+      ${ar.tipo?`<button class="btn nomol" data-nom="${t.id}">🚫 No quisieron limpieza</button>`:''}`
               :`<div class="hecho">Sin empezar · ${t.minutos_estimados} min estimados</div>`;
   }
   // Un dormitorio se asigna entero: aquí dentro va lo que pide cada cama, para
@@ -617,6 +640,7 @@ function engancharCuartos(root){
   root.querySelectorAll('[data-ini]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); iniciar(b.dataset.ini); });
   root.querySelectorAll('[data-fin]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirFin(b.dataset.fin); });
   root.querySelectorAll('[data-und]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deshacerInicio(b.dataset.und); });
+  root.querySelectorAll('[data-nom]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirNoMolestar(b.dataset.nom); });
 }
 // Busca una tarea esté donde esté (mi orden o el reparto completo).
 function buscarTarea(id){
@@ -992,6 +1016,44 @@ async function deshacerInicio(id){
   toast('Listo · el cuarto vuelve a quedar pendiente');
   cargar();
 }
+
+// El huésped no quiso que le limpiaran: la tarea se cierra sin trabajo y sus
+// minutos salen de la carga del día. Los previstos se guardan por si hay que volver.
+let NOM=null;
+function abrirNoMolestar(id){
+  NOM=id;
+  const {t}=buscarTarea(id); const a=t?.hk_areas||{};
+  $('nomT').textContent=`${a.codigo||''} · no quisieron limpieza`;
+  $('nomC').value=''; $('nomM').value='NO_MOLESTAR';
+  $('shNom').classList.add('on');
+}
+$('nomX').onclick=()=>{ $('shNom').classList.remove('on'); NOM=null; };
+$('shNom').onclick=e=>{ if(e.target===$('shNom')){ $('shNom').classList.remove('on'); NOM=null; } };
+$('nomOk').onclick=async()=>{
+  if(!NOM) return;
+  const b=$('nomOk'); b.disabled=true;
+  const {t,a}=buscarTarea(NOM);
+  const now=new Date().toISOString();
+  const motivo=$('nomM').value, com=$('nomC').value.trim()||null;
+  const meta={...(t?.metadata||{}), no_molestar:true, minutos_previstos:t?.minutos_estimados||0};
+  const {error}=await sb.from('hk_tareas').update({
+    estado:'no_realizada', motivo_codigo:motivo, comentario:com, minutos_estimados:0, minutos_reales:0,
+    terminado_at:now, ejecutado_por:USER.id, ejecutado_por_nombre:NOMBRE, metadata:meta, updated_at:now,
+  }).eq('id',NOM);
+  b.disabled=false;
+  if(error) return toast('No se pudo marcar');
+  // La carga del día baja: lo que no se limpió no se le cobra a nadie.
+  if(a&&a.id){
+    const resto=(a.hk_tareas||[]).filter(x=>x.id!==NOM).reduce((s,x)=>s+(x.minutos_estimados||0),0);
+    await sb.from('hk_asignaciones').update({minutos_estimados:resto,updated_at:now}).eq('id',a.id);
+  }
+  await marcarLimpieza(t?.area_id,'no_molestar');
+  await sb.from('hk_eventos').insert({tarea_id:NOM,tipo:'comentario',employee_id:EMP,employee_nombre:NOMBRE,
+    nota:'No quisieron limpieza · '+motivo});
+  $('shNom').classList.remove('on'); NOM=null;
+  toast('Marcado · no cuenta en tu día');
+  cargar();
+};
 
 let FIN=null;
 function abrirFin(id){
