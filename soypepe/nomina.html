@@ -60,7 +60,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const money=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const QN=q=>{const m=['','ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][+q.slice(5,7)];return (q.slice(8)==='Q1'?'1–15 ':'16–fin ')+m+' '+q.slice(2,4);};
 async function rpc(fn,body){const r=await fetch(SBU+'/rest/v1/rpc/'+fn,{method:'POST',headers:H,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json();}
-let D=null;
+let D=null,ROSTER=null,VER='';
 function openSheet(html){$('#sheet').innerHTML='<button class="x" onclick="document.getElementById(\'modal\').classList.remove(\'show\')">✕</button>'+html;$('#modal').classList.add('show');}
 $('#modal').onclick=e=>{if(e.target.id==='modal')$('#modal').classList.remove('show');};
 function bonoTxt(a){
@@ -73,6 +73,11 @@ function bonoTxt(a){
 }
 /* ===== desglose (estimada o recibo) ===== */
 function fila(k,v,cls){return `<tr><td>${k}</td><td class="${cls||''}">${v}</td></tr>`;}
+function filasConceptos(cc){ // conceptos con nombre y motivo (desglose legal)
+ return (cc||[]).map(c=>fila(esc(c.concepto)+(c.nota?` <span style="color:var(--faint);font-size:11px">· ${esc(c.nota)}</span>`:''),
+  (c.tipo==='percepcion'?'+':'−')+money(c.monto), c.tipo==='percepcion'?'up':'down')).join('');
+}
+function sumC(cc,t){return (cc||[]).filter(x=>x.tipo===t).reduce((s,x)=>s+(+x.monto||0),0);}
 function verDesglose(){
  const det=D.detalle||{};const fiscal=D.esquema==='fiscal';
  openSheet(`<h2>Desglose de mi quincena</h2><div class="sub">${QN(D.quincena)} · esquema ${esc(D.esquema)} · ${D.estimada_estatus==='validada'?'FINAL':'estimado'}</div>
@@ -80,7 +85,8 @@ function verDesglose(){
    ${fila('Sueldo mensual base (contrato)',money(D.salario_mensual))}
    ${fila('Sueldo diario (mensual ÷ 30)',money(D.sueldo_diario))}
    ${fila('Días de la quincena',det.dias??15)}
-   ${fila('Percepciones',money(det.percepciones))}
+   ${fila('Sueldo de la quincena',money(det.dias!=null?det.dias*D.sueldo_diario:det.percepciones))}
+   ${filasConceptos(D.conceptos)}
    ${fiscal?fila('ISR retenido (tabla SAT 2026)','−'+money(det.isr),'down'):''}
    ${fiscal?fila('IMSS cuota obrera (sobre tu SBC)','−'+money(det.imss),'down'):''}
    ${fiscal&&det.sbc?fila('SBC (salario base de cotización)',money(det.sbc)):''}
@@ -91,16 +97,19 @@ function verDesglose(){
 }
 function verRecibo(r){
  const fiscal=Number(r.isr)>0||Number(r.imss)>0;
+ const cc=r.conceptos||[];
+ const desg=cc.length?filasConceptos(cc)
+  :((r.ajuste>0?fila('Bonos y extras <span style="color:var(--faint);font-size:11px">· concepto por detallar con administración</span>','+'+money(r.ajuste),'up'):'')
+   +(r.ajuste<0?fila('Ajustes y descuentos <span style="color:var(--faint);font-size:11px">· concepto por detallar con administración</span>','−'+money(-r.ajuste),'down'):''));
  openSheet(`<h2>Recibo · ${QN(r.quincena)}</h2><div class="sub">pagado</div>
   <table class="tc">
-   ${r.base!=null?fila('Quincena base',money(r.base)):''}
-   ${r.ajuste>0?fila('Bonos y extras','+'+money(r.ajuste),'up'):''}
-   ${r.ajuste<0?fila('Ajustes y descuentos','−'+money(-r.ajuste),'down'):''}
-   ${fiscal?fila('ISR retenido','−'+money(r.isr),'down'):''}
+   ${r.base!=null?fila('Sueldo de la quincena (base de contrato)',money(r.base)):''}
+   ${desg}
+   ${fiscal?fila('ISR retenido (tabla SAT)','−'+money(r.isr),'down'):''}
    ${fiscal?fila('IMSS cuota obrera','−'+money(r.imss),'down'):''}
    <tr class="tot"><td>Neto depositado</td><td>${money(r.neto)}</td></tr>
   </table>
-  <p class="nota">Si algo no te cuadra, coméntalo con tu jefe o con administración — para eso está este recibo.</p>`);
+  <p class="nota">Cada pago o descuento debe traer su concepto y motivo. Si algo no te cuadra o falta el detalle, coméntalo con tu jefe o con administración — para eso está este recibo.</p>`);
 }
 function verContrato(){
  const c=D.contrato;
@@ -149,27 +158,42 @@ El monto anticipado se descontará íntegramente del pago de esta misma quincena
 }
 /* ===== vista principal ===== */
 async function pinta(){
- try{D=await rpc('mi_nomina',{p_email:EMAIL});}catch(e){$('#app').innerHTML='<div class="cargando">No se pudo cargar. Revisa tu sesión.</div>';return;}
+ try{D=await rpc('mi_nomina',{p_email:VER||EMAIL});}catch(e){$('#app').innerHTML='<div class="cargando">No se pudo cargar. Revisa tu sesión.</div>';return;}
  if(!D.ok){$('#app').innerHTML='<div class="cargando">'+esc(D.error||'Sin datos')+'</div>';return;}
+ if(ROSTER===null){try{ROSTER=await rpc('roster_nomina',{});}catch(e){ROSTER=[];}}
  const esFinal=D.estimada_estatus==='validada';
  const det=D.detalle||{};
+ const com=Number(D.comision_adelanto)||(D.retirable_bruto*0.02);
+ const cc=D.conceptos||[];
+ /* si la estimada es la base pura (tentativa), los conceptos capturados se suman a la vista */
+ const estMostrada=(D.estimada_estatus==='tentativa')?(Number(D.estimada)+sumC(cc,'percepcion')-sumC(cc,'deduccion')):Number(D.estimada);
+ const ccRows=cc.map(c=>`<tr><td>${esc(c.concepto)}${c.nota?` <span style="color:var(--faint);font-size:10.5px">· ${esc(c.nota)}</span>`:''}</td><td>—</td><td class="${c.tipo==='percepcion'?'up':'down'}">${c.tipo==='percepcion'?'+':'−'}${money(c.monto)}</td></tr>`).join('');
+ const verHTML=(ROSTER&&ROSTER.length)?`<div class="card" style="padding:10px 14px"><label style="font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.05em">👁 Ver como</label>
+   <select id="verComo" style="width:100%;margin-top:5px;padding:10px;border:1px solid var(--bd);border-radius:10px;background:#16130f;color:var(--txt);font-size:14px">
+    <option value="">Yo (${esc(EMAIL)})</option>
+    ${ROSTER.map(r=>`<option value="${esc(r.email)}" ${VER===r.email?'selected':''}>${esc(r.nombre)}</option>`).join('')}
+   </select></div>`:'';
  $('#app').innerHTML=`
-  <div class="card"><h3>Mi quincena · ${QN(D.quincena)} <span class="tag ${esFinal?'final':'tent'}">${esFinal?'FINAL':'TENTATIVA'}</span></h3>
+  ${verHTML}
+  ${D.preview?`<div class="aviso" style="border-color:var(--gold);color:var(--gold)">👁 Estás viendo la pantalla de <b>${esc(D.nombre)}</b> tal como la ve. Solo lectura: el botón de adelanto está apagado.</div>`:''}
+  <div class="card"><h3>${D.preview?esc(D.nombre)+' · quincena':'Mi quincena'} · ${QN(D.quincena)} <span class="tag ${esFinal?'final':'tent'}">${esFinal?'FINAL':'TENTATIVA'}</span></h3>
    <table class="tc">
     <tr><th>Concepto</th><th>A día de hoy</th><th>Quincena ${esFinal?'final':'estimada'}</th></tr>
     <tr><td>Días laborados</td><td>${D.dias_trabajados}</td><td>${det.dias??15}</td></tr>
     <tr><td>Sueldo por días</td><td>${money(D.retirable_bruto)}</td><td>${money(det.percepciones)}</td></tr>
+    ${ccRows}
     ${Number(det.isr)?`<tr><td>ISR retenido</td><td>—</td><td class="down">−${money(det.isr)}</td></tr>`:''}
     ${Number(det.imss)?`<tr><td>IMSS obrero</td><td>—</td><td class="down">−${money(det.imss)}</td></tr>`:''}
     ${Number(det.deducciones)?`<tr><td>Otras deducciones</td><td>—</td><td class="down">−${money(det.deducciones)}</td></tr>`:''}
-    <tr class="tot"><td>Neto</td><td>${money(D.retirable_neto)}<div style="font-size:9.5px;font-weight:400;color:var(--faint)">si lo adelantas (−2%)</div></td><td>${money(D.estimada)}</td></tr>
+    <tr><td>Comisión si adelantas (2%)</td><td class="down">−${money(com)}</td><td>—</td></tr>
+    <tr class="tot"><td>Se te deposita</td><td>${money(D.retirable_neto)}<div style="font-size:9.5px;font-weight:400;color:var(--faint)">hoy, si adelantas</div></td><td>${money(estMostrada)}<div style="font-size:9.5px;font-weight:400;color:var(--faint)">día de pago</div></td></tr>
    </table>
    <div class="btnrow">
     <button class="btn g" id="bDesglose">📋 Ver desglose</button>
     <button class="btn g" id="bContrato">📄 Mi contrato</button>
    </div>
-   <button class="btn full" id="bAdelantar" ${(!D.adelanto&&D.retirable_neto>=100)?'':'disabled'}>💸 Adelantar mis días trabajados</button>
-   <div class="nota">${D.adelanto?('Tienes un adelanto en trámite: '+money(D.adelanto.monto)+' ('+esc(D.adelanto.estado)+').'):(esFinal?'Cifra validada por administración: esto es lo que te cae.':'La cifra final se valida dos días antes del depósito; bonos y extras pueden moverla.')}</div>
+   <button class="btn full" id="bAdelantar" ${(!D.preview&&!D.adelanto&&D.retirable_neto>=100)?'':'disabled'}>💸 Adelantar ${money(D.retirable_neto)} de mis días trabajados</button>
+   <div class="nota">${D.adelanto?('Adelanto en trámite: '+money(D.adelanto.monto)+' ('+esc(D.adelanto.estado)+').'):(esFinal?'Cifra validada por administración: esto es lo que te cae.':'La cifra final se valida dos días antes del depósito; bonos y extras pueden moverla.')}</div>
   </div>
   <div class="card"><h3>Mis recibos anteriores</h3>
    ${(D.recibos||[]).length?(D.recibos||[]).map((r,i)=>`<div class="rec" data-i="${i}"><span class="q">${QN(r.quincena)}</span><span class="mid">${bonoTxt(r.ajuste)}</span><span class="n">${money(r.neto)}</span><span class="ch">›</span></div>`).join(''):'<div class="nota">Aún no hay recibos registrados.</div>'}
@@ -178,6 +202,7 @@ async function pinta(){
  $('#bDesglose').onclick=verDesglose;
  $('#bContrato').onclick=verContrato;
  const ba=$('#bAdelantar');if(ba&&!ba.disabled)ba.onclick=verAdelanto;
+ const vc=$('#verComo');if(vc)vc.onchange=()=>{VER=vc.value;pinta();};
  document.querySelectorAll('.rec[data-i]').forEach(el=>el.onclick=()=>verRecibo(D.recibos[+el.dataset.i]));
 }
 pinta();
