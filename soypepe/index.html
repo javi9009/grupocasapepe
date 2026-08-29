@@ -2179,9 +2179,14 @@ async function openVacaciones(){
   $('vacaSheet').classList.add('show');
   const body=$('vac-body'); const empId=EMP||HZ.empId;
   if(!empId){ body.innerHTML='<div class="ph"><div class="ico">🌴</div><div class="d">Tu cuenta aún no está ligada a tu ficha. Avisa a RH.</div></div>'; return; }
-  let saldo=null, sols=[];
+  let saldo=null, sols=[], bonifSaldo=0;
   try{ const {data}=await sb.from('vacaciones_saldo').select('*').eq('employee_id',empId).order('anio_aniversario',{ascending:false}).limit(1); if(data&&data[0]) saldo=data[0]; }catch(e){}
   try{ const {data}=await sb.from('vacaciones_solicitudes').select('*').eq('employee_id',empId).order('fecha_inicio',{ascending:false}); sols=data||[]; }catch(e){}
+  try{
+    const {count:ot}=await sb.from('dias_bonificados').select('id',{count:'exact',head:true}).eq('employee_id',empId);
+    const us=sols.filter(s=>s.tipo==='bonificado'&&['pendiente','pre_aprobada','aprobada','tomada','confirmada'].includes((s.estado||'').toLowerCase())).reduce((n,s)=>n+(Number(s.dias_solicitados)||1),0);
+    bonifSaldo=Math.max(0,(ot||0)-us);
+  }catch(e){}
   VAC.saldo=saldo;
   const corr=saldo?saldo.dias_corresponden:0, tom=saldo?saldo.dias_tomados:0, disp=saldo?saldo.dias_pendientes:0;
   const periodo=saldo?(vacFc(saldo.fecha_inicio_periodo)+' → '+vacFc(saldo.fecha_fin_periodo)):'—';
@@ -2198,7 +2203,14 @@ async function openVacaciones(){
       +'<div class="vac-calc" id="vac-calc">Elige tus fechas</div>'
       +'<button class="vac-btn" id="vac-send" disabled>Solicitar</button>'
       +'<div class="vac-msg" id="vac-msg" style="display:none"></div></div>'):'')
-    +'<div style="display:flex;gap:8px;margin-top:10px"><button class="vac-btn" id="vac-permBtn" style="background:#8C6212">🤒 Permiso / baja</button><button class="vac-btn" id="vac-bonifBtn" style="background:#1F6BA8">🎁 Día bonificado</button></div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="vac-btn" id="vac-permBtn" style="background:#8C6212">🤒 Solicitar permiso / baja</button>'
+    +(bonifSaldo>0?'<button class="vac-btn" id="vac-bonifBtn" style="background:#1F6BA8">🎁 Tienes '+bonifSaldo+' día'+(bonifSaldo>1?'s':'')+' bonificado'+(bonifSaldo>1?'s':'')+'</button>':'')
+    +'</div>'
+    +(bonifSaldo>0?('<div class="vac-form" id="bonifForm" style="display:none"><h4>🎁 Usar mi día bonificado</h4>'
+      +'<div style="font-size:12px;color:var(--txt3);margin:2px 0 8px">Tu jefe te otorgó '+bonifSaldo+' día'+(bonifSaldo>1?'s':'')+' libre'+(bonifSaldo>1?'s':'')+' PAGADO'+(bonifSaldo>1?'s':'')+' por buen desempeño. Elige la fecha; tu jefe la aprueba y queda en tu horario como descanso.</div>'
+      +'<div class="row"><div><label>Fecha</label><input type="date" id="bonif-fecha" min="'+today+'"></div></div>'
+      +'<button class="vac-btn" id="bonif-send" style="margin-top:8px;background:#1F6BA8">Solicitar esta fecha</button>'
+      +'<div class="vac-msg" id="bonif-msg" style="display:none"></div></div>'):'')
     +'<div class="vac-form" id="permForm" style="display:none"><h4>Solicitar permiso o baja temporal</h4>'
       +'<div style="font-size:12px;color:var(--txt3);margin:2px 0 8px">Días sin goce de sueldo. Lo revisa y aprueba tu jefe. Si es por salud, adjunta tu comprobante médico.</div>'
       +'<div class="row"><div><label>Tipo</label><select id="perm-tipo" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg2);color:var(--txt)"><option value="permiso">Permiso</option><option value="baja">Baja temporal</option></select></div><div><label>Del</label><input type="date" id="perm-ini" min="'+today+'"></div><div><label>Al</label><input type="date" id="perm-fin" min="'+today+'"></div></div>'
@@ -2206,18 +2218,12 @@ async function openVacaciones(){
       +'<label style="margin-top:6px">Comprobante médico (foto o PDF, opcional)</label><input type="file" id="perm-file" accept="image/*,.pdf" style="width:100%;font-size:12px;margin-top:2px">'
       +'<button class="vac-btn" id="perm-send" style="margin-top:8px;background:#8C6212">Enviar solicitud</button>'
       +'<div class="vac-msg" id="perm-msg" style="display:none"></div></div>'
-    +'<div class="vac-form" id="bonifForm" style="display:none"><h4>Solicitar día bonificado</h4>'
-      +'<div style="font-size:12px;color:var(--txt3);margin:2px 0 8px">Día libre PAGADO por buen desempeño. Lo aprueba tu jefe y queda en tu horario como descanso.</div>'
-      +'<div class="row"><div><label>Fecha</label><input type="date" id="bonif-fecha" min="'+today+'"></div></div>'
-      +'<label style="margin-top:6px">Motivo</label><input id="bonif-motivo" placeholder="¿por qué te lo mereces? 😉" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg2);color:var(--txt)">'
-      +'<button class="vac-btn" id="bonif-send" style="margin-top:8px;background:#1F6BA8">Solicitar</button>'
-      +'<div class="vac-msg" id="bonif-msg" style="display:none"></div></div>'
     +'<div class="vac-h4">Mis solicitudes</div><div id="vac-list">'
-    +(sols.length?sols.map(s=>{const tl={vacaciones:'🌴 Vacaciones',permiso:'🤒 Permiso',baja:'🤒 Baja temporal',bonificado:'🎁 Día bonificado'}[s.tipo||'vacaciones']||s.tipo;return '<div class="vac-req"><div><b>'+vacFc(s.fecha_inicio)+' – '+vacFc(s.fecha_fin)+'</b><div style="font-size:11px;color:var(--txt3)">'+tl+' · '+s.dias_solicitados+' día(s)'+(s.motivo?' · '+s.motivo:'')+'</div></div>'+vacBadge(s.estado)+'</div>';}).join(''):'<div style="font-size:13px;color:var(--txt3);padding:8px 0">Sin solicitudes todavía.</div>')
+    +(sols.length?sols.map(s=>{const tl={vacaciones:'🌴 Vacaciones',permiso:'🤒 Permiso',baja:'🤒 Baja temporal',bonificado:'🎁 Día bonificado (otorgado en tu ficha)'}[s.tipo||'vacaciones']||s.tipo;return '<div class="vac-req"><div><b>'+vacFc(s.fecha_inicio)+' – '+vacFc(s.fecha_fin)+'</b><div style="font-size:11px;color:var(--txt3)">'+tl+' · '+s.dias_solicitados+' día(s)'+(s.motivo?' · '+s.motivo:'')+'</div></div>'+vacBadge(s.estado)+'</div>';}).join(''):'<div style="font-size:13px;color:var(--txt3);padding:8px 0">Sin solicitudes todavía.</div>')
     +'</div>';
 
   const _lft=$('vac-lft'); if(_lft) _lft.onclick=()=>$('lftSheet').classList.add('show');
-  const _pb=$('vac-permBtn'); if(_pb) _pb.onclick=()=>{ $('permForm').style.display=$('permForm').style.display==='none'?'block':'none'; $('bonifForm').style.display='none'; };
+  const _pb=$('vac-permBtn'); if(_pb) _pb.onclick=()=>{ $('permForm').style.display=$('permForm').style.display==='none'?'block':'none'; const bf=$('bonifForm'); if(bf) bf.style.display='none'; };
   const _bb=$('vac-bonifBtn'); if(_bb) _bb.onclick=()=>{ $('bonifForm').style.display=$('bonifForm').style.display==='none'?'block':'none'; $('permForm').style.display='none'; };
   const _ps=$('perm-send'); if(_ps) _ps.onclick=()=>permEnviar();
   const _bs=$('bonif-send'); if(_bs) _bs.onclick=()=>bonifEnviar();
@@ -2288,16 +2294,16 @@ async function permEnviar(){
 }
 async function bonifEnviar(){
   const empId=EMP||HZ.empId, msg=$('bonif-msg'), btn=$('bonif-send');
-  const f=$('bonif-fecha').value, motivo=($('bonif-motivo').value||'').trim();
+  const f=$('bonif-fecha').value;
   if(!f){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='Elige la fecha.'; return; }
   btn.disabled=true; const t0=btn.textContent; btn.textContent='Enviando…';
   try{
-    const { error }=await sb.from('vacaciones_solicitudes').insert({ employee_id:empId, tipo:'bonificado', fecha_inicio:f, fecha_fin:f, dias_solicitados:1, estado:'pendiente', motivo, notas:'Día bonificado solicitado para '+f+(motivo?' · '+motivo:'') });
+    const { error }=await sb.from('vacaciones_solicitudes').insert({ employee_id:empId, tipo:'bonificado', fecha_inicio:f, fecha_fin:f, dias_solicitados:1, estado:'pendiente', notas:'Día bonificado (otorgado por su jefe) solicitado para '+f });
     if(error) throw error;
     try{ const uid=(await sb.auth.getUser()).data.user?.id;
-      await sb.from('incidencias').insert({ employee_id:empId, user_id:uid, nombre_display:(HZ.nombreDisplay||NOMBRE||null), tipo:'bonificado', severidad:'info', descripcion:'Solicitud de día bonificado el '+f+(motivo?' · '+motivo:''), fecha:f, metadata:{inicio:f,fin:f,dias:1,estado:'pendiente',motivo} });
+      await sb.from('incidencias').insert({ employee_id:empId, user_id:uid, nombre_display:(HZ.nombreDisplay||NOMBRE||null), tipo:'bonificado', severidad:'info', descripcion:'Quiere usar su día bonificado el '+f, fecha:f, metadata:{inicio:f,fin:f,dias:1,estado:'pendiente'} });
     }catch(e){}
-    msg.style.display='block'; msg.style.color='#1d9e75'; msg.innerHTML='✓ <b>Solicitud enviada.</b> Si tu jefe la aprueba, el día queda pagado y en tu horario como descanso.';
+    msg.style.display='block'; msg.style.color='#1d9e75'; msg.innerHTML='✓ <b>Enviado.</b> Cuando tu jefe apruebe, el día queda pagado y en tu horario como descanso.';
     setTimeout(openVacaciones,1500);
   }catch(e){ msg.style.display='block'; msg.style.color='#b03434'; msg.textContent='No se pudo enviar. Intenta de nuevo.'; btn.disabled=false; btn.textContent=t0; }
 }
