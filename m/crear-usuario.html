@@ -43,7 +43,15 @@ input,select{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px
 
   <div class="pane on" id="pane-crear">
     <div class="card"><h3><span class="step">1</span>Ubicación</h3><p class="sub">Sede(s). La principal define su ID y propiedad.</p><div class="chips" id="ubic"></div><label style="margin-top:10px">Sede principal</label><select id="principal"></select></div>
-    <div class="card"><h3><span class="step">2</span>Rol / tipología</h3><p class="sub">Puesto. Define el acceso automático (dashboard y SoyPepe) por rol.</p><select id="rol"><option value="">— Selecciona un rol —</option></select></div>
+    <div class="card"><h3><span class="step">2</span>Rol, categoría y tramo</h3><p class="sub">El rol define el acceso automático (dashboard y SoyPepe) y trae su categoría del organigrama. El tramo fija el escalón salarial del tabulador.</p>
+      <label>Rol</label><select id="rol"><option value="">— Selecciona un rol —</option></select>
+      <div class="muted" id="rolInfo" style="margin-top:4px"></div>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>Tramo salarial</label><select id="tramo"><option value="practicas">Prácticas</option><option value="junior">Junior</option><option value="junior2">Junior 2</option><option value="senior">Senior</option></select><div class="muted" id="tramoInfo"></div></div>
+        <div><label>Jefe jerárquico (aprueba horario, vacaciones y renovación)</label><select id="jefeJ"><option value="">— Elegir —</option></select></div>
+        <div style="grid-column:1/-1"><label>Jefe funcional (opcional · dirige el trabajo técnico)</label><select id="jefeF"><option value="">— Ninguno —</option></select></div>
+      </div>
+    </div>
     <div class="card"><h3><span class="step">3</span>Acceso a información</h3><p class="sub">El acceso base lo da el rol. Aquí puedes premarcar páginas del dashboard (copiadas de un colaborador real del mismo puesto) y ajustarlas. <span id="presetInfo" class="muted"></span></p><div class="pages" id="pages"></div><div style="margin-top:6px"><button class="btn2" id="clearPg">Ninguna</button></div></div>
     <div class="card"><h3><span class="step">4</span>Datos y creación</h3>
       <div class="grid2">
@@ -93,7 +101,32 @@ async function presetPorRol(rol){$('presetInfo').textContent='';if(!rol){renderP
       if(acc.length){const pre={};acc.forEach(a=>pre[a.pantalla]=a.nivel||'editar');renderPages(pre);$('presetInfo').textContent='(preseteado de un usuario con rol '+rol+')';return;}}
     renderPages({});$('presetInfo').textContent='(sin referencia previa — marca manualmente)';
   }catch(e){renderPages({});}}
-$('rol').onchange=()=>presetPorRol($('rol').value);
+let ROLES=[],CATS={},RANGOS=[],EMPS=[];
+function rolInfo(){const r=ROLES.find(x=>x.rol===$('rol').value);const el=$('rolInfo');
+ if(!r){el.textContent='';tramoInfo();return;}
+ const c=CATS[r.categoria];
+ el.innerHTML=c?('Categoría: <b>'+esc(c.nombre)+'</b> · contrato '+esc(c.tipo_contrato||'—')+(c.prueba_meses?(' · prueba '+c.prueba_meses+' meses'):'')):(r.categoria?('Categoría: '+esc(r.categoria)):'Sin categoría en el catálogo — se asigna después en el Organigrama.');
+ tramoInfo();}
+function tramoInfo(){const r=ROLES.find(x=>x.rol===$('rol').value);const el=$('tramoInfo');el.textContent='';
+ if(!r)return;const sede={cdmx:'CDMX',puebla:'Puebla',virreyes:'Virreyes',sincretico:'Virreyes',corp:'CDMX'}[$('principal').value]||'CDMX';
+ const g=RANGOS.find(x=>x.activo&&(x.rol===r.rol||x.puesto===r.rol)&&(!x.sede||x.sede===sede))||RANGOS.find(x=>x.activo&&(x.rol===r.rol||x.puesto===r.rol));
+ if(!g)return;const v=g[$('tramo').value];
+ if(v!=null)el.textContent='Tabulador '+(g.sede||'')+': $'+Number(v).toLocaleString('es-MX')+' brutos';}
+$('rol').onchange=()=>{presetPorRol($('rol').value);rolInfo();};
+$('tramo').onchange=tramoInfo;
+$('principal').addEventListener('change',tramoInfo);
+async function cablearRol(email,msgEl){ // tras crear: categoría+tramo en employees y jefes en org_asignacion
+ try{
+  const emp=await api('/employees?select=id&email=eq.'+encodeURIComponent(email)+'&order=created_at.desc&limit=1');
+  const id=emp&&emp[0]&&emp[0].id; if(!id) return 'no encontré el expediente para cablear rol';
+  const r=ROLES.find(x=>x.rol===$('rol').value)||{};
+  await api('/employees?id=eq.'+id,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({categoria:r.categoria||null,tramo:$('tramo').value,updated_at:new Date().toISOString()})});
+  const hoy=new Date().toISOString().slice(0,10);const asig=[];
+  if($('jefeJ').value)asig.push({employee_id:id,jefe_id:$('jefeJ').value,tipo:'jerarquico',desde:hoy,nota:'alta desde Crear usuario'});
+  if($('jefeF').value&&$('jefeF').value!==$('jefeJ').value)asig.push({employee_id:id,jefe_id:$('jefeF').value,tipo:'funcional',desde:hoy,nota:'alta desde Crear usuario'});
+  if(asig.length)await api('/org_asignacion',{method:'POST',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify(asig)});
+  return null;
+ }catch(e){return 'categoría/jefes no se guardaron ('+(e.message||'error')+') — ajústalo en el Organigrama';}}
 $('genpw').onclick=()=>{$('password').value='CP'+Math.random().toString(36).slice(2,7)+Math.floor(10+Math.random()*89);};
 
 $('email').onblur=async()=>{const em=$('email').value.trim().toLowerCase();const w=$('dupwarn');w.className='warnbox';if(!em||em.indexOf('@')<1)return;
@@ -110,7 +143,8 @@ $('crear').onclick=async()=>{const msg=$('msg');msg.className='msg';msg.textCont
   $('crear').disabled=true;msg.className='msg';msg.textContent='Creando usuario…';
   try{const j=await callFn({action:'crear',nombre,apellido:$('apellido').value.trim(),email,celular:$('celular').value.trim(),rol:$('rol').value,proyectos:[...UBIC],proyecto_principal:$('principal').value||[...UBIC][0],password:$('password').value.trim(),paginas,enviar_correo:$('enviar').checked});
     if(!j.ok){msg.className='msg err';msg.textContent='⚠ '+(j.error||'No se pudo crear');$('crear').disabled=false;return;}
-    msg.className='msg ok';msg.textContent='✓ Usuario creado'+(j.correo_enviado?' · correo enviado':'');
+    const wireErr=await cablearRol(email);
+    msg.className='msg ok';msg.textContent='✓ Usuario creado'+(j.correo_enviado?' · correo enviado':'')+(wireErr?(' · ⚠ '+wireErr):' · categoría, tramo y jefes registrados');
     const res=$('result');res.className='result show';
     res.innerHTML='<div style="font-weight:700;margin-bottom:8px">✅ Cuenta creada'+(j.correo_enviado?' y notificada por correo':'')+':</div>'+'<div class="kv"><span>ID</span><code>'+esc(j.empleado_id||'—')+'</code></div><div class="kv"><span>Correo</span><code>'+esc(j.email)+'</code></div><div class="kv"><span>Contraseña temporal</span><code>'+esc(j.password)+'</code></div>'+(j.correo_enviado?'':'<div class="muted" style="margin-top:8px">(No se envió correo — comparte los datos manualmente.)</div>');
     ['nombre','apellido','email','celular','password'].forEach(id=>$(id).value='');$('dupwarn').className='warnbox';$('crear').disabled=false;
@@ -140,7 +174,14 @@ async function doBaja(id,nm){if(!confirm('¿Desactivar el acceso de '+(nm||'este
   }catch(e){$('gmsg').className='msg err';$('gmsg').textContent='⚠ Error de conexión.';}}
 
 (async()=>{renderUbic();renderPrincipal();renderPages({});
-  try{const roles=await api('/roles_catalogo?select=rol&order=rol')||[];$('rol').innerHTML='<option value="">— Selecciona un rol —</option>'+roles.map(r=>`<option>${esc(r.rol)}</option>`).join('');}catch(e){}})();
+  try{ROLES=await api('/roles_catalogo?select=rol,categoria,area&order=orden')||[];
+    $('rol').innerHTML='<option value="">— Selecciona un rol —</option>'+ROLES.map(r=>`<option value="${esc(r.rol)}">${esc(r.rol)}${r.area?' · '+esc(r.area):''}</option>`).join('');}catch(e){}
+  try{(await api('/org_categorias?select=codigo,nombre,tipo_contrato,prueba_meses')||[]).forEach(c=>CATS[c.codigo]=c);}catch(e){}
+  try{RANGOS=await api('/rangos_salariales?select=rol,puesto,sede,activo,practicas,junior,junior2,senior&activo=is.true')||[];}catch(e){}
+  try{EMPS=await api('/employees?select=id,nombre,apellido,nombre_display,puesto&estatus=eq.activo&order=nombre')||[];
+    const ops=EMPS.map(e2=>`<option value="${e2.id}">${esc(e2.nombre_display||[e2.nombre,e2.apellido].filter(Boolean).join(' '))}${e2.puesto?' · '+esc(e2.puesto):''}</option>`).join('');
+    $('jefeJ').innerHTML='<option value="">— Elegir —</option>'+ops;$('jefeF').innerHTML='<option value="">— Ninguno —</option>'+ops;}catch(e){}
+})();
 </script>
 <script>
 (function(){var KEYP='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO',PAGE='PAG-RH-ALTA';var _f=window.fetch.bind(window);
