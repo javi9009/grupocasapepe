@@ -184,6 +184,9 @@ button{font-family:inherit}
 .sheet .modos .mo.on.alerta{background:#b03434;border-color:#b03434}
 .btn.atras{background:var(--surface,#fff);color:var(--soft,#6b5d49);border:1px solid var(--bd,#e3d8c3);margin-top:7px;font-weight:700}
 .chip.pase{background:#efe9f6;border-color:#c1b0d8;color:#4d3a6b}
+.sheet .quien{font-size:12.5px;color:var(--soft,#6b5d49);background:var(--bg2,#faf7f0);border-radius:10px;
+  padding:9px 11px;margin-top:4px;line-height:1.4}
+.sheet .quien b{color:var(--txt,#2b2017)}
 </style></head><body>
 
 <div class="appbar">
@@ -223,6 +226,7 @@ button{font-family:inherit}
   <select id="addArea"></select>
   <label id="addLbl2">¿Qué pasó?</label>
   <textarea id="addMot" placeholder="Ej. se derramó café, segundo repaso de los baños…"></textarea>
+  <div class="quien" id="addDest"></div>
   <div class="btns"><button class="no" id="addX">Cancelar</button><button class="ok" id="addBtn">Añadir</button></div>
 </div></div>
 
@@ -662,6 +666,7 @@ async function cargarZonasYExtras(){
     sb.from('hk_extras').select('*,hk_areas(codigo,nombre)').eq('property_id',PROP).eq('fecha',FECHA).order('reportado_at',{ascending:false}),
   ]);
   ZONAS=z||[]; EXTRAS=x||[];
+  await cargarCargas();
 }
 function bloqueAnadir(){
   // Solo las pendientes de resolver van en la pantalla. Añadir una limpieza vive
@@ -685,7 +690,7 @@ function engancharAnadir(root){
       resuelto_nombre:NOMBRE,resuelto_at:new Date().toISOString()}).eq('id',x.dataset.res);
     if(error){ x.disabled=false; return toast('No se pudo marcar'); }
     // El trabajo cuenta: entra como tarea extra en el día de quien la resolvió
-    const destino=MIA?MIA.id:null;
+    const destino=MIA?MIA.id:null;   // la hizo ella, aquí no hay a quién elegir
     if(destino) await sb.from('hk_tareas').insert({
       asignacion_id:destino, property_id:PROP, fecha:FECHA, area_id:e?.area_id||null,
       titulo:e?.area_id?null:(e?.lugar||'Limpieza extraordinaria'),
@@ -695,6 +700,48 @@ function engancharAnadir(root){
     toast('Gracias · queda registrado');
     cargar();
   });
+}
+
+// ---- a quién le cuesta menos ----
+// Carga real de cada persona (a su ritmo), su turno, y cuánto le costaría en
+// horas extra hacerse cargo de una limpieza más.
+let CARGAS=[];
+async function cargarCargas(){
+  if(!PROP) return;
+  const {data}=await sb.from('hk_asignaciones')
+    .select('id,employee_id,nombre_display,turno,hora_inicio,hora_fin,hk_tareas(minutos_estimados,minutos_reales,estado)')
+    .eq('fecha',FECHA).eq('property_id',PROP);
+  CARGAS=(data||[]).filter(a=>a.employee_id&&a.turno!=='front');
+}
+const minDeHora=t=>{ if(!t) return 0; const [h,m]=String(t).split(':').map(Number); return h*60+(m||0); };
+function fotoCarga(a){
+  const ts=a.hk_tareas||[];
+  const carga=ts.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const hechas=ts.filter(t=>t.minutos_reales!=null);
+  const est=hechas.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const real=hechas.reduce((s,t)=>s+Number(t.minutos_reales||0),0);
+  // Solo se premia ir rápido: ir lento no le añade carga, es retraso.
+  const ritmo=(est>=30&&real>0)?Math.max(1,est/real):1;
+  let jornada=minDeHora(a.hora_fin)-minDeHora(a.hora_inicio);
+  if(jornada<=0) jornada=480;
+  return {carga:carga/ritmo, ritmo, jornada};
+}
+function costeExtra(a,min){
+  const f=fotoCarga(a);
+  const antes=Math.max(0,f.carga-f.jornada);
+  const despues=Math.max(0,f.carga+min/f.ritmo-f.jornada);
+  return {coste:despues-antes, holgura:f.jornada-f.carga};
+}
+// Devuelve a quién dársela: la de menor coste en horas extra. A igualdad de
+// coste (todas con hueco), se queda con quien la reporta.
+function mejorDestino(min,preferId){
+  if(!CARGAS.length) return null;
+  const cand=CARGAS.map(a=>({a,...costeExtra(a,min)}))
+    .sort((x,y)=>x.coste-y.coste || (y.holgura-x.holgura));
+  const mejor=cand[0];
+  const propia=cand.find(x=>x.a.id===preferId);
+  if(propia && propia.coste<=mejor.coste+0.001) return propia;
+  return mejor;
 }
 
 // ＋ de la barra: añadir una limpieza que no venía en el reparto.
@@ -720,6 +767,7 @@ function abrirAnadir(){
     +(zonas.length?`<optgroup label="Zonas comunes">${zonas.map(a=>`<option value="${a.id}" data-min="${a.minutos_override||30}">${esc(a.nombre)}</option>`).join('')}</optgroup>`:'');
   $('addMot').value='';
   ponModo('limpieza');
+  pintarDestino();
   $('shAdd').classList.add('on');
 }
 let MODO='limpieza';
@@ -740,7 +788,34 @@ function ponModo(m){
   $('addBtn').textContent=huesped?'Avisar a front':'Añadir';
   $('addQuienBox').hidden = huesped || $('addQuienBox').dataset.puede!=='1';
 }
-document.querySelectorAll('#shAdd .mo').forEach(b=>b.onclick=()=>ponModo(b.dataset.modo));
+document.querySelectorAll('#shAdd .mo').forEach(b=>b.onclick=()=>{ ponModo(b.dataset.modo); pintarDestino(); });
+
+// Quién se queda la limpieza extra: se propone a quien menos horas extra le cueste.
+function minutosElegidos(){
+  const sel=$('addArea');
+  return Number(sel.options[sel.selectedIndex]?.dataset.min||0)||0;
+}
+function destinoElegido(){
+  // Si el ama de llaves eligió a mano, manda su elección.
+  if(!$('addQuienBox').hidden && $('addQuien').value){
+    const a=CARGAS.find(x=>x.id===$('addQuien').value);
+    return a?{a,coste:costeExtra(a,minutosElegidos()).coste,aMano:true}:null;
+  }
+  return mejorDestino(minutosElegidos(), MIA?MIA.id:null);
+}
+function pintarDestino(){
+  const d=destinoElegido(), box=$('addDest');
+  if(!d||!minutosElegidos()){ box.textContent=''; return; }
+  const mia=MIA&&d.a.id===MIA.id;
+  const coste=Math.round(d.coste);
+  box.innerHTML = d.aMano
+    ? `Se la añades a <b>${esc(d.a.nombre_display)}</b>${coste>0?` · le suma ${coste} min de horas extra`:' · le cabe en su turno'}.`
+    : mia
+      ? `Te la quedas tú${coste>0?` · te suma ${coste} min de horas extra`:' · te cabe en el turno'}.`
+      : `La hace <b>${esc(d.a.nombre_display)}</b>, que es a quien menos le cuesta${coste>0?` (${coste} min extra)`:' y le cabe en su turno'}.`;
+}
+$('addArea').onchange=pintarDestino;
+$('addQuien').onchange=pintarDestino;
 $('btnMas').onclick=abrirAnadir;
 $('addX').onclick=()=>$('shAdd').classList.remove('on');
 $('shAdd').onclick=e=>{ if(e.target===$('shAdd')) $('shAdd').classList.remove('on'); };
@@ -766,15 +841,19 @@ async function avisarHuesped(areaId, nota, min){
       cuerpo:`${donde} · lo reportó ${NOMBRE}${nota?` · ${nota}`:''}`,
       icono:'⚠', accion:{url:'/soypepe/',tipo:'hk_huesped',fecha:FECHA,area_id:areaId},
     });
-    // 3. Ese cuarto hay que limpiarlo igual: entra como extra en el día.
-    const destino=MIA?MIA.id:null;
+    // 3. Ese cuarto hay que limpiarlo igual: entra como extra en el día de quien
+    // menos horas extra sume, que puede ser ella misma si le cabe en el turno.
+    const elegido=mejorDestino(min, MIA?MIA.id:null);
+    const destino=elegido?elegido.a.id:(MIA?MIA.id:null);
     if(destino) await sb.from('hk_tareas').insert({
       asignacion_id:destino, property_id:PROP, fecha:FECHA, area_id:areaId,
       estatus_area:'ocupada', minutos_estimados:min, orden:9000, estado:'pendiente',
       es_extra:true, comentario:motivo,
     });
     $('shAdd').classList.remove('on');
-    toast('Front ya lo sabe · el cuarto se te añadió al día');
+    toast(elegido && !(MIA&&elegido.a.id===MIA.id)
+      ? `Front ya lo sabe · el cuarto va al día de ${elegido.a.nombre_display}`
+      : 'Front ya lo sabe · el cuarto se te añadió al día');
     cargar();
   }catch(e){ toast('No se pudo avisar'); }
   finally{ b.disabled=false; }
@@ -785,7 +864,8 @@ $('addBtn').onclick=async()=>{
   if(!sel.value) return toast(MODO==='huesped'?'Elige dónde está el huésped':'Elige qué limpiaste');
   if(MODO==='huesped') return avisarHuesped(sel.value, $('addMot').value.trim(),
     Number(sel.options[sel.selectedIndex].dataset.min||20));
-  const destino = $('addQuienBox').hidden ? (MIA&&MIA.id) : $('addQuien').value;
+  const elegido=destinoElegido();
+  const destino = elegido ? elegido.a.id : (MIA&&MIA.id);
   if(!destino) return toast('No hay a quién añadírsela');
   const min=Number(sel.options[sel.selectedIndex].dataset.min||30);
   const mot=$('addMot').value.trim();
@@ -803,7 +883,7 @@ $('addBtn').onclick=async()=>{
     resuelto_por:USER?.email||null, resuelto_nombre:NOMBRE, resuelto_at:new Date().toISOString(), tarea_id:nt.id,
   });
   $('shAdd').classList.remove('on');
-  toast('Añadida al día');
+  toast(elegido && !(MIA&&elegido.a.id===MIA.id) ? `Añadida al día de ${elegido.a.nombre_display}` : 'Añadida a tu día');
   cargar();
 };
 
