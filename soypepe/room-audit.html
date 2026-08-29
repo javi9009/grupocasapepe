@@ -426,8 +426,40 @@ async function guardar(areaId,estado,nota,destino,clasificacion){
       if(tk) await sb.from('hk_auditoria').update({mtto_ticket_id:tk.id}).eq('id',data.id);
     }catch(e){ /* si mantenimiento no acepta el ticket, la auditoría igual queda guardada */ }
   }
+  await marcarTareaAudit();
   toast(estado==='ok'?'Habitación lista':estado==='incidencia'?'Anotado · alguien lo resuelve antes de la entrada':'Anotado · conviene cambiar de habitación');
   await cargar();
+}
+
+// El room audit es una tarea del día de quien lo hace: se abre con la primera
+// marca y se cierra cuando ya no queda ninguna llegada por revisar.
+async function marcarTareaAudit(){
+  try{
+    const {data:asg}=await sb.from('hk_asignaciones').select('id')
+      .eq('property_id',PROP).eq('fecha',FECHA).eq('employee_id',EMP);
+    const ids=(asg||[]).map(a=>a.id);
+    if(!ids.length) return;
+    const {data:ops}=await sb.from('hk_tareas_op').select('id').eq('property_id',PROP).eq('codigo','ROOM_AUDIT');
+    const opIds=(ops||[]).map(o=>o.id);
+    if(!opIds.length) return;
+    const {data:tareas}=await sb.from('hk_tareas').select('id,estado,iniciado_at,minutos_estimados')
+      .eq('fecha',FECHA).in('asignacion_id',ids).in('tarea_op_id',opIds);
+    if(!tareas||!tareas.length) return;
+
+    const llegan=CUARTOS.filter(c=>c.check_in||(CAMAS[c.area_id]||[]).some(x=>x.check_in));
+    const faltan=llegan.filter(c=>!AUD[c.area_id]).length;
+    const ahora=new Date().toISOString();
+
+    for(const t of tareas){
+      if(t.estado==='pendiente'){
+        await sb.from('hk_tareas').update({estado:'en_curso',iniciado_at:ahora,
+          ejecutado_por:USER.id,ejecutado_por_nombre:NOMBRE,updated_at:ahora}).eq('id',t.id);
+      }
+      if(!faltan && t.estado!=='terminada'){
+        await sb.from('hk_tareas').update({estado:'terminada',terminado_at:ahora,updated_at:ahora}).eq('id',t.id);
+      }
+    }
+  }catch(e){ /* la auditoría no depende de esto */ }
 }
 
 arranca();
