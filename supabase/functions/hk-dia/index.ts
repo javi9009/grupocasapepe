@@ -339,11 +339,22 @@ async function reparto(propKey: string, fecha: string) {
   const sobraOps: Tarea[] = [];
   const opsLibres: Tarea[] = [];
   const poraOps = personas.filter((p) => p.turno !== 'front');
+  // Front tiene una sola caja al día: la de la jefa de front, y el día que descansa,
+  // la del turno de front de la mañana. El room audit va siempre a esa persona.
+  const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
+  const frontDia = personas.filter((p) => p.turno === 'front');
+  const front = frontDia.find((p) => p.employee_id === JEFA_FRONT)
+    ?? frontDia.slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0];
   for (const t of operativas) {
     // Una operativa no obligatoria (el room audit, que puede hacer front) no se
     // reparte sola: viaja a SIN ASIGNAR para que el ama de llaves la coloque.
     if (t.opcional) { opsLibres.push(t); continue; }
     const pref = (t as Tarea & { turnoPref?: string | null }).turnoPref;
+    // El room audit es de front: va a la caja de front, no a la recamarista más libre.
+    if (pref === 'front' && front) {
+      const arr = opsPorPersona.get(kp(front)) ?? []; arr.push(t); opsPorPersona.set(kp(front), arr);
+      continue;   // no le suma carga: front no se mide por horas de limpieza
+    }
     const cand = (pref ? personas.filter((p) => p.turno === pref) : poraOps);
     const lista = (cand.length ? cand : (poraOps.length ? poraOps : personas)).slice().sort((a, b) =>
       ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)));
@@ -421,12 +432,7 @@ async function reparto(propKey: string, fecha: string) {
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
 
-  // Front tiene una sola caja al día, para el room audit: la de la jefa de front.
-  // El día que descansa, la del turno de front de la mañana.
-  const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
-  const frontDia = personas.filter((p) => p.turno === 'front');
-  const front = frontDia.find((p) => p.employee_id === JEFA_FRONT)
-    ?? frontDia.slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0];
+  // La caja de front existe siempre, aunque ese día no haya audit que colocar.
   if (front && !porPersona.has(kp(front))) porPersona.set(kp(front), { p: front, tareas: [] });
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
   // El motor no mueve nada por su cuenta: lo que no se reparte queda suelto en el

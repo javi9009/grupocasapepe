@@ -725,13 +725,19 @@ $('btnGen').onclick=async()=>{
 };
 $('btnVal').onclick=async()=>{
   if(!ASIG.length)return;
-  // La caja SIN ASIGNAR siempre existe (camas libres, opcionales y profundas):
-  // solo se avisa si de verdad quedó trabajo obligado sin dueño.
-  let pend=0;
-  ASIG.filter(a=>!a.employee_id).forEach(a=>(a.hk_tareas||[]).forEach(t=>{
-    if(!t.metadata?.sin_trabajo && !t.metadata?.opcional && !t.metadata?.profunda && t.minutos_estimados>0) pend++;
-  }));
-  if(pend&&!confirm(`Quedan ${pend} ${pend===1?'área con limpieza pendiente':'áreas con limpieza pendiente'} sin persona asignada.\n\n¿Validar de todos modos?`))return;
+  // Todas las tareas PARA ASIGNAR — las que hoy piden limpieza — tienen que tener
+  // dueño. Si queda alguna suelta no se valida: se enseña cuáles son y se para.
+  const paraAsignar=[];
+  const suelta=t=>!t.metadata?.sin_trabajo && !t.metadata?.opcional && !t.metadata?.profunda && t.minutos_estimados>0;
+  ASIG.filter(a=>!a.employee_id).forEach(a=>(a.hk_tareas||[]).forEach(t=>{ if(suelta(t)) paraAsignar.push(t); }));
+  SUELTAS.forEach(t=>{ if(suelta(t)) paraAsignar.push(t); });
+  if(paraAsignar.length){
+    const nom=t=>t.hk_tareas_op?t.hk_tareas_op.nombre:(t.titulo||t.hk_areas?.codigo||'—');
+    const lista=paraAsignar.slice(0,12).map(nom).join(', ');
+    alert(`No se puede validar todavía.\n\nQuedan ${paraAsignar.length} ${paraAsignar.length===1?'tarea que pide limpieza':'tareas que piden limpieza'} sin asignar:\n${lista}${paraAsignar.length>12?`, y ${paraAsignar.length-12} más`:''}\n\nRepártelas y vuelve a validar.`);
+    const e=$('stA'); e.className='status err'; e.textContent=`${paraAsignar.length} sin asignar · repártelas para poder validar`;
+    return;
+  }
   const {data:{user}}=await sb.auth.getUser();
   let nom=user?.email||'';
   if(user){const{data:el}=await sb.from('empleado_login').select('nombre_display,nombre_completo').eq('user_id',user.id).maybeSingle();if(el)nom=el.nombre_display||el.nombre_completo||nom;}
@@ -1362,16 +1368,23 @@ function tarjetaProd(a,r,c){
 
   // ---- pila 1: lo que se le repartió, contra sus 8 h ----
   const objetivo=Number(r.min_estimados ?? ts.reduce((s,t)=>s+(t.minutos_estimados||0),0));
-  // Extraordinaria = entró en su día después de validar el reparto: una limpieza
-  // añadida, una incidencia, un huésped donde no debía, o un cuarto que se le
-  // pasó a ella con el día en marcha. Lo que se movió antes de validar, no.
-  const val=a?.validado_at||null;
-  const esExtra=t=>!!(t.metadata?.extra_at) || (val && t.created_at && t.created_at>val);
-  const extras=ts.filter(esExtra);
+  // ---- ordinarias y extraordinarias ----
+  // Se llena el turno con los tiempos PREVISTOS, metiendo primero las tareas más
+  // largas: así lo que se sale son las más pequeñas y las horas extra a pagar son
+  // las menos posibles. Lo que no cabe en las 8 h es extraordinario.
+  const conTrabajo=ts.filter(t=>(t.minutos_estimados||0)>0);
+  const porTamano=conTrabajo.slice().sort((x,y)=>(y.minutos_estimados||0)-(x.minutos_estimados||0));
+  const ordinarias=[], extras=[];
+  let lleno=0;
+  porTamano.forEach(t=>{
+    const m=t.minutos_estimados||0;
+    if(lleno+m<=jornada){ lleno+=m; ordinarias.push(t); } else extras.push(t);
+  });
+  // Una tarea especial es la que el ama de llaves activó a mano desde el listado.
+  const especiales=ts.filter(t=>t.metadata?.asignada_a_mano||t.metadata?.se_limpio_igual);
   const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
-  // Solo cuentan las extraordinarias que de verdad hizo, en minutos de estándar.
   const minExtraHechos=extras.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
-  const nExtra=Number(r.tareas_extra ?? extras.length);
+  const nExtra=extras.length;
   const pct=Math.round(objetivo/jornada*100);
 
   // ---- pila 2: lo que lleva hecho y a dónde va ----
@@ -1390,10 +1403,8 @@ function tarjetaProd(a,r,c){
   const objetivoReal=objetivo/Math.max(1,ritmo);
   const pctReal=Math.round(objetivoReal/jornada*100);
   const nv1=nivel(pctReal,Math.max(0,objetivoReal-jornada));
-  // Horas extra: solo salen de las tareas extraordinarias, solo de las que ya hizo,
-  // y solo por lo que se sale del turno. El retraso no cuenta: eso no es trabajo de más.
-  const previstos=objetivo-minExtra;
-  const horasExtra=Math.min(minExtraHechos,Math.max(0,previstos+minExtraHechos-jornada));
+  // Las horas extra estimadas del día son los tiempos previstos de lo que no cabe.
+  const horasExtra=minExtra;
   const forecast=dedicado+faltaReal;
   const avance=objetivo?Math.round(estHechas/objetivo*100):0;
   // Verde si cierra dentro del turno; naranja si se pasa menos de una hora; rojo si más.
@@ -1413,7 +1424,9 @@ function tarjetaProd(a,r,c){
   const fuera=finTurno?ts.filter(t=>t.terminado_at&&new Date(t.terminado_at)>finTurno):[];
   const ultima=fuera.length?new Date(Math.max(...fuera.map(t=>new Date(t.terminado_at).getTime()))):null;
   const minFuera=ultima?Math.max(0,(ultima-finTurno)/60000):0;
-  const minPagar=minFuera>=60?minFuera:0;
+  // Solo se paga si además trabajó de verdad sus 8 h, y a partir de la primera hora.
+  const ocho=dedicado>=jornada;
+  const minPagar=(ocho&&minFuera>=60)?minFuera:0;
 
   const tareas=Number(r.tareas_asignadas ?? ts.length);
   const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
@@ -1447,20 +1460,23 @@ function tarjetaProd(a,r,c){
     <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Ninguna extraordinaria hoy.')}</div>
     <div class="cajon" data-caj="horas" hidden>
       <div class="expl">${horasExtra>0
-        ? `De las extraordinarias ya hechas (${Math.round(minExtraHechos)} min) más las ${Math.round(previstos/60*10)/10} h del reparto, se salen del turno <b>${hm(horasExtra)}</b>. Es un estimado: al cerrar el día se cuenta con el reloj.`
-        : `Con ${Math.round(minExtraHechos)} min de extraordinarias hechas y ${Math.round(previstos/60*10)/10} h de reparto, todavía le cabe en el turno.`}</div>
-      ${listaTareas(extras.filter(t=>t.estado==='terminada'),'Aún no ha cerrado ninguna extraordinaria.')}
-      ${extras.some(t=>t.estado!=='terminada')?(n=>`<div class="expl">Le queda${n===1?'':'n'} ${n} extraordinaria${n===1?'':'s'} sin cerrar: si la${n===1?'':'s'} hace, subirán las horas extra.</div>`)(extras.filter(t=>t.estado!=='terminada').length):''}
+        ? `Con los tiempos previstos, ${hm(lleno)} le caben en el turno y estas ${extras.length} ${extras.length===1?'tarea se sale':'tareas se salen'}: <b>${hm(horasExtra)} de horas extra estimadas</b>.
+           Son las más cortas de su día, para que lo que se pague sea lo menos posible. Se pagan al cerrar, y solo si de verdad trabajó sus ${hm(jornada)}.`
+        : `Todo su día cabe en las ${hm(jornada)} del turno: no hay horas extra que pagar.`}</div>
+      ${listaTareas(extras,'Ninguna tarea se sale del turno.')}
+      ${minExtraHechos?`<div class="expl">Ya cerró ${Math.round(minExtraHechos)} min de esas.</div>`:''}
     </div>
     ${cerrado?`<div class="pcierre ${minPagar?'paga':''}">
       ${fuera.length
         ? `Cerró ${fuera.length} ${fuera.length===1?'tarea':'tareas'} después de su salida, hasta las ${ultima.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})}.
-           <b>${minPagar?`${Math.round(minPagar/60*10)/10} h extra a pagar`:'No llega a la hora: no se paga'}</b>`
+           <b>${minPagar?`${Math.round(minPagar/60*10)/10} h extra a pagar`
+             :!ocho?`No se paga: trabajó ${hm(dedicado)} reales, por debajo de sus ${hm(jornada)}`
+             :'No llega a la hora: no se paga'}</b>`
         : 'Cerró dentro de su horario · sin horas extra que pagar.'}
     </div>`:''}
     <div class="ppie">
       <span><b>${Math.round(estHechas)}/${Math.round(objetivo)}</b> min hechos</span>
-      ${minExtra?`<span><b>${Math.round(minExtra)}</b> min de extras</span>`:''}
+      ${especiales.length?`<span><b>${especiales.length}</b> especiales</span>`:''}
       <span><b>${entrada||'—'}</b> entrada</span>
       ${r.privadas_fuera_de_hora?`<span class="mal"><b>${r.privadas_fuera_de_hora}</b> tarde</span>`:''}
     </div>
