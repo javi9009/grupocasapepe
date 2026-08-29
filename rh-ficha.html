@@ -175,6 +175,9 @@ const GOOGLE_API_KEY='AIzaSyA5UPhH3WE3QsaoRXRSLeyx_EuxTg1eRz4',GOOGLE_CLIENT_ID=
 
 async function sb(p,o){const r=await fetch(SB+p,{headers:H,...o});if(!r.ok)throw new Error(await r.text());const t=await r.text();return t?JSON.parse(t):null;}
 function st(t,c){const s=$("#st");s.textContent=t||"";s.className=c||"";}
+let NOM={};
+function impacto(delta){ const tot=Number(NOM.total_mensual)||0, obj=Number(NOM.objetivo_anual)||0; const nuevoMes=tot+delta; const anual=nuevoMes*12; return {tot,nuevoMes,anual,pctMes:tot?(delta/tot*100):0,obj,pctObj:obj?(anual/obj*100):null,holgura:obj?(obj-anual):null}; }
+function confirmImpacto(titulo,delta){ const im=impacto(delta); let msg=titulo+"\n\nImpacto en la nómina de la empresa:\n"; msg+="\u2022 "+(delta>=0?"+":"")+mxn(delta)+" al mes ("+(delta>=0?"+":"")+im.pctMes.toFixed(2)+"% del gasto salarial)\n"; msg+="\u2022 Gasto mensual: "+mxn(im.tot)+" \u2192 "+mxn(im.nuevoMes)+"\n"; if(im.obj){ msg+="\u2022 Proyección anual: "+mxn(im.anual)+" vs objetivo "+mxn(im.obj)+"\n"; msg+="\u2022 "+(im.holgura>=0?("Vas BIEN: quedan "+mxn(im.holgura)+" de holgura ("+im.pctObj.toFixed(1)+"% del objetivo)."):("\u26a0 Te PASAS del objetivo por "+mxn(-im.holgura)+" ("+im.pctObj.toFixed(1)+"% del objetivo).")); } else { msg+="\u2022 (No hay objetivo anual de nómina configurado)"; } return confirm(msg+"\n\n\u00bfConfirmas el cambio?"); }
 function edad(f){if(!f)return null;const d=new Date(f),h=new Date();let a=h.getFullYear()-d.getFullYear();if(h<new Date(h.getFullYear(),d.getMonth(),d.getDate()))a--;return a;}
 function aniv(f){if(!f)return null;const d=new Date(f+"T00:00:00"),hoy=new Date();
  const ult=new Date(d);ult.setFullYear(hoy.getFullYear());if(ult>hoy)ult.setFullYear(ult.getFullYear()-1);
@@ -210,6 +213,7 @@ function din(e,k,label,type,extra){ // dato editable
 function bindIns(){
  $("#pane").querySelectorAll(".in[data-k]").forEach(el=>{el.onchange=async()=>{
   const k=el.dataset.k;let v=el.value===""?null:(el.type==="number"?Number(el.value):el.value);
+  if(k==="salario_bruto"){ const old=Number((E[cur]||{}).salario_bruto)||0; const nv=Number(v)||0; if(nv!==old && !confirmImpacto("Cambiar salario de "+((E[cur]||{}).nombre||"la persona")+": "+mxn(old)+" \u2192 "+mxn(nv), nv-old)){ el.value=old||""; return; } }
   const body={[k]:v};
   if(el.dataset.dual)body.ultimo_aumento_fecha=v;
   const ok=await patchEmp(cur,body);
@@ -341,6 +345,7 @@ function sLaboral(p,e){
    ${din(e,"salario_desde","Último aumento","date",' data-dual="1"')}
    ${dato("Horas extra validadas (4 m)",Math.round((p.min_extra_4m||0)/60)+" h")}
    <h2 style="margin-top:16px">Bonos</h2>
+   ${dato("Bono de puntualidad", e.bono_puntualidad ? '<span class="pill ok">Activo</span> &nbsp;<button class="bt" id="bonoTgl" data-on="0">Quitar</button>' : '<span class="faint">No lo tiene</span> &nbsp;<button class="bt" id="bonoTgl" data-on="1">＋ Agregar bono</button>')}
    ${b.length?b.map(x=>dato(esc(x.nombre),mxn(x.monto)+" · "+esc(x.estatus||"—"))).join(""):'<p class="vacia">Sin bonos registrados.</p>'}
   </div>
   <div class="card"><h2>Vacaciones</h2>
@@ -504,6 +509,13 @@ function pinta(){
  $("#pane").querySelectorAll("[data-drive]").forEach(b=>b.onclick=()=>pickFromDrive(b.dataset.drive));
  const bb=$("#btnBaja");if(bb)bb.onclick=darBaja;
  const bd=$("#btnDel");if(bd)bd.onclick=cancelarUsr;
+ const bt2=$("#bonoTgl"); if(bt2) bt2.onclick=async()=>{
+   const on=bt2.dataset.on==="1"; const bm=Number(NOM.bono_monto)||500; const delta=on?bm:-bm;
+   const nom=(E[cur]||{}).nombre||"esta persona";
+   if(!confirmImpacto((on?"Agregar":"Quitar")+" bono de puntualidad a "+nom+".\nSe recalcula según su puntualidad y se suma a la nómina.", delta)) return;
+   const ok=await patchEmp(cur,{bono_puntualidad:on});
+   if(ok){ NOM.total_mensual=(Number(NOM.total_mensual)||0)+delta; pinta(); }
+ };
  try{history.replaceState(null,"",location.pathname+"?id="+cur+"&tab="+tab);}catch(_){}
 }
 function llenaSel(){
@@ -517,10 +529,11 @@ function llenaSel(){
   $("#fuente").textContent="en vivo";$("#fuente").className="badge";
  }catch(e){$("#fuente").textContent="sin conexión";$("#fuente").className="badge off";}
  try{
-  const emps=await sb("/employees?select=id,empleado_id,nombre,apellido,nombre_display,estatus,prueba_planta,fecha_inicio_labores,fecha_nacimiento,nacionalidad,estado_civil,direccion,telefono,email,rfc,curp,nss,afore,contacto_nombre,contacto_cel,salario_bruto,salario_desde,ultimo_aumento_fecha,puesto,area,area_2,sede,tramo,vac_anio,vac_anteriores,vac_tomadas,vac_pendientes,contrato_url,id_oficial_url,foto_url,acta_nacimiento_url,rfc_doc_url,nss_doc_url,comprobante_domicilio_url,comprobante_estudios_url,imss_cedula_url,cv_url&estatus=in.(activo,pendiente_alta)");
+  const emps=await sb("/employees?select=id,empleado_id,nombre,apellido,nombre_display,estatus,prueba_planta,fecha_inicio_labores,fecha_nacimiento,nacionalidad,estado_civil,direccion,telefono,email,rfc,curp,nss,afore,contacto_nombre,contacto_cel,salario_bruto,salario_desde,ultimo_aumento_fecha,puesto,area,area_2,sede,tramo,bono_puntualidad,vac_anio,vac_anteriores,vac_tomadas,vac_pendientes,contrato_url,id_oficial_url,foto_url,acta_nacimiento_url,rfc_doc_url,nss_doc_url,comprobante_domicilio_url,comprobante_estudios_url,imss_cedula_url,cv_url&estatus=in.(activo,pendiente_alta)");
   emps.forEach(x=>E[x.id]=x);
  }catch(e){}
  try{RANGOS=await sb("/rangos_salariales?select=rol,puesto,sede,activo,practicas,junior,junior2,senior&activo=is.true");}catch(e){}
+ try{NOM=await sb("/rpc/nomina_resumen",{method:"POST",body:"{}"})||{};}catch(e){NOM={};}
  llenaSel();
  $("#sel").onchange=()=>{cur=$("#sel").value;tab="resumen";pinta();};
  const q=new URLSearchParams(location.search);
