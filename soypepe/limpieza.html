@@ -182,6 +182,8 @@ button{font-family:inherit}
   border:1px solid var(--bd,#e3d8c3);background:var(--surface,#fff);color:var(--soft,#6b5d49);cursor:pointer}
 .sheet .modos .mo.on{background:#1d9e75;border-color:#1d9e75;color:#fff}
 .sheet .modos .mo.on.alerta{background:#b03434;border-color:#b03434}
+.btn.atras{background:var(--surface,#fff);color:var(--soft,#6b5d49);border:1px solid var(--bd,#e3d8c3);margin-top:7px;font-weight:700}
+.chip.pase{background:#efe9f6;border-color:#c1b0d8;color:#4d3a6b}
 </style></head><body>
 
 <div class="appbar">
@@ -531,8 +533,13 @@ function tarjetaCuarto(t,a){
       ${dif>0?`· <span class="rap">${dif} min menos</span>`:dif<0?`· <span class="len">${-dif} min más</span>`:''}
       ${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`;
   }else if(t.estado==='en_curso'){
-    caja=puede?`<button class="btn end" data-fin="${t.id}">Terminar · <b data-crono="${t.iniciado_at}">0 min</b></button>`
+    caja=puede?`<button class="btn end" data-fin="${t.id}">Terminar · <b data-crono="${t.iniciado_at}">0 min</b></button>
+      <button class="btn atras" data-und="${t.id}">↩ No pude entrar · deshacer</button>`
               :`<div class="hecho">En limpieza desde las ${new Date(t.iniciado_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})}</div>`;
+  }else if(esperaPase(t)){
+    // El segundo repaso del día no se abre hasta cerrar el primero.
+    caja=`<div class="hecho">Este es el repaso de la <b>${esc(etiquetaPase(t))}</b>.
+      Se abre en cuanto quede cerrado el de la ${esc(etiquetaPase({...t,pase:t.pase-1}))}.</div>`;
   }else{
     caja=puede?`<button class="btn go" data-ini="${t.id}">Empezar limpieza</button>`
               :`<div class="hecho">Sin empezar · ${t.minutos_estimados} min estimados</div>`;
@@ -552,7 +559,7 @@ function tarjetaCuarto(t,a){
     <div class="lin">
       <span class="cod">${esc(op?op.nombre:(ar.codigo||''))}</span>
       <span class="chip ${c[0]}">${c[1]}</span>
-      ${t.pases>1?`<span class="chip">pase ${t.pase}/${t.pases}</span>`:''}
+      ${t.pases>1?`<span class="chip pase">${esc(etiquetaPase(t))}</span>`:''}
       ${t.partes>1?`<span class="chip">entre ${t.partes}</span>`:''}
       ${t.es_extra&&!t.reasignada_desde?'<span class="chip ext">extra</span>':''}
       <span class="min">${t.minutos_reales!=null?`${t.minutos_reales}m / ${t.minutos_estimados}m`:`${t.minutos_estimados}m`}</span>
@@ -561,10 +568,27 @@ function tarjetaCuarto(t,a){
     </div>
     <div class="caja">${detalle}${caja}</div></div>`;
 }
+// Nombre del pase: la cocina y los baños se limpian dos veces al día.
+function etiquetaPase(t){
+  const nom={2:['mañana','tarde'],3:['mañana','mediodía','tarde']}[t.pases];
+  return (t.titulo||'').includes(' · ') ? t.titulo.split(' · ').pop()
+    : (nom?.[(t.pase||1)-1] || `pase ${t.pase}/${t.pases}`);
+}
+// ¿Le toca esperar? Sí, si es un pase posterior y el anterior de esa misma área
+// todavía no está cerrado.
+function esperaPase(t){
+  if(!(t.pases>1)||!(t.pase>1)) return false;
+  const todas=[];
+  [MIA,...TODAS].filter(Boolean).forEach(a=>(a.hk_tareas||[]).forEach(x=>todas.push(x)));
+  const previo=todas.find(x=>x.area_id===t.area_id&&x.pase===t.pase-1);
+  return !!previo && previo.estado!=='terminada';
+}
+
 function engancharCuartos(root){
   root.querySelectorAll('.cuarto .lin').forEach(l=>l.onclick=()=>l.parentElement.classList.toggle('on'));
   root.querySelectorAll('[data-ini]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); iniciar(b.dataset.ini); });
   root.querySelectorAll('[data-fin]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirFin(b.dataset.fin); });
+  root.querySelectorAll('[data-und]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deshacerInicio(b.dataset.und); });
 }
 // Busca una tarea esté donde esté (mi orden o el reparto completo).
 function buscarTarea(id){
@@ -843,6 +867,25 @@ async function iniciar(id){
   await sb.from('hk_eventos').insert({tarea_id:id,tipo:'inicio',employee_id:EMP,employee_nombre:NOMBRE});
   if(a&&a.estado==='validada')await sb.from('hk_asignaciones').update({estado:'en_curso'}).eq('id',a.id);
   mensaje('inicio');
+  cargar();
+}
+
+// Entró, estaba ocupada y salió: se deshace el inicio y el cuarto vuelve a estar
+// pendiente, como si no lo hubiera abierto. No cuenta tiempo ni lo marca limpio.
+async function deshacerInicio(id){
+  const {t}=buscarTarea(id);
+  if(!t||t.estado!=='en_curso') return;
+  const now=new Date().toISOString();
+  const {error}=await sb.from('hk_tareas').update({estado:'pendiente',iniciado_at:null,
+    minutos_reales:null,ejecutado_por:null,ejecutado_por_nombre:null,updated_at:now}).eq('id',id);
+  if(error) return toast('No se pudo deshacer');
+  // Se le quita la marca de "limpiando": el cuarto queda como estaba.
+  if(t.area_id) await sb.from('hk_estatus_dia').update({limpieza:null,limpieza_at:null,
+    limpieza_por:null,limpieza_fuente:null}).eq('property_id',PROP).eq('fecha',FECHA)
+    .eq('area_id',t.area_id).eq('limpieza','limpiando');
+  await sb.from('hk_eventos').insert({tarea_id:id,tipo:'deshacer',employee_id:EMP,employee_nombre:NOMBRE,
+    nota:'No se pudo entrar (ocupada)'});
+  toast('Listo · el cuarto vuelve a quedar pendiente');
   cargar();
 }
 

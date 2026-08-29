@@ -209,8 +209,12 @@ async function reparto(propKey: string, fecha: string) {
       // caja SIN ASIGNAR con sus minutos, para dársela a alguien solo el día que toque.
       const opcional = a.obligatoria === false;
       const veces = Math.max(1, Number(a.veces_dia ?? 1));
+      // Cada pase lleva su nombre (mañana / tarde) para que no se confundan ni se
+      // empiecen a la vez: el de la tarde no se abre hasta cerrar el de la mañana.
+      const NOM: Record<number, string[]> = { 2: ['mañana', 'tarde'], 3: ['mañana', 'mediodía', 'tarde'] };
       for (let n = 1; n <= veces; n++) {
-        (opcional ? opcionales : publicas).push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
+        const etiqueta = veces > 1 ? (NOM[veces]?.[n - 1] ?? `pase ${n}`) : null;
+        (opcional ? opcionales : publicas).push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
       }
     }
   }
