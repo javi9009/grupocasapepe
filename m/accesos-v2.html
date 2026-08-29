@@ -67,6 +67,7 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
 <div class="tabs">
   <button class="tab on" id="tab-lista" onclick="setTab('lista')">Personas</button>
   <button class="tab" id="tab-rol" onclick="setTab('rol')">Por rol</button>
+  <button class="tab" id="tab-rango" onclick="setTab('rango')">Por rango</button>
   <button class="tab" id="tab-user" onclick="setTab('user')">Por usuario</button>
   <button class="tab" id="tab-cat" onclick="setTab('cat')">Categorías</button>
 </div>
@@ -85,6 +86,23 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
   <label>Rol: </label>
   <select id="rolSel" onchange="loadRol()"></select>
   <div id="rolGrid"></div>
+</div>
+
+<div id="pane-rango" style="display:none">
+  <p style="color:var(--mut);margin:2px 0 12px">Da o quita el acceso a una página a <b>todos los roles</b> de un rango de golpe (ej. todos los Técnicos).</p>
+  <div class="fbar" style="flex-wrap:wrap;gap:10px">
+    <label>Rango: <select id="rgSel"></select></label>
+    <label>Página: <select id="rgPag"></select></label>
+    <label>Permiso:
+      <select id="rgNiv">
+        <option value="editar">Editar</option>
+        <option value="ver">Solo ver</option>
+        <option value="none">Quitar acceso</option>
+      </select>
+    </label>
+    <button class="btn primary" id="rgApply" onclick="aplicarRango()">Aplicar al rango</button>
+  </div>
+  <div id="rgMsg" class="msg" style="display:none;margin-top:10px"></div>
 </div>
 
 <div id="pane-user" style="display:none">
@@ -149,10 +167,10 @@ async function boot(){
   PROJMAP={}; (am.data||[]).forEach(r=>{ (PROJMAP[r.employee_id]=PROJMAP[r.employee_id]||[]).push(r.proyecto); });
   $('fubic').innerHTML='<option value="">Todas las ubicaciones</option>'+PROJS_DEF.map(p=>'<option value="'+p[0]+'">'+p[1]+'</option>').join('');
   $('farea').innerHTML='<option value="">Todas las áreas</option>'+AREAS.map(a=>'<option value="'+a.replace(/"/g,'&quot;')+'">'+a+'</option>').join('');
-  fillRolSel(); fillUserSel();
+  fillRolSel(); fillUserSel(); fillRangoSel();
   banner(); renderLista();
   initPw();
-  const _t=new URLSearchParams(location.search).get('tab'); if(_t && ['lista','rol','user','cat'].includes(_t)) setTab(_t);
+  const _t=new URLSearchParams(location.search).get('tab'); if(_t && ['lista','rol','rango','user','cat'].includes(_t)) setTab(_t);
 }
 
 function _genPass(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<10;i++) s+=a[Math.floor(Math.random()*a.length)]; return s+'#'+Math.floor(Math.random()*90+10); }
@@ -268,10 +286,39 @@ async function asignarTodoDireccion(){
   banner();
 }
 
+async function fillRangoSel(){
+  const sel=$('rgSel'); if(sel && !sel.dataset.loaded){
+    let rows=[]; try{ const r=await sb.rpc('rangos_para_acceso'); if(!r.error) rows=r.data||[]; }catch(e){}
+    const LBL={direccion:'Direccion',gerencia_regional:'Gerencia Regional',gerente_general:'Gerente General',subgerencia:'Subgerencia',jefe_area:'Jefe de Area',subjefe:'Subjefe',tecnico:'Tecnico',auxiliar:'Auxiliar',practicante:'Practicante',socio:'Socio'};
+    sel.innerHTML=rows.map(r=>'<option value="'+_q(r.categoria)+'">'+(LBL[r.categoria]||r.categoria)+' ('+r.n_roles+' roles)</option>').join('');
+    sel.dataset.loaded='1';
+  }
+  const pg=$('rgPag');
+  if(pg && !pg.dataset.loaded){
+    pg.innerHTML=(PAG||[]).map(p=>'<option value="'+_q(p.codigo)+'">'+((p.area?p.area+' · ':'')+(p.nombre||p.codigo))+'</option>').join('');
+    pg.dataset.loaded='1';
+  }
+}
+async function aplicarRango(){
+  const cat=$('rgSel').value, cod=$('rgPag').value, niv=$('rgNiv').value;
+  if(!cat||!cod) return;
+  const pagTxt=$('rgPag').selectedOptions[0]?$('rgPag').selectedOptions[0].textContent:cod;
+  const rangoTxt=$('rgSel').selectedOptions[0]?$('rgSel').selectedOptions[0].textContent:cat;
+  const accion = niv==='none' ? 'QUITAR el acceso a' : ('dar acceso "'+niv+'" a');
+  if(!confirm('Vas a '+accion+' la pagina "'+pagTxt+'" para TODOS los roles de: '+rangoTxt+'.\n\nEsto afecta a todas las personas con esos roles. Continuar?')) return;
+  const btn=$('rgApply'); btn.disabled=true; const m=$('rgMsg'); m.style.display='block'; m.textContent='Aplicando…';
+  try{
+    const r=await sb.rpc('pagina_asignar_rango',{p_codigo:cod,p_categoria:cat,p_nivel:niv});
+    if(r.error){ m.textContent='Error: '+r.error.message; }
+    else{ const n=r.data; m.textContent='✓ Listo. '+(niv==='none'?('Acceso quitado en '+n+' rol(es).'):('Acceso "'+niv+'" aplicado a '+n+' rol(es).')); if(typeof reload==='function'){/* refresca cache de rol_permisos en memoria */ } }
+  }catch(e){ m.textContent='Error: '+e.message; }
+  btn.disabled=false;
+}
+
 function setTab(t){ TAB=t;
-  ['lista','rol','user','cat'].forEach(x=>{ const tb=$('tab-'+x); if(tb) tb.classList.toggle('on',t===x); const pn=$('pane-'+x); if(pn) pn.style.display=t===x?'':'none'; });
+  ['lista','rol','rango','user','cat'].forEach(x=>{ const tb=$('tab-'+x); if(tb) tb.classList.toggle('on',t===x); const pn=$('pane-'+x); if(pn) pn.style.display=t===x?'':'none'; });
   $('bar').style.display='none';
-  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else if(t==='user') fillUserSel(); else if(t==='cat') renderCat();
+  if(t==='lista') renderLista(); else if(t==='rol') fillRolSel(); else if(t==='rango') fillRangoSel(); else if(t==='user') fillUserSel(); else if(t==='cat') renderCat();
 }
 
 function grpRender(container, getNivel, opts){
