@@ -173,13 +173,14 @@ async function arranca(){
 }
 
 async function cargar(){
-  const [{data:est},{data:aud}]=await Promise.all([
+  const [{data:est},{data:aud},{data:areas}]=await Promise.all([
     sb.from('hk_estatus_dia').select('area_id,estatus,check_in,check_out,limpieza,limpieza_por,metadata,hk_areas(id,codigo,nombre,tipo,piso,parent_id)')
       .eq('property_id',PROP).eq('fecha',FECHA),
     sb.from('hk_auditoria').select('*').eq('property_id',PROP).eq('fecha',FECHA),
+    sb.from('hk_areas').select('id,codigo,nombre,tipo,piso,parent_id').eq('property_id',PROP).eq('activo',true).eq('tipo','dorm'),
   ]);
   AUD={}; (aud||[]).forEach(a=>AUD[a.area_id]=a);
-  CUARTOS=(est||[]).filter(e=>['privada','dorm'].includes(e.hk_areas?.tipo));
+
   // Las camas cuelgan de su dormitorio: son ellas las que traen la llegada.
   CAMAS={};
   (est||[]).filter(e=>e.hk_areas?.tipo==='cama'&&e.hk_areas?.parent_id).forEach(e=>{
@@ -187,6 +188,25 @@ async function cargar(){
     (CAMAS[k]=CAMAS[k]||[]).push(e);
   });
   Object.values(CAMAS).forEach(arr=>arr.sort((a,b)=>String(a.hk_areas.codigo).localeCompare(String(b.hk_areas.codigo),'es',{numeric:true})));
+
+  const porEstatus=new Map((est||[]).map(e=>[e.area_id,e]));
+  // El dormitorio no llega de Cloudbeds (allí solo existen las camas): se arma
+  // con el inventario, y su estado de limpieza se lee de sus camas.
+  const dorms=(areas||[]).map(ar=>{
+    const fila=porEstatus.get(ar.id);
+    const camas=CAMAS[ar.id]||[];
+    const limp=fila?.limpieza || (camas.length && camas.every(c=>c.limpieza==='limpia') ? 'limpia'
+      : camas.some(c=>c.limpieza==='limpiando') ? 'limpiando'
+      : camas.some(c=>c.limpieza==='sucia') ? 'sucia' : null);
+    return {
+      area_id:ar.id, estatus:fila?.estatus||'rutina',
+      check_in:fila?.check_in||null, check_out:fila?.check_out||camas.some(c=>c.check_out)||null,
+      limpieza:limp, limpieza_por:fila?.limpieza_por||camas.find(c=>c.limpieza_por)?.limpieza_por||null,
+      hk_areas:ar,
+    };
+  }).filter(d=>(CAMAS[d.area_id]||[]).length);
+
+  CUARTOS=[...(est||[]).filter(e=>e.hk_areas?.tipo==='privada'), ...dorms];
   pintar();
 }
 
