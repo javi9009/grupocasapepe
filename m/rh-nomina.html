@@ -67,17 +67,21 @@ function calcEmp(e,inc){
  const ini=e.fecha_inicio_labores?new Date(e.fecha_inicio_labores+'T00:00:00'):null;
  const years=ini?Math.floor((Date.now()-ini)/(365.25*864e5)):1;
  const factor=1+(15+0.25*vacDays(years))/365; const sbc=r2(sd*factor);
- const diasLab=inc&&inc.dias_lab!=null?+inc.dias_lab:15; const dias=diasLab||15;
+ /* Días pagables de la quincena: 15 menos ausencias y permisos sin goce, más días extra.
+    NO se usan las checadas parciales (inc.dias_lab): la quincena se paga completa. */
+ const dias=Math.max(0,15-(inc?+inc.dias_ausente||0:0)-(inc?+inc.dias_permiso_baja||0:0)+(inc?+inc.dias_extra||0:0));
  const montoExtra=inc?+inc.monto_extra||0:0; const montoDesc=inc?+inc.monto_descontado||0:0;
- const isrM=isr(sueldoM); const sub=sueldoM<=P.SUB_TOPE?P.SUB_MENS:0; const isrRetM=Math.max(0,isrM-sub); const isrQ=r2(isrRetM/2);
+ const fiscal=(e.esquema_pago==='fiscal');
+ const isrM=isr(sueldoM); const sub=sueldoM<=P.SUB_TOPE?P.SUB_MENS:0; const isrRetM=Math.max(0,isrM-sub);
+ const isrQ=fiscal?r2(isrRetM/2):0;
  const exc=Math.max(0,sbc-3*P.UMA);
- const o=P.OBR; const obr={eym_esp:r2(exc*o.eym_esp*dias),eym_din:r2(sbc*o.eym_din*dias),gmp:r2(sbc*o.gmp*dias),iv:r2(sbc*o.iv*dias),ceav:r2(sbc*o.ceav*dias)};
+ const o=P.OBR; const obr=fiscal?{eym_esp:r2(exc*o.eym_esp*dias),eym_din:r2(sbc*o.eym_din*dias),gmp:r2(sbc*o.gmp*dias),iv:r2(sbc*o.iv*dias),ceav:r2(sbc*o.ceav*dias)}:{eym_esp:0,eym_din:0,gmp:0,iv:0,ceav:0};
  const obrTot=r2(obr.eym_esp+obr.eym_din+obr.gmp+obr.iv+obr.ceav);
  const perc=r2(sd*dias+montoExtra);
  const neto=r2(perc-isrQ-obrTot-montoDesc);
- const pa=P.PAT; const pat={eym_fija:r2(pa.eym_fija*P.UMA*dias),eym_esp:r2(exc*pa.eym_esp*dias),eym_din:r2(sbc*pa.eym_din*dias),gmp:r2(sbc*pa.gmp*dias),rt:r2(sbc*pa.rt*dias),iv:r2(sbc*pa.iv*dias),guard:r2(sbc*pa.guard*dias),retiro:r2(sbc*pa.retiro*dias),ceav:r2(sbc*pa.ceav*dias),infonavit:r2(sbc*pa.infonavit*dias)};
+ const pa=P.PAT; const pat=fiscal?{eym_fija:r2(pa.eym_fija*P.UMA*dias),eym_esp:r2(exc*pa.eym_esp*dias),eym_din:r2(sbc*pa.eym_din*dias),gmp:r2(sbc*pa.gmp*dias),rt:r2(sbc*pa.rt*dias),iv:r2(sbc*pa.iv*dias),guard:r2(sbc*pa.guard*dias),retiro:r2(sbc*pa.retiro*dias),ceav:r2(sbc*pa.ceav*dias),infonavit:r2(sbc*pa.infonavit*dias)}:{eym_fija:0,eym_esp:0,eym_din:0,gmp:0,rt:0,iv:0,guard:0,retiro:0,ceav:0,infonavit:0};
  const patTot=r2(Object.values(pat).reduce((s,x)=>s+x,0)); const costo=r2(perc+patTot);
- return {sueldoM,sd:r2(sd),sbc,years,factor:r2(factor),dias,montoExtra,montoDesc,isrM:r2(isrM),sub,isrQ,obr,obrTot,perc,neto,pat,patTot,costo};
+ return {fiscal,sueldoM,sd:r2(sd),sbc,years,factor:r2(factor),dias,montoExtra,montoDesc,isrM:r2(isrM),sub,isrQ,obr,obrTot,perc,neto,pat,patTot,costo};
 }
 let emps=[],incs={},quincena='',calcCache={};
 async function sb(p,o){const r=await fetch(SB+p,{headers:H,...o});if(!r.ok){throw new Error(await r.text())}const c=await r.text();return c?JSON.parse(c):null}
@@ -86,7 +90,7 @@ function ubic(e){return e.sede||PROP[e.property_id]||'';}
 function qnaFromDate(d){const m=d.toISOString().slice(0,7);return m+(d.getDate()<=15?'-Q1':'-Q2');}
 function shiftQ(q,dir){const[y,mo,half]=[+q.slice(0,4),+q.slice(5,7),q.slice(8)];let d;if(half==='Q1')d=new Date(y,mo-1,dir>0?16:0);else d=new Date(y,mo-1+(dir>0?1:0),dir>0?1:15);return qnaFromDate(d);}
 const money=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
-const COLS=[{t:'Colaborador'},{t:'Puesto'},{t:'S.D.',h:'Sueldo diario = sueldo mensual bruto / 30.'},{t:'SBC',h:'Salario base de cotización = SD × factor de integración (según antigüedad/vacaciones).'},{t:'Días',h:'Días de la quincena tomados de la sábana de Incidencias (reloj).'},{t:'Percepción',h:'Sueldo de la quincena + montos extra (festivos/horas extra/días extra).'},{t:'ISR',h:'ISR a retener quincenal (tabla mensual 2026 ÷ 2, ya aplicado el subsidio al empleo).'},{t:'IMSS obrero',h:'Cuota obrera del IMSS desglosada por ramo, sobre el SBC.'},{t:'Neto',h:'Lo que recibe el colaborador = percepción − ISR − IMSS obrero − descuentos.'},{t:'Costo empresa',h:'Bruto + carga patronal IMSS/SAR/Infonavit. Lo que cuesta la quincena a la empresa.'}];
+const COLS=[{t:'Colaborador'},{t:'Puesto'},{t:'Esquema',h:'Cómo se le paga: "bruto" deposita la quincena bruta + extras − descuentos, sin retenciones (así cuadra la dispersión real de la mayoría hoy). "fiscal" retiene ISR e IMSS (Roberto, Deisy, y quien esté en nómina formal). Cambiarlo aquí lo guarda en su expediente.'},{t:'S.D.',h:'Sueldo diario = sueldo mensual bruto / 30.'},{t:'SBC',h:'Salario base de cotización = SD × factor de integración (según antigüedad/vacaciones).'},{t:'Días',h:'Días pagables = 15 − ausencias − permisos sin goce + días extra (de la sábana de Incidencias). Las checadas parciales del reloj NO restan: la quincena se paga completa.'},{t:'Percepción',h:'Sueldo de la quincena + montos extra (festivos/horas extra/días extra).'},{t:'ISR',h:'ISR a retener quincenal (tabla mensual 2026 ÷ 2, ya aplicado el subsidio al empleo). Solo esquema fiscal.'},{t:'IMSS obrero',h:'Cuota obrera del IMSS desglosada por ramo, sobre el SBC. Solo esquema fiscal.'},{t:'Neto',h:'Lo que le cae al colaborador. Bruto: percepción − descuentos. Fiscal: percepción − ISR − IMSS − descuentos.'},{t:'Costo empresa',h:'Bruto + carga patronal IMSS/SAR/Infonavit (solo esquema fiscal).'}];
 function header(){$('thead').innerHTML=COLS.map((c,i)=>`<th class="${i===0?'name':''}">${c.t}${c.h?`<span class="help" data-h="${c.h.replace(/"/g,'&quot;')}">?</span>`:''}</th>`).join('');}
 function fillFilters(){const u=[...new Set(emps.map(ubic).filter(Boolean))].sort(),a=[...new Set(emps.map(e=>e.area).filter(Boolean))].sort();
  $('fUbic').innerHTML='<option value="">Todas</option>'+u.map(x=>`<option>${x}</option>`).join('');$('fArea').innerHTML='<option value="">Todas</option>'+a.map(x=>`<option>${x}</option>`).join('');}
@@ -95,15 +99,18 @@ function render(){
  $('qnaLbl').textContent=quincena;
  const list=vis(); let tNeto=0,tCosto=0,tObr=0,tPat=0;
  $('tbody').innerHTML=list.map(e=>{const c=calcEmp(e,incs[e.id]);calcCache[e.id]=c;tNeto+=c.neto;tCosto+=c.costo;tObr+=c.obrTot;tPat+=c.patTot;
-  return `<tr data-id="${e.id}"><td class="name">${[e.nombre,e.apellido].filter(Boolean).join(' ')}</td><td style="font-size:11px;color:var(--soft)">${e.puesto||''}</td><td>${money(c.sd)}</td><td>${money(c.sbc)}</td><td>${c.dias}</td><td>${money(c.perc)}</td><td>${money(c.isrQ)}</td><td>${money(c.obrTot)}</td><td><b>${money(c.neto)}</b></td><td>${money(c.costo)}</td></tr>`;}).join('');
- if(!list.length)$('tbody').innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--soft);padding:18px">Sin colaboradores con salario asignado. Captura salarios en la sábana RH primero.</td></tr>';
+  return `<tr data-id="${e.id}"><td class="name">${[e.nombre,e.apellido].filter(Boolean).join(' ')}</td><td style="font-size:11px;color:var(--soft)">${e.puesto||''}</td><td style="text-align:left"><select data-esq="${e.id}" onclick="event.stopPropagation()" style="border:1px solid var(--bd);border-radius:6px;padding:2px 4px;font-size:11px;background:#fff;color:var(--txt)"><option value="bruto" ${e.esquema_pago!=='fiscal'?'selected':''}>bruto</option><option value="fiscal" ${e.esquema_pago==='fiscal'?'selected':''}>fiscal</option></select></td><td>${money(c.sd)}</td><td>${money(c.sbc)}</td><td>${c.dias}</td><td>${money(c.perc)}</td><td>${money(c.isrQ)}</td><td>${money(c.obrTot)}</td><td><b>${money(c.neto)}</b></td><td>${money(c.costo)}</td></tr>`;}).join('');
+ if(!list.length)$('tbody').innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--soft);padding:18px">Sin colaboradores con salario asignado. Captura salarios en la sábana RH primero.</td></tr>';
+ document.querySelectorAll('[data-esq]').forEach(s=>{s.onchange=async()=>{const id=s.dataset.esq;status('guardando…');
+  try{await sb('/employees?id=eq.'+id,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({esquema_pago:s.value,updated_at:new Date().toISOString()})});
+   const e2=emps.find(x=>x.id===id);if(e2)e2.esquema_pago=s.value;status('✓ guardado','ok');render();}catch(e){status('⚠ no se guardó','err');}};});
  $('cards').innerHTML=[['Colaboradores',list.length],['Total neto',money(tNeto)],['IMSS obrero',money(tObr)],['Carga patronal',money(tPat)],['Costo empresa',money(tCosto)]].map(c=>`<div class="mc"><div class="l">${c[0]}</div><div class="v">${c[1]}</div></div>`).join('');
  document.querySelectorAll('#tbody tr[data-id]').forEach(tr=>tr.onclick=()=>openPT(tr.dataset.id));
 }
 function ptRow(l,v,cls){return `<tr class="${cls||''}"><td>${l}</td><td>${typeof v==='number'?money(v):v}</td></tr>`;}
 function openPT(id){const e=emps.find(x=>x.id===id);const c=calcCache[id];$('ptName').textContent='Papel de trabajo · '+[e.nombre,e.apellido].filter(Boolean).join(' ');
  $('ptBody').innerHTML=`<table class="pt">
- <tr class="h"><td>Datos base</td><td>${quincena}</td></tr>
+ <tr class="h"><td>Datos base</td><td>${quincena} · esquema ${c.fiscal?'fiscal':'bruto'}</td></tr>
  ${ptRow('Sueldo mensual bruto',c.sueldoM)}${ptRow('Sueldo diario',c.sd)}${ptRow('Factor integración',c.factor)}${ptRow('SBC',c.sbc)}${ptRow('Antigüedad (años)',c.years)}${ptRow('Días de la quincena',c.dias)}
  <tr class="h"><td>ISR</td><td></td></tr>
  ${ptRow('ISR causado mensual (tabla 2026)',c.isrM)}${ptRow('Subsidio al empleo',c.sub)}${ptRow('ISR retenido quincenal',c.isrQ)}
@@ -129,5 +136,5 @@ async function loadInc(){incs={};const arr=await sb('/incidencias_quincenal?sele
 const pop=$('pop');document.addEventListener('click',e=>{const h=e.target.closest('.help');if(h&&h.dataset.h){pop.innerHTML='<b>¿Qué es?</b><br>'+h.dataset.h;pop.style.display='block';const r=h.getBoundingClientRect();pop.style.left=Math.min(r.left,innerWidth-280)+'px';pop.style.top=(r.bottom+6)+'px';e.stopPropagation();}else if(!e.target.closest('#pop')&&!e.target.closest('.modal'))pop.style.display='none';});
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('.modal').classList.remove('show'));
 document.querySelectorAll('.modal').forEach(m=>m.onclick=e=>{if(e.target===m)m.classList.remove('show');});
-(async()=>{header();quincena=qnaFromDate(new Date());try{emps=await sb("/employees?select=id,empleado_id,nombre,apellido,puesto,area,sede,property_id,salario_bruto,fecha_inicio_labores&estatus=eq.activo&order=area,nombre");emps=await _filtraAmbito(emps);await loadInc();}catch(e){}fillFilters();render();status('✓','ok');})();
+(async()=>{header();quincena=qnaFromDate(new Date());try{emps=await sb("/employees?select=id,empleado_id,nombre,apellido,puesto,area,sede,property_id,salario_bruto,fecha_inicio_labores,esquema_pago&estatus=eq.activo&order=area,nombre");emps=await _filtraAmbito(emps);await loadInc();}catch(e){}fillFilters();render();status('✓','ok');})();
 </script></body></html>
