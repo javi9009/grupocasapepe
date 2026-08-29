@@ -33,11 +33,17 @@
       return _cache;
     }catch(_){ _cache=null; return null; }
   }
+  var _dir=undefined;
+  async function esDireccion(){
+    if(_dir!==undefined) return _dir;
+    var em=tokEmail(); if(!em){ _dir=false; return false; }
+    try{ var r=await fetch(SB+'/rest/v1/rpc/soy_direccion',{method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json'},body:'{}'}); if(!r.ok){_dir=false;return false;} var a=await r.json(); _dir=(a===true); return _dir; }catch(_){ _dir=false; return false; }
+  }
   async function permite(proy){ var u=await ubicaciones(); if(!u) return true; return u.indexOf(toProy(proy))>=0; }
-  async function filtra(list,getSede){ var u=await ubicaciones(); if(!u||!Array.isArray(list)) return list; getSede=getSede||function(x){return x&&(x.sede||x.proyecto||x.propiedad);}; return list.filter(function(x){ var p=toProy(getSede(x)); return !p||u.indexOf(p)>=0; }); }
+  async function filtra(list,getSede){ var u=await ubicaciones(); if(!u||!Array.isArray(list)) return list; var dir=await esDireccion(); getSede=getSede||function(x){return x&&(x.sede||x.proyecto||x.propiedad);}; return list.filter(function(x){ var p=toProy(getSede(x)); if(!p) return true; if(p==='corp' && !dir) return false; return u.indexOf(p)>=0; }); }
   async function scopeSelect(sel){ if(typeof sel==='string') sel=document.querySelector(sel); if(!sel) return; var u=await ubicaciones(); if(!u) return; Array.prototype.slice.call(sel.options).forEach(function(o){ var p=toProy(o.getAttribute('data-proy'))||toProy(o.value)||toProy(o.textContent); if(p&&u.indexOf(p)<0) o.remove(); }); if(sel.selectedIndex<0&&sel.options.length) sel.selectedIndex=0; try{ sel.dispatchEvent(new Event('change')); }catch(_){} }
   // Auto-init: cualquier <select data-cp-ubic> se poda solo al cargar
   function auto(){ document.querySelectorAll('select[data-cp-ubic]').forEach(function(s){ scopeSelect(s); }); }
   if(document.readyState!=='loading') auto(); else document.addEventListener('DOMContentLoaded',auto);
-  window.cpAcceso={ubicaciones:ubicaciones,permite:permite,filtra:filtra,scopeSelect:scopeSelect,toProy:toProy,tokEmail:tokEmail};
+  window.cpAcceso={ubicaciones:ubicaciones,permite:permite,filtra:filtra,scopeSelect:scopeSelect,toProy:toProy,tokEmail:tokEmail,esDireccion:esDireccion};
 })();
