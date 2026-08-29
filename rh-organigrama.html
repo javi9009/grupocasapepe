@@ -137,6 +137,11 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
 .orgtree .node b{font-size:.82rem;font-weight:600}
 .orgtree .node em{font-style:normal;font-size:.67rem;color:var(--muted)}
 .orgtree .node .team{font-size:.62rem;color:var(--faint);text-transform:uppercase;letter-spacing:.03em;margin-top:2px}
+.bandas{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;justify-content:center}
+.banda{font-size:.7rem;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:2px 10px;font-weight:600}
+.orgtree .node[draggable=true]{cursor:grab}
+.orgtree .node.drop{outline:2px dashed var(--accent);outline-offset:3px;background:var(--accent-soft)}
+.orgtree li.equipo{border:1px dashed var(--rule-2);border-radius:12px;background:rgba(0,0,0,.02)}
 </style>
 </head>
 <body>
@@ -464,25 +469,54 @@ function pintaPendientes(){
 
 /* ---------- guardar ---------- */
 function refresca(){ pintaKpis(); pintaLanes(); pintaDetalle(); pintaEquipos(); pintaPendientes(); renderArbol(); estadoBotones(); }
+const MANDO_TREE=['direccion','gerencia_regional','gerente_general','subgerencia','jefe_area','subjefe'];
+function ordenCatG(x){ const c=CATS.find(cc=>cc.codigo===catDe(x)); return c?c.orden:99; }
+async function orgRpc(fn,args){ const t=tok(); const r=await fetch(SB.url+"/rpc/"+fn,{method:"POST",headers:{apikey:SB.key,Authorization:"Bearer "+(t||SB.key),"Content-Type":"application/json"},body:JSON.stringify(args)}); if(!r.ok){let m="";try{m=(await r.json()).message||"";}catch(e){} throw new Error(m||("HTTP "+r.status)); } return t; }
+async function onDropJefe(srcId, jefeId){
+  if(!srcId||srcId===jefeId) return;
+  const x=byId(srcId), y=byId(jefeId); if(!x||!y) return;
+  if(!MANDO_TREE.includes(catDe(y))){ alert('"'+y.nombre+'" no es un puesto de mando; no puede liderar un equipo.'); return; }
+  if(ordenCatG(y) > ordenCatG(x)){ alert('No puedes poner a un nivel inferior ("'+y.nombre+'") como jefe de uno superior ("'+x.nombre+'").'); return; }
+  const cambiaSede = y.sede && y.sede!=='Corp' && x.sede!==y.sede;
+  if(cambiaSede && x.sede && !confirm('')){} // no-op
+  let msg='Mover a '+x.nombre+' ('+(x.rol||'')+') al equipo de '+y.nombre+' ('+(y.rol||'')+').\n\nCambios:\n\u2022 Jefe directo \u2192 '+y.nombre;
+  if(cambiaSede) msg+='\n\u2022 Propiedad \u2192 '+y.sede;
+  if(!confirm(msg+'\n\n\u00bfConfirmas?')) return;
+  try{
+    await orgRpc('org_set_jefe',{p_id:srcId,p_jefe:jefeId});
+    if(cambiaSede) await orgRpc('org_reubicar',{p_id:srcId,p_sede:y.sede,p_area:x.area,p_rol:x.rol});
+    cambios={}; await carga(); sel=srcId; refresca();
+  }catch(e){ alert('No se pudo: '+e.message+(tok()?'':' (inicia sesión en el dashboard).')); }
+}
 function renderArbol(){
   const box=document.getElementById("arbol"); if(!box) return;
   const inLoc = pp => !FILT_LOC || pp.sede===FILT_LOC || pp.sede==='Corp';
   const SET = ARBOL.filter(inLoc);
   const inSet = id => SET.some(x=>x.id===id);
-  const ordenCat = x => { const c=CATS.find(cc=>cc.codigo===catDe(x)); return c?c.orden:99; };
-  const kids = id => SET.filter(x=>jefeDe(x)===id).sort((a,b)=>(ordenCat(a)-ordenCat(b))||String(a.nombre).localeCompare(b.nombre));
-  const roots = SET.filter(pp=>{ const j=jefeDe(pp); return !j || !inSet(j); }).sort((a,b)=>(ordenCat(a)-ordenCat(b))||String(a.nombre).localeCompare(b.nombre));
+  const kids = id => SET.filter(x=>jefeDe(x)===id).sort((a,b)=>(ordenCatG(a)-ordenCatG(b))||String(a.nombre).localeCompare(b.nombre));
+  const roots = SET.filter(pp=>{ const j=jefeDe(pp); return !j || !inSet(j); }).sort((a,b)=>(ordenCatG(a)-ordenCatG(b))||String(a.nombre).localeCompare(b.nombre));
+  // bandas de rango con conteo
+  const cnt={}; SET.forEach(pp=>{ const c=catDe(pp); if(c) cnt[c]=(cnt[c]||0)+1; });
+  const bandas='<div class="bandas">'+CATS.filter(c=>cnt[c.codigo]).map(c=>'<span class="banda">'+esc(c.nombre)+' \u00b7 '+cnt[c.codigo]+'</span>').join('')+'</div>';
+  const esLider = pp => ['gerencia_regional','gerente_general','subgerencia','jefe_area'].includes(catDe(pp));
   function node(pp){
     const cat=CATS.find(c=>c.codigo===catDe(pp));
     const eq = SET.filter(x=>jefeDe(x)===pp.id).length;
     const ch=kids(pp.id);
-    return '<li><span class="node'+(sel===pp.id?' sel':'')+'" data-id="'+pp.id+'"><b>'+esc(pp.nombre)+'</b>'
-      +'<em>'+esc(pp.rol||"—")+(cat?" · "+esc(cat.nombre):"")+'</em>'
-      +'<span class="team">'+esc(pp.sede||"")+(eq?(" · "+eq+" a cargo"):"")+'</span></span>'
+    const box2 = (esLider(pp) && ch.length) ? ' class="equipo"' : '';
+    return '<li'+box2+'><span class="node'+(sel===pp.id?' sel':'')+'" draggable="true" title="Arrastra para mover de equipo" data-id="'+pp.id+'"><b>'+esc(pp.nombre)+'</b>'
+      +'<em>'+esc(pp.rol||"\u2014")+(cat?" \u00b7 "+esc(cat.nombre):"")+'</em>'
+      +'<span class="team">'+esc(pp.sede||"")+(eq?(" \u00b7 "+eq+" a cargo"):"")+'</span></span>'
       +(ch.length?('<ul>'+ch.map(node).join("")+'</ul>'):"")+'</li>';
   }
-  box.innerHTML = roots.length ? ('<div class="orgtree"><ul>'+roots.map(node).join("")+'</ul></div>') : '<p class="faint">Sin datos en esta ubicación.</p>';
-  box.querySelectorAll(".node").forEach(n=>{ n.onclick=()=>{ sel=n.dataset.id; pintaDetalle(); pintaLanes(); }; });
+  box.innerHTML = roots.length ? (bandas+'<div class="orgtree"><ul>'+roots.map(node).join("")+'</ul></div>') : '<p class="faint">Sin datos en esta ubicación.</p>';
+  box.querySelectorAll(".node").forEach(n=>{
+    n.onclick=()=>{ sel=n.dataset.id; pintaDetalle(); };
+    n.ondragstart=(e)=>{ e.dataTransfer.setData("text/plain", n.dataset.id); e.dataTransfer.effectAllowed="move"; };
+    n.ondragover=(e)=>{ e.preventDefault(); n.classList.add("drop"); };
+    n.ondragleave=()=>{ n.classList.remove("drop"); };
+    n.ondrop=(e)=>{ e.preventDefault(); n.classList.remove("drop"); onDropJefe(e.dataTransfer.getData("text/plain"), n.dataset.id); };
+  });
 }
 function estadoBotones(){
   const n = Object.keys(cambios).length;
