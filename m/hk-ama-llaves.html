@@ -196,6 +196,11 @@ tr.op .who{color:#5b4bab}
 .ppct.ok{color:var(--accent)}.ppct.warn{color:#b8821a}.ppct.bad,.ppct.extra{color:var(--bad)}
 .pmin{font-size:11.5px;color:var(--soft)}
 .pext{font-size:11px;font-weight:800;color:#7d1414;background:#fbe9e9;border-radius:6px;padding:2px 7px}
+.pnota{font-size:11px;color:var(--soft);margin:-6px 0 10px;line-height:1.4}
+.pcierre{font-size:11.5px;color:var(--soft);background:var(--bg3);border-radius:10px;padding:8px 10px;margin-bottom:9px;line-height:1.45}
+.pcierre b{color:var(--txt)}
+.pcierre.paga{background:#fbe9e9;color:#7d1414}
+.pcierre.paga b{color:#7d1414}
 .pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:9px}
 .pgrid div{background:var(--bg3);border-radius:9px;padding:7px 4px;text-align:center}
 .pgrid div.ok b{color:var(--accent)}.pgrid div.warn b{color:#b8821a}
@@ -1345,8 +1350,11 @@ function tarjetaProd(a,r,c){
 
   // ---- pila 1: lo que se le repartió, contra sus 8 h ----
   const objetivo=Number(r.min_estimados ?? ts.reduce((s,t)=>s+(t.minutos_estimados||0),0));
-  const minExtra=ts.filter(t=>t.es_extra).reduce((s,t)=>s+(t.minutos_estimados||0),0);
-  const nExtra=Number(r.tareas_extra ?? ts.filter(t=>t.es_extra).length);
+  const extras=ts.filter(t=>t.es_extra);
+  const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  // Solo cuentan las extraordinarias que de verdad hizo, en minutos de estándar.
+  const minExtraHechos=extras.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const nExtra=Number(r.tareas_extra ?? extras.length);
   const pct=Math.round(objetivo/jornada*100);
 
   // ---- pila 2: lo que lleva hecho y a dónde va ----
@@ -1365,9 +1373,10 @@ function tarjetaProd(a,r,c){
   const objetivoReal=objetivo/Math.max(1,ritmo);
   const pctReal=Math.round(objetivoReal/jornada*100);
   const nv1=nivel(pctReal,Math.max(0,objetivoReal-jornada));
-  // Horas extra: el trabajo de más que no le cabe en el turno, medido a su ritmo.
-  // No cuenta el retraso, solo que le tocaron más cuartos de los que caben.
-  const horasExtra=Math.max(0,objetivoReal-jornada);
+  // Horas extra: solo salen de las tareas extraordinarias, solo de las que ya hizo,
+  // y solo por lo que se sale del turno. El retraso no cuenta: eso no es trabajo de más.
+  const previstos=objetivo-minExtra;
+  const horasExtra=Math.min(minExtraHechos,Math.max(0,previstos+minExtraHechos-jornada));
   const forecast=dedicado+faltaReal;
   const avance=objetivo?Math.round(estHechas/objetivo*100):0;
   // Verde si cierra dentro del turno; naranja si se pasa menos de una hora; rojo si más.
@@ -1378,6 +1387,17 @@ function tarjetaProd(a,r,c){
   const hora=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
   const entradaISO=r.primera_entrada||null;
   const entrada=entradaISO?hora(entradaISO):hhmm(a?.hora_inicio);
+  // ---- cierre del día: lo que hizo fuera de su horario ----
+  // Cuando el turno ya terminó, las horas extra se cuentan de verdad: las tareas
+  // que cerró después de su hora de salida. Se pagan a partir de la primera hora
+  // completa; por debajo de eso no se paga.
+  const finTurno=(a&&a.hora_fin)?new Date(`${F()}T${String(a.hora_fin).slice(0,8)}`):null;
+  const cerrado=finTurno?Date.now()>finTurno.getTime():false;
+  const fuera=finTurno?ts.filter(t=>t.terminado_at&&new Date(t.terminado_at)>finTurno):[];
+  const ultima=fuera.length?new Date(Math.max(...fuera.map(t=>new Date(t.terminado_at).getTime()))):null;
+  const minFuera=ultima?Math.max(0,(ultima-finTurno)/60000):0;
+  const minPagar=minFuera>=60?minFuera:0;
+
   const tareas=Number(r.tareas_asignadas ?? ts.length);
   const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
   const efi=r.eficiencia_pct?Number(r.eficiencia_pct):null;
@@ -1392,6 +1412,8 @@ function tarjetaProd(a,r,c){
     <div class="pfila"><span class="ppct ${nv1}">${pctReal}%</span>
       <span class="pmin">${hm(objetivo)} de estándar${ritmo>1?` · a su ritmo son ${hm(objetivoReal)}`:''} · el turno son ${hm(jornada)}</span>
       ${horasExtra>0?`<span class="pext">⚠ ${hm(horasExtra)} de horas extra</span>`:''}</div>
+    ${minExtra&&!horasExtra?`<div class="pnota">Las extraordinarias le caben en el turno${minExtraHechos<minExtra?' · aún le faltan algunas por hacer':''}.</div>`:''}
+    ${horasExtra>0?`<div class="pnota">Estimado: ${Math.round(minExtraHechos)} min de extraordinarias ya hechas, ${Math.round(previstos/60*10)/10} h de reparto.</div>`:''}
 
     <div class="pet">Avance del día</div>
     <div class="ppila"><i class="hecho" style="width:${w(dedicado)}%"></i>
@@ -1408,6 +1430,12 @@ function tarjetaProd(a,r,c){
     </div>
     <div class="cajon" data-caj="hechas" hidden>${listaTareas(ts.filter(t=>t.estado!=='pendiente'),'Todavía no ha cerrado ninguna.')}</div>
     <div class="cajon" data-caj="extra" hidden>${listaTareas(ts.filter(t=>t.es_extra),'Ninguna extraordinaria hoy.')}</div>
+    ${cerrado?`<div class="pcierre ${minPagar?'paga':''}">
+      ${fuera.length
+        ? `Cerró ${fuera.length} ${fuera.length===1?'tarea':'tareas'} después de su salida, hasta las ${ultima.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})}.
+           <b>${minPagar?`${Math.round(minPagar/60*10)/10} h extra a pagar`:'No llega a la hora: no se paga'}</b>`
+        : 'Cerró dentro de su horario · sin horas extra que pagar.'}
+    </div>`:''}
     <div class="ppie">
       <span><b>${Math.round(estHechas)}/${Math.round(objetivo)}</b> min hechos</span>
       ${minExtra?`<span><b>${Math.round(minExtra)}</b> min de extras</span>`:''}
