@@ -68,13 +68,18 @@ function calcEmp(e,inc){
  const ini=e.fecha_inicio_labores?new Date(e.fecha_inicio_labores+'T00:00:00'):null;
  const years=ini?Math.floor((Date.now()-ini)/(365.25*864e5)):1;
  const factor=1+(15+0.25*vacDays(years))/365; const sbc=r2(sd*factor);
- /* Días pagables de la quincena: 15 menos ausencias y permisos sin goce, más días extra.
+ /* FÓRMULA CANÓNICA (idéntica a la sábana de Incidencias y al recibo de SoyPepe):
+    días pagados = 15 − faltas − descontados (3 retardos = 1 falta) − permiso/baja.
+    Los días extra y festivos NO cambian los días: se pagan aparte × S.D.
     NO se usan las checadas parciales (inc.dias_lab): la quincena se paga completa. */
- const dias=Math.max(0,15-(inc?+inc.dias_ausente||0:0)-(inc?+inc.dias_permiso_baja||0:0)+(inc?+inc.dias_extra||0:0));
- /* Si hay conceptos capturados (desglose legal), mandan sobre los montos globales de Incidencias */
+ const dias=Math.max(0,15-(inc?+inc.dias_ausente||0:0)-(inc?+inc.dias_permiso_baja||0:0)-(inc?+inc.dias_descontados||0:0));
+ const extraDias=r2(((inc?+inc.dias_extra||0:0)+(inc?+inc.festivos_laborados||0:0))*sd);
+ /* Extras: si hay conceptos de pago capturados (desglose legal), mandan sobre el $ extra global.
+    Descuentos $: SOLO conceptos de deducción — los retardos/faltas ya van descontados por días. */
  const cc=conc[e.id]||[];
- const montoExtra=cc.length?r2(cc.filter(x=>x.tipo==='percepcion').reduce((s,x)=>s+(+x.monto||0),0)):(inc?+inc.monto_extra||0:0);
- const montoDesc=cc.length?r2(cc.filter(x=>x.tipo==='deduccion').reduce((s,x)=>s+(+x.monto||0),0)):(inc?+inc.monto_descontado||0:0);
+ const ccPerc=cc.filter(x=>x.tipo==='percepcion');
+ const montoExtra=ccPerc.length?r2(ccPerc.reduce((s,x)=>s+(+x.monto||0),0)):(inc?+inc.monto_extra||0:0);
+ const montoDesc=r2(cc.filter(x=>x.tipo==='deduccion').reduce((s,x)=>s+(+x.monto||0),0));
  const fiscal=(e.esquema_pago==='fiscal');
  const fijo=(e.esquema_pago==='fijo'&&+e.neto_fijo>0);
  const isrM=isr(sueldoM); const sub=sueldoM<=P.SUB_TOPE?P.SUB_MENS:0; const isrRetM=Math.max(0,isrM-sub);
@@ -82,11 +87,11 @@ function calcEmp(e,inc){
  const exc=Math.max(0,sbc-3*P.UMA);
  const o=P.OBR; const obr=fiscal?{eym_esp:r2(exc*o.eym_esp*dias),eym_din:r2(sbc*o.eym_din*dias),gmp:r2(sbc*o.gmp*dias),iv:r2(sbc*o.iv*dias),ceav:r2(sbc*o.ceav*dias)}:{eym_esp:0,eym_din:0,gmp:0,iv:0,ceav:0};
  const obrTot=r2(obr.eym_esp+obr.eym_din+obr.gmp+obr.iv+obr.ceav);
- const perc=fijo?r2(+e.neto_fijo+montoExtra):r2(sd*dias+montoExtra);
- const neto=fijo?r2(+e.neto_fijo+montoExtra-montoDesc):r2(perc-isrQ-obrTot-montoDesc);
+ const perc=fijo?r2(+e.neto_fijo+montoExtra+extraDias):r2(sd*dias+extraDias+montoExtra);
+ const neto=fijo?r2(+e.neto_fijo+montoExtra+extraDias-montoDesc):r2(perc-isrQ-obrTot-montoDesc);
  const pa=P.PAT; const pat=fiscal?{eym_fija:r2(pa.eym_fija*P.UMA*dias),eym_esp:r2(exc*pa.eym_esp*dias),eym_din:r2(sbc*pa.eym_din*dias),gmp:r2(sbc*pa.gmp*dias),rt:r2(sbc*pa.rt*dias),iv:r2(sbc*pa.iv*dias),guard:r2(sbc*pa.guard*dias),retiro:r2(sbc*pa.retiro*dias),ceav:r2(sbc*pa.ceav*dias),infonavit:r2(sbc*pa.infonavit*dias)}:{eym_fija:0,eym_esp:0,eym_din:0,gmp:0,rt:0,iv:0,guard:0,retiro:0,ceav:0,infonavit:0};
  const patTot=r2(Object.values(pat).reduce((s,x)=>s+x,0)); const costo=r2(perc+patTot);
- return {fiscal,fijo,sueldoM,sd:r2(sd),sbc,years,factor:r2(factor),dias,montoExtra,montoDesc,isrM:r2(isrM),sub,isrQ,obr,obrTot,perc,neto,pat,patTot,costo};
+ return {fiscal,fijo,sueldoM,sd:r2(sd),sbc,years,factor:r2(factor),dias,extraDias,montoExtra,montoDesc,isrM:r2(isrM),sub,isrQ,obr,obrTot,perc,neto,pat,patTot,costo};
 }
 let emps=[],incs={},conc={},quincena='',calcCache={};
 const C_PERC=['Horas extra','Día festivo laborado','Prima dominical','Bono de puntualidad','Bono de productividad','Propinas','Comisiones','Prima vacacional','Vacaciones pagadas','Aguinaldo proporcional','Otro pago'];
@@ -97,7 +102,7 @@ function ubic(e){return e.sede||PROP[e.property_id]||'';}
 function qnaFromDate(d){const m=d.toISOString().slice(0,7);return m+(d.getDate()<=15?'-Q1':'-Q2');}
 function shiftQ(q,dir){const[y,mo,half]=[+q.slice(0,4),+q.slice(5,7),q.slice(8)];let d;if(half==='Q1')d=new Date(y,mo-1,dir>0?16:0);else d=new Date(y,mo-1+(dir>0?1:0),dir>0?1:15);return qnaFromDate(d);}
 const money=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
-const COLS=[{t:'Colaborador'},{t:'Puesto'},{t:'Esquema',h:'Cómo se le paga: "bruto" deposita la quincena bruta + extras − descuentos, sin retenciones (así cuadra la dispersión real de la mayoría hoy). "fiscal" retiene ISR e IMSS (Roberto, Deisy, y quien esté en nómina formal). Cambiarlo aquí lo guarda en su expediente.'},{t:'S.D.',h:'Sueldo diario = sueldo mensual bruto / 30.'},{t:'SBC',h:'Salario base de cotización = SD × factor de integración (según antigüedad/vacaciones).'},{t:'Días',h:'Días pagables = 15 − ausencias − permisos sin goce + días extra (de la sábana de Incidencias). Las checadas parciales del reloj NO restan: la quincena se paga completa.'},{t:'Percepción',h:'Sueldo de la quincena + montos extra (festivos/horas extra/días extra).'},{t:'ISR',h:'ISR a retener quincenal (tabla mensual 2026 ÷ 2, ya aplicado el subsidio al empleo). Solo esquema fiscal.'},{t:'IMSS obrero',h:'Cuota obrera del IMSS desglosada por ramo, sobre el SBC. Solo esquema fiscal.'},{t:'Neto',h:'Lo que le cae al colaborador. Bruto: percepción − descuentos. Fiscal: percepción − ISR − IMSS − descuentos.'},{t:'Costo empresa',h:'Bruto + carga patronal IMSS/SAR/Infonavit (solo esquema fiscal).'}];
+const COLS=[{t:'Colaborador'},{t:'Puesto'},{t:'Esquema',h:'Cómo se le paga: "bruto" deposita la quincena bruta + extras − descuentos, sin retenciones (así cuadra la dispersión real de la mayoría hoy). "fiscal" retiene ISR e IMSS (Roberto, Deisy, y quien esté en nómina formal). Cambiarlo aquí lo guarda en su expediente.'},{t:'S.D.',h:'Sueldo diario = sueldo mensual bruto / 30.'},{t:'SBC',h:'Salario base de cotización = SD × factor de integración (según antigüedad/vacaciones).'},{t:'Días',h:'Días pagados = 15 − faltas − descontados (3 retardos = 1 falta) − permiso/baja (de la sábana de Incidencias). Los días extra y festivos se pagan aparte × S.D. Las checadas parciales del reloj NO restan: la quincena se paga completa. Misma fórmula que Incidencias y SoyPepe.'},{t:'Percepción',h:'Días pagados × S.D. + (días extra + festivos) × S.D. + conceptos de pago (o $ extra global si no hay conceptos).'},{t:'ISR',h:'ISR a retener quincenal (tabla mensual 2026 ÷ 2, ya aplicado el subsidio al empleo). Solo esquema fiscal.'},{t:'IMSS obrero',h:'Cuota obrera del IMSS desglosada por ramo, sobre el SBC. Solo esquema fiscal.'},{t:'Neto',h:'Lo que le cae al colaborador. Bruto: percepción − descuentos. Fiscal: percepción − ISR − IMSS − descuentos.'},{t:'Costo empresa',h:'Bruto + carga patronal IMSS/SAR/Infonavit (solo esquema fiscal).'}];
 function header(){$('thead').innerHTML=COLS.map((c,i)=>`<th class="${i===0?'name':''}">${c.t}${c.h?`<span class="help" data-h="${c.h.replace(/"/g,'&quot;')}">?</span>`:''}</th>`).join('');}
 function fillFilters(){const u=[...new Set(emps.map(ubic).filter(Boolean))].sort(),a=[...new Set(emps.map(e=>e.area).filter(Boolean))].sort();
  $('fUbic').innerHTML='<option value="">Todas</option>'+u.map(x=>`<option>${x}</option>`).join('');$('fArea').innerHTML='<option value="">Todas</option>'+a.map(x=>`<option>${x}</option>`).join('');}
@@ -161,7 +166,9 @@ $('calc').onclick=async()=>{
  status('✓ papel de trabajo guardado','ok');
 };
 $('validar').onclick=async()=>{
- if(!confirm('¿Validar la nómina FINAL de '+quincena+'? Esto guarda el cálculo actual y lo marca como definitivo: SoyPepe dejará de mostrar "tentativa" y enseñará estas cifras como lo que se va a depositar.'))return;
+ const sinVal=vis().filter(e=>{const i=incs[e.id];return i&&!i.validado;}).length;
+ const aviso=sinVal?('\n\n⚠ OJO: '+sinVal+' colaborador(es) tienen incidencias SIN validar por su jefe en la sábana de Incidencias. Lo ideal es validarlas antes de emitir la final.'):'';
+ if(!confirm('¿Validar la nómina FINAL de '+quincena+'? Esto guarda el cálculo actual y lo marca como definitivo: SoyPepe dejará de mostrar "tentativa" y enseñará estas cifras como lo que se va a depositar.'+aviso))return;
  status('validando…');
  const list=vis(); const payload=list.map(e=>{const c=calcCache[e.id]||calcEmp(e,incs[e.id]);return {quincena,employee_id:e.id,sueldo_diario:c.sd,sbc:c.sbc,dias_lab:c.dias,percepciones:c.perc,isr:c.isrQ,imss_obrero:c.obrTot,otras_deducciones:c.montoDesc,neto:c.neto,carga_patronal:c.patTot,costo_empresa:c.costo,papel_trabajo:c,estatus:'validada',updated_at:new Date().toISOString()};});
  try{await fetch(SB+'/nomina_quincenal?on_conflict=quincena,employee_id',{method:'POST',headers:{...H,Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(payload)});
