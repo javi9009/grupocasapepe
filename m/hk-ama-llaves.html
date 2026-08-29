@@ -175,6 +175,34 @@ tr.op .who{color:#5b4bab}
 .pop.lista button.act{background:var(--accent);color:#fff;font-weight:700}
 .pop.lista button i{font-style:normal;font-size:11.5px;color:var(--soft);font-variant-numeric:tabular-nums}
 .pop.lista button.act i{color:rgba(255,255,255,.8)}
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:22px}
+.pcard{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:13px 15px 12px}
+.pcard.sobrecarga{border-style:dotted;border-width:2px;border-color:#7d1414}
+.pcard .ph{display:flex;flex-direction:column;gap:1px;margin-bottom:8px}
+.pcard .ph b{font-size:15.5px;font-weight:800}
+.pcard .ph span{font-size:11.5px;color:var(--soft)}
+.ppila{display:flex;height:18px;border-radius:9px;overflow:hidden;background:#efe6d4;position:relative;margin-bottom:7px}
+.ppila i{display:block;height:100%}
+.ppila .hecho{background:var(--accent)}
+.ppila .falta{background:#cfe6db}
+.ppila.warn .hecho{background:#d99b2a}.ppila.warn .falta{background:#f0e0c0}
+.ppila.bad .hecho{background:var(--bad)}.ppila.bad .falta{background:#eccfcb}
+.ppila .marca{position:absolute;top:0;bottom:0;width:2px;background:rgba(0,0,0,.35)}
+.pfila{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.ppct{font-size:22px;font-weight:800;line-height:1}
+.ppct.ok{color:var(--accent)}.ppct.warn{color:#b8821a}.ppct.bad{color:var(--bad)}
+.pmin{font-size:11.5px;color:var(--soft)}
+.pext{font-size:11px;font-weight:800;color:#7d1414;background:#fbe9e9;border-radius:6px;padding:2px 7px}
+.pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:9px}
+.pgrid div{background:var(--bg3);border-radius:9px;padding:7px 4px;text-align:center}
+.pgrid div.warn{background:#f6eeda}.pgrid div.warn b{color:#b8821a}
+.pgrid div.bad{background:#f7e6e4}.pgrid div.bad b{color:var(--bad)}
+.pgrid b{display:block;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+.pgrid span{font-size:9.5px;color:var(--soft);text-transform:uppercase;letter-spacing:.03em}
+.ppie{display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--soft);border-top:1px solid var(--bg3);padding-top:8px}
+.ppie b{color:var(--txt);font-variant-numeric:tabular-nums}
+.ppie .bien b{color:var(--accent)}.ppie .mal b{color:var(--bad)}
+.ppie .ex b{color:#7d1414}
 th.ord{cursor:pointer;user-select:none;white-space:nowrap}
 th.ord:hover{color:var(--tinta,#16130f)}
 th.ord .fl{opacity:.35;font-size:10px;margin-left:3px}
@@ -373,11 +401,10 @@ td.grab:hover{color:var(--gold)}
 
 <!-- ================= INFORME ================= -->
 <div class="pane" id="p-informe">
-  <p class="sub">Estimado vs. real del día. La eficiencia compara el estándar de lo <b>ya terminado</b> contra el tiempo medido entre «Iniciar» y «Terminar limpieza». Por encima de 100% va por delante del estándar. «Tarde» = privadas cerradas después de la hora límite.</p>
-  <div class="wrap"><table id="tblProd"><thead><tr>
-    <th>Colaborador</th><th>Turno</th><th class="num">Tareas</th><th class="num">Hechas</th><th class="num">Extra</th>
-    <th class="num">Estimado día</th><th class="num">Estimado hecho</th><th class="num">Real</th><th class="num">Diferencia</th><th class="num">Eficiencia</th><th class="num">Tarde</th><th>Entrada · Salida</th>
-  </tr></thead><tbody></tbody></table></div>
+  <p class="sub">Cómo va cada una hoy: el objetivo del día contra lo que lleva dedicado, y a qué hora cerraría al ritmo que va.
+  La eficiencia compara el estándar de lo <b>ya terminado</b> contra el tiempo medido entre «Iniciar» y «Terminar limpieza».
+  La pila con borde punteado es carga por encima de las 8 h.</p>
+  <div class="pcards" id="prodCards"></div>
   <h3>Tiempo real por área (histórico)</h3>
   <p class="sub">Sirve para recalibrar los tiempos estándar con lo que de verdad tarda cada cuarto.
   Filtra por persona y por fechas, y pincha en cualquier columna para ordenar.</p>
@@ -1214,22 +1241,96 @@ async function moverTarea(tareaId,desde,hacia){
 
 // ---------------- INFORME ----------------
 async function cargarInforme(){
-  const {data:pr}=await sb.from('hk_v_productividad_dia').select('*').eq('property_id',P()).eq('fecha',F());
+  const [{data:pr},{data:asg},c]=await Promise.all([
+    sb.from('hk_v_productividad_dia').select('*').eq('property_id',P()).eq('fecha',F()),
+    sb.from('hk_asignaciones').select('id,nombre_display,turno,hora_inicio,hora_fin,employee_id,metadata,hk_tareas(estado,minutos_estimados,minutos_reales,iniciado_at,es_extra)')
+      .eq('property_id',P()).eq('fecha',F()),
+    confA(),
+  ]);
   // Front no limpia: el informe es del equipo de limpieza.
-  const filas=(pr||[]).filter(r=>String(r.turno||'')!=='front');
-  $('tblProd').tBodies[0].innerHTML=filas.length?filas.map(r=>{
-    const dif=Number(r.diferencia_min||0);
-    const col=dif>0?'var(--accent)':dif<0?'var(--bad)':'inherit';
-    return `<tr><td>${esc(r.colaborador||'—')}</td><td>${esc((r.turno||'').replace('_',' '))}</td>
-      <td class="num">${r.tareas_asignadas}</td><td class="num">${r.tareas_terminadas}</td><td class="num">${r.tareas_extra||0}</td>
-      <td class="num">${r.min_estimados} m</td><td class="num">${r.min_est_hechas} m</td><td class="num">${r.min_reales} m</td>
-      <td class="num" style="color:${col};font-weight:700">${dif>0?'+':''}${dif} m</td>
-      <td class="num">${r.eficiencia_pct?r.eficiencia_pct+'%':'—'}</td>
-      <td class="num" style="${r.privadas_fuera_de_hora?'color:var(--bad);font-weight:700':'color:var(--soft)'}">${r.privadas_fuera_de_hora||0}</td>
-      <td>${r.primera_entrada?new Date(r.primera_entrada).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'—'} · ${r.ultima_salida?new Date(r.ultima_salida).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'—'}</td></tr>`;
-  }).join(''):'<tr><td colspan="12" style="text-align:center;color:var(--soft);padding:20px">Sin datos para este día.</td></tr>';
+  pintarProdCards((pr||[]).filter(r=>String(r.turno||'')!=='front'),
+                  (asg||[]).filter(a=>a.turno!=='front'&&a.employee_id), c);
 
   await cargarHistorico();
+}
+
+// Cada persona, su pila del día: lo que ya dedicó, lo que le falta al ritmo que
+// lleva, y a qué hora acabaría. Las horas extra son las de más carga de la que
+// cabe en el turno, no las de haberse retrasado.
+function pintarProdCards(filas,asigs,c){
+  const box=$('prodCards');
+  if(!filas.length && !asigs.length){ box.innerHTML='<div class="empty">Sin datos para este día.</div>'; return; }
+  const porNombre={}; filas.forEach(r=>porNombre[r.colaborador]=r);
+  const usadas=new Set();
+  const cards=asigs.map(a=>{
+    const r=porNombre[a.nombre_display]||{}; usadas.add(a.nombre_display);
+    return tarjetaProd(a,r,c);
+  });
+  filas.filter(r=>!usadas.has(r.colaborador)).forEach(r=>cards.push(tarjetaProd(null,r,c)));
+  box.innerHTML=cards.join('');
+}
+
+function tarjetaProd(a,r,c){
+  const ts=(a?.hk_tareas)||[];
+  const jornada=a?jornadaDe(a,c):(Number(c.horas_turno||8)*60);
+  const objetivo=Number(r.min_estimados ?? ts.reduce((s,t)=>s+(t.minutos_estimados||0),0));
+  const estHechas=Number(r.min_est_hechas ?? 0);
+  const enCurso=ts.find(t=>t.estado==='en_curso'&&t.iniciado_at);
+  const vivo=enCurso?Math.max(0,(Date.now()-new Date(enCurso.iniciado_at))/60000):0;
+  const dedicado=Number(r.min_reales ?? 0)+vivo;
+  const falta=Math.max(0,objetivo-estHechas);
+  // Al ritmo que lleva: si va rápido, lo que falta le cuesta menos.
+  const ritmo=(estHechas>0&&dedicado>0)?estHechas/dedicado:1;
+  const faltaReal=ritmo>0?falta/ritmo:falta;
+  const forecast=dedicado+faltaReal;
+  const pct=Math.round(objetivo/jornada*100);
+  const extraCarga=Math.max(0,objetivo-jornada);
+  const pctFore=Math.round(forecast/jornada*100);
+  // El número grande habla de la carga asignada; el color del cierre, de cómo va.
+  const nv=pct>=100?'bad':pct>=90?'warn':'ok';
+  const nvFore=pctFore>=100?'bad':pctFore>=90?'warn':'ok';
+  const tope=Math.max(jornada,forecast,objetivo)||1;
+  const w=x=>Math.max(0,Math.min(100,x/tope*100));
+  const hm=m=>`${Math.round(m/60*10)/10} h`;
+  const hhmmDe=(base,min)=>{
+    if(!base) return null;
+    const d=new Date(base); d.setMinutes(d.getMinutes()+min);
+    return d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
+  };
+  const entradaISO=r.primera_entrada||null;
+  const entrada=entradaISO?new Date(entradaISO).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):hhmm(a?.hora_inicio);
+  const salidaEst=entradaISO?hhmmDe(entradaISO,forecast+(c.minutos_comida||0)):null;
+  const tareas=Number(r.tareas_asignadas ?? ts.length);
+  const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
+  const efi=r.eficiencia_pct?Number(r.eficiencia_pct):null;
+  return `<div class="pcard ${extraCarga>0?'sobrecarga':''}">
+    <div class="ph"><b>${esc(a?a.nombre_display:r.colaborador)}</b>
+      <span>${esc(((a?.turno)||r.turno||'').replace('_',' '))}${a?` · ${hhmm(a.hora_inicio)}–${hhmm(a.hora_fin)}`:''}</span></div>
+    <div class="ppila ${nvFore}">
+      <i class="hecho" style="width:${w(dedicado)}%"></i>
+      <i class="falta" style="width:${w(faltaReal)}%"></i>
+      <span class="marca" style="left:${w(jornada)}%"></span>
+    </div>
+    <div class="pfila">
+      <span class="ppct ${nv}">${pct}%</span>
+      <span class="pmin">objetivo ${hm(objetivo)} · turno de ${hm(jornada)}</span>
+      ${extraCarga>0?`<span class="pext">⚠ ${hm(extraCarga)} extra de carga</span>`:''}
+    </div>
+    <div class="pgrid">
+      <div><b>${hm(dedicado)}</b><span>dedicadas${enCurso?' · en curso':''}</span></div>
+      <div><b>${hm(faltaReal)}</b><span>le faltan</span></div>
+      <div class="${nvFore}"><b>${hm(forecast)}</b><span>cierre al ritmo de hoy</span></div>
+      <div class="${nvFore}"><b>${salidaEst||'—'}</b><span>sale a las</span></div>
+    </div>
+    <div class="ppie">
+      <span><b>${hechas}/${tareas}</b> tareas</span>
+      <span><b>${Math.round(estHechas)}/${Math.round(objetivo)}</b> min</span>
+      <span class="${efi==null?'':efi>=100?'bien':'mal'}"><b>${efi!=null?efi+'%':'—'}</b> eficiencia</span>
+      <span><b>${entrada||'—'}</b> entrada</span>
+      ${r.tareas_extra?`<span class="ex"><b>${r.tareas_extra}</b> extra</span>`:''}
+      ${r.privadas_fuera_de_hora?`<span class="mal"><b>${r.privadas_fuera_de_hora}</b> tarde</span>`:''}
+    </div>
+  </div>`;
 }
 
 // ---------------- HISTÓRICO POR ÁREA ----------------
