@@ -35,7 +35,7 @@
   }
   async function permite(proy){ var u=await ubicaciones(); if(!u) return true; return u.indexOf(toProy(proy))>=0; }
   async function filtra(list,getSede){ var u=await ubicaciones(); if(!u||!Array.isArray(list)) return list; getSede=getSede||function(x){return x&&(x.sede||x.proyecto||x.propiedad);}; return list.filter(function(x){ var p=toProy(getSede(x)); return !p||u.indexOf(p)>=0; }); }
-  async function scopeSelect(sel){ if(typeof sel==='string') sel=document.querySelector(sel); if(!sel) return; var u=await ubicaciones(); if(!u) return; Array.prototype.slice.call(sel.options).forEach(function(o){ var p=toProy(o.getAttribute('data-proy')||o.value||o.textContent); if(p&&u.indexOf(p)<0) o.remove(); }); if(sel.selectedIndex<0&&sel.options.length) sel.selectedIndex=0; try{ sel.dispatchEvent(new Event('change')); }catch(_){} }
+  async function scopeSelect(sel){ if(typeof sel==='string') sel=document.querySelector(sel); if(!sel) return; var u=await ubicaciones(); if(!u) return; Array.prototype.slice.call(sel.options).forEach(function(o){ var p=toProy(o.getAttribute('data-proy'))||toProy(o.value)||toProy(o.textContent); if(p&&u.indexOf(p)<0) o.remove(); }); if(sel.selectedIndex<0&&sel.options.length) sel.selectedIndex=0; try{ sel.dispatchEvent(new Event('change')); }catch(_){} }
   // Auto-init: cualquier <select data-cp-ubic> se poda solo al cargar
   function auto(){ document.querySelectorAll('select[data-cp-ubic]').forEach(function(s){ scopeSelect(s); }); }
   if(document.readyState!=='loading') auto(); else document.addEventListener('DOMContentLoaded',auto);
