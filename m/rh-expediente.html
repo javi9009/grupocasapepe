@@ -99,7 +99,7 @@ function proxRenov(r){
  const dias=Math.round((next-new Date())/86400000);
  return {txt:next.toISOString().slice(0,10)+' ('+dias+'d)', cls: dias<=15?'soon':(dias<=45?'mid':''), ts:next.getTime()};
 }
-function rangoHint(r){const m=rangos.find(x=>x.puesto===r.puesto&&(x.area===r.area)&&x.activo); if(!m)return''; const f=n=>n==null?'—':'$'+Number(n).toLocaleString('es-MX'); return ` title="Banda: ${f(m.sueldo_min)} / ${f(m.sueldo_sugerido)} / ${f(m.sueldo_max)}"`;}
+function rangoHint(r){const m=rangos.find(x=>x.puesto===r.puesto&&(x.area===r.area)&&x.activo); const f=n=>n==null?'—':'$'+Number(n).toLocaleString('es-MX'); const parts=[]; if(m)parts.push(`Banda: ${f(m.sueldo_min)} / ${f(m.sueldo_sugerido)} / ${f(m.sueldo_max)}`); const mes=mesesDesde(r.salario_desde); if(mes!=null)parts.push('Con este salario: '+mes+' m'); return parts.length?` title="${parts.join(' · ')}"`:'';}
 /* grp: p=personales · l=laboral · v=vacaciones · sin grp = siempre visible en toda vista */
 const COLS=[
  {k:'empleado_id',t:'ID',type:'text',w:110,help:'Identificador único del colaborador. Es la llave que une todas las sábanas. Independiente de la sede (si se cambia de ciudad conserva su ID).'},
@@ -126,9 +126,7 @@ const COLS=[
  {k:'_docs',t:'Expediente',type:'docs',w:95,grp:'l',help:'Documentos cargados de 10. Clic en el número para ver/adjuntar cada documento (Contrato, INE, RFC, NSS, etc.) — alineados al formulario de alta.'},
  {k:'salario_bruto',t:'Salario bruto',type:'salario',w:110,grp:'l',help:'Sueldo mensual bruto actual. La referencia (mín/sugerido/máx) viene de la sábana Rangos Salariales según puesto+área; pasa el cursor por la celda para verla.'},
  {k:'prueba_planta',t:'Prueba/Planta',type:'pp',w:110,grp:'l',help:'Si está en periodo de prueba o ya es de planta. Define el criterio de la próxima renovación.'},
- {k:'salario_desde',t:'Salario desde',type:'date',grp:'l',help:'Fecha del salario actual. Sirve para medir el tiempo con ese salario.'},
- {k:'ultimo_aumento_fecha',t:'Último aumento',type:'date',grp:'l',help:'Fecha del último aumento de sueldo. Editable.'},
- {k:'_tsal',t:'Tiempo c/salario',type:'tsal',w:105,grp:'l',help:'Meses transcurridos con el salario actual (calculado desde "Salario desde").'},
+ {k:'salario_desde',t:'Último aumento',type:'salupd',grp:'l',help:'Fecha en que quedó el salario actual (el último aumento; si no ha habido, la entrada). Al editarla se actualizan juntas las dos fechas de la base. Los meses con este salario se ven pasando el cursor por el sueldo.'},
  {k:'_renov',t:'Próx. renovación',type:'renov',w:135,grp:'l',help:'Prueba → fecha de inicio + 30 días (operativo) o 180 (confianza). Planta → siguiente aniversario anual. Se marca en rojo si faltan ≤15 días.'},
  {k:'_bono',t:'Bono',type:'bono',w:70,grp:'l',help:'Bono asociado al contrato. Clic para ver/gestionar; al modificarlo se pide aceptación al colaborador por SoyPepe.'},
  {k:'vac_anio',t:'Vac. del año',type:'vacro',w:90,grp:'v',help:'Días de vacaciones que le corresponden este año por Ley (LFT) según antigüedad. Automático.'},
@@ -177,7 +175,6 @@ function header(){$('thead').innerHTML=activeCols().map(c=>{const w=(CFG.widths&
 function sortVal(r,k){
  if(k==='_ubic')return ubic(r);
  if(k==='_docs')return docCount(r);
- if(k==='_tsal')return mesesDesde(r.salario_desde)??-1;
  if(k==='_renov')return proxRenov(r).ts;
  if(k==='_bono')return bonos.filter(b=>b.employee_id===r.id).length;
  return r[k]==null?'':r[k];
@@ -197,7 +194,7 @@ function cell(r,c){
  if(c.type==='salario') return `<input type="number" step="1" value="${r.salario_bruto??''}" data-id="${r.id}" data-k="salario_bruto" style="text-align:right"${rangoHint(r)}>`;
  if(c.type==='pp') return `<select data-id="${r.id}" data-k="prueba_planta"><option value="">—</option><option ${r.prueba_planta==='prueba'?'selected':''}>prueba</option><option ${r.prueba_planta==='planta'?'selected':''}>planta</option></select>`;
  if(c.type==='docs'){const dc=docCount(r);return `<button class="btn exp ${dc>=10?'ok':'bad'}" data-doc="${r.id}">${dc}/10</button>`;}
- if(c.type==='tsal'){const m=mesesDesde(r.salario_desde);return m==null?'—':m+' m';}
+ if(c.type==='salupd') return `<input type="date" value="${r.salario_desde||r.ultimo_aumento_fecha||''}" data-id="${r.id}" data-k="salario_desde" data-dual="1">`;
  if(c.type==='renov'){const pr=proxRenov(r);return `<span class="ren ${pr.cls}">${pr.txt}</span>`;}
  if(c.type==='bono') return `<button class="btn" data-bono="${r.id}">${(bonos.filter(b=>b.employee_id===r.id).length)||'+'}</button>`;
  if(c.type==='vacro') return `<span style="display:block;text-align:right">${r.vac_anio??'—'}</span>`;
@@ -208,8 +205,9 @@ function render(){$('tbody').innerHTML=vis().map(r=>'<tr>'+activeCols().map(c=>`
 function bind(){
  document.querySelectorAll('#tbody input,#tbody select').forEach(el=>{el.onchange=async()=>{
   const id=el.dataset.id,k=el.dataset.k,v=el.value===''?null:(el.type==='number'?Number(el.value):el.value); status('guardando…');
-  try{await sb('/employees?id=eq.'+id,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({[k]:v,updated_at:new Date().toISOString()})});
-   const row=data.find(x=>x.id===id); if(row){row[k]=v; if(k&&k.indexOf('vac_')===0)row.vac_pendientes=(Number(row.vac_anio)||0)+(Number(row.vac_anteriores)||0)-(Number(row.vac_tomadas)||0);} status('✓ guardado','ok');
+  const body={[k]:v,updated_at:new Date().toISOString()}; if(el.dataset.dual)body.ultimo_aumento_fecha=v;
+  try{await sb('/employees?id=eq.'+id,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify(body)});
+   const row=data.find(x=>x.id===id); if(row){row[k]=v; if(el.dataset.dual)row.ultimo_aumento_fecha=v; if(k&&k.indexOf('vac_')===0)row.vac_pendientes=(Number(row.vac_anio)||0)+(Number(row.vac_anteriores)||0)-(Number(row.vac_tomadas)||0);} status('✓ guardado','ok');
    if(k==='area'||k==='sede') fillFilters(); if(k==='prueba_planta'||k==='salario_desde'||(k&&k.indexOf('vac_')===0)) render();
   }catch(e){status('⚠ no se guardó','err');}
  };});
