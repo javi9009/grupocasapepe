@@ -209,13 +209,15 @@ tr.op .who{color:#5b4bab}
 .pgrid b{display:block;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
 .pgrid span{font-size:9.5px;color:var(--soft);text-transform:uppercase;letter-spacing:.03em;line-height:1.2;display:block}
 .pgrid div.abre{cursor:pointer;position:relative;transition:background .12s}
-.pgrid div.abre::after{content:'▾';position:absolute;top:3px;right:5px;font-size:8px;color:var(--soft);opacity:.55}
+.pgrid div.abre::after{content:'▾';position:absolute;top:3px;right:5px;font-size:10px;color:var(--accent);opacity:.9}
 .pgrid div.abre:hover{background:var(--bg2)}
 .pgrid div.abre.on{outline:2px solid var(--accent);outline-offset:-2px}
 .pgrid div.abre.on::after{content:'▴'}
 .pgrid div.muda{cursor:default}.pgrid div.muda::after{content:''}
 .cajon{background:var(--bg2);border:1px solid var(--bd);border-radius:11px;padding:4px 10px;margin:-3px 0 10px}
 .cajon .nada{padding:9px 0;font-size:12px;color:var(--soft);text-align:center}
+.cajon .expl{font-size:11.5px;color:var(--soft);line-height:1.45;padding:8px 0}
+.cajon .expl b{color:var(--txt)}
 .cajon .lin{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid rgba(0,0,0,.05);font-size:12.5px}
 .cajon .lin:first-child{border-top:0}
 .cajon .lin.pendiente{opacity:.6}
@@ -1252,11 +1254,19 @@ async function moverTarea(tareaId,desde,hacia){
   const suelta = desde===null || desde===undefined || desde==='null';
   const a1=suelta?null:ASIG.find(x=>x.id===desde), a2=ASIG.find(x=>x.id===hacia);
   const tt=suelta?SUELTAS.find(x=>x.id===tareaId):(a1.hk_tareas||[]).find(x=>x.id===tareaId);
-  const campos={asignacion_id:hacia,es_extra:true,updated_at:new Date().toISOString()};
+  // Antes de validar, mover cuartos es planificar. Después, es trabajo que se le
+  // mete a alguien en marcha: eso sí es extraordinario y puede generar horas extra.
+  const yaValidado=!!(a2&&a2.estado&&a2.estado!=='propuesta');
+  const ahora=new Date().toISOString();
+  const campos={asignacion_id:hacia,es_extra:yaValidado,updated_at:ahora};
+  if(yaValidado){
+    campos.reasignada_desde=suelta?null:desde;
+    campos.metadata={...((suelta?SUELTAS.find(x=>x.id===tareaId):null)?.metadata||{}),extra_at:ahora,extra_motivo:'movida en marcha'};
+  }
   const aPersona=!!(a2&&a2.employee_id);
   if(aPersona && tt && tt.metadata?.sin_trabajo && !tt.minutos_estimados){
     campos.minutos_estimados=await tiempoEstandarDe(tt);
-    campos.metadata={...(tt.metadata||{}),sin_trabajo:false,asignada_a_mano:true};
+    campos.metadata={...(tt.metadata||{}),...(campos.metadata||{}),sin_trabajo:false,asignada_a_mano:true};
     if(tt){ tt.minutos_estimados=campos.minutos_estimados; tt.metadata=campos.metadata; }
   }
   const {error}=await sb.from('hk_tareas').update(campos).eq('id',tareaId);
@@ -1285,7 +1295,7 @@ async function moverTarea(tareaId,desde,hacia){
 async function cargarInforme(){
   const [{data:pr},{data:asg},c]=await Promise.all([
     sb.from('hk_v_productividad_dia').select('*').eq('property_id',P()).eq('fecha',F()),
-    sb.from('hk_asignaciones').select('id,nombre_display,turno,hora_inicio,hora_fin,employee_id,metadata,hk_tareas(id,estado,estatus_area,minutos_estimados,minutos_reales,iniciado_at,terminado_at,es_extra,titulo,comentario,hk_areas(codigo,nombre,tipo,piso),hk_tareas_op(nombre))')
+    sb.from('hk_asignaciones').select('id,nombre_display,turno,hora_inicio,hora_fin,employee_id,metadata,estado,validado_at,hk_tareas(id,estado,estatus_area,minutos_estimados,minutos_reales,iniciado_at,terminado_at,es_extra,reasignada_desde,created_at,metadata,titulo,comentario,hk_areas(codigo,nombre,tipo,piso),hk_tareas_op(nombre))')
       .eq('property_id',P()).eq('fecha',F()),
     confA(),
   ]);
@@ -1350,7 +1360,12 @@ function tarjetaProd(a,r,c){
 
   // ---- pila 1: lo que se le repartió, contra sus 8 h ----
   const objetivo=Number(r.min_estimados ?? ts.reduce((s,t)=>s+(t.minutos_estimados||0),0));
-  const extras=ts.filter(t=>t.es_extra);
+  // Extraordinaria = entró en su día después de validar el reparto: una limpieza
+  // añadida, una incidencia, un huésped donde no debía, o un cuarto que se le
+  // pasó a ella con el día en marcha. Lo que se movió antes de validar, no.
+  const val=a?.validado_at||null;
+  const esExtra=t=>!!(t.metadata?.extra_at) || (val && t.created_at && t.created_at>val);
+  const extras=ts.filter(esExtra);
   const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
   // Solo cuentan las extraordinarias que de verdad hizo, en minutos de estándar.
   const minExtraHechos=extras.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
@@ -1411,9 +1426,7 @@ function tarjetaProd(a,r,c){
       ${objetivoReal>jornada?'<i class="tope"></i>':''}</div>
     <div class="pfila"><span class="ppct ${nv1}">${pctReal}%</span>
       <span class="pmin">${hm(objetivo)} de estándar${ritmo>1?` · a su ritmo son ${hm(objetivoReal)}`:''} · el turno son ${hm(jornada)}</span>
-      ${horasExtra>0?`<span class="pext">⚠ ${hm(horasExtra)} de horas extra</span>`:''}</div>
-    ${minExtra&&!horasExtra?`<div class="pnota">Las extraordinarias le caben en el turno${minExtraHechos<minExtra?' · aún le faltan algunas por hacer':''}.</div>`:''}
-    ${horasExtra>0?`<div class="pnota">Estimado: ${Math.round(minExtraHechos)} min de extraordinarias ya hechas, ${Math.round(previstos/60*10)/10} h de reparto.</div>`:''}
+      </div>
 
     <div class="pet">Avance del día</div>
     <div class="ppila"><i class="hecho" style="width:${w(dedicado)}%"></i>
@@ -1425,11 +1438,18 @@ function tarjetaProd(a,r,c){
     <div class="pgrid">
       <div class="abre ${ts.length?'':'muda'}" data-caj="hechas"><b>${hechas}/${tareas}</b><span>tareas hechas</span></div>
       <div class="abre ${nExtra?'ex':''} ${nExtra?'':'muda'}" data-caj="extra"><b>${nExtra}</b><span>extraordinarias</span></div>
-      <div class="${horasExtra>0?'bad':''}"><b>${hm(horasExtra)}</b><span>horas extra</span></div>
+      <div class="abre ${horasExtra>0?'bad':''} ${extras.length?'':'muda'}" data-caj="horas"><b>${hm(horasExtra)}</b><span>horas extra</span></div>
       <div class="${efi==null?'':efi>=100?'ok':'warn'}"><b>${efi!=null?efi+'%':'—'}</b><span>eficiencia</span></div>
     </div>
     <div class="cajon" data-caj="hechas" hidden>${listaTareas(ts.filter(t=>t.estado!=='pendiente'),'Todavía no ha cerrado ninguna.')}</div>
-    <div class="cajon" data-caj="extra" hidden>${listaTareas(ts.filter(t=>t.es_extra),'Ninguna extraordinaria hoy.')}</div>
+    <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Ninguna extraordinaria hoy.')}</div>
+    <div class="cajon" data-caj="horas" hidden>
+      <div class="expl">${horasExtra>0
+        ? `De las extraordinarias ya hechas (${Math.round(minExtraHechos)} min) más las ${Math.round(previstos/60*10)/10} h del reparto, se salen del turno <b>${hm(horasExtra)}</b>. Es un estimado: al cerrar el día se cuenta con el reloj.`
+        : `Con ${Math.round(minExtraHechos)} min de extraordinarias hechas y ${Math.round(previstos/60*10)/10} h de reparto, todavía le cabe en el turno.`}</div>
+      ${listaTareas(extras.filter(t=>t.estado==='terminada'),'Aún no ha cerrado ninguna extraordinaria.')}
+      ${extras.some(t=>t.estado!=='terminada')?(n=>`<div class="expl">Le queda${n===1?'':'n'} ${n} extraordinaria${n===1?'':'s'} sin cerrar: si la${n===1?'':'s'} hace, subirán las horas extra.</div>`)(extras.filter(t=>t.estado!=='terminada').length):''}
+    </div>
     ${cerrado?`<div class="pcierre ${minPagar?'paga':''}">
       ${fuera.length
         ? `Cerró ${fuera.length} ${fuera.length===1?'tarea':'tareas'} después de su salida, hasta las ${ultima.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})}.
