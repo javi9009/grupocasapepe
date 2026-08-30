@@ -377,10 +377,17 @@ async function reparto(propKey: string, fecha: string) {
       const arr = opsPorPersona.get(kp(front)) ?? []; arr.push(t); opsPorPersona.set(kp(front), arr);
       continue;   // no le suma carga: front no se mide por horas de limpieza
     }
-    const cand = (pref ? personas.filter((p) => p.turno === pref) : poraOps);
-    // Si no hay nadie del turno de día, la operativa queda SIN CUBRIR: nunca se le
-    // cuelga a front ni al de la noche, que no son equipo de limpieza.
-    const lista = (cand.length ? cand : poraOps).slice().sort((a, b) =>
+    // Una operativa con turno propio es de ese turno y de nadie más: el reparto de
+    // cuartos lo hace el ama de llaves, y si ese día no está, queda SIN CUBRIR.
+    if (pref) {
+      const suyos = personas.filter((p) => p.turno === pref);
+      if (!suyos.length) { sobraOps.push(t); continue; }
+      const p0 = suyos.slice().sort((a, b) => ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)))[0];
+      const arr0 = opsPorPersona.get(kp(p0)) ?? []; arr0.push(t); opsPorPersona.set(kp(p0), arr0);
+      usado.set(kp(p0), (usado.get(kp(p0)) ?? 0) + t.minutos);
+      continue;
+    }
+    const lista = poraOps.slice().sort((a, b) =>
       ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)));
     const p = lista[0];
     if (!p) { sobraOps.push(t); continue; }
