@@ -614,10 +614,22 @@ async function arranque(){
   if(!ACC||!ACC.propiedades||!ACC.propiedades.length){
     g.innerHTML='<div class="empty">Tu cuenta ('+esc(ACC?ACC.email:'')+') todavía no tiene acceso a la auditoría nocturna. Pídeselo a Javi.</div>';return;}
   g.innerHTML='';
-  prop=ACC.propiedades[0].id; propNombre=ACC.propiedades[0].nombre;
   document.getElementById('secmes').hidden=false;
+  // Se arranca en la primera propiedad que de verdad tenga días auditados, no en la
+  // primera de la lista: si la lista empieza por una que la auditoría no cubre, antes
+  // se quedaba en blanco sin decir por qué.
+  const ps=ACC.propiedades;
+  prop=ps[0].id; propNombre=ps[0].nombre;
+  await cargaMes();
+  if(!MES.length){
+    for(let i=1;i<ps.length;i++){
+      prop=ps[i].id; propNombre=ps[i].nombre;
+      await cargaMes();
+      if(MES.length) break;
+    }
+  }
   const qf=new URLSearchParams(location.search).get('f');
-  await cargaMes(); await cargaDia(/^\d{4}-\d{2}-\d{2}$/.test(qf||'')?qf:ultimoAuditado());
+  await cargaDia(/^\d{4}-\d{2}-\d{2}$/.test(qf||'')?qf:ultimoAuditado());
 }
 function ultimoAuditado(){for(let i=MES.length-1;i>=0;i--){if(Number(MES[i][5])===0&&Number(MES[i][1])>0)return MES[i][0];}return MES.length?MES[MES.length-1][0]:null;}
 function hoyCDMX(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}));}
@@ -631,10 +643,20 @@ function rangoTira(){
   const min=new Date(MIN_FECHA+'T12:00:00');
   return {desde:iso(desde < min ? min : desde), hasta:iso(hasta)};
 }
+let MES_MSG='';
+// El acceso al panel y el acceso a la auditoría los deciden dos sitios distintos, así
+// que puede haber una propiedad en la lista que la auditoría todavía no cubra: entonces
+// aud_panel_mes devuelve {error:'sin_acceso'} en vez de una lista. Eso es una propiedad
+// sin auditar, no una pantalla rota, y hasta hoy tumbaba el panel entero.
 async function cargaMes(){
   const r=rangoTira();
-  if(r.hasta < r.desde){MES=[];}
-  else MES=await rpc('aud_panel_mes',{p_property:prop,p_desde:r.desde,p_hasta:r.hasta})||[];
+  let mm=[];
+  if(r.hasta >= r.desde){
+    try{ mm=await rpc('aud_panel_mes',{p_property:prop,p_desde:r.desde,p_hasta:r.hasta}); }
+    catch(e){ mm={error:String(e.message||e)}; }
+  }
+  MES = Array.isArray(mm) ? mm : [];
+  MES_MSG = (mm && !Array.isArray(mm) && mm.error) ? String(mm.error) : '';
   const t=document.getElementById('mesTitulo');
   if(t) t.textContent = tiraOffset===0 ? 'Últimos 30 días'
     : (fmtCorto(r.desde)+' – '+fmtCorto(r.hasta));
@@ -759,7 +781,19 @@ async function centraTiraEn(f){
 // su ficha y sólo la última tiene derecho a pintar.
 let CARGA=0;
 async function cargaDia(f){
-  if(!f)return;
+  // Sin día que cargar hay que pintar igual y decir por qué: si no, la pantalla se
+  // queda en blanco y parece que la auditoría no corrió cuando lo que pasa es que
+  // esta propiedad no está auditada.
+  if(!f){ cargando=false; D=null; pinta();
+    const g=document.getElementById('gate');
+    if(g) g.innerHTML='<div class="empty">'
+      +(MES_MSG==='sin_acceso'
+        ? esc(propNombre)+' aparece en tu lista de propiedades pero la auditoría nocturna '
+          +'todavía no la cubre. Elige otra propiedad arriba.'
+        : 'No hay ningún día auditado en '+esc(propNombre)+' en este periodo.')
+      +'</div>';
+    return; }
+  const g0=document.getElementById('gate'); if(g0) g0.innerHTML='';
   const tk=++CARGA;
   cargando=true; fecha=f; D=null; pinta();
   let d;
@@ -809,7 +843,10 @@ function pintaTop(){
 }
 function pintaTira(){
   const t=document.getElementById('tira');t.innerHTML='';
-  if(!MES.length){t.innerHTML='<span class="sub" style="padding:6px 2px">Nada auditado en este periodo.</span>';return;}
+  if(!MES.length){t.innerHTML='<span class="sub" style="padding:6px 2px">'
+    +(MES_MSG==='sin_acceso'
+      ? 'La auditoría nocturna todavía no cubre '+esc(propNombre)+'.'
+      : 'Nada auditado en este periodo.')+'</span>';return;}
   MES.forEach(r=>{const b=document.createElement('button');b.type='button';b.className='d';
     const cls=claseDia(r);
     if(cls!=='nd') b.className+=' '+cls;
@@ -1522,7 +1559,7 @@ function tarjetaQuien(){
       +' <span class="chip none">'+(efe?'declaró $'+m(efe)+' en efectivo':'sin venta en efectivo')+'</span>'
       +(vivo?' <span class="chip warn">corte sin cerrar en Poster · trámite, no dinero</span>':'')+'</div></div>';}).join('');
   if(!bloques&&!ab)return '';
-  return '<div class="card quien"><div><b>Quién estaba.</b> <span class="lede" style="display:inline">Si necesitas consultar a alguno de tus compañeros, ellos estaban en el turno.</span></div>'
+  return '<div class="card quien"><div><b>Quién estaba.</b> <span class="lede" style="display:inline">Los tours los cobra recepción, así que ahí es donde hay que preguntar cuando un cobro no dice por dónde entró. En la terraza no hay cajón: el corte no se juzga por lo que queda dentro, sino por la venta en efectivo que declara contra lo que llegó a la caja fuerte.</span></div>'
     +bloques+ab+panelPersona()+'</div>';
 }
 
