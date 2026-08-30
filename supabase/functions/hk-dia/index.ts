@@ -383,7 +383,11 @@ async function reparto(propKey: string, fecha: string) {
   // Zonas que no las hace áreas públicas sino quien abre el primer turno (la oficina).
   // "La que entra en primer turno" es la primera del turno de cuartos, no la de áreas
   // públicas: a esa se le carga todo lo demás.
-  const primerTurno = poolCuartos[0] ?? personas.slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0] ?? null;
+  // La oficina la abre quien entra primero del equipo de limpieza. Si ese día no
+  // hay nadie del turno de día, la zona queda SIN CUBRIR: no es de front.
+  const primerTurno = poolCuartos[0]
+    ?? personas.filter((p) => p.turno !== 'front' && p.turno !== 'nocturno')
+      .slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0] ?? null;
   const dePrimerTurno: Tarea[] = [];
   const publicasResto: Tarea[] = [];
   for (const t of publicas) (t.aQuien === 'primer_turno' && primerTurno ? dePrimerTurno : publicasResto).push(t);
