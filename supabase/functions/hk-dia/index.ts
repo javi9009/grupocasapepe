@@ -162,6 +162,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const cuartos: Tarea[] = [];
   const publicas: Tarea[] = [];
+  const nocturnas: Tarea[] = [];   // lo que deja hecho el turno de noche
   const opcionales: Tarea[] = [];
 
   const DIAS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
@@ -209,11 +210,20 @@ async function reparto(propKey: string, fecha: string) {
       // caja SIN ASIGNAR con sus minutos, para dársela a alguien solo el día que toque.
       const opcional = a.obligatoria === false;
       const veces = Math.max(1, Number(a.veces_dia ?? 1));
+      // Zonas del turno de noche: el auditor nocturno las deja hechas antes de que
+      // entre el equipo de la mañana. Si la zona tiene dos pases, el de la noche
+      // cubre el primero y el segundo sigue siendo de la tarde.
+      const deNoche = (a.metadata as Record<string, unknown> | null)?.asignar_a === 'nocturno';
+      const minNoche = Number((a.metadata as Record<string, unknown> | null)?.minutos_nocturno ?? 0) || min;
       // Cada pase lleva su nombre (mañana / tarde) para que no se confundan ni se
       // empiecen a la vez: el de la tarde no se abre hasta cerrar el de la mañana.
       const NOM: Record<number, string[]> = { 2: ['mañana', 'tarde'], 3: ['mañana', 'mediodía', 'tarde'] };
       for (let n = 1; n <= veces; n++) {
         const etiqueta = veces > 1 ? (NOM[veces]?.[n - 1] ?? `pase ${n}`) : null;
+        if (deNoche && n === 1) {
+          nocturnas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: minNoche, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0), lote: `noche:${a.id}`, titulo: `${a.nombre} · noche`, pase: veces > 1 ? 1 : undefined, pases: veces > 1 ? veces : undefined });
+          continue;
+        }
         (opcional ? opcionales : publicas).push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
       }
     }
@@ -299,7 +309,11 @@ async function reparto(propKey: string, fecha: string) {
     if (cap <= 0) continue;
     personas.push({ employee_id: h.employee_id ? String(h.employee_id) : null, nombre: String(h.nombre_display ?? ''), turno, hi, hf, cap, bruta, admin });
   }
+  // El de la noche no se mide por horas: se le asigna su ruta de apoyo y punto.
+  const nocturno = personas.find((p) => p.turno === 'nocturno') ?? null;
   const poolCuartos = personas.filter((p) => p.turno === 'recamarista' || p.turno === 'ama_llaves').sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''));
+  // Si esa noche no hay quien cubra el turno, sus zonas vuelven a la mañana.
+  if (!nocturno && nocturnas.length) publicas.push(...nocturnas.map((t) => ({ ...t, titulo: undefined, lote: `area:${t.area_id}:1` })));
   const poolPublicasReal = personas.filter((p) => p.turno === 'areas_publicas');
   const poolP = poolPublicasReal.length ? poolPublicasReal : poolCuartos;
 
@@ -338,7 +352,7 @@ async function reparto(propKey: string, fecha: string) {
   const opsPorPersona = new Map<string, Tarea[]>();
   const sobraOps: Tarea[] = [];
   const opsLibres: Tarea[] = [];
-  const poraOps = personas.filter((p) => p.turno !== 'front');
+  const poraOps = personas.filter((p) => p.turno !== 'front' && p.turno !== 'nocturno');
   // Front tiene una sola caja al día: la de la jefa de front, y el día que descansa,
   // la del turno de front de la mañana. El room audit va siempre a esa persona.
   const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
@@ -424,12 +438,18 @@ async function reparto(propKey: string, fecha: string) {
       property_id: P, fecha, employee_id: p?.employee_id ?? null, nombre_display: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'),
       turno: p?.turno ?? 'recamarista', hora_inicio: p?.hi ?? null, hora_fin: p?.hf ?? null,
       estado: 'propuesta', minutos_estimados: total, pisos, generado_por: 'motor',
-      metadata: { capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
+      metadata: { sin_medir: p?.turno === 'nocturno' || p?.turno === 'front', capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
     const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
     for (let i = 0; i < filas.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
+  }
+
+  // La ruta de la noche va entera a quien cubre el turno.
+  if (nocturno && nocturnas.length) {
+    const e = porPersona.get(kp(nocturno)) ?? { p: nocturno, tareas: [] };
+    e.tareas.push(...nocturnas); porPersona.set(kp(nocturno), e);
   }
 
   // La caja de front existe siempre, aunque ese día no haya audit que colocar.
