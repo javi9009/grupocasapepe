@@ -1385,12 +1385,19 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   const porNombre={}; (filas||[]).forEach(r=>porNombre[r.colaborador]=r);
   if(!asigs.length){ box.innerHTML=''; return; }
   const hm=m=>`${Math.round(m/60*10)/10} h`;
+  // De cada una, dos lecturas del mismo día:
+  //   carga = lo que le tocó de ESTÁNDAR (papel). Es la moneda del reparto.
+  //   real  = lo que de verdad le va a costar: el reloj de lo ya hecho más lo que
+  //           le queda al ritmo que lleva. Es la moneda de la capacidad.
+  // Al empezar el día, sin nada medido, las dos son la misma.
   const gente=asigs.map(a=>{
     const k=metricasProd(a,porNombre[a.nombre_display]||{},c);
     const carga=(a.hk_tareas||[]).filter(t=>t.estado!=='no_realizada')
       .reduce((s,t)=>s+(t.minutos_estimados||0),0);
-    return {nombre:a.nombre_display||'—',carga,jornada:k.jornada||1,
-      pct:Math.round(carga/(k.jornada||1)*100),k};
+    const jornada=k.jornada||1;
+    const real=k.forecast>0?k.forecast:carga;
+    return {nombre:a.nombre_display||'—',carga,real,jornada,
+      pct:Math.round(real/jornada*100),pctStd:Math.round(carga/jornada*100),k};
   }).sort((x,y)=>y.pct-x.pct);
 
   // Lo que nadie tiene: cuenta como trabajo del día igual, pero sin manos detrás.
@@ -1398,23 +1405,25 @@ function pintarCapacidad(asigs,sueltas,c,filas){
     .filter(t=>t.estado!=='no_realizada').reduce((y,t)=>y+(t.minutos_estimados||0),0),0);
 
   const capacidad=gente.reduce((s,p)=>s+p.jornada,0);
-  const carga=gente.reduce((s,p)=>s+p.carga,0)+sinCubrir;
+  const carga=gente.reduce((s,p)=>s+p.real,0)+sinCubrir;      // en reloj: ¿cabe?
+  const cargaStd=gente.reduce((s,p)=>s+p.carga,0)+sinCubrir;  // en papel: ¿cómo se reparte?
   const pct=Math.round(carga/capacidad*100);
   const nv=pct>=100?'bad':pct>=90?'warn':'ok';
 
   // La escala llega hasta lo que sea mayor, para que el exceso se vea salir.
   const tope=Math.max(capacidad,carga)||1;
   const w=x=>x/tope*100;
-  const barras=gente.map(p=>`<i class="${nivel(p.pct,0)}" style="width:${w(p.carga)}%"
-      title="${esc(p.nombre)} · ${hm(p.carga)} de ${hm(p.jornada)} (${p.pct}%)"></i>`).join('')
+  const barras=gente.map(p=>`<i class="${nivel(p.pct,0)}" style="width:${w(p.real)}%"
+      title="${esc(p.nombre)} · ${hm(p.real)} de reloj para ${hm(p.carga)} de estándar · turno ${hm(p.jornada)} (${p.pct}%)"></i>`).join('')
     +(sinCubrir?`<i class="nadie" style="width:${w(sinCubrir)}%" title="Sin cubrir · ${hm(sinCubrir)}"></i>`:'');
 
-  // Bascular: lo máximo que se puede pasar de las cargadas a las que tienen hueco.
-  const exceso=gente.reduce((s,p)=>s+Math.max(0,p.carga-p.jornada),0);
-  const holgura=gente.reduce((s,p)=>s+Math.max(0,p.jornada-p.carga),0);
+  // Bascular: lo máximo que se puede pasar de las cargadas a las que tienen hueco,
+  // medido igual en reloj —que es donde de verdad hay sitio—.
+  const exceso=gente.reduce((s,p)=>s+Math.max(0,p.real-p.jornada),0);
+  const holgura=gente.reduce((s,p)=>s+Math.max(0,p.jornada-p.real),0);
   const bascular=Math.min(exceso,Math.max(0,holgura-sinCubrir));
-  const arriba=gente.filter(p=>p.carga>p.jornada);
-  const abajo=gente.filter(p=>p.jornada-p.carga>=20).sort((x,y)=>x.pct-y.pct);
+  const arriba=gente.filter(p=>p.real>p.jornada);
+  const abajo=gente.filter(p=>p.jornada-p.real>=20).sort((x,y)=>x.pct-y.pct);
   const falta=Math.max(0,carga-capacidad);
   const jornadaMedia=capacidad/gente.length;
 
@@ -1440,6 +1449,25 @@ function pintarCapacidad(asigs,sueltas,c,filas){
     etiqueta=['ok','Cabe'];
     nota=`Hay <b>${hm(capacidad-carga)}</b> libres en el equipo del día y nadie pasa de su turno.
       Espacio para cuartos extra, limpiezas profundas o formación.`;
+  }
+  // Cuando el papel dice una cosa y el reloj otra, el estándar está mal calibrado
+  // para este equipo: se programan tiempos altos, salen horas extra sobre el papel
+  // y luego el trabajo se hace en menos. Se dice cuánto habría que bajarlo.
+  const stdHecho=gente.reduce((s,p)=>s+p.k.estHechas,0);
+  const relojHecho=gente.reduce((s,p)=>s+p.k.dedicado,0);
+  const ritmoGrupo=(stdHecho>=180&&relojHecho>0)?stdHecho/relojHecho:1;
+  const bajar=Math.round((1-1/ritmoGrupo)*100);
+  if(cargaStd-carga>=30){
+    const faltaPapel=Math.max(0,cargaStd-capacidad);
+    nota+=` <b>De estándar serían ${hm(cargaStd)}</b>, pero al ritmo real del equipo se resuelve en ${hm(carga)}:
+      el papel va más lento que la gente.${bajar>=3?` Van un <b>${Math.round((ritmoGrupo-1)*100)}%</b> por encima del
+      tiempo previsto; bajando los estándares un <b>${bajar}%</b> el día quedaría en ${hm(carga)}
+      ${faltaPapel>0?`y dejarían de aparecer ${hm(faltaPapel)} de horas extra que hoy solo existen en el papel`
+                    :'y el reparto cuadraría con la realidad'}.`:''}
+      El histórico por área de aquí abajo es donde se recalibra.`;
+  }else if(carga-cargaStd>=30){
+    nota+=` De estándar serían solo ${hm(cargaStd)}: el papel va <b>más rápido</b> que el ritmo real del equipo,
+      así que los tiempos previstos se están quedando cortos.`;
   }
 
   // ---------- lo que de verdad pasó ----------
@@ -1517,9 +1545,9 @@ function pintarCapacidad(asigs,sueltas,c,filas){
 
   box.innerHTML=`<div class="gcap">
     <div class="gh"><span class="gpct ${nv}">${pct}%</span>
-      <span class="gtx">${hm(carga)} de trabajo para ${hm(capacidad)} de turno · ${gente.length} persona${gente.length===1?'':'s'}${sinCubrir?` · ${hm(sinCubrir)} sin cubrir`:''}</span>
+      <span class="gtx">${hm(carga)} de trabajo para ${hm(capacidad)} de turno · ${gente.length} persona${gente.length===1?'':'s'}${sinCubrir?` · ${hm(sinCubrir)} sin cubrir`:''}${Math.abs(cargaStd-carga)>=20?` · ${hm(cargaStd)} de estándar en papel`:''}</span>
       <span class="gtag ${etiqueta[0]}">${etiqueta[1]}</span></div>
-    <div class="gsub">Previsto de todo el grupo</div>
+    <div class="gsub">Capacidad del grupo · en tiempo real</div>
     <div class="gbar">${barras}<span class="tope" style="left:${w(capacidad)}%"></span></div>
     <div class="gleg">${gente.map(p=>`<span class="${nivel(p.pct,0)}"><b>${esc(p.nombre.split(' ')[0])}</b> ${p.pct}%</span>`).join('')}
       ${sinCubrir?`<span class="bad"><b>Sin cubrir</b> ${hm(sinCubrir)}</span>`:''}</div>
