@@ -126,14 +126,16 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 // `lote` agrupa lo que no se puede partir entre dos personas: un dormitorio entero
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
 interface CamaDet { area_id: string; codigo: string; nombre: string; estatus: string; minutos: number }
-interface Tarea { area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean }
+interface Tarea { area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
 async function reparto(propKey: string, fecha: string) {
   const cfg = PROPS[propKey];
   const P = cfg.supaId;
+  // El turno de noche de AYER es el que acaba de limpiar esta madrugada.
+  const ayer = new Date(Date.parse(`${fecha}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
 
-  const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr, dndArr] = await Promise.all([
+  const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr, dndArr, nocheAyer] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
     rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
@@ -145,7 +147,13 @@ async function reparto(propKey: string, fecha: string) {
     rest(`hk_asignaciones?property_id=eq.${P}&fecha=eq.${fecha}&select=id,estado`),
     rest(`hk_tareas_op?property_id=eq.${P}&activo=eq.true&select=id,codigo,nombre,minutos,turno,hora_sugerida,dia_semana,orden,obligatoria&order=orden`),
     rest(`hk_no_molestar?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,nota`),
-  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>, Array<{ area_id: string; nota: string | null }>];
+    // Lo que hizo (o no) el turno de noche que acaba de terminar.
+    rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${ayer}&select=area_id,estado,terminado_at,hk_asignaciones!inner(turno)&hk_asignaciones.turno=eq.nocturno`),
+  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>, Array<{ area_id: string; nota: string | null }>, Array<{ area_id: string; estado: string; terminado_at: string | null }>];
+
+  // Qué zonas dejó cerradas la noche de ayer: esas ya no se piden hoy.
+  const hechasAnoche = new Set((nocheAyer ?? []).filter((t) => t.estado === 'terminada').map((t) => String(t.area_id)));
+  const falloAnoche = new Set((nocheAyer ?? []).filter((t) => t.estado !== 'terminada').map((t) => String(t.area_id)));
 
   const conf = confArr[0] ?? { horas_turno: 8, minutos_traslado_piso: 5, no_mezclar_pisos: true, factor_ama_llaves: 0.5, minutos_comida: 30 };
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
@@ -226,6 +234,11 @@ async function reparto(propKey: string, fecha: string) {
       const NOM: Record<number, string[]> = { 2: ['mañana', 'tarde'], 3: ['mañana', 'mediodía', 'tarde'] };
       for (let n = 1; n <= veces; n++) {
         const etiqueta = veces > 1 ? (NOM[veces]?.[n - 1] ?? `pase ${n}`) : null;
+        // Si anoche no se hizo, la zona vuelve a la mañana para que no se quede sucia.
+        if (deNoche && n === 1 && falloAnoche.has(String(a.id))) {
+          publicas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: `${a.nombre} · no se hizo anoche`, piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0), lote: `area:${a.id}:1`, opcional: false });
+          continue;
+        }
         if (deNoche && n === 1) {
           nocturnas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: minNoche, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0), lote: `noche:${a.id}`, titulo: `${a.nombre} · noche`, pase: veces > 1 ? 1 : undefined, pases: veces > 1 ? veces : undefined });
           continue;
@@ -293,6 +306,12 @@ async function reparto(propKey: string, fecha: string) {
     if (est === 'fuera_servicio') continue;
     const dnd = noMolestar.has(String(a.id)) || (a.parent_id && noMolestar.has(String(a.parent_id)));
     libres.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: dnd ? `${a.nombre} · no molestar` : String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: 0, checklist_id: null, orden: Number(a.orden ?? 0), lote: `libre:${a.id}`, sinTrabajo: true, noMolestar: !!dnd });
+  }
+  // Lo que el turno de noche dejó cerrado se enseña en el listado, hecho y con 0 min,
+  // para que el ama de llaves lo vea resuelto y no se lo dé a nadie.
+  for (const a of areas) {
+    if (!hechasAnoche.has(String(a.id))) continue;
+    libres.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: `${a.nombre} · hecho anoche`, piso: Number(a.piso ?? 0), tipo: String(a.tipo), estatus: 'rutina', minutos: 0, checklist_id: null, orden: Number(a.orden ?? 0), lote: `noche_ok:${a.id}`, sinTrabajo: true, hechoAnoche: true });
   }
   libres.sort((x, y) => x.piso - y.piso || x.orden - y.orden);
 
@@ -462,7 +481,7 @@ async function reparto(propKey: string, fecha: string) {
       metadata: { sin_medir: p?.turno === 'nocturno' || p?.turno === 'front', capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
-    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
+    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
     for (let i = 0; i < filas.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
@@ -480,7 +499,7 @@ async function reparto(propKey: string, fecha: string) {
   // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
   const sueltas = [...opsLibres, ...profundas, ...opcionales, ...libres];
   if (sueltas.length) {
-    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
+    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
     for (let i = 0; i < filasS.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filasS.slice(i, i + 100)) });
   }
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
