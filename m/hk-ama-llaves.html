@@ -198,6 +198,13 @@ tr.op .who{color:#5b4bab}
   font-variant-numeric:tabular-nums}
 .gleg span b{font-weight:800;color:var(--txt)}
 .gleg span.ok b{color:var(--accent)}.gleg span.warn b{color:#b8821a}.gleg span.bad b,.gleg span.extra b{color:var(--bad)}
+.gbar i.pagar{background:#7d1414}
+.gsub{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--soft);margin:0 0 4px}
+.gsep{height:1px;background:var(--bd);margin:13px 0 11px}
+.gmov{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.gmov span{font-size:10.5px;color:#8a6212;background:#fdf3e0;border:1px solid #ecdcbd;border-radius:6px;
+  padding:2px 7px;font-variant-numeric:tabular-nums}
+.gmov span b{font-weight:800}
 .gnota{font-size:11.5px;color:var(--soft);line-height:1.45;margin-top:8px}
 .gnota b{color:var(--txt)}
 .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:22px}
@@ -1337,7 +1344,7 @@ async function cargarInforme(){
   // Front no limpia: el informe es del equipo de limpieza.
   const noMide=t=>t==='front'||t==='nocturno';
   const conGente=(asg||[]).filter(a=>!noMide(a.turno)&&a.employee_id);
-  pintarCapacidad(conGente,(asg||[]).filter(a=>!a.employee_id),c);
+  pintarCapacidad(conGente,(asg||[]).filter(a=>!a.employee_id),c,(pr||[]).filter(r=>!noMide(String(r.turno||''))));
   pintarProdCards((pr||[]).filter(r=>!noMide(String(r.turno||''))),conGente, c);
 
   await cargarHistorico();
@@ -1346,7 +1353,11 @@ async function cargarInforme(){
 // El detalle de un cajón: qué cuarto, en qué estatus y cuánto costó de verdad.
 function listaTareas(ts,vacio){
   if(!ts.length) return `<div class="nada">${vacio}</div>`;
-  const orden=ts.slice().sort((x,y)=>String(y.terminado_at||'').localeCompare(String(x.terminado_at||'')));
+  // Primero lo cerrado (lo último arriba) y al final lo que aún no ha tocado.
+  const peso=t=>t.estado==='pendiente'?1:0;
+  const orden=ts.slice().sort((x,y)=>peso(x)-peso(y)
+    || (peso(x)? String(x.hk_areas?.codigo||'').localeCompare(String(y.hk_areas?.codigo||''),'es',{numeric:true})
+               : String(y.terminado_at||'').localeCompare(String(x.terminado_at||''))));
   return orden.map(t=>{
     const ar=t.hk_areas||{}, op=t.hk_tareas_op;
     const nom=op?op.nombre:(t.titulo||`${ar.codigo||''}${ar.nombre&&ar.nombre!==ar.codigo?` · ${ar.nombre}`:''}`);
@@ -1357,9 +1368,9 @@ function listaTareas(ts,vacio){
     return `<div class="lin ${t.estado}">
       <span class="nm">${esc(nom)}${t.es_extra?' <i class="ex">extra</i>':''}</span>
       <span class="es">${esc(est)}</span>
-      <span class="mi">${real!=null?`${Math.round(real)}′ de ${t.minutos_estimados}′`:`${t.minutos_estimados}′`}</span>
-      ${dif!=null?`<span class="di ${dif<0?'mal':'bien'}">${dif>0?'−':'+'}${Math.abs(dif)}′</span>`:'<span class="di"></span>'}
-      <span class="ho">${hora||(t.estado==='en_curso'?'en curso':'')}</span>
+      <span class="mi">${real!=null&&t.estado!=='pendiente'?`${Math.round(real)}′ de ${t.minutos_estimados}′`:`${t.minutos_estimados}′`}</span>
+      ${dif!=null&&t.estado!=='pendiente'?`<span class="di ${dif<0?'mal':'bien'}">${dif>0?'−':'+'}${Math.abs(dif)}′</span>`:'<span class="di"></span>'}
+      <span class="ho">${t.estado==='pendiente'?'sin empezar':(hora||(t.estado==='en_curso'?'en curso':''))}</span>
     </div>`;
   }).join('');
 }
@@ -1369,15 +1380,17 @@ function listaTareas(ts,vacio){
 //   ¿CABE el día? -> carga total contra capacidad total. Si no cabe, falta gente.
 //   ¿Está BIEN REPARTIDO? -> lo que le sobra a unas contra lo que les falta a otras.
 // Un día puede caber de sobra y aun así tener a Sara al 120% y a otra al 60%.
-function pintarCapacidad(asigs,sueltas,c){
+function pintarCapacidad(asigs,sueltas,c,filas){
   const box=$('capGrupo');
+  const porNombre={}; (filas||[]).forEach(r=>porNombre[r.colaborador]=r);
   if(!asigs.length){ box.innerHTML=''; return; }
   const hm=m=>`${Math.round(m/60*10)/10} h`;
   const gente=asigs.map(a=>{
-    const ts=a.hk_tareas||[];
-    const carga=ts.filter(t=>t.estado!=='no_realizada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
-    const jornada=jornadaDe(a,c)||1;
-    return {nombre:a.nombre_display||'—',carga,jornada,pct:Math.round(carga/jornada*100)};
+    const k=metricasProd(a,porNombre[a.nombre_display]||{},c);
+    const carga=(a.hk_tareas||[]).filter(t=>t.estado!=='no_realizada')
+      .reduce((s,t)=>s+(t.minutos_estimados||0),0);
+    return {nombre:a.nombre_display||'—',carga,jornada:k.jornada||1,
+      pct:Math.round(carga/(k.jornada||1)*100),k};
   }).sort((x,y)=>y.pct-x.pct);
 
   // Lo que nadie tiene: cuenta como trabajo del día igual, pero sin manos detrás.
@@ -1429,14 +1442,85 @@ function pintarCapacidad(asigs,sueltas,c){
       Espacio para cuartos extra, limpiezas profundas o formación.`;
   }
 
+  // ---------- lo que de verdad pasó ----------
+  const hecho=gente.reduce((s,p)=>s+p.k.estHechas,0);
+  const extraTotal=gente.reduce((s,p)=>s+p.k.horasExtra,0);
+  const pctHecho=Math.round(hecho/capacidad*100);
+  const topeR=Math.max(tope,hecho);
+  const wr=x=>x/topeR*100;
+  const barrasR=gente.map(p=>{
+    const dentro=Math.min(p.k.estHechas,p.jornada);
+    return `<i class="${nivel(Math.round(dentro/p.jornada*100),0)}" style="width:${wr(dentro)}%"
+        title="${esc(p.nombre)} · ${hm(dentro)} de estándar cerradas"></i>`
+      +(p.k.horasExtra>0?`<i class="pagar" style="width:${wr(p.k.horasExtra)}%"
+        title="${esc(p.nombre)} · ${hm(p.k.horasExtra)} de horas extra"></i>`:'');
+  }).join('');
+
+  // ---------- ¿esas horas extra había dónde meterlas? ----------
+  // Se cogen las tareas extraordinarias de quien se pasó y se intentan colocar,
+  // de mayor a menor, en el hueco que dejó libre alguien que no llegó a su turno.
+  // Lo que encaja son horas extra EVITABLES: mismo trabajo, sin pagarlas.
+  // El hueco real de una compañera es lo que le sobra de turno por encima de lo
+  // suyo: ni lo que aún no ha terminado de su carga ni lo ya hecho cuentan como sitio.
+  const huecos=gente.filter(p=>p.k.horasExtra<=0)
+    .map(p=>({nombre:p.nombre,libre:Math.max(0,p.jornada-Math.max(p.carga,p.k.estHechas))}))
+    .filter(h=>h.libre>=15);
+  const movidas=[];
+  let evitable=0;
+  for(const p of gente.filter(p=>p.k.horasExtra>0)){
+    let movido=0;
+    const suyas=p.k.extras.slice().sort((x,y)=>(y.minutos_estimados||0)-(x.minutos_estimados||0));
+    for(const t of suyas){
+      if(movido>=p.k.horasExtra) break;              // ya se le quitó todo lo que le sobraba
+      const min=t.minutos_estimados||0;
+      const h=huecos.filter(h=>h.libre>=min).sort((m,n)=>n.libre-m.libre)[0];
+      if(!h) continue;
+      h.libre-=min; movido+=min; movidas.push({t,de:p.nombre,min,a:h.nombre});
+    }
+    evitable+=Math.min(movido,p.k.horasExtra);
+  }
+  const pagar=Math.max(0,extraTotal-evitable);
+
+  let notaR;
+  if(extraTotal<=0){
+    notaR=hecho>0
+      ? `Nadie ha pasado de su turno: <b>hoy no hay horas extra que pagar</b>.`
+      : `Todavía no hay nada cerrado.`;
+  }else if(evitable>0){
+    const quien=[...new Set(movidas.map(m=>m.a))];
+    const una=movidas.length===1;
+    notaR=`Se acumulan <b>${hm(extraTotal)}</b> de horas extra, pero <b>${hm(evitable)}</b> eran evitables:
+      ${una?'la tarea que hizo':`las ${movidas.length} tareas que hizo`}
+      ${[...new Set(movidas.map(m=>esc(m.de)))].join(' y ')} de más ${una?'cabía':'cabían'} en el hueco que
+      ${quien.length===1?'dejó':'dejaron'} ${quien.map(esc).join(' y ')}.
+      Repartiendo distinto se ${pagar>0?'pagarían':'pagarían'} <b>${pagar>0?hm(pagar):'0 h'}</b>.`;
+  }else{
+    notaR=`Hay <b>${hm(extraTotal)}</b> de horas extra y <b>no había dónde meterlas</b>:
+      nadie del turno cerró con hueco suficiente. Esto es falta de manos, no de reparto.`;
+  }
+
+  const chip=(m)=>`<span><b>${esc(m.t.hk_areas?.codigo||m.t.titulo||'tarea')}</b> ${m.min}′ · ${esc(m.de.split(' ')[0])} → ${esc(m.a.split(' ')[0])}</span>`;
+
   box.innerHTML=`<div class="gcap">
     <div class="gh"><span class="gpct ${nv}">${pct}%</span>
       <span class="gtx">${hm(carga)} de trabajo para ${hm(capacidad)} de turno · ${gente.length} persona${gente.length===1?'':'s'}${sinCubrir?` · ${hm(sinCubrir)} sin cubrir`:''}</span>
       <span class="gtag ${etiqueta[0]}">${etiqueta[1]}</span></div>
+    <div class="gsub">Previsto de todo el grupo</div>
     <div class="gbar">${barras}<span class="tope" style="left:${w(capacidad)}%"></span></div>
     <div class="gleg">${gente.map(p=>`<span class="${nivel(p.pct,0)}"><b>${esc(p.nombre.split(' ')[0])}</b> ${p.pct}%</span>`).join('')}
       ${sinCubrir?`<span class="bad"><b>Sin cubrir</b> ${hm(sinCubrir)}</span>`:''}</div>
     <div class="gnota">${nota}</div>
+
+    <div class="gsep"></div>
+    <div class="gh"><span class="gpct ${pagar>0?'bad':evitable>0?'warn':'ok'}">${pctHecho}%</span>
+      <span class="gtx">${hm(hecho)} de estándar ya cerradas${extraTotal>0?` · ${hm(extraTotal)} por encima del turno`:''}</span>
+      <span class="gtag ${pagar>0?'bad':evitable>0?'warn':'ok'}">${pagar>0?`${hm(pagar)} a pagar`
+        :evitable>0?'0 h a pagar · eran evitables':'Sin horas extra'}</span></div>
+    <div class="gsub">Resultado real del día</div>
+    <div class="gbar">${barrasR||'<i class="nadie" style="width:100%"></i>'}<span class="tope" style="left:${wr(capacidad)}%"></span></div>
+    <div class="gnota">${notaR}</div>
+    ${movidas.length?`<div class="gmov">${movidas.slice(0,8).map(chip).join('')}
+      ${movidas.length>8?`<span>y ${movidas.length-8} más</span>`:''}</div>`:''}
   </div>`;
 }
 
@@ -1467,7 +1551,9 @@ function pintarProdCards(filas,asigs,c){
   });
 }
 
-function tarjetaProd(a,r,c){
+// El cálculo del día de una persona, separado de cómo se pinta: lo usan igual la
+// tarjeta de cada una y la barra del grupo, para que los números sean los mismos.
+function metricasProd(a,r,c){
   const ts=(a?.hk_tareas)||[];
   const jornada=a?jornadaDe(a,c):(Number(c.horas_turno||8)*60);
 
@@ -1518,11 +1604,6 @@ function tarjetaProd(a,r,c){
   // Verde si cierra dentro del turno; naranja si se pasa menos de una hora; rojo si más.
   const nv2=forecast<=jornada?'ok':forecast<=jornada+60?'warn':'bad';
 
-  const w=x=>Math.max(0,Math.min(100,x/jornada*100));
-  const hm=m=>`${Math.round(m/60*10)/10} h`;
-  const hora=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
-  const entradaISO=r.primera_entrada||null;
-  const entrada=entradaISO?hora(entradaISO):hhmm(a?.hora_inicio);
   // ---- cierre del día: lo que hizo fuera de su horario ----
   // Cuando el turno ya terminó, las horas extra se cuentan de verdad: las tareas
   // que cerró después de su hora de salida. Se pagan a partir de la primera hora
@@ -1546,6 +1627,20 @@ function tarjetaProd(a,r,c){
   const tareas=Math.max(0,Number(r.tareas_asignadas ?? ts.length)-noQuisieron.length);
   const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
   const efi=r.eficiencia_pct?Number(r.eficiencia_pct):null;
+  return {ts,jornada,objetivo,especiales,pct,estHechas,ordinarias,extras,horasExtra,minExtra,nExtra,lleno,
+    dedicado,falta,faltaReal,ritmo,nv1,forecast,avance,nv2,cerrado,minFuera,ocho,minPagar,extraCaida,
+    noQuisieron,tareas,hechas,efi};
+}
+
+function tarjetaProd(a,r,c){
+  const k=metricasProd(a,r,c);
+  const {ts,jornada,objetivo,especiales,pct,estHechas,extras,horasExtra,nExtra,dedicado,faltaReal,
+    nv1,forecast,avance,nv2,extraCaida,noQuisieron,tareas,hechas,efi}=k;
+  const w=x=>Math.max(0,Math.min(100,x/jornada*100));
+  const hm=m=>`${Math.round(m/60*10)/10} h`;
+  const hora=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
+  const entradaISO=r.primera_entrada||null;
+  const entrada=entradaISO?hora(entradaISO):hhmm(a?.hora_inicio);
 
   return `<div class="pcard ${horasExtra>0?'sobrecarga':''}">
     <div class="ph"><b>${esc(a?a.nombre_display:r.colaborador)}</b>
@@ -1571,7 +1666,7 @@ function tarjetaProd(a,r,c){
       <div class="abre ${horasExtra>0?'bad':''}" data-caj="horas"><b>${hm(horasExtra)}</b><span>horas extra</span></div>
       <div class="${efi==null?'':efi>=100?'ok':'warn'}"><b>${efi!=null?efi+'%':'—'}</b><span>eficiencia</span></div>
     </div>
-    <div class="cajon" data-caj="hechas" hidden>${listaTareas(ts.filter(t=>t.estado!=='pendiente'),'Todavía no ha cerrado ninguna.')}</div>
+    <div class="cajon" data-caj="hechas" hidden>${listaTareas(ts,'Todavía no tiene tareas.')}</div>
     <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Todavía ninguna: no ha pasado de sus '+hm(jornada)+' de estándar.')}</div>
     <div class="cajon" data-caj="horas" hidden>
       <div class="expl">${horasExtra>0
