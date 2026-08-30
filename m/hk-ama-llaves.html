@@ -177,6 +177,29 @@ tr.op .who{color:#5b4bab}
 .pop.lista button.act{background:var(--accent);color:#fff;font-weight:700}
 .pop.lista button i{font-style:normal;font-size:11.5px;color:var(--soft);font-variant-numeric:tabular-nums}
 .pop.lista button.act i{color:rgba(255,255,255,.8)}
+.gcap{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:11px 14px 12px;margin-bottom:14px}
+.gcap .gh{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:7px}
+.gcap .gpct{font-size:22px;font-weight:800;line-height:1}
+.gcap .gpct.ok{color:var(--accent)}.gcap .gpct.warn{color:#b8821a}.gcap .gpct.bad{color:var(--bad)}
+.gcap .gtx{font-size:11.5px;color:var(--soft)}
+.gcap .gtag{margin-left:auto;font-size:10.5px;font-weight:800;border-radius:7px;padding:3px 8px;white-space:nowrap}
+.gcap .gtag.ok{background:#e4f0e9;color:#12694d}
+.gcap .gtag.warn{background:#fdf0d8;color:#8a6212}
+.gcap .gtag.bad{background:#fbe9e9;color:#7d1414}
+.gbar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:#efe6d4;position:relative}
+.gbar i{display:block;height:100%;border-right:1px solid rgba(255,255,255,.75)}
+.gbar i.ok{background:var(--accent)}
+.gbar i.warn{background:#d99b2a}
+.gbar i.bad,.gbar i.extra{background:var(--bad)}
+.gbar i.nadie{background:repeating-linear-gradient(135deg,#c9bda6 0 3px,#efe6d4 3px 6px)}
+.gbar .tope{position:absolute;top:-2px;bottom:-2px;width:2px;background:#16130f;opacity:.55}
+.gleg{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.gleg span{font-size:10.5px;color:var(--soft);background:var(--bg3);border-radius:6px;padding:2px 7px;
+  font-variant-numeric:tabular-nums}
+.gleg span b{font-weight:800;color:var(--txt)}
+.gleg span.ok b{color:var(--accent)}.gleg span.warn b{color:#b8821a}.gleg span.bad b,.gleg span.extra b{color:var(--bad)}
+.gnota{font-size:11.5px;color:var(--soft);line-height:1.45;margin-top:8px}
+.gnota b{color:var(--txt)}
 .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:22px}
 .pcard{background:var(--surface);border:1px solid var(--bd);border-radius:14px;padding:13px 15px 12px}
 .pcard.sobrecarga{border-style:dotted;border-width:2px;border-color:#7d1414}
@@ -435,6 +458,7 @@ td.grab:hover{color:var(--gold)}
   <p class="sub">Cómo va cada una hoy: el objetivo del día contra lo que lleva dedicado, y a qué hora cerraría al ritmo que va.
   La eficiencia compara el estándar de lo <b>ya terminado</b> contra el tiempo medido entre «Iniciar» y «Terminar limpieza».
   La pila con borde punteado es carga por encima de las 8 h.</p>
+  <div id="capGrupo"></div>
   <div class="pcards" id="prodCards"></div>
   <h3>Tiempo real por área (histórico)</h3>
   <p class="sub">Sirve para recalibrar los tiempos estándar con lo que de verdad tarda cada cuarto.
@@ -1312,8 +1336,9 @@ async function cargarInforme(){
   ]);
   // Front no limpia: el informe es del equipo de limpieza.
   const noMide=t=>t==='front'||t==='nocturno';
-  pintarProdCards((pr||[]).filter(r=>!noMide(String(r.turno||''))),
-                  (asg||[]).filter(a=>!noMide(a.turno)&&a.employee_id), c);
+  const conGente=(asg||[]).filter(a=>!noMide(a.turno)&&a.employee_id);
+  pintarCapacidad(conGente,(asg||[]).filter(a=>!a.employee_id),c);
+  pintarProdCards((pr||[]).filter(r=>!noMide(String(r.turno||''))),conGente, c);
 
   await cargarHistorico();
 }
@@ -1337,6 +1362,82 @@ function listaTareas(ts,vacio){
       <span class="ho">${hora||(t.estado==='en_curso'?'en curso':'')}</span>
     </div>`;
   }).join('');
+}
+
+// La foto del grupo en una sola barra: la carga de todo el día contra todas las
+// horas de turno que hay. Sirve para dos preguntas distintas:
+//   ¿CABE el día? -> carga total contra capacidad total. Si no cabe, falta gente.
+//   ¿Está BIEN REPARTIDO? -> lo que le sobra a unas contra lo que les falta a otras.
+// Un día puede caber de sobra y aun así tener a Sara al 120% y a otra al 60%.
+function pintarCapacidad(asigs,sueltas,c){
+  const box=$('capGrupo');
+  if(!asigs.length){ box.innerHTML=''; return; }
+  const hm=m=>`${Math.round(m/60*10)/10} h`;
+  const gente=asigs.map(a=>{
+    const ts=a.hk_tareas||[];
+    const carga=ts.filter(t=>t.estado!=='no_realizada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
+    const jornada=jornadaDe(a,c)||1;
+    return {nombre:a.nombre_display||'—',carga,jornada,pct:Math.round(carga/jornada*100)};
+  }).sort((x,y)=>y.pct-x.pct);
+
+  // Lo que nadie tiene: cuenta como trabajo del día igual, pero sin manos detrás.
+  const sinCubrir=(sueltas||[]).reduce((s,a)=>s+(a.hk_tareas||[])
+    .filter(t=>t.estado!=='no_realizada').reduce((y,t)=>y+(t.minutos_estimados||0),0),0);
+
+  const capacidad=gente.reduce((s,p)=>s+p.jornada,0);
+  const carga=gente.reduce((s,p)=>s+p.carga,0)+sinCubrir;
+  const pct=Math.round(carga/capacidad*100);
+  const nv=pct>=100?'bad':pct>=90?'warn':'ok';
+
+  // La escala llega hasta lo que sea mayor, para que el exceso se vea salir.
+  const tope=Math.max(capacidad,carga)||1;
+  const w=x=>x/tope*100;
+  const barras=gente.map(p=>`<i class="${nivel(p.pct,0)}" style="width:${w(p.carga)}%"
+      title="${esc(p.nombre)} · ${hm(p.carga)} de ${hm(p.jornada)} (${p.pct}%)"></i>`).join('')
+    +(sinCubrir?`<i class="nadie" style="width:${w(sinCubrir)}%" title="Sin cubrir · ${hm(sinCubrir)}"></i>`:'');
+
+  // Bascular: lo máximo que se puede pasar de las cargadas a las que tienen hueco.
+  const exceso=gente.reduce((s,p)=>s+Math.max(0,p.carga-p.jornada),0);
+  const holgura=gente.reduce((s,p)=>s+Math.max(0,p.jornada-p.carga),0);
+  const bascular=Math.min(exceso,Math.max(0,holgura-sinCubrir));
+  const arriba=gente.filter(p=>p.carga>p.jornada);
+  const abajo=gente.filter(p=>p.jornada-p.carga>=20).sort((x,y)=>x.pct-y.pct);
+  const falta=Math.max(0,carga-capacidad);
+  const jornadaMedia=capacidad/gente.length;
+
+  let etiqueta,nota;
+  if(falta>0){
+    const personas=Math.round(falta/jornadaMedia*10)/10;
+    etiqueta=['bad','No cabe'];
+    nota=`El trabajo del día pasa de lo que hay en el turno en <b>${hm(falta)}</b>. Aunque se reparta perfecto,
+      alguien sale de su horario: son <b>${personas} persona${personas===1?'':'s'}</b> más de la jornada media
+      (o ${hm(falta)} de horas extra pagadas).${sinCubrir?` Ojo: <b>${hm(sinCubrir)}</b> no tienen a nadie detrás.`:''}`;
+  }else if(bascular>=20&&arriba.length&&abajo.length){
+    etiqueta=['warn','Mal repartido'];
+    nota=`El día <b>sí cabe</b> —sobran ${hm(capacidad-carga)}—, pero está mal balanceado:
+      ${arriba.map(p=>`<b>${esc(p.nombre)}</b> va al ${p.pct}%`).join(' y ')},
+      mientras ${abajo.slice(0,2).map(p=>`${esc(p.nombre)} está al ${p.pct}%`).join(' y ')}.
+      Pasando unos <b>${hm(bascular)}</b> de ${esc(arriba[0].nombre)} a ${esc(abajo[0].nombre)} cierran todas dentro de su turno,
+      y no se pagan horas extra.`;
+  }else if(pct>=90){
+    etiqueta=['warn','Al límite'];
+    nota=`Está bien repartido, pero el día va lleno: solo sobran <b>${hm(capacidad-carga)}</b>.
+      Cualquier imprevisto (una salida de más, alguien que falta) se convierte en horas extra.`;
+  }else{
+    etiqueta=['ok','Cabe'];
+    nota=`Hay <b>${hm(capacidad-carga)}</b> libres en el equipo del día y nadie pasa de su turno.
+      Espacio para cuartos extra, limpiezas profundas o formación.`;
+  }
+
+  box.innerHTML=`<div class="gcap">
+    <div class="gh"><span class="gpct ${nv}">${pct}%</span>
+      <span class="gtx">${hm(carga)} de trabajo para ${hm(capacidad)} de turno · ${gente.length} persona${gente.length===1?'':'s'}${sinCubrir?` · ${hm(sinCubrir)} sin cubrir`:''}</span>
+      <span class="gtag ${etiqueta[0]}">${etiqueta[1]}</span></div>
+    <div class="gbar">${barras}<span class="tope" style="left:${w(capacidad)}%"></span></div>
+    <div class="gleg">${gente.map(p=>`<span class="${nivel(p.pct,0)}"><b>${esc(p.nombre.split(' ')[0])}</b> ${p.pct}%</span>`).join('')}
+      ${sinCubrir?`<span class="bad"><b>Sin cubrir</b> ${hm(sinCubrir)}</span>`:''}</div>
+    <div class="gnota">${nota}</div>
+  </div>`;
 }
 
 // Cada persona, su pila del día: lo que ya dedicó, lo que le falta al ritmo que
