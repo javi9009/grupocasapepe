@@ -1460,10 +1460,14 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   // Se cogen las tareas extraordinarias de quien se pasó y se intentan colocar,
   // de mayor a menor, en el hueco que dejó libre alguien que no llegó a su turno.
   // Lo que encaja son horas extra EVITABLES: mismo trabajo, sin pagarlas.
-  // El hueco real de una compañera es lo que le sobra de turno por encima de lo
-  // suyo: ni lo que aún no ha terminado de su carga ni lo ya hecho cuentan como sitio.
+  // El hueco de una compañera es tiempo de reloj, no de papel: lo que le va a
+  // sobrar del turno cuando acabe lo suyo al ritmo que lleva. Si Ali dedica 5.1 h
+  // de sus 8, le sobran 2.9 h aunque en el reparto figure llena.
+  // Y una tarea de 60' de estándar le cuesta menos si va rápida: se convierte a su ritmo.
+  const holguraDe=p=>Math.max(0,p.jornada-p.k.forecast);
   const huecos=gente.filter(p=>p.k.horasExtra<=0)
-    .map(p=>({nombre:p.nombre,libre:Math.max(0,p.jornada-Math.max(p.carga,p.k.estHechas))}))
+    .map(p=>({nombre:p.nombre,libre:holguraDe(p),ritmo:p.k.ritmo>0?p.k.ritmo:1,
+      dedicado:p.k.dedicado,jornada:p.jornada}))
     .filter(h=>h.libre>=15);
   const movidas=[];
   let evitable=0;
@@ -1473,9 +1477,9 @@ function pintarCapacidad(asigs,sueltas,c,filas){
     for(const t of suyas){
       if(movido>=p.k.horasExtra) break;              // ya se le quitó todo lo que le sobraba
       const min=t.minutos_estimados||0;
-      const h=huecos.filter(h=>h.libre>=min).sort((m,n)=>n.libre-m.libre)[0];
+      const h=huecos.filter(h=>h.libre>=min/h.ritmo).sort((m,n)=>n.libre-m.libre)[0];
       if(!h) continue;
-      h.libre-=min; movido+=min; movidas.push({t,de:p.nombre,min,a:h.nombre});
+      h.libre-=min/h.ritmo; movido+=min; movidas.push({t,de:p.nombre,min,a:h.nombre,rec:h});
     }
     evitable+=Math.min(movido,p.k.horasExtra);
   }
@@ -1489,14 +1493,24 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   }else if(evitable>0){
     const quien=[...new Set(movidas.map(m=>m.a))];
     const una=movidas.length===1;
-    notaR=`Se acumulan <b>${hm(extraTotal)}</b> de horas extra, pero <b>${hm(evitable)}</b> eran evitables:
-      ${una?'la tarea que hizo':`las ${movidas.length} tareas que hizo`}
-      ${[...new Set(movidas.map(m=>esc(m.de)))].join(' y ')} de más ${una?'cabía':'cabían'} en el hueco que
-      ${quien.length===1?'dejó':'dejaron'} ${quien.map(esc).join(' y ')}.
-      Repartiendo distinto se ${pagar>0?'pagarían':'pagarían'} <b>${pagar>0?hm(pagar):'0 h'}</b>.`;
+    // Se dice con el reloj de cada una, que es lo que se ve en el turno.
+    const rec=quien.map(n=>{
+      const h=movidas.find(m=>m.a===n).rec;
+      return `<b>${esc(n.split(' ')[0])}</b> dedicó ${hm(h.dedicado)} de sus ${hm(h.jornada)}`;
+    });
+    notaR=`<b>Hay capacidad; está mal repartido.</b> Se acumulan <b>${hm(extraTotal)}</b> de horas extra
+      de ${[...new Set(movidas.map(m=>esc(m.de.split(' ')[0])))].join(' y ')},
+      y a la vez ${rec.join(' y ')}: cabían ahí.
+      ${una?'La tarea':`Las ${movidas.length} tareas`} que hizo de más ${una?'entraba':'entraban'} en ese hueco,
+      así que de las ${hm(extraTotal)} eran evitables <b>${hm(evitable)}</b>
+      y solo habría que pagar <b>${pagar>0?hm(pagar):'0 h'}</b>.`;
   }else{
+    const sobrante=gente.filter(p=>p.k.horasExtra<=0&&holguraDe(p)>=15)
+      .map(p=>`${esc(p.nombre.split(' ')[0])} ${hm(holguraDe(p))}`);
     notaR=`Hay <b>${hm(extraTotal)}</b> de horas extra y <b>no había dónde meterlas</b>:
-      nadie del turno cerró con hueco suficiente. Esto es falta de manos, no de reparto.`;
+      ${sobrante.length?`el hueco que quedaba (${sobrante.join(', ')}) no daba para ninguna de las tareas sueltas`
+                       :'nadie del turno acabó con tiempo libre'}.
+      Esto es falta de manos, no de reparto.`;
   }
 
   const chip=(m)=>`<span><b>${esc(m.t.hk_areas?.codigo||m.t.titulo||'tarea')}</b> ${m.min}′ · ${esc(m.de.split(' ')[0])} → ${esc(m.a.split(' ')[0])}</span>`;
@@ -1518,6 +1532,12 @@ function pintarCapacidad(asigs,sueltas,c,filas){
         :evitable>0?'0 h a pagar · eran evitables':'Sin horas extra'}</span></div>
     <div class="gsub">Resultado real del día</div>
     <div class="gbar">${barrasR||'<i class="nadie" style="width:100%"></i>'}<span class="tope" style="left:${wr(capacidad)}%"></span></div>
+    <div class="gleg">${gente.map(p=>{
+      const libre=holguraDe(p);
+      return `<span class="${p.k.horasExtra>0?'bad':libre>=30?'ok':''}"><b>${esc(p.nombre.split(' ')[0])}</b>
+        ${hm(p.k.dedicado)} de ${hm(p.jornada)}${p.k.horasExtra>0?` · +${hm(p.k.horasExtra)} extra`
+          :libre>=15?` · ${hm(libre)} libres`:''}</span>`;
+    }).join('')}</div>
     <div class="gnota">${notaR}</div>
     ${movidas.length?`<div class="gmov">${movidas.slice(0,8).map(chip).join('')}
       ${movidas.length>8?`<span>y ${movidas.length-8} más</span>`:''}</div>`:''}
