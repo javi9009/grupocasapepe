@@ -94,28 +94,35 @@ async function syncEstatus(propKey: string, fecha: string) {
   const ayer = new Date(Date.parse(fecha + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
   const previo = await rest(`hk_estatus_dia?property_id=eq.${cfg.supaId}&fecha=eq.${ayer}&limpieza=eq.limpia&select=area_id,limpieza_por,limpieza_fuente&limit=1000`) as Array<{ area_id: string; limpieza_por: string | null; limpieza_fuente: string | null }>;
   const limpioAyer = new Map(previo.map((x) => [x.area_id, x]));
+  // Lo que alguien marcó HOY (limpió, empezó o puso no molestar) no se toca.
+  const hoyArr = await rest(`hk_estatus_dia?property_id=eq.${cfg.supaId}&fecha=eq.${fecha}&limpieza_at=not.is.null&select=area_id&limit=1000`) as Array<{ area_id: string }>;
+  const marcadoHoy = new Set(hoyArr.map((x) => String(x.area_id)));
   const filas: Array<Record<string, unknown>> = [];
   const heredadas: Array<Record<string, unknown>> = [];
+  const limpiar: Array<Record<string, unknown>> = [];
   let sinMatch = 0;
   for (const r of rows) {
     const a = porCb.get(r.roomID);
     if (!a) { sinMatch++; continue; }
     const m = mapEstatus(r, fecha, diasBlancos);
-    // Herencia de la limpieza de ayer: solo si hoy no hay salida y el cuarto no
-    // estuvo ocupado, es decir, nadie lo ha vuelto a usar.
-    const hered = (!m.co && (m.estatus === 'vacia_limpia')) ? limpioAyer.get(a.id) : undefined;
+    // Herencia de la limpieza de ayer: solo si hoy el cuarto NO pide limpieza, o
+    // sea, nadie lo usó ni llega nadie. Una llegada o una salida amanecen sucias
+    // aunque ayer quedaran limpias: hay que prepararlas.
+    const hered = !m.pide ? limpioAyer.get(a.id) : undefined;
     const base = { property_id: cfg.supaId, fecha, area_id: a.id, estatus: m.estatus, check_in: m.ci, check_out: m.co, solicita_limpieza: m.pide, reserva_ref: null, fuente: 'cloudbeds', metadata: { frontdeskStatus: r.frontdeskStatus, roomCondition: r.roomCondition, doNotDisturb: r.doNotDisturb, refusedService: r.refusedService, comentario_cb: r.roomComments ?? '', llegada: r.arrivalDate, salida: r.departureDate, noches: (m as {noches?: number}).noches ?? null } };
     // Los lotes de PostgREST exigen las mismas claves en todas las filas: las que
     // heredan la limpieza de ayer van en su propio lote.
     if (hered) heredadas.push({ ...base, limpieza: 'limpia', limpieza_por: hered.limpieza_por, limpieza_fuente: hered.limpieza_fuente });
+    // Pide limpieza y hoy nadie la ha tocado: se borra cualquier marca arrastrada.
+    else if (m.pide && !marcadoHoy.has(String(a.id))) limpiar.push({ ...base, limpieza: null, limpieza_at: null, limpieza_por: null, limpieza_fuente: null });
     else filas.push(base);
   }
-  for (const lote of [filas, heredadas]) {
+  for (const lote of [filas, heredadas, limpiar]) {
     for (let i = 0; i < lote.length; i += 100) {
       await rest('hk_estatus_dia?on_conflict=fecha,area_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(lote.slice(i, i + 100)) });
     }
   }
-  const todas = [...filas, ...heredadas];
+  const todas = [...filas, ...heredadas, ...limpiar];
   const conBlancos = todas.filter((f) => f.estatus === 'ocupada_blancos').length;
   return { ok: true, cloudbeds_rows: rows.length, guardadas: todas.length, heredadas: heredadas.length, sin_match: sinMatch, cambio_blancos: conBlancos, dias_cambio_blancos: diasBlancos };
 }
