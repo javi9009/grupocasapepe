@@ -370,7 +370,9 @@ async function reparto(propKey: string, fecha: string) {
       continue;   // no le suma carga: front no se mide por horas de limpieza
     }
     const cand = (pref ? personas.filter((p) => p.turno === pref) : poraOps);
-    const lista = (cand.length ? cand : (poraOps.length ? poraOps : personas)).slice().sort((a, b) =>
+    // Si no hay nadie del turno de día, la operativa queda SIN CUBRIR: nunca se le
+    // cuelga a front ni al de la noche, que no son equipo de limpieza.
+    const lista = (cand.length ? cand : poraOps).slice().sort((a, b) =>
       ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)));
     const p = lista[0];
     if (!p) { sobraOps.push(t); continue; }
