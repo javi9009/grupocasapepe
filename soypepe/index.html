@@ -1257,6 +1257,8 @@ function setupLimpieza(){
       .on('postgres_changes',{event:'*',schema:'public',table:'hk_asignaciones'},()=>refrescarBotonLimpieza())
       .on('postgres_changes',{event:'*',schema:'public',table:'hk_tareas'},()=>{ refrescarBotonLimpieza(); refrescarEstatusCuartos(); })
       .on('postgres_changes',{event:'*',schema:'public',table:'hk_auditoria'},()=>{ refrescarBotonAudit(); refrescarEstatusCuartos(); })
+      // El color sale de aquí: quien limpia escribe en hk_estatus_dia al entrar y al salir.
+      .on('postgres_changes',{event:'*',schema:'public',table:'hk_estatus_dia'},()=>refrescarEstatusCuartos())
       .subscribe();
   }catch(e){ /* sin realtime: quedan el intervalo y el visibilitychange */ }
 }
@@ -1509,10 +1511,12 @@ const HK_AUD={
   no_apta:   {i:'✱', fg:'#b03434', t:'Conviene cambiar de habitación'}
 };
 const hkEsc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let HK_CACHE=null;
+let HK_CACHE=null, HK_CACHE_AT=0;
 
 async function hkCargarEstatus(){
-  if(HK_CACHE) return HK_CACHE;
+  // La foto vale un minuto: pasado eso se vuelve a pedir, para no enseñar un
+  // cuarto "limpiándose" que se cerró hace rato.
+  if(HK_CACHE && Date.now()-HK_CACHE_AT < 60000) return HK_CACHE;
   const prop = await resolverProp();
   if(!prop) return null;
   const hoy = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).toISOString().slice(0,10);
@@ -1550,6 +1554,7 @@ async function hkCargarEstatus(){
               encasa:(e.estatus==='ocupada'||e.estatus==='ocupada_blancos'), llegada:!!e.check_in, salida:!!e.check_out, color:color,
               aud:au?au.estado:null, audNota:au?(au.nota||''):'', audDest:au?(au.destino||''):''};
     });
+    HK_CACHE_AT=Date.now();
     return HK_CACHE;
   }catch(e){ return null; }
 }
@@ -1598,13 +1603,17 @@ function hkEngancha(cardId, listId, filtro, titulo){
 // Cuando alguien entra o sale de un cuarto, el desplegable del Reporte del día
 // tiene que cambiar de color sin recargar: se tira la caché y se repinta lo abierto.
 function refrescarEstatusCuartos(){
-  HK_CACHE=null;
+  HK_CACHE=null; HK_CACHE_AT=0;
   const abierto=['rep-encasa-list','rep-llegadas-list','rep-salidas-list'].find(id=>{const l=$(id);return l&&l.style.display!=='none';});
   if(!abierto) return;
   const filtro={'rep-encasa-list':f=>f.encasa,'rep-llegadas-list':f=>f.llegada,'rep-salidas-list':f=>f.salida}[abierto];
   const titulo={'rep-encasa-list':'En casa','rep-llegadas-list':'Llegadas','rep-salidas-list':'Salidas'}[abierto];
   hkCargarEstatus().then(filas=>hkPinta($(abierto), filas?filas.filter(filtro):null, titulo));
 }
+
+// Al volver a la app se repinta: si mientras estabas fuera cerraron un cuarto,
+// el color cambia sin tener que recargar.
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarEstatusCuartos(); });
 
 function setupHkEstatus(){
   hkEngancha('rep-encasa-card','rep-encasa-list',   f=>f.encasa,  'En casa');
