@@ -1368,27 +1368,33 @@ function tarjetaProd(a,r,c){
 
   // ---- pila 1: lo que se le repartió, contra sus 8 h ----
   const objetivo=Number(r.min_estimados ?? ts.reduce((s,t)=>s+(t.minutos_estimados||0),0));
-  // ---- ordinarias y extraordinarias ----
-  // Se llena el turno con los tiempos PREVISTOS, metiendo primero las tareas más
-  // largas: así lo que se sale son las más pequeñas y las horas extra a pagar son
-  // las menos posibles. Lo que no cabe en las 8 h es extraordinario.
-  const conTrabajo=ts.filter(t=>(t.minutos_estimados||0)>0);
-  const porTamano=conTrabajo.slice().sort((x,y)=>(y.minutos_estimados||0)-(x.minutos_estimados||0));
-  const ordinarias=[], extras=[];
-  let lleno=0;
-  porTamano.forEach(t=>{
-    const m=t.minutos_estimados||0;
-    if(lleno+m<=jornada){ lleno+=m; ordinarias.push(t); } else extras.push(t);
-  });
   // Una tarea especial es la que el ama de llaves activó a mano desde el listado.
   const especiales=ts.filter(t=>t.metadata?.asignada_a_mano||t.metadata?.se_limpio_igual);
-  const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
-  const minExtraHechos=extras.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
-  const nExtra=extras.length;
   const pct=Math.round(objetivo/jornada*100);
 
   // ---- pila 2: lo que lleva hecho y a dónde va ----
-  const estHechas=Number(r.min_est_hechas ?? 0);
+  // Todo se mide en tiempos PREVISTOS: la pila y las horas extra hablan de
+  // estándar, no de reloj. El reloj solo manda al cerrar el turno, para pagar.
+  const estHechas=Number(r.min_est_hechas ?? ts.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0));
+
+  // ---- ordinarias y extraordinarias ----
+  // Extraordinario es lo que hizo DESPUÉS de completar sus 8 h de estándar. Si no
+  // llega a las 8 h, no hay horas extra por mucho que le hayan repartido de más.
+  const hechasOrden=ts.filter(t=>t.estado==='terminada'&&(t.minutos_estimados||0)>0)
+    .sort((x,y)=>String(x.terminado_at||'').localeCompare(String(y.terminado_at||'')));
+  const ordinarias=[], extras=[];
+  let acum=0;
+  hechasOrden.forEach(t=>{
+    const m=t.minutos_estimados||0;
+    if(acum>=jornada) extras.push(t);
+    else if(acum+m<=jornada) ordinarias.push(t);
+    else extras.push(t);           // la que cruza la línea ya es extraordinaria
+    acum+=m;
+  });
+  const horasExtra=Math.max(0,estHechas-jornada);
+  const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const nExtra=extras.length;
+  const lleno=Math.min(estHechas,jornada);
   const enCurso=ts.find(t=>t.estado==='en_curso'&&t.iniciado_at);
   // El cuarto abierto cuenta en vivo, pero con tope: uno que se quedó sin cerrar
   // desde ayer no puede inflar el día.
@@ -1399,12 +1405,9 @@ function tarjetaProd(a,r,c){
   // (el caso de Ali), su carga no es la del papel: es la que de verdad le cuesta.
   const ritmo=(estHechas>=30&&dedicado>0)?estHechas/dedicado:1;
   const faltaReal=ritmo>0?falta/ritmo:falta;
-  // Ir rápido baja la carga real; ir lento NO la sube: eso es retraso, no horas extra.
-  const objetivoReal=objetivo/Math.max(1,ritmo);
-  const pctReal=Math.round(objetivoReal/jornada*100);
-  const nv1=nivel(pctReal,Math.max(0,objetivoReal-jornada));
-  // Las horas extra estimadas del día son los tiempos previstos de lo que no cabe.
-  const horasExtra=minExtra;
+  // La pila del previsto habla de estándar: lo que se le repartió contra su turno.
+  const nv1=nivel(pct,0);
+
   const forecast=dedicado+faltaReal;
   const avance=objetivo?Math.round(estHechas/objetivo*100):0;
   // Verde si cierra dentro del turno; naranja si se pasa menos de una hora; rojo si más.
@@ -1440,11 +1443,11 @@ function tarjetaProd(a,r,c){
       <span>${esc(((a?.turno)||r.turno||'').replace('_',' '))}${a?` · ${hhmm(a.hora_inicio)}–${hhmm(a.hora_fin)}`:''}</span></div>
 
     <div class="pet">Previsto del día</div>
-    <div class="ppila"><i class="${nv1}" style="width:${w(objetivoReal)}%"></i>
-      ${objetivoReal>jornada?'<i class="tope"></i>':''}</div>
-    <div class="pfila"><span class="ppct ${nv1}">${pctReal}%</span>
-      <span class="pmin">${hm(objetivo)} de estándar${ritmo>1?` · a su ritmo son ${hm(objetivoReal)}`:''} · el turno son ${hm(jornada)}</span>
-      </div>
+    <div class="ppila"><i class="${nv1}" style="width:${w(objetivo)}%"></i>
+      ${objetivo>jornada?'<i class="tope"></i>':''}</div>
+    <div class="pfila"><span class="ppct ${nv1}">${pct}%</span>
+      <span class="pmin">${hm(objetivo)} de estándar · el turno son ${hm(jornada)}</span>
+      ${horasExtra>0?`<span class="pext">⚠ ${hm(horasExtra)} extra</span>`:''}</div>
 
     <div class="pet">Avance del día</div>
     <div class="ppila"><i class="hecho" style="width:${w(dedicado)}%"></i>
@@ -1456,18 +1459,17 @@ function tarjetaProd(a,r,c){
     <div class="pgrid">
       <div class="abre ${ts.length?'':'muda'}" data-caj="hechas"><b>${hechas}/${tareas}</b><span>tareas hechas</span></div>
       <div class="abre ${nExtra?'ex':''} ${nExtra?'':'muda'}" data-caj="extra"><b>${nExtra}</b><span>extraordinarias</span></div>
-      <div class="abre ${horasExtra>0?'bad':''} ${extras.length?'':'muda'}" data-caj="horas"><b>${hm(horasExtra)}</b><span>horas extra</span></div>
+      <div class="abre ${horasExtra>0?'bad':''}" data-caj="horas"><b>${hm(horasExtra)}</b><span>horas extra</span></div>
       <div class="${efi==null?'':efi>=100?'ok':'warn'}"><b>${efi!=null?efi+'%':'—'}</b><span>eficiencia</span></div>
     </div>
     <div class="cajon" data-caj="hechas" hidden>${listaTareas(ts.filter(t=>t.estado!=='pendiente'),'Todavía no ha cerrado ninguna.')}</div>
-    <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Ninguna extraordinaria hoy.')}</div>
+    <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Todavía ninguna: no ha pasado de sus '+hm(jornada)+' de estándar.')}</div>
     <div class="cajon" data-caj="horas" hidden>
       <div class="expl">${horasExtra>0
-        ? `Con los tiempos previstos, ${hm(lleno)} le caben en el turno y estas ${extras.length} ${extras.length===1?'tarea se sale':'tareas se salen'}: <b>${hm(horasExtra)} de horas extra estimadas</b>.
-           Son las más cortas de su día, para que lo que se pague sea lo menos posible. Se pagan al cerrar, y solo si de verdad trabajó sus ${hm(jornada)}.`
-        : `Todo su día cabe en las ${hm(jornada)} del turno: no hay horas extra que pagar.`}</div>
-      ${listaTareas(extras,'Ninguna tarea se sale del turno.')}
-      ${minExtraHechos?`<div class="expl">Ya cerró ${Math.round(minExtraHechos)} min de esas.</div>`:''}
+        ? `Ya completó sus ${hm(jornada)} de estándar y siguió: lo que hizo después son <b>${hm(horasExtra)} de horas extra</b>, de estas ${extras.length} ${extras.length===1?'tarea':'tareas'}.
+           Es el estimado; al cerrar el turno se confirma con el reloj.`
+        : `Lleva ${hm(estHechas)} de estándar hechas de las ${hm(jornada)} de su turno. Hasta que no complete su tiempo no hay horas extra, aunque le hayan repartido ${hm(objetivo)}.`}</div>
+      ${horasExtra>0?listaTareas(extras,'—'):''}
     </div>
     ${cerrado?`<div class="pcierre ${minPagar?'paga':''}">
       ${fuera.length
