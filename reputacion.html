@@ -1064,13 +1064,17 @@ function lineas(sel, series, opts){
     box.innerHTML = vacio(vacioTit||"Todavía no hay serie", vacioSub||"Hacen falta al menos dos capturas para dibujar una línea.");
     return;
   }
-  const xs=[...new Set(puntos.map(p=>p.x))].sort();
+  // El eje lo marca el periodo elegido, no los puntos que haya. Si de una fuente
+  // solo tenemos dos meses, se tiene que VER que faltan los otros cuatro; con el
+  // eje ajustado a los datos, dos puntos parecian una serie completa y plana.
+  const xs = (opts && opts.ejeX && opts.ejeX.length) ? opts.ejeX
+           : [...new Set(puntos.map(p=>p.x))].sort();
   const vals=puntos.map(p=>p.y).concat(rayas.map(r=>r.valor));
   let lo = minY!=null ? minY : Math.min(...vals);
   let hi = maxY!=null ? maxY : Math.max(...vals);
   const margen=(hi-lo)*0.15 || 1; lo-=margen; hi+=margen;
   const W=1000, H=280, L=48, R=14, T=14, B=34;
-  const px = x => L + (xs.indexOf(x)/(xs.length-1||1))*(W-L-R);
+  const px = x => L + (Math.max(0,xs.indexOf(x))/(xs.length-1||1))*(W-L-R);
   const py = y => T + (1-(y-lo)/(hi-lo||1))*(H-T-B);
   const ticks=[lo, lo+(hi-lo)/2, hi].map(v=>Math.round(v*10)/10);
   const paso = Math.ceil(xs.length/8);
@@ -1083,7 +1087,7 @@ function lineas(sel, series, opts){
        stroke-width="1.5" stroke-dasharray="6 5"><title>${esc(r.nombre)}: ${num(r.valor,1)}${esc(sufijo)}</title></line>`).join("")}
     ${xs.map((x,i)=> i%paso? "" : `<text x="${px(x)}" y="${H-10}" text-anchor="middle" font-size="12" fill="var(--faint)">${esc(etiquetaX(x))}</text>`).join("")}
     ${series.map(s=>{
-      const d=s.datos.slice().sort((a,b)=>a.x<b.x?-1:1);
+      const d=s.datos.filter(p=>xs.includes(p.x)).sort((a,b)=>a.x<b.x?-1:1);
       return `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round"
         stroke-linecap="round" points="${d.map(p=>px(p.x)+","+py(p.y)).join(" ")}"/>
       ${d.map(p=>`<circle cx="${px(p.x)}" cy="${py(p.y)}" r="3.5" fill="${s.color}"><title>${esc(s.nombre)} · ${esc(etiquetaX(p.x))}: ${num(p.y,1)}${esc(sufijo)}</title></circle>`).join("")}`;
@@ -1216,7 +1220,14 @@ function grafIndice(){
   if(sel && !sel.options.length){
     fuentes.forEach(f=>sel.add(new Option(nf(f),f)));
     sel.add(new Option("Todas (PepeFeliz)","*"));
-    sel.value = fuentes.includes("hostelworld") ? "hostelworld" : (fuentes[0]||"*");
+    // Hostelworld es la unica con compset, pero de ella apenas tenemos resenas
+    // nuestras: arrancar ahi daba una linea de dos puntos que parecia seis meses
+    // planos. Se arranca en la fuente con mas meses de historia propia y el
+    // selector deja ir a Hostelworld para comparar contra la competencia.
+    const meses = f => new Set((D.rn||[])
+      .filter(r=>(!PLAZA||r.plaza===PLAZA) && r.plataforma===f)
+      .map(r=>r.fecha.slice(0,7))).size;
+    sel.value = fuentes.slice().sort((a,b)=>meses(b)-meses(a))[0] || "*";
     sel.onchange=grafIndice;
   }
   const F = sel && sel.value ? sel.value : "hostelworld";
@@ -1256,13 +1267,34 @@ function grafIndice(){
   if(!SEL_IDX[plaza]) SEL_IDX[plaza]=new Set(comps.filter(c=>c.resenas>=100).slice(0,3).map(c=>c.nombre));
   const elegidos = selectorCompetidores("#chkIndice", comps, SEL_IDX, grafIndice);
 
+  // Todos los meses del periodo, tengan datos o no.
+  const ejeX=[]; {
+    const fin = RANGO.hasta ? new Date(RANGO.hasta+"T12:00:00") : new Date();
+    let ini;
+    if (RANGO.desde) ini = new Date(RANGO.desde+"T12:00:00");
+    else { const t=(D.rn||[]).filter(r=>!PLAZA||r.plaza===PLAZA).map(r=>r.fecha).sort();
+           ini = t.length ? new Date(t[0]+"T12:00:00") : new Date(fin); }
+    for (let d=new Date(ini.getFullYear(), ini.getMonth(), 1);
+         d<=fin && ejeX.length<60;
+         d.setMonth(d.getMonth()+1)) ejeX.push(iso(d).slice(0,7));
+  }
+  const mesesConDato = new Set(datos.map(d=>d.x));
+  const huecos = ejeX.filter(m=>!mesesConDato.has(m)).length;
+
   lineas("#grafIndice", [{nombre:`Casa Pepe ${PLAZA||""} · ${nombreF}`, color:"var(--accent)", datos}],
-    {sufijo:"/100", rayas: elegidos.map(c=>({nombre:c.nombre, valor:c.valor, color:c.color})),
+    {sufijo:"/100", ejeX, rayas: elegidos.map(c=>({nombre:c.nombre, valor:c.valor, color:c.color})),
      vacioTit:`Sin reseñas de ${esc(nombreF)} en este periodo`,
      vacioSub:"Hacen falta al menos dos meses con reseñas de esa fuente. Amplía el periodo o elige otra OTA."});
 
   const caja=$("#grafIndice");
   if(caja && datos.length>=2){
+    if(huecos)
+      caja.insertAdjacentHTML("afterbegin",
+        `<div class="aviso" style="margin:0 0 10px">
+          <b>${datos.length} de ${ejeX.length} meses del periodo tienen reseñas en ${esc(nombreF)}.</b>
+          Los ${huecos} restantes están vacíos porque no entró ninguna reseña de esa fuente, no porque
+          la nota no se moviera. ${nombreF!=="Booking"?`Con <b>Booking</b> hay serie completa: cámbiala en el selector de arriba.`:""}
+        </div>`);
     caja.insertAdjacentHTML("beforeend",
       `<p style="margin:10px 0 0;color:var(--muted);font-size:.82rem;max-width:82ch">
         Nuestra línea es el promedio de las reseñas de cada mes en <b>${esc(nombreF)}</b>, en base 100
