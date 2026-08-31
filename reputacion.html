@@ -588,12 +588,25 @@ const fecha = s => !s ? "—" : new Date(s+"T12:00:00").toLocaleDateString("es-M
 
 // Las menciones solo son legibles con sesion iniciada (grant a authenticated).
 // Sin sesion devuelve null y la pantalla lo dice, en vez de romperse.
+// OJO: antes CUALQUIER fallo devolvia null y la pantalla culpaba a la sesion.
+// Con una vista borrada (404) decia "Hace falta iniciar sesion" teniendo sesion
+// abierta, y perdiamos media hora buscando donde no era. Ahora se distingue.
 async function apiOpc(view, qs="select=*") {
   try {
     const r = await fetch(`${SB}/rest/v1/${view}?${qs}`, { headers: H });
-    if (!r.ok) return null;
+    if (r.status===401 || r.status===403) return null;          // no hay sesion
+    if (!r.ok) { const t=await r.text();
+      console.error(`apiOpc ${view}: ${r.status} ${t.slice(0,200)}`);
+      return {__fallo:r.status, __vista:view}; }                 // la vista falla
     return await r.json();
-  } catch (e) { return null; }
+  } catch (e) { return {__fallo:0, __vista:view}; }
+}
+// Si la respuesta trae __fallo no es una lista: es una vista rota o borrada.
+const falloDe = d => (d && !Array.isArray(d) && d.__fallo!==undefined) ? d : null;
+function avisoFallo(f){
+  return vacio("Esta tarjeta no pudo cargar",
+    `La vista <code>${esc(f.__vista)}</code> respondio ${f.__fallo||"sin conexion"}. ` +
+    `No es tu sesion: es la base de datos. Avisa para recrearla.`);
 }
 
 /* PostgREST corta en 1.000 filas por respuesta, y ya tenemos 2.119 resenas y
@@ -1352,6 +1365,8 @@ function grafValor(){
 function ranking(){
   const box=$("#rankingBox"); if(!box) return;
 
+  const fallo = falloDe(D.menc2);
+  if (fallo) { box.innerHTML = avisoFallo(fallo); $("#sinIdentificar").innerHTML=""; return; }
   if (D.menc2 === null) {
     box.innerHTML = vacio("Hace falta iniciar sesión",
       "El ranking lleva nombre y puesto, así que solo se lee con sesión de la plataforma.");
@@ -1394,7 +1409,7 @@ function ranking(){
               : "Solo cuentan las menciones confirmadas. Si esperabas ver a alguien, mira abajo: puede estar sin identificar.");
 
   // Nombres que el huesped escribio y que no estan en el vocabulario.
-  const sin=(D.sinid||[]).filter(r=>!r.resuelto && (!PLAZA||r.plaza===PLAZA) && enRango(r.fecha));
+  const sin=(Array.isArray(D.sinid)?D.sinid:[]).filter(r=>!r.resuelto && (!PLAZA||r.plaza===PLAZA) && enRango(r.fecha));
   $("#sinIdentificar").innerHTML = sin.length ? `
     <div style="font-weight:700;margin-bottom:2px">Nombres sin identificar <span class="pill warn">${sin.length}</span></div>
     <p style="margin:0 0 10px;color:var(--muted);font-size:.85rem;max-width:80ch">
@@ -2297,6 +2312,8 @@ function limpieza(){
 /* ==================== MENCIONES POR REVISAR ==================== */
 function menciones(){
   const box=$("#menciones"); if(!box) return;
+  const fallo = falloDe(D.menc);
+  if (fallo) { box.innerHTML = avisoFallo(fallo); return; }
   if (D.menc === null) {
     box.innerHTML = vacio("Hace falta iniciar sesión",
       "Las menciones llevan nombre de colaborador, así que solo se leen con sesión de la plataforma.");
