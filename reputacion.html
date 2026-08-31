@@ -221,7 +221,8 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
     </div>
     <div class="card" style="margin-top:16px">
       <div class="hd"><h2>Objetivo limpieza</h2>
-        <span class="note">Lo que dice el huésped en la nota de cada OTA, junto a lo que dice en texto libre.</span></div>
+        <span class="note">Dos caminos independientes: lo que dice el huésped y lo que dice la operación.</span></div>
+      <div class="bd" id="cruceLimpieza" style="padding-bottom:0"></div>
       <div class="bd" style="padding:0"><div class="tblwrap"><table id="tblLimpieza">
         <thead><tr><th>Plaza</th><th>Fuente</th><th class="n">Nota</th><th class="n">Objetivo</th>
           <th class="n">vs</th><th class="n">Quejas 90d</th><th class="n">Elogios 90d</th><th>Estado</th></tr></thead>
@@ -331,14 +332,14 @@ async function api(view, qs="select=*") {
 const NOMBRE_FUENTE = { hostelworld:"Hostelworld", booking:"Booking", google:"Google", tripadvisor:"Tripadvisor" };
 const nf = f => NOMBRE_FUENTE[f] || f;
 
-const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], idx:[], idxd:[], pos:[], rt:[], evc:[], limp:[], menc:null, borradores:{} };
+const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], idx:[], idxd:[], pos:[], rt:[], evc:[], limp:[], cruce:[], menc:null, borradores:{} };
 let PLAZAS = [];      // las que este usuario puede ver
 let PLAZA  = null;    // la seleccionada; null = todas
 
 /* ---------------- arranque ---------------- */
 (async function init(){
   try {
-    const [evo, crit, obj, resp, cola, compset, borr, valor, mens, idx, idxd, pos, rt, evc, limp, menc] = await Promise.all([
+    const [evo, crit, obj, resp, cola, compset, borr, valor, mens, idx, idxd, pos, rt, evc, limp, cruce, menc] = await Promise.all([
       api("cp_reputacion_evolucion", "select=*&order=fecha_consulta.asc"),
       api("cp_puntos_criticos",      "select=*&order=severidad.desc"),
       api("cp_objetivos",            "select=*"),
@@ -354,9 +355,10 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_resenas_tema",         "select=*&limit=800"),
       api("cp_evolucion_competidores","select=*&order=fecha_consulta.asc&limit=600"),
       api("cp_objetivo_limpieza",    "select=*"),
+      api("cp_limpieza_cruce",       "select=*"),
       apiOpc("cp_menciones_por_revisar","select=*&order=confianza.desc"),
     ]);
-    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens; D.idx=idx; D.idxd=idxd; D.pos=pos; D.rt=rt; D.evc=evc; D.limp=limp; D.menc=menc;
+    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens; D.idx=idx; D.idxd=idxd; D.pos=pos; D.rt=rt; D.evc=evc; D.limp=limp; D.cruce=cruce; D.menc=menc;
     borr.forEach(b => D.borradores[b.review_id] = b);
 
     // Cascada de ubicación: si el usuario solo ve una plaza, no ve las otras.
@@ -1028,6 +1030,7 @@ function evoCompetidores(){
 
 /* ==================== OBJETIVO LIMPIEZA ==================== */
 function limpieza(){
+  cruceLimpieza();
   const tb=$("#tblLimpieza tbody"); if(!tb) return;
   const rows=(D.limp||[]).filter(enPlaza)
     .sort((a,b)=> (a.plaza+a.fuente).localeCompare(b.plaza+b.fuente));
@@ -1113,6 +1116,35 @@ async function confirmarMencion(btn){
     msg.textContent = si ? "Confirmada." : "Descartada.";
     $$("[data-mac]",art).forEach(b=>b.disabled=true);
   }catch(e){ msg.textContent="No se guardó: "+String(e.message||e).slice(0,120); }
+}
+
+
+/* ==================== CRUCE LIMPIEZA: operación vs huésped ==================== */
+function cruceLimpieza(){
+  const box=$("#cruceLimpieza"); if(!box) return;
+  const rows=(D.cruce||[]).filter(enPlaza);
+  if(!rows.length){ box.innerHTML=""; return; }
+  const color = d => d==="todo bien" ? "ok"
+    : d==="se limpia pero no se nota" ? "warn"
+    : d==="no se esta limpiando" ? "bad"
+    : "nd";
+  box.innerHTML = `<div class="grid g2" style="margin-bottom:6px">` + rows.map(r=>`
+    <div style="border:1px solid var(--rule);border-radius:8px;padding:13px 15px;background:var(--surface-3)">
+      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px">
+        <b>${esc(r.plaza)}</b>
+        <span class="pill ${color(r.diagnostico)}">${esc(r.diagnostico)}</span>
+      </div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:9px">
+        <div><div style="font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:700">Dice la operación</div>
+          <div style="font-size:1.25rem;font-weight:700">${r.cumplimiento_30d==null?"—":num(r.cumplimiento_30d)+"%"}</div>
+          <div style="font-size:.78rem;color:var(--muted)">${Number(r.tareas_30d||0).toLocaleString("es-MX")} tareas · ${r.dias_con_registro} de ${r.dias} días con registro</div></div>
+        <div><div style="font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:700">Dice el huésped</div>
+          <div style="font-size:1.25rem;font-weight:700">${num(r.nota_limpieza100)}<span style="font-size:.8rem;color:var(--muted)">/100</span></div>
+          <div style="font-size:.78rem;color:var(--muted)">${r.quejas_90d||0} quejas · ${r.elogios_90d||0} elogios en 90 d</div></div>
+      </div>
+      <div style="font-size:.85rem;color:var(--ink-2);line-height:1.5;border-top:1px dashed var(--rule-2);padding-top:9px">
+        ${esc(r.que_hacer)}</div>
+    </div>`).join("") + `</div>`;
 }
 
 </script>
