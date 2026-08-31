@@ -596,6 +596,22 @@ async function apiOpc(view, qs="select=*") {
   } catch (e) { return null; }
 }
 
+/* PostgREST corta en 1.000 filas por respuesta, y ya tenemos 2.119 resenas y
+   miles de subnotas: pidiendolas de una vez la pantalla calculaba con un tercio
+   de los datos sin avisar de nada. Esto pagina con Range hasta agotarlas. */
+async function apiTodo(view, qs="select=*", paso=1000) {
+  const filas=[];
+  for (let desde=0; ; desde+=paso) {
+    const r = await fetch(`${SB}/rest/v1/${view}?${qs}`, {
+      headers:{...H, Range:`${desde}-${desde+paso-1}`, "Range-Unit":"items"} });
+    if (!r.ok) throw new Error(`${view}: ${r.status} ${await r.text()}`);
+    const lote = await r.json();
+    filas.push(...lote);
+    if (lote.length < paso) return filas;
+    if (desde > 50000) return filas;      // guardarrail: nunca un bucle infinito
+  }
+}
+
 async function api(view, qs="select=*") {
   const r = await fetch(`${SB}/rest/v1/${view}?${qs}`, { headers: H });
   if (!r.ok) throw new Error(`${view}: ${r.status} ${await r.text()}`);
@@ -627,14 +643,14 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_puntos_criticos",      "select=*&order=severidad.desc"),
       api("cp_objetivos",            "select=*"),
       api("cp_respuesta_kpi",        "select=*&order=mes.desc"),
-      api("cp_cola_respuestas",      "select=*&order=prioridad.desc&limit=200"),
+      apiTodo("cp_cola_respuestas",      "select=*&order=prioridad.desc"),
       api("cp_compset",              "select=*&order=fecha_consulta.desc,precio.asc"),
       api("cp_valor_precio",         "select=*&order=mxn_por_punto.desc"),
       api("cp_serie_mensual",        "select=*&order=periodo.asc"),
       api("cp_indice",               "select=*"),
       api("cp_indice_desglose",      "select=*&order=peso.desc"),
       api("cp_posicion_plaza",       "select=*&order=posicion.asc"),
-      api("cp_resenas_tema",         "select=*&limit=800"),
+      apiTodo("cp_resenas_tema",         "select=*"),
       api("cp_evolucion_competidores","select=*&order=fecha_consulta.asc&limit=600"),
       api("cp_objetivo_limpieza",    "select=*"),
       api("cp_limpieza_cruce",       "select=*"),
@@ -643,9 +659,9 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_concepto_critico",     "select=*&order=severidad.desc"),
       api("cp_concepto_fuerte",      "select=*&order=fuerza.desc"),
       api("cp_indice_mes",           "select=*&order=periodo.asc"),
-      api("cp_resenas_nota",         "select=*&order=fecha.desc&limit=6000"),
-      api("cp_resena_categoria",     "select=*&limit=20000"),
-      api("cp_valor_punto_serie",    "select=*&order=fecha_consulta.asc&limit=800"),
+      apiTodo("cp_resenas_nota",         "select=*&order=fecha.desc"),
+      apiTodo("cp_resena_categoria",     "select=*"),
+      apiTodo("cp_valor_punto_serie",    "select=*&order=fecha_consulta.asc"),
       apiOpc("cp_menciones",         "select=*&order=fecha.desc&limit=1000"),
       apiOpc("cp_menciones_sin_identificar","select=*&order=fecha.desc"),
     ]);
@@ -737,23 +753,30 @@ function evolucion(){
     const mias = (D.rn||[]).filter(x=>x.plaza===r.plaza && x.plataforma===r.fuente && enRango(x.fecha));
     const notaPer = mias.length ? mias.reduce((a,b)=>a+Number(b.rating),0)/mias.length : null;
     const dPer = (notaPer!=null) ? notaPer-Number(r.rating_global) : null;
+    // Javi, 31-ago: "si muevo la temporalidad no se mueve la nota". Manda la del
+    // PERIODO; la acumulada de la OTA pasa a segunda linea, porque esa no se
+    // puede recortar por fecha: es de toda la vida del hostal.
+    const difPer = (o && notaPer!=null) ? notaPer-Number(o.objetivo) : null;
+    const clsPer = difPer==null ? "nd" : difPer>=0 ? "ok" : (difPer>-0.3 ? "warn" : "bad");
     return `<div class="kpi">
       <div class="lbl">${esc(r.plaza)} · ${esc(nf(r.fuente))}</div>
-      <div class="val">${num(r.rating_global)} <small>/ ${num(r.escala,0)}</small></div>
+      <div class="val" style="${notaPer==null?"color:var(--faint)":""}">${
+        notaPer==null?"—":num(notaPer,2)} <small>/ ${num(r.escala,0)}</small></div>
       <div class="foot">
-        <div style="color:var(--faint);font-size:.76rem;margin-bottom:5px">
-          nota pública acumulada · ${(r.resenas||0).toLocaleString("es-MX")} reseñas</div>
-        ${o ? `<div style="margin-bottom:5px">
-          <span class="pill ${cls}">objetivo ${num(o.objetivo,1)}</span>
-          <span style="color:var(--muted);font-size:.8rem">${dif>=0?"lo cumplimos por "+num(dif,2):"nos faltan "+num(Math.abs(dif),2)}</span>
+        <div style="color:var(--faint);font-size:.76rem;margin-bottom:5px">${
+          notaPer==null ? `sin reseñas nuestras en ${esc(et)}`
+                        : `en ${esc(et)} · ${mias.length.toLocaleString("es-MX")} reseñas`}</div>
+        ${o && notaPer!=null ? `<div style="margin-bottom:5px">
+          <span class="pill ${clsPer}">objetivo ${num(o.objetivo,1)}</span>
+          <span style="color:var(--muted);font-size:.8rem">${difPer>=0?"lo cumplimos por "+num(difPer,2):"faltan "+num(Math.abs(difPer),2)}</span>
           ${o.nota?`<div style="color:var(--faint);font-size:.76rem">${esc(o.nota)}</div>`:""}
-        </div>` : `<span class="pill nd">sin objetivo</span>`}
-        ${notaPer!=null ? `<div style="border-top:1px dashed var(--rule-2);padding-top:6px;margin-top:4px">
-          <b style="font-size:1.05rem">${num(notaPer,2)}</b>
-          <span style="color:var(--muted);font-size:.8rem">en ${esc(et)} · ${mias.length} reseñas</span>
-          ${Math.abs(dPer)>=0.1?`<span class="pill ${dPer>0?"ok":"bad"}">${dPer>0?"▲":"▼"} ${num(Math.abs(dPer),2)} vs la acumulada</span>`:""}
-          </div>` : `<div style="border-top:1px dashed var(--rule-2);padding-top:6px;margin-top:4px;color:var(--muted);font-size:.8rem">
-            Sin reseñas nuestras de esta fuente en ${esc(et)}.</div>`}
+        </div>` : (o?`<span class="pill nd">objetivo ${num(o.objetivo,1)}</span>`:`<span class="pill nd">sin objetivo</span>`)}
+        <div style="border-top:1px dashed var(--rule-2);padding-top:6px;margin-top:4px">
+          <b>${num(r.rating_global)}</b>
+          <span style="color:var(--muted);font-size:.8rem">nota pública acumulada · ${(r.resenas||0).toLocaleString("es-MX")} reseñas</span>
+          <div style="color:var(--faint);font-size:.74rem">Es la de toda la vida del hostal: no se mueve con el periodo.
+            ${dPer!=null&&Math.abs(dPer)>=0.1?`Lo reciente va ${dPer>0?"por encima":"por debajo"} ${num(Math.abs(dPer),2)}.`:""}</div>
+        </div>
       </div></div>`;
   }).join("") : vacio("Sin capturas todavía","Corre la tarea de mercado y esto se llena solo.");
 
@@ -1421,7 +1444,7 @@ const CAMPOS = [
    pistas:["respuesta","response","reply","tu respuesta","property response"]},
   {k:"respuesta_fecha", et:"Fecha de la respuesta",
    pistas:["fecha de respuesta","fecha respuesta","response date","replied on"]},
-  {k:"id_externo",et:"ID de la reseña", pistas:["id","review id","identificador","booking number","nº de reserva"]},
+  {k:"id_externo",et:"Nº de reserva", pistas:["reservation number","nº de reserva","n° de reserva","numero de reserva","booking number","review id","identificador"]},
   {k:"url",       et:"Enlace",     pistas:["url","enlace","link"]},
   // Subnotas por resena: son las que permiten recalcular cada concepto para
   // cualquier periodo en vez de quedarnos con la foto acumulada de la OTA.
