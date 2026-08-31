@@ -317,6 +317,12 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
     <div class="grid g2" id="pfCards" style="margin-bottom:16px"></div>
 
     <div class="card" style="margin-bottom:16px">
+      <div class="hd"><h2>Por área</h2>
+        <span class="note">La nota de cada subvaloración en el periodo elegido — limpieza, personal, ubicación… — calculada con las reseñas, no con la foto acumulada de la OTA.</span></div>
+      <div class="bd" id="pfAreas"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
       <div class="hd"><h2>Qué mueve el indicador</h2>
         <span class="note">Temas ordenados por lo que restan. Haz clic en uno para ver los comentarios que lo dicen.</span>
       </div>
@@ -1956,9 +1962,64 @@ function resumen(){
     [...new Set((D.rn||[]).map(r=>r.plataforma))].sort().forEach(f=>sel.add(new Option(nf(f),f)));
     sel.onchange=()=>{PF_FUENTE=sel.value; PF_TEMA=null; pintarTemas(); $("#pfDetalleCard").hidden=true;};
   }
+  areas();
   avisosFrescura();
   $("#pfCerrar") && ($("#pfCerrar").onclick=()=>{PF_TEMA=null;$("#pfDetalleCard").hidden=true;pintarTemas();});
   pintarTemas();
+}
+
+/* Detalle por subvaloracion: limpieza, personal, ubicacion... con la nota del
+   PERIODO. Sale de las subnotas que trae cada resena de Booking, no de la foto
+   acumulada que publica la OTA. */
+function areas(){
+  const box=$("#pfAreas"); if(!box) return;
+  const et = ETIQUETA_CHIP[RANGO.chip] || "el periodo";
+  const filas=(D.rcat||[]).filter(r=>(!PLAZA||r.plaza===PLAZA) && enRango(r.fecha));
+  if(!filas.length){
+    box.innerHTML = vacio("Todavía no hay subnotas por reseña",
+      "El export de Booking trae la nota de limpieza, personal, ubicación… de cada reseña. Vuelve a subir los archivos en «Cargar reseñas» y esta tabla se llena: la primera carga todavía no las capturaba.");
+    return;
+  }
+  const objetivos={};
+  (D.obj||[]).forEach(o=>{ if(o.categoria) objetivos[o.plaza+"|"+o.categoria+"|"+o.fuente]=Number(o.objetivo); });
+  const g={};
+  filas.forEach(r=>{
+    (g[r.categoria] ||= {cat:r.categoria, notas:[], porF:{}});
+    g[r.categoria].notas.push(Number(r.valor100));
+    (g[r.categoria].porF[r.plataforma] ||= []).push({v:Number(r.valor), e:Number(r.escala), plaza:r.plaza});
+  });
+  const list=Object.values(g).map(x=>{
+    const nota=x.notas.reduce((a,b)=>a+b,0)/x.notas.length;
+    const det=Object.entries(x.porF).map(([f,l])=>{
+      const e0=l[0].e, val=l.reduce((a,b)=>a+b.v,0)/l.length;
+      const obj=objetivos[l[0].plaza+"|"+x.cat+"|"+f];
+      return {fuente:f, valor:val, escala:e0, n:l.length, objetivo:obj??null,
+              objetivo100:obj!=null?obj/e0*100:null, bajo:obj!=null&&val<obj};
+    }).sort((a,b)=>a.valor/a.escala-b.valor/b.escala);
+    const conObj=det.filter(d=>d.objetivo100!=null);
+    const obj100=conObj.length?conObj.reduce((a,d)=>a+d.objetivo100,0)/conObj.length:null;
+    return {cat:x.cat, nota, n:x.notas.length, det, obj100, vs: obj100!=null? nota-obj100 : null};
+  }).sort((a,b)=>a.nota-b.nota);
+
+  box.innerHTML = `<div class="rank">` + list.map(x=>{
+    const cls = x.vs==null ? "nd" : x.vs>=0 ? "ok" : x.vs>-3 ? "warn" : "bad";
+    const col = x.vs==null ? "var(--accent)" : x.vs>=0 ? "var(--ok)" : x.vs>-3 ? "var(--warn)" : "var(--bad)";
+    return `<div class="rankrow">
+      <div class="pos" style="width:auto"></div>
+      <div class="quien">
+        <div class="nom">${esc(nCat(x.cat))}
+          <span style="font-weight:400;color:var(--muted);font-size:.82rem">· ${x.n.toLocaleString("es-MX")} reseñas</span></div>
+        <div class="barra"><i style="width:${Math.max(0,Math.min(100,x.nota))}%;background:${col}"></i>
+          ${x.obj100!=null?`<i style="left:${Math.min(100,x.obj100)}%;width:2px;background:var(--ink);border-radius:0"></i>`:""}</div>
+        <div class="rol">${desglose(x.det)}</div>
+      </div>
+      <div class="cifra"><b>${num(x.nota,1)}</b><span style="color:var(--faint)">/100</span>
+        <div class="rol">${x.obj100==null?"sin objetivo"
+          :`<span class="pill ${cls}">${x.vs>=0?"+":""}${num(x.vs,1)} vs objetivo</span>`}</div></div>
+    </div>`;}).join("") + `</div>
+    <p style="margin:12px 0 0;color:var(--muted);font-size:.82rem;max-width:82ch">
+      Nota de ${esc(et)} en base 100. La rayita negra en la barra es el objetivo.
+      Cada subvaloración junta todas las OTAs que la publican; el desglose por fuente va debajo con su escala real.</p>`;
 }
 
 /* Frescura por fuente, tambien dentro del periodo elegido. */
