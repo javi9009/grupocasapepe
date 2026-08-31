@@ -220,6 +220,15 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
       </div>
     </div>
     <div class="card" style="margin-top:16px">
+      <div class="hd"><h2>Objetivo limpieza</h2>
+        <span class="note">Lo que dice el huésped en la nota de cada OTA, junto a lo que dice en texto libre.</span></div>
+      <div class="bd" style="padding:0"><div class="tblwrap"><table id="tblLimpieza">
+        <thead><tr><th>Plaza</th><th>Fuente</th><th class="n">Nota</th><th class="n">Objetivo</th>
+          <th class="n">vs</th><th class="n">Quejas 90d</th><th class="n">Elogios 90d</th><th>Estado</th></tr></thead>
+        <tbody></tbody></table></div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <div class="hd"><h2>Objetivos vigentes</h2>
         <span class="note">Viven en <code>revenue.objetivos</code>. Cambiarlos es un UPDATE, no tocar código.</span></div>
       <div class="bd" style="padding:0">
@@ -269,6 +278,13 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
       </div>
     </div>
     <div id="cola"></div>
+
+    <div class="card" style="margin-top:24px">
+      <div class="hd"><h2>Menciones por revisar</h2>
+        <span class="note">No se revisa el comentario — es real. Se confirma a quién nombra. Solo llega aquí lo dudoso; si el nombre viene claro, se confirma solo.</span>
+      </div>
+      <div class="bd" id="menciones"></div>
+    </div>
   </section>
 
 </main>
@@ -296,6 +312,16 @@ const num = (v, d=1) => v==null || v==="" ? "—" :
 const fecha = s => !s ? "—" : new Date(s+"T12:00:00").toLocaleDateString("es-MX",
   {day:"numeric", month:"short", year:"numeric"});
 
+// Las menciones solo son legibles con sesion iniciada (grant a authenticated).
+// Sin sesion devuelve null y la pantalla lo dice, en vez de romperse.
+async function apiOpc(view, qs="select=*") {
+  try {
+    const r = await fetch(`${SB}/rest/v1/${view}?${qs}`, { headers: H });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
 async function api(view, qs="select=*") {
   const r = await fetch(`${SB}/rest/v1/${view}?${qs}`, { headers: H });
   if (!r.ok) throw new Error(`${view}: ${r.status} ${await r.text()}`);
@@ -305,14 +331,14 @@ async function api(view, qs="select=*") {
 const NOMBRE_FUENTE = { hostelworld:"Hostelworld", booking:"Booking", google:"Google", tripadvisor:"Tripadvisor" };
 const nf = f => NOMBRE_FUENTE[f] || f;
 
-const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], idx:[], idxd:[], pos:[], rt:[], evc:[], borradores:{} };
+const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], idx:[], idxd:[], pos:[], rt:[], evc:[], limp:[], menc:null, borradores:{} };
 let PLAZAS = [];      // las que este usuario puede ver
 let PLAZA  = null;    // la seleccionada; null = todas
 
 /* ---------------- arranque ---------------- */
 (async function init(){
   try {
-    const [evo, crit, obj, resp, cola, compset, borr, valor, mens, idx, idxd, pos, rt, evc] = await Promise.all([
+    const [evo, crit, obj, resp, cola, compset, borr, valor, mens, idx, idxd, pos, rt, evc, limp, menc] = await Promise.all([
       api("cp_reputacion_evolucion", "select=*&order=fecha_consulta.asc"),
       api("cp_puntos_criticos",      "select=*&order=severidad.desc"),
       api("cp_objetivos",            "select=*"),
@@ -327,8 +353,10 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_posicion_plaza",       "select=*&order=posicion.asc"),
       api("cp_resenas_tema",         "select=*&limit=800"),
       api("cp_evolucion_competidores","select=*&order=fecha_consulta.asc&limit=600"),
+      api("cp_objetivo_limpieza",    "select=*"),
+      apiOpc("cp_menciones_por_revisar","select=*&order=confianza.desc"),
     ]);
-    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens; D.idx=idx; D.idxd=idxd; D.pos=pos; D.rt=rt; D.evc=evc;
+    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens; D.idx=idx; D.idxd=idxd; D.pos=pos; D.rt=rt; D.evc=evc; D.limp=limp; D.menc=menc;
     borr.forEach(b => D.borradores[b.review_id] = b);
 
     // Cascada de ubicación: si el usuario solo ve una plaza, no ve las otras.
@@ -372,7 +400,7 @@ $$(".secnav button").forEach(b => b.onclick = () => {
 });
 
 /* ---------------- pintado ---------------- */
-function pintar(){ cabecera(); resumen(); evolucion(); evoCompetidores(); criticos(); valorPrecio(); mercado(); respuestas(); }
+function pintar(){ cabecera(); resumen(); evolucion(); evoCompetidores(); limpieza(); menciones(); criticos(); valorPrecio(); mercado(); respuestas(); }
 
 function cabecera(){
   const ult = D.evo.map(r=>r.fecha_consulta).sort().pop();
@@ -995,6 +1023,96 @@ function evoCompetidores(){
     es el indicador adelantado — quien recibe más reseñas está recibiendo más huéspedes, y su nota se moverá antes.<br>
     <b>revisar</b> marca saltos que el volumen no puede explicar: con miles de reseñas acumuladas, medio punto
     en un día es un error de lectura, no un cambio del hotel.</p>`;
+}
+
+
+/* ==================== OBJETIVO LIMPIEZA ==================== */
+function limpieza(){
+  const tb=$("#tblLimpieza tbody"); if(!tb) return;
+  const rows=(D.limp||[]).filter(enPlaza)
+    .sort((a,b)=> (a.plaza+a.fuente).localeCompare(b.plaza+b.fuente));
+  tb.innerHTML = rows.length ? rows.map(r=>{
+    const est = r.estado==="en objetivo" ? "ok" : r.estado==="cerca" ? "warn"
+              : r.estado==="bajo objetivo" ? "bad" : "nd";
+    return `<tr>
+      <td>${esc(r.plaza)}</td><td>${esc(nf(r.fuente))}</td>
+      <td class="n nota-esc">${num(r.nota_limpieza,2)}<span style="color:var(--faint);font-weight:400">/${num(r.escala,0)}</span></td>
+      <td class="n">${r.objetivo==null?"—":num(r.objetivo,2)}</td>
+      <td class="n" style="color:${Number(r.vs_objetivo)<0?"var(--bad)":"var(--ok)"};font-weight:600">
+        ${r.vs_objetivo==null?"—":(Number(r.vs_objetivo)>0?"+":"")+num(r.vs_objetivo,2)}</td>
+      <td class="n" style="${r.quejas_90d>0?"color:var(--bad);font-weight:600":"color:var(--muted)"}">${r.quejas_90d||0}</td>
+      <td class="n" style="color:var(--muted)">${r.elogios_90d||0}</td>
+      <td><span class="pill ${est}">${esc(r.estado)}</span></td></tr>`;
+  }).join("")
+  : `<tr><td colspan="8">${vacio("Sin datos de limpieza","Falta una captura de subcategorías.")}</td></tr>`;
+}
+
+/* ==================== MENCIONES POR REVISAR ==================== */
+function menciones(){
+  const box=$("#menciones"); if(!box) return;
+  if (D.menc === null) {
+    box.innerHTML = vacio("Hace falta iniciar sesión",
+      "Las menciones llevan nombre de colaborador, así que solo se leen con sesión de la plataforma.");
+    return;
+  }
+  const rows=(D.menc||[]).filter(r=>!PLAZA||r.plaza===PLAZA);
+  if(!rows.length){
+    box.innerHTML = vacio("Nada dudoso pendiente",
+      "Las menciones con nombre claro se confirman solas. Aquí solo aparece lo que necesita criterio.");
+    return;
+  }
+  box.innerHTML = rows.map(r=>`
+    <article class="resena" data-mid="${r.id}">
+      <div class="rh">
+        <span class="pill">${esc(nf(r.plataforma))}</span>
+        <span class="pill warn">${esc(r.por_que_dudoso)}</span>
+        <span class="meta">${esc(r.plaza)} · ${fecha(r.fecha)} · confianza ${num(r.confianza,2)}</span>
+        <span style="margin-left:auto;color:var(--muted);font-size:.85rem">
+          ¿es <b style="color:var(--ink)">${esc(r.nombre_display)}</b>, ${esc(r.puesto||"")}?</span>
+      </div>
+      <div class="rb">
+        <div style="background:var(--warn-bg);border-left:3px solid var(--warn);padding:9px 12px;border-radius:0 6px 6px 0;margin-bottom:10px">
+          <div style="font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);font-weight:700;margin-bottom:3px">
+            Detectado: “${esc(r.nombre_detectado)}”</div>
+          <div style="font-style:italic">“${esc(r.extracto||"")}”</div>
+        </div>
+        <details><summary style="cursor:pointer;font-size:.85rem;color:var(--accent);font-weight:600">Ver la reseña completa</summary>
+          <div class="txt" style="margin-top:8px">${esc(r.texto||"")}</div></details>
+        <div class="acts">
+          <button class="btn sm" data-mac="si">Sí, es ${esc(r.nombre_display)}</button>
+          <button class="btn sm ghost" data-mac="no">No es una persona / es otro</button>
+          <span data-mmsg style="color:var(--muted);font-size:.83rem"></span>
+        </div>
+      </div>
+    </article>`).join("");
+  $$("#menciones [data-mac]").forEach(b=>b.onclick=()=>confirmarMencion(b));
+}
+
+async function confirmarMencion(btn){
+  const art=btn.closest(".resena");
+  const id=Number(art.dataset.mid);
+  const si=btn.dataset.mac==="si";
+  const msg=$("[data-mmsg]",art);
+  const quien=(window.cpAcceso && cpAcceso.tokEmail && cpAcceso.tokEmail()) || null;
+  if(!quien){ msg.textContent="Hace falta sesión para firmar la confirmación."; return; }
+  msg.textContent="Guardando…";
+  try{
+    const r=await fetch(`${SB}/rest/v1/rpc/cp_confirmar_mencion`,{
+      method:"POST", headers:{...H,"Content-Type":"application/json"},
+      body:JSON.stringify({p_id:id, p_confirmado:si, p_quien:quien,
+                           p_motivo: si?null:"Descartado desde la pantalla"})});
+    if(!r.ok){
+      const t=await r.text();
+      // el guardarrail de no confirmar la propia mencion llega como error de postgres
+      msg.textContent = t.includes("sobre ti mismo")
+        ? "No puedes confirmar una mención sobre ti. Pásala a Javi, Liz o Deisy."
+        : "No se guardó: " + t.slice(0,120);
+      return;
+    }
+    art.style.opacity=".45";
+    msg.textContent = si ? "Confirmada." : "Descartada.";
+    $$("[data-mac]",art).forEach(b=>b.disabled=true);
+  }catch(e){ msg.textContent="No se guardó: "+String(e.message||e).slice(0,120); }
 }
 
 </script>
