@@ -152,10 +152,16 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
     <div class="grid g4" id="kpisNota" style="margin-bottom:16px"></div>
     <div class="card">
       <div class="hd">
-        <h2>Serie por fuente</h2>
-        <span class="note">Todo en base 100 (nota ÷ escala × 100). Sin eso, un 4,6 de Google y un 9,1 de Booking no se pueden poner en el mismo eje.</span>
+        <h2>Evolución mes a mes</h2>
+        <span class="note">La nota del MES — el promedio de las reseñas de ese mes — no el acumulado de la ficha. Es la serie que ven los socios.</span>
+        <span style="margin-left:auto"><select id="selAnio"></select></span>
       </div>
       <div class="bd" id="serieBox"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="hd"><h2>Acumulado de la ficha</h2>
+        <span class="note">Lo que ve un huésped al entrar. Con más de mil reseñas se mueve muy despacio: sirve para posicionarse, no para ver si un mes salió bien.</span></div>
+      <div class="bd" id="acumBox"></div>
     </div>
   </section>
 
@@ -256,14 +262,14 @@ async function api(view, qs="select=*") {
 const NOMBRE_FUENTE = { hostelworld:"Hostelworld", booking:"Booking", google:"Google", tripadvisor:"Tripadvisor" };
 const nf = f => NOMBRE_FUENTE[f] || f;
 
-const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], borradores:{} };
+const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], borradores:{} };
 let PLAZAS = [];      // las que este usuario puede ver
 let PLAZA  = null;    // la seleccionada; null = todas
 
 /* ---------------- arranque ---------------- */
 (async function init(){
   try {
-    const [evo, crit, obj, resp, cola, compset, borr, valor] = await Promise.all([
+    const [evo, crit, obj, resp, cola, compset, borr, valor, mens] = await Promise.all([
       api("cp_reputacion_evolucion", "select=*&order=fecha_consulta.asc"),
       api("cp_puntos_criticos",      "select=*&order=severidad.desc"),
       api("cp_objetivos",            "select=*"),
@@ -272,8 +278,9 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_compset",              "select=*&order=fecha_consulta.desc,precio.asc"),
       api("cp_borradores",           "select=*"),
       api("cp_valor_precio",         "select=*&order=mxn_por_punto.desc"),
+      api("cp_serie_mensual",        "select=*&order=periodo.asc"),
     ]);
-    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor;
+    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens;
     borr.forEach(b => D.borradores[b.review_id] = b);
 
     // Cascada de ubicación: si el usuario solo ve una plaza, no ve las otras.
@@ -354,26 +361,89 @@ function evolucion(){
       </div></div>`;
   }).join("") : vacio("Sin capturas todavía","Corre la tarea de mercado y esto se llena solo.");
 
-  // Serie: solo tiene sentido con más de una captura por fuente.
+  acumulado();
+  serieMensual();
+}
+
+/* la nota acumulada, la que sale de la ficha */
+function acumulado(){
   const porFuente = {};
   D.evo.filter(enPlaza).forEach(r => (porFuente[r.plaza+" · "+nf(r.fuente)] ||= []).push(r));
   const conSerie = Object.entries(porFuente).filter(([,v]) => v.length > 1);
-  $("#serieBox").innerHTML = conSerie.length
+  $("#acumBox").innerHTML = conSerie.length
     ? `<div class="grid g2">` + conSerie.map(([k,v]) => {
         const min = Math.min(...v.map(x=>x.nota100)) - 2, max = Math.max(...v.map(x=>x.nota100)) + 1;
-        return `<div>
-          <div style="font-weight:600;margin-bottom:6px">${esc(k)}</div>
-          <div class="serie">${v.map(x=>{
-            const h = max>min ? ((x.nota100-min)/(max-min))*100 : 50;
-            return `<i style="height:${Math.max(h,4)}%" title="${fecha(x.fecha_consulta)} · ${num(x.nota100)}/100"></i>`;
-          }).join("")}</div>
+        return `<div><div style="font-weight:600;margin-bottom:6px">${esc(k)}</div>
+          <div class="serie">${v.map(x=>{const h = max>min ? ((x.nota100-min)/(max-min))*100 : 50;
+            return `<i style="height:${Math.max(h,4)}%" title="${fecha(x.fecha_consulta)} · ${num(x.nota100)}/100"></i>`;}).join("")}</div>
           <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:.78rem;margin-top:5px">
             <span>${fecha(v[0].fecha_consulta)} · ${num(v[0].nota100)}</span>
             <span>${fecha(v.at(-1).fecha_consulta)} · ${num(v.at(-1).nota100)}</span>
           </div></div>`;
       }).join("") + `</div>`
-    : vacio("Todavía no hay serie",
-        "Cada fuente tiene una sola captura. La serie empieza a dibujarse con la segunda: es una limitación real de los datos, no un fallo de la pantalla.");
+    : vacio("Una sola captura por fuente",
+        "El acumulado se empieza a dibujar con la segunda captura. Es una limitación de los datos, no de la pantalla.");
+}
+
+/* la nota del mes: la serie que de verdad muestra evolución */
+const MESES=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function serieMensual(){
+  const rows=(D.mens||[]).filter(enPlaza);
+  if(!rows.length){ $("#serieBox").innerHTML=vacio("Sin serie mensual",
+    "La nota del mes se captura del extranet. Cárgala con cp_guardar_nota_mes."); return; }
+  const anios=[...new Set(rows.map(r=>r.anio))].sort();
+  const sel=$("#selAnio");
+  if(sel && !sel.options.length){
+    anios.forEach(a=>sel.add(new Option(a,a)));
+    sel.value=anios.at(-1); sel.onchange=serieMensual;
+  }
+  const anio = sel && sel.value ? Number(sel.value) : anios.at(-1);
+  const prev = anio-1;
+  const combos=[...new Set(rows.map(r=>r.plaza+"|"+r.fuente))].sort();
+
+  $("#serieBox").innerHTML = `<div class="grid g2">` + combos.map(k=>{
+    const [plaza,fuente]=k.split("|");
+    const cur = MESES.map((_,i)=> rows.find(r=>r.plaza===plaza&&r.fuente===fuente&&r.anio===anio&&r.mes===i+1) || null);
+    const ant = MESES.map((_,i)=> rows.find(r=>r.plaza===plaza&&r.fuente===fuente&&r.anio===prev&&r.mes===i+1) || null);
+    const vals=[...cur,...ant].filter(Boolean).map(r=>Number(r.nota));
+    if(!vals.length) return "";
+    const lo=Math.min(...vals)-0.3, hi=Math.max(...vals)+0.15;
+    const h=v=> hi>lo ? Math.max(((v-lo)/(hi-lo))*100,4) : 50;
+    const conDato=cur.filter(Boolean), conAnt=ant.filter(Boolean);
+    const med = a => a.length ? a.reduce((s,r)=>s+Number(r.nota),0)/a.length : null;
+    const mCur=med(conDato), mAnt=med(conAnt);
+    const comparables = cur.map((c,i)=>c&&ant[i]?[Number(c.nota),Number(ant[i].nota)]:null).filter(Boolean);
+    const dCmp = comparables.length
+      ? comparables.reduce((s,[a,b])=>s+(a-b),0)/comparables.length : null;
+    return `<div style="margin-bottom:6px">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-weight:700">${esc(plaza)} · ${esc(nf(fuente))}</span>
+        ${mCur!=null?`<span class="pill">${anio}: ${num(mCur,2)}</span>`:""}
+        ${mAnt!=null?`<span class="pill nd">${prev}: ${num(mAnt,2)}</span>`:""}
+        ${dCmp!=null?`<span class="pill ${dCmp>=0?"ok":"bad"}">${dCmp>=0?"+":""}${num(dCmp,2)} en los ${comparables.length} meses comparables</span>`:""}
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:5px;height:72px">
+        ${cur.map((c,i)=>{
+          const a=ant[i];
+          return `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
+            <div style="display:flex;align-items:flex-end;gap:2px;height:100%">
+              ${a?`<i title="${MESES[i]} ${prev}: ${num(a.nota,2)}" style="flex:1;height:${h(Number(a.nota))}%;background:var(--surface-2);border:1px solid var(--rule-2);border-bottom:0;border-radius:3px 3px 0 0"></i>`:`<i style="flex:1"></i>`}
+              ${c?`<i title="${MESES[i]} ${anio}: ${num(c.nota,2)}" style="flex:1;height:${h(Number(c.nota))}%;background:${Number(c.nota)<(mAnt??Number(c.nota))-0.5?"var(--bad)":"var(--accent)"};border-radius:3px 3px 0 0"></i>`:`<i style="flex:1"></i>`}
+            </div></div>`;
+        }).join("")}
+      </div>
+      <div style="display:flex;gap:5px;margin-top:4px">
+        ${MESES.map((m,i)=>`<span style="flex:1;text-align:center;font-size:.66rem;color:${cur[i]?"var(--muted)":"var(--faint)"}">${m}</span>`).join("")}
+      </div>
+      <div style="display:flex;gap:5px;margin-top:1px">
+        ${cur.map(c=>`<span style="flex:1;text-align:center;font-size:.68rem;font-variant-numeric:tabular-nums;color:var(--ink-2)">${c?num(c.nota,1):"·"}</span>`).join("")}
+      </div>
+    </div>`;
+  }).join("") + `</div>
+  <p style="margin:14px 0 0;color:var(--muted);font-size:.83rem;max-width:80ch">
+    Barra clara = ${prev}, barra verde = ${anio}. Un mes en rojo cayó más de medio punto
+    bajo la media del año anterior. Los meses sin barra no tienen dato capturado, que no es
+    lo mismo que un mes malo.</p>`;
 }
 
 /* ---- PUNTOS CRÍTICOS ---- */
