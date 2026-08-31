@@ -261,6 +261,14 @@ tr.op .who{color:#5b4bab}
 .cajon .lin{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid rgba(0,0,0,.05);font-size:12.5px}
 .cajon .lin:first-child{border-top:0}
 .cajon .lin.pendiente{opacity:.6}
+.cajon .lin.mueve{cursor:pointer;border-radius:7px;margin:0 -6px;padding-left:6px;padding-right:6px;
+  transition:background .12s,opacity .12s}
+.cajon .lin.mueve:hover{background:var(--bg3);opacity:1}
+.cajon .lin.mueve .nm::after{content:'↔';margin-left:7px;color:var(--accent);font-weight:800;opacity:.75}
+.inftoast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:90;
+  background:var(--txt);color:var(--surface);font-size:13px;font-weight:600;
+  padding:9px 16px;border-radius:999px;opacity:0;pointer-events:none;transition:all .18s}
+.inftoast.on{opacity:1;transform:translate(-50%,0)}
 .cajon .nm{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cajon .nm .ex{font-style:normal;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
   color:#4a3d94;background:#ece8ff;border-radius:4px;padding:1px 4px}
@@ -475,7 +483,8 @@ td.grab:hover{color:var(--gold)}
 <!-- ================= INFORME ================= -->
 <div class="pane" id="p-informe">
   <p class="sub"><b>Papel repartido</b>: los tiempos estándar de lo que se le dio. <b>Papel efectuado</b>: los de lo que ya cerró.
-  <b>Horas reales</b>: el reloj entre «Iniciar» y «Terminar limpieza». Se reparte y se pagan las horas extra en papel —igual para todas,
+  <b>Horas reales</b>: el reloj entre «Iniciar» y «Terminar limpieza». En el cajón de tareas,
+  toca una que ponga <b>sin empezar</b> para pasársela a quien va sobrada de tiempo. Se reparte y se pagan las horas extra en papel —igual para todas,
   vaya rápida o despacio—; las horas reales dicen si el día cabe y quién tiene hueco.</p>
   <div id="capGrupo"></div>
   <div class="pcards" id="prodCards"></div>
@@ -1372,12 +1381,13 @@ function listaTareas(ts,vacio){
                : String(y.terminado_at||'').localeCompare(String(x.terminado_at||''))));
   return orden.map(t=>{
     const ar=t.hk_areas||{}, op=t.hk_tareas_op;
+    const mueve=t.estado==='pendiente';
     const nom=op?op.nombre:(t.titulo||`${ar.codigo||''}${ar.nombre&&ar.nombre!==ar.codigo?` · ${ar.nombre}`:''}`);
     const est=(ESTLBL[t.estatus_area]||[])[2]||'';
     const real=t.minutos_reales!=null?Number(t.minutos_reales):null;
     const dif=real!=null?Math.round((t.minutos_estimados||0)-real):null;
     const hora=t.terminado_at?new Date(t.terminado_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'';
-    return `<div class="lin ${t.estado}">
+    return `<div class="lin ${t.estado}${mueve?' mueve':''}"${mueve?` data-pas="${t.id}" title="Pasársela a otra"`:''}>
       <span class="nm">${esc(nom)}${t.es_extra?' <i class="ex">extra</i>':''}</span>
       <span class="es">${esc(est)}</span>
       <span class="mi">${real!=null&&t.estado!=='pendiente'?`${Math.round(real)}′ de ${t.minutos_estimados}′`:`${t.minutos_estimados}′`}</span>
@@ -1569,11 +1579,15 @@ function pintarCapacidad(asigs,sueltas,c,filas){
 // Cada persona, su pila del día: lo que ya dedicó, lo que le falta al ritmo que
 // lleva, y a qué hora acabaría. Las horas extra son las de más carga de la que
 // cabe en el turno, no las de haberse retrasado.
+let PROD=[], PRODC=null;
 function pintarProdCards(filas,asigs,c){
   const box=$('prodCards');
   if(!filas.length && !asigs.length){ box.innerHTML='<div class="empty">Sin datos para este día.</div>'; return; }
   const porNombre={}; filas.forEach(r=>porNombre[r.colaborador]=r);
   const usadas=new Set();
+  // Se guarda quién es quién y cómo va, para poder pasar cuartos de una a otra.
+  PRODC=c;
+  PROD=asigs.map(a=>({a,k:metricasProd(a,porNombre[a.nombre_display]||{},c)}));
   const cards=asigs.map(a=>{
     const r=porNombre[a.nombre_display]||{}; usadas.add(a.nombre_display);
     return tarjetaProd(a,r,c);
@@ -1581,6 +1595,9 @@ function pintarProdCards(filas,asigs,c){
   filas.filter(r=>!usadas.has(r.colaborador)).forEach(r=>cards.push(tarjetaProd(null,r,c)));
   box.innerHTML=cards.join('');
   // Los cajones se abren como en Soy Pepe: tocas la caja y se despliega debajo.
+  box.querySelectorAll('.cajon [data-pas]').forEach(el=>el.onclick=(e)=>{
+    e.stopPropagation(); abrirPasar(el.dataset.pas);
+  });
   box.querySelectorAll('.pgrid .abre').forEach(el=>el.onclick=()=>{
     if(el.classList.contains('muda')) return;
     const card=el.closest('.pcard'), cual=el.dataset.caj;
@@ -1591,6 +1608,86 @@ function pintarProdCards(filas,asigs,c){
     pan.hidden=!abrir;
     el.classList.toggle('on',abrir);
   });
+}
+
+// Pasar un cuarto que todavía no se ha empezado a otra compañera, con el día ya
+// en marcha. El orden lo manda el hueco REAL de cada una: lo que le va a sobrar
+// del turno cuando acabe lo suyo al ritmo que lleva. Si la que lo recibe va rápida,
+// un cuarto de 40' de papel le cuesta menos de reloj, y eso también se calcula.
+function abrirPasar(tareaId){
+  const de=PROD.find(x=>(x.k.ts||[]).some(t=>t.id===tareaId));
+  const t=de&&de.k.ts.find(x=>x.id===tareaId);
+  if(!t) return;
+  if(t.estado!=='pendiente'){ toastInf('Esa limpieza ya empezó: no se mueve'); return; }
+  const min=t.minutos_estimados||0;
+  const ar=t.hk_areas||{}, op=t.hk_tareas_op;
+  const nombre=op?op.nombre:`${ar.codigo||''}${ar.nombre&&ar.nombre!==ar.codigo?` · ${ar.nombre}`:''}`;
+  const hm=m=>`${Math.round(m/60*10)/10} h`;
+
+  const otras=PROD.filter(x=>x.a.id!==de.a.id).map(x=>{
+    const libre=Math.max(0,x.a?x.k.jornada-x.k.forecast:0);
+    const ritmo=x.k.ritmo>0?x.k.ritmo:1;
+    const cuesta=min/ritmo;                    // lo que le costaría de reloj
+    return {...x,libre,cuesta,cabe:libre>=cuesta};
+  }).sort((a,b)=>b.libre-a.libre);
+
+  document.querySelectorAll('.modal').forEach(x=>x.remove());
+  const d=document.createElement('div'); d.className='modal';
+  d.innerHTML=`<div class="caja">
+    <h4>${esc(nombre)}</h4>
+    <p class="sub">${min} min de papel · ahora la tiene <b>${esc(de.a.nombre_display)}</b>,
+      que va al ${Math.round(de.k.forecast/de.k.jornada*100)}% de su turno</p>
+    <p class="sub" style="margin:14px 0 6px"><b>Pasársela a</b> · ordenadas por el tiempo que les va a sobrar</p>
+    <div id="pasGente">${otras.length?otras.map((x,i)=>`<button type="button" class="quien" data-pa="${x.a.id}">
+      <span class="tk">${x.cabe?'→':'⚠'}</span>
+      <span class="n">${esc(x.a.nombre_display)}${i===0&&x.cabe?' <i class="rec">la que más hueco tiene</i>':''}</span>
+      <span class="c">${hm(x.k.dedicado)} de ${hm(x.k.jornada)} · ${x.cabe
+        ? `le sobran ${hm(x.libre)}`
+        : `se pasaría ${hm(x.cuesta-x.libre)}`}</span></button>`).join('')
+      :'<p class="sub">No hay nadie más en el turno.</p>'}</div>
+    <div class="pie"><button class="b" id="pasCerrar">Cerrar</button></div>
+  </div>`;
+  document.body.appendChild(d);
+  d.onclick=e=>{ if(e.target===d) d.remove(); };
+  d.querySelector('#pasCerrar').onclick=()=>d.remove();
+  d.querySelectorAll('[data-pa]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    const x=otras.find(o=>o.a.id===b.dataset.pa);
+    await pasarTarea(t,de,x);
+    d.remove();
+  });
+}
+
+async function pasarTarea(t,de,a){
+  const ahora=new Date().toISOString();
+  // Si le cabe en su turno no es trabajo extraordinario: es mejor reparto. Solo
+  // cuenta como extra cuando la deja por encima de su jornada.
+  const extra=!a.cabe;
+  const meta={...(t.metadata||{}), balanceada_at:ahora, balanceada_desde:de.a.nombre_display};
+  const {error}=await sb.from('hk_tareas').update({
+    asignacion_id:a.a.id, es_extra:extra, reasignada_desde:de.a.id, metadata:meta, updated_at:ahora,
+  }).eq('id',t.id);
+  if(error) return toastInf('No se pudo pasar: '+error.message);
+
+  // Las dos pilas se recalculan: a una le baja la carga y a la otra le sube.
+  de.k.ts.splice(de.k.ts.findIndex(x=>x.id===t.id),1);
+  (a.k.ts||[]).push(t);
+  for(const p of [de,a]){
+    const tot=(p.k.ts||[]).filter(x=>x.estado!=='no_realizada')
+      .reduce((s2,x)=>s2+(x.minutos_estimados||0),0);
+    await sb.from('hk_asignaciones').update({minutos_estimados:tot,updated_at:ahora}).eq('id',p.a.id);
+  }
+  try{ await sb.from('hk_eventos').insert({tarea_id:t.id,tipo:'comentario',metadata:{},
+    nota:`Pasada de ${de.a.nombre_display} a ${a.a.nombre_display} para equilibrar el día`}); }catch(e){}
+  toastInf(`Pasada a ${a.a.nombre_display}`);
+  cargarInforme();
+}
+
+function toastInf(txt){
+  let e=$('infToast');
+  if(!e){ e=document.createElement('div'); e.id='infToast'; e.className='inftoast'; document.body.appendChild(e); }
+  e.textContent=txt; e.classList.add('on');
+  clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove('on'),2600);
 }
 
 // El cálculo del día de una persona, separado de cómo se pinta: lo usan igual la
