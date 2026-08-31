@@ -138,7 +138,8 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
 
 <nav class="secnav" role="tablist" aria-label="Secciones">
   <div class="secnav-in">
-    <button role="tab" data-tab="evolucion" aria-selected="true">Evolución</button>
+    <button role="tab" data-tab="resumen" aria-selected="true">Resumen</button>
+    <button role="tab" data-tab="evolucion" aria-selected="false">Evolución</button>
     <button role="tab" data-tab="criticos"  aria-selected="false">Puntos críticos</button>
     <button role="tab" data-tab="mercado"   aria-selected="false">Mercado</button>
     <button role="tab" data-tab="respuestas" aria-selected="false">Respuestas</button>
@@ -147,8 +148,30 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
 
 <main class="wrap">
 
+
+  <!-- ============ RESUMEN · PepeFeliz ============ -->
+  <section class="tab" id="tab-resumen">
+    <div class="grid g2" id="pfCards" style="margin-bottom:16px"></div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="hd"><h2>Qué mueve el indicador</h2>
+        <span class="note">Temas ordenados por lo que restan. Haz clic en uno para ver los comentarios que lo dicen.</span>
+        <span style="margin-left:auto"><select id="pfFuente"><option value="">todas las fuentes</option></select></span>
+      </div>
+      <div class="bd" style="padding:0"><div id="pfTemas"></div></div>
+    </div>
+
+    <div class="card" id="pfDetalleCard" hidden>
+      <div class="hd"><h2 id="pfDetalleTit">Comentarios</h2>
+        <span class="note" id="pfDetalleSub"></span>
+        <span style="margin-left:auto"><button class="btn ghost sm" id="pfCerrar">Cerrar</button></span>
+      </div>
+      <div class="bd" id="pfDetalle"></div>
+    </div>
+  </section>
+
   <!-- ============ EVOLUCIÓN ============ -->
-  <section class="tab" id="tab-evolucion">
+  <section class="tab" id="tab-evolucion" hidden>
     <div class="grid g4" id="kpisNota" style="margin-bottom:16px"></div>
     <div class="card">
       <div class="hd">
@@ -262,14 +285,14 @@ async function api(view, qs="select=*") {
 const NOMBRE_FUENTE = { hostelworld:"Hostelworld", booking:"Booking", google:"Google", tripadvisor:"Tripadvisor" };
 const nf = f => NOMBRE_FUENTE[f] || f;
 
-const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], borradores:{} };
+const D = { evo:[], crit:[], obj:[], resp:[], cola:[], compset:[], valor:[], mens:[], idx:[], idxd:[], pos:[], rt:[], borradores:{} };
 let PLAZAS = [];      // las que este usuario puede ver
 let PLAZA  = null;    // la seleccionada; null = todas
 
 /* ---------------- arranque ---------------- */
 (async function init(){
   try {
-    const [evo, crit, obj, resp, cola, compset, borr, valor, mens] = await Promise.all([
+    const [evo, crit, obj, resp, cola, compset, borr, valor, mens, idx, idxd, pos, rt] = await Promise.all([
       api("cp_reputacion_evolucion", "select=*&order=fecha_consulta.asc"),
       api("cp_puntos_criticos",      "select=*&order=severidad.desc"),
       api("cp_objetivos",            "select=*"),
@@ -279,8 +302,12 @@ let PLAZA  = null;    // la seleccionada; null = todas
       api("cp_borradores",           "select=*"),
       api("cp_valor_precio",         "select=*&order=mxn_por_punto.desc"),
       api("cp_serie_mensual",        "select=*&order=periodo.asc"),
+      api("cp_indice",               "select=*"),
+      api("cp_indice_desglose",      "select=*&order=peso.desc"),
+      api("cp_posicion_plaza",       "select=*&order=posicion.asc"),
+      api("cp_resenas_tema",         "select=*&limit=800"),
     ]);
-    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens;
+    D.evo=evo; D.crit=crit; D.obj=obj; D.resp=resp; D.cola=cola; D.compset=compset; D.valor=valor; D.mens=mens; D.idx=idx; D.idxd=idxd; D.pos=pos; D.rt=rt;
     borr.forEach(b => D.borradores[b.review_id] = b);
 
     // Cascada de ubicación: si el usuario solo ve una plaza, no ve las otras.
@@ -324,7 +351,7 @@ $$(".secnav button").forEach(b => b.onclick = () => {
 });
 
 /* ---------------- pintado ---------------- */
-function pintar(){ cabecera(); evolucion(); criticos(); valorPrecio(); mercado(); respuestas(); }
+function pintar(){ cabecera(); resumen(); evolucion(); criticos(); valorPrecio(); mercado(); respuestas(); }
 
 function cabecera(){
   const ult = D.evo.map(r=>r.fecha_consulta).sort().pop();
@@ -685,6 +712,164 @@ async function guardar(btn){
 }
 
 function vacio(t, s){ return `<div class="vacio"><strong>${esc(t)}</strong>${esc(s)}</div>`; }
+
+
+/* ==================== RESUMEN · PepeFeliz ==================== */
+let PF_FUENTE = "";
+let PF_TEMA   = null;
+
+function resumen(){
+  const idx = D.idx.filter(enPlaza);
+  $("#pfCards").innerHTML = idx.length ? idx.map(i => {
+    const pos = D.pos.find(p => p.plaza===i.plaza && p.es_nuestro);
+    const d12 = (i.icp_12m!=null && i.icp!=null) ? Number(i.icp_12m)-Number(i.icp) : null;
+    const det = D.idxd.filter(x=>x.plaza===i.plaza);
+    return `<div class="card">
+      <div class="hd"><h2>${esc(i.plaza)}</h2>
+        <span class="note">${Number(i.resenas_totales).toLocaleString("es-MX")} reseñas · ${i.fuentes} fuentes</span></div>
+      <div class="bd">
+        <div style="display:flex;align-items:flex-start;gap:22px;flex-wrap:wrap">
+          <div style="min-width:150px">
+            <div class="lbl" style="font-size:.68rem;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:700">PepeFeliz</div>
+            <div style="font-size:3.1rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums">${num(i.icp)}<span style="font-size:1.1rem;color:var(--muted);font-weight:500">/100</span></div>
+          </div>
+          <div style="flex:1;min-width:180px">
+            ${i.icp_12m!=null?`<div style="margin-bottom:7px">
+              <span class="pill ${d12>0?"ok":d12<0?"bad":"nd"}">${d12>0?"▲":d12<0?"▼":"="} últimos 12 m: ${num(i.icp_12m)}</span>
+              <div style="color:var(--muted);font-size:.8rem;margin-top:4px">
+                ${d12>0.3?"Lo reciente va mejor que el acumulado: la nota pública va a subir."
+                 :d12<-0.3?"Lo reciente va peor que el acumulado: la nota pública va a bajar."
+                 :"Lo reciente y el acumulado van iguales."}</div></div>`:""}
+            ${pos?`<div><span class="pill ${pos.posicion<=3?"ok":pos.posicion>=(pos.de-2)?"bad":"warn"}">
+              ${pos.posicion}º de ${pos.de} en la plaza</span>
+              <div style="color:var(--muted);font-size:.8rem;margin-top:4px">
+                ${Number(pos.vs_lider)===0?"Empatados con el líder."
+                  :`${num(Math.abs(pos.vs_lider),1)} puntos del líder (${num(pos.lider_nota)}).`}
+                Hostelworld, propiedades con 100+ reseñas.</div></div>`:""}
+          </div>
+        </div>
+        <details style="margin-top:14px">
+          <summary style="cursor:pointer;font-size:.85rem;color:var(--accent);font-weight:600">Cómo sale este número</summary>
+          <div class="tblwrap" style="margin-top:10px"><table><thead><tr>
+            <th>Fuente</th><th class="n">Nota</th><th class="n">Reseñas</th>
+            <th class="n">Base 100</th><th class="n">Peso</th><th class="n">Aporta</th>
+          </tr></thead><tbody>
+            ${det.map(x=>`<tr>
+              <td>${esc(nf(x.fuente))}</td>
+              <td class="n">${num(x.rating_global)}<span style="color:var(--faint)">/${num(x.escala,0)}</span></td>
+              <td class="n">${Number(x.resenas).toLocaleString("es-MX")}</td>
+              <td class="n">${num(x.nota100)}</td>
+              <td class="n">${num(x.peso_pct)}%</td>
+              <td class="n"><b>${num(x.aporta,2)}</b></td></tr>`).join("")}
+            <tr style="border-top:2px solid var(--rule-2)"><td colspan="5"><b>PepeFeliz</b></td>
+              <td class="n"><b>${num(i.icp)}</b></td></tr>
+          </tbody></table></div>
+          <p style="margin:9px 0 0;color:var(--muted);font-size:.8rem;line-height:1.5">
+            Cada nota se lleva a base 100 (nota ÷ escala × 100) y se promedia con peso
+            <code>ln(1 + reseñas)</code>. Con peso lineal, Hostelworld pesaría 36 veces más que
+            Tripadvisor y esto sería Hostelworld con adornos; en logaritmo pesa el doble.
+            Más volumen manda más, pero no borra al resto.</p>
+        </details>
+      </div></div>`;
+  }).join("") : vacio("Sin capturas","Corre la tarea de mercado.");
+
+  const sel=$("#pfFuente");
+  if(sel && sel.options.length<=1){
+    [...new Set(D.rt.map(r=>r.plataforma))].sort().forEach(f=>sel.add(new Option(nf(f),f)));
+    sel.onchange=()=>{PF_FUENTE=sel.value; PF_TEMA=null; pintarTemas(); $("#pfDetalleCard").hidden=true;};
+  }
+  $("#pfCerrar") && ($("#pfCerrar").onclick=()=>{PF_TEMA=null;$("#pfDetalleCard").hidden=true;pintarTemas();});
+  pintarTemas();
+}
+
+function filasTema(){
+  return D.rt.filter(r=>(!PLAZA||r.plaza===PLAZA) && (!PF_FUENTE||r.plataforma===PF_FUENTE));
+}
+
+function pintarTemas(){
+  const rows=filasTema();
+  const g={};
+  rows.forEach(r=>{
+    const k=r.plaza+"|"+r.tema;
+    (g[k] ||= {plaza:r.plaza,tema:r.tema,nombre:r.tema_nombre||r.tema,
+               responsable:r.responsable,accionable:r.accionable,neg:0,pos:0,n:0,ult:null,notas:[]});
+    g[k].n++;
+    if(r.sentimiento==="negativo"){g[k].neg++; g[k].notas.push(Number(r.nota100));}
+    if(r.sentimiento==="positivo") g[k].pos++;
+    if(!g[k].ult || r.fecha>g[k].ult) g[k].ult=r.fecha;
+  });
+  const list=Object.values(g).filter(t=>t.neg>0)
+    .map(t=>{
+      const dias=(Date.now()-new Date(t.ult+"T12:00:00"))/864e5;
+      t.resta = +(t.neg * Math.exp(-dias/120) * (t.notas.length? (100-avg(t.notas))/100 : .5)).toFixed(2);
+      return t;})
+    .sort((a,b)=>b.resta-a.resta);
+  const max=Math.max(1,...list.map(t=>t.resta));
+
+  $("#pfTemas").innerHTML = list.length ? `<div class="tblwrap"><table><thead><tr>
+      <th>Plaza</th><th>Tema</th><th>Responsable</th>
+      <th class="n">Negativas</th><th class="n">Positivas</th>
+      <th class="n">Nota media al quejarse</th><th>Última</th><th>Peso</th><th></th>
+    </tr></thead><tbody>
+    ${list.map(t=>`<tr${PF_TEMA===t.plaza+"|"+t.tema?' style="background:var(--accent-soft)"':''}>
+      <td>${esc(t.plaza)}</td>
+      <td><b>${esc(t.nombre)}</b>${t.accionable===false?' <span class="pill nd" title="Marcado como no accionable">no accionable</span>':''}</td>
+      <td>${esc(t.responsable||"—")}</td>
+      <td class="n" style="color:var(--bad);font-weight:600">${t.neg}</td>
+      <td class="n" style="color:var(--muted)">${t.pos}</td>
+      <td class="n">${t.notas.length?num(avg(t.notas)):"—"}</td>
+      <td style="color:var(--muted)">${fecha(t.ult)}</td>
+      <td><div class="sev"><i style="width:${(t.resta/max*100).toFixed(0)}%"></i></div></td>
+      <td><button class="btn sm ghost" data-tema="${esc(t.plaza+"|"+t.tema)}">Ver comentarios</button></td>
+    </tr>`).join("")}</tbody></table></div>`
+    : vacio("Sin temas negativos","Con los filtros de ahora no hay ninguna queja etiquetada.");
+
+  $$("#pfTemas [data-tema]").forEach(b=>b.onclick=()=>{PF_TEMA=b.dataset.tema; pintarTemas(); verComentarios();});
+}
+const avg=a=>a.reduce((s,x)=>s+x,0)/a.length;
+
+function verComentarios(){
+  if(!PF_TEMA) return;
+  const [plaza,tema]=PF_TEMA.split("|");
+  const rows=filasTema().filter(r=>r.plaza===plaza && r.tema===tema)
+    .sort((a,b)=>(a.sentimiento==="negativo"?0:1)-(b.sentimiento==="negativo"?0:1) || (b.fecha||"").localeCompare(a.fecha||""));
+  const t0=rows[0]||{};
+  $("#pfDetalleTit").textContent = (t0.tema_nombre||tema)+" · "+plaza;
+  $("#pfDetalleSub").textContent = `${rows.length} menciones · responsable ${t0.responsable||"sin asignar"}`;
+  $("#pfDetalleCard").hidden=false;
+  $("#pfDetalle").innerHTML = rows.map(r=>{
+    const b=D.borradores[r.review_id];
+    return `<article class="resena" data-id="${r.review_id}">
+      <div class="rh">
+        <span class="pill">${esc(nf(r.plataforma))}</span>
+        <span class="pill ${r.es_negativa?"bad":"ok"}">${num(r.rating,1)}/${num(r.escala,0)}</span>
+        <span class="pill ${r.sentimiento==="negativo"?"bad":r.sentimiento==="positivo"?"ok":"nd"}">${esc(r.sentimiento)}</span>
+        <span class="who">${esc(r.huesped||"Huésped")}</span>
+        <span class="meta">${esc(r.pais||"")} · ${fecha(r.fecha)}${r.fecha_es_aproximada?" (aprox.)":""}</span>
+        <span style="margin-left:auto">${r.contestable?`<span class="pill ${b?.estado==="aprobado"?"ok":"nd"}">${b?.estado||"pendiente"}</span>`:'<span class="pill nd">solo lectura</span>'}</span>
+      </div>
+      <div class="rb">
+        <div style="background:var(--warn-bg);border-left:3px solid var(--warn);padding:9px 12px;border-radius:0 6px 6px 0;margin-bottom:10px">
+          <div style="font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);font-weight:700;margin-bottom:3px">Por qué se etiquetó así</div>
+          <div style="font-style:italic">“${esc(r.extracto||"")}”</div>
+        </div>
+        ${r.titulo?`<div style="font-weight:700;margin-bottom:4px">${esc(r.titulo)}</div>`:""}
+        <div class="txt">${esc(r.texto||"")}</div>
+        ${r.contestable?`<div class="draft">
+          <label style="font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:700">Borrador de respuesta</label>
+          <textarea data-txt>${esc(b?.borrador||"")}</textarea>
+          <div class="acts">
+            <button class="btn sm" data-accion="aprobado">Aprobar</button>
+            <button class="btn sm ghost" data-accion="pendiente">Guardar sin aprobar</button>
+            <span data-msg style="color:var(--muted);font-size:.83rem"></span>
+          </div></div>`
+        :`<div class="draft" style="color:var(--muted);font-size:.82rem">
+            ${esc(nf(r.plataforma))} no publica respuestas del hotel. Esto no se contesta: se arregla.</div>`}
+      </div></article>`;
+  }).join("");
+  $$("#pfDetalle [data-accion]").forEach(b=>b.onclick=()=>guardar(b));
+  $("#pfDetalleCard").scrollIntoView({behavior:"smooth",block:"start"});
+}
 
 </script>
 </body>
