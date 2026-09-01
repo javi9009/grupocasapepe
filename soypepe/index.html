@@ -630,6 +630,7 @@
         <button class="circle" id="cirLimpieza" hidden><span class="b">🧹</span><span class="t">Mi limpieza</span></button>
         <button class="circle" id="cirAudit" hidden><span class="b">🔍</span><span class="t">Room audit</span></button>
         <button class="circle" id="cirGasto" hidden><span class="b">🧾</span><span class="t">Gasto de caja</span></button>
+        <button class="circle" id="cirCaja" hidden><span class="b">💵</span><span class="t">Caja de turno</span></button>
       </div>
 
       <!-- ===== BITÁCORA Y RANKINGS: OCULTOS HASTA NUEVO AVISO (2026-08-29) =====
@@ -2156,9 +2157,36 @@ async function chMark(){
     }
     CH_BUSY=false;
     await chLoad();
+    chCaja(chMode==='entrada'||esEntrada ? 'entrada' : 'salida');
   }catch(e){
     CH_BUSY=false; btn.disabled=false; btn.textContent=prev;
     const hint=$('ch-hint'); if(hint) hint.textContent='No se pudo registrar. Revisa tu conexión e intenta otra vez.';
+  }
+}
+
+/* El relevo del fondo de caja vive en el reloj, que es donde de verdad cambia el
+   turno. Al llegar, si alguien te dejó la caja, se abre para que la cuentes. Al
+   irte, si llevas una, se abre para que digas a quién se la dejas: la salida no se
+   bloquea —a veces no hay a quién entregársela—, pero si te vas sin que el otro la
+   acepte queda en rojo hasta que la acepte. */
+async function chCaja(modo){
+  let d=null; try{ d=await cajaEstado(); }catch(e){}
+  if(!d) return;
+  const hint=$('ch-hint');
+  if(modo==='entrada'){
+    if((d.por_recibir||[]).length){
+      if(hint) hint.textContent='Te dejaron una caja. Cuéntala y acéptala.';
+      setTimeout(()=>abreCaja('caja'), 600);
+    }
+    return;
+  }
+  if((d.cajas||[]).length){
+    if(hint) hint.innerHTML='<b style="color:#b03434">Llevas la caja de turno.</b> '
+      +'Dile a quién se la dejas antes de irte.';
+    setTimeout(()=>abreCaja('caja'), 600);
+  }else if((d.sin_aceptar||[]).length){
+    if(hint) hint.innerHTML='<b style="color:#b03434">Entregaste la caja y todavía no te la aceptan.</b> '
+      +'Queda anotado hasta que la acepten.';
   }
 }
 if($('ch-btn')) $('ch-btn').onclick=chMark;
@@ -2568,13 +2596,26 @@ function abreCaja(modo){
   var sub = modo==='gasto' ? 'Fondos sin POS' : 'Tu turno';
   openEmbed('/soypepe/experiencias.html?abrir='+modo+'&t='+Date.now(), t, sub);
 }
+/* Lo que el reloj necesita saber de la caja: si llevo alguna, si alguien me dejó una
+   esperando, y si entregué una que nadie ha aceptado todavía. */
+let CJESTADO=null;
+async function cajaEstado(){
+  try{ const { data } = await sb.rpc('aud_caja_mi_turno');
+       CJESTADO = (data && data.ok) ? data : null; }catch(e){ CJESTADO=null; }
+  return CJESTADO;
+}
 async function setupCaja(){
   try{
-    const { data } = await sb.rpc('aud_caja_mi_turno');
-    if(!data || !data.ok) return;
+    const data = await cajaEstado();
+    if(!data) return;
     // La caja de la terraza la abre y la cierra Poster; aquí sólo los gastos de los
     // fondos que ningún POS conoce.
     if((data.fondos||[]).length){ const g=$('cirGasto'); g.hidden=false; g.onclick=()=>abreCaja('gasto'); }
+    if($('cirCaja') && ((data.cajas||[]).length || (data.por_recibir||[]).length)){
+      const c=$('cirCaja'); c.hidden=false; c.onclick=()=>abreCaja('caja');
+      const n=(data.por_recibir||[]).length;
+      const t=c.querySelector('.t'); if(t) t.textContent = n ? ('Caja de turno ('+n+')') : 'Caja de turno';
+    }
   }catch(e){ /* si falla, simplemente no salen los botones */ }
 }
 
