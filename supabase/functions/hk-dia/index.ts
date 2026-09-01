@@ -609,7 +609,8 @@ async function reparto(propKey: string, fecha: string) {
   const salida: Array<Record<string, unknown>> = [];
   const esPublica = (t: Tarea) => t.tipo === 'zona_comun';
   async function crear(p: Persona | null, tareas: Tarea[], etiqueta?: string, sinAsignar = false) {
-    if (!tareas.length && !(p && p.turno === 'front')) return;
+    // Una caja vacía solo tiene sentido para quien puede recibir trabajo a mano.
+    if (!tareas.length && !(p && (p.turno === 'front' || candidatos.has(p.turno)))) return;
     tareas.sort((a, b) => (a.tipo === 'operativa' ? 0 : 1) - (b.tipo === 'operativa' ? 0 : 1) || (esPublica(a) ? 1 : 0) - (esPublica(b) ? 1 : 0) || a.piso - b.piso || a.orden - b.orden);
     const pisos = [...new Set(tareas.map((t) => t.piso))].filter((x) => x > 0).sort((a, b) => a - b);
     const total = tareas.reduce((s, t) => s + t.minutos, 0);
@@ -633,6 +634,15 @@ async function reparto(propKey: string, fecha: string) {
 
   // La caja de front existe siempre, aunque ese día no haya audit que colocar.
   if (front && !porPersona.has(kp(front))) porPersona.set(kp(front), { p: front, tareas: [] });
+  // Si una operativa admite varios turnos, TODOS los que estén ese día tienen caja,
+  // aunque hoy no les tocara: es lo que permite pasarles la tarea a mano. Sin caja
+  // no habría a dónde arrastrarla.
+  const candidatos = new Set<string>();
+  for (const t of operativas) for (const k of ((t as Tarea & { turnosPref?: string[] }).turnosPref ?? [])) candidatos.add(k);
+  for (const p of personas) {
+    if (!candidatos.has(p.turno) || porPersona.has(kp(p))) continue;
+    porPersona.set(kp(p), { p, tareas: [] });
+  }
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
   // El motor no mueve nada por su cuenta: lo que no se reparte queda suelto en el
   // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
