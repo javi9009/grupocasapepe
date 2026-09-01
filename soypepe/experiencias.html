@@ -506,11 +506,24 @@ async function cargaCuentas(){
 }
 async function cargaTours(){
   if(TOURS.length) return TOURS;
-  try{ const { data }=await sb.from('tours').select('id,nombre').eq('estatus','activo').order('nombre');
-       TOURS=data||[]; }catch(e){ TOURS=[]; }
+  // Cada tour sabe de qué casa es: en Puebla no tienen por qué salir los de México.
+  const prop = (CAJA && CAJA.property_id) || null;
+  try{ let q=sb.from('tours').select('id,nombre').eq('estatus','activo').order('nombre');
+       if(prop) q=q.eq('property_id',prop);
+       const { data }=await q; TOURS=data||[]; }catch(e){ TOURS=[]; }
   return TOURS;
 }
 
+
+/* A quién se la puedo entregar, por orden: quien está en turno ahora, mi área, el
+   auditor, administración. El orden lo manda la base; aquí sólo se agrupa. */
+function cjGrupos(gente){
+  const orden=['En turno ahora','Tu área','Auditoría','Administración','Los demás'];
+  const por={}; gente.forEach(g=>{ const k=g[3]||'Los demás'; (por[k]=por[k]||[]).push(g); });
+  return orden.filter(k=>por[k]).map(k=>'<optgroup label="'+E(k)+'">'
+    +por[k].map(g=>'<option value="'+E(g[0])+'">'+E(g[1])+(g[2]?' · '+E(g[2]):'')+'</option>').join('')
+    +'</optgroup>').join('');
+}
 
 function pintaCjSheet(){
   const cajas=CAJA.cajas||[], gente=CAJA.gente||[], pend=CAJA.por_recibir||[], mias=CAJA.sin_aceptar||[];
@@ -525,13 +538,18 @@ function pintaCjSheet(){
       +'<span><span class="nm">'+(c.icono||'')+' '+E(c.nombre)+'</span>'
       +'<span class="dt">Debería tener $'+MX(c.saldo)+'</span></span></label>').join('')
     : '<div class="lede" style="margin:0">No llevas ninguna caja de turno.</div>')+'</div>'
-    +(cajas.length ? '<div class="flds">'
-      +'<input id="cjMonto" type="number" inputmode="decimal" step="0.01" placeholder="¿Cuánto contaste?">'
+    +(cajas.length ? '<label class="dt" style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">El fondo</label>'
+      +'<div class="flds">'
+      +'<input id="cjMonto" type="number" inputmode="decimal" step="0.01" placeholder="¿Cuánto contaste del fondo?">'
+      +'</div>'
+      +'<label class="dt" style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">La venta que llevas anotada</label>'
+      +'<div class="flds">'
+      +'<input id="cjVenta" type="number" inputmode="decimal" step="0.01" placeholder="0.00">'
       +'</div>'
       +'<label class="dt" style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Se la entrego a</label>'
       +'<select id="cjQuien" style="width:100%;background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:11px;padding:12px;font-size:14px;font-family:inherit;margin-bottom:12px">'
       +'<option value="">— elige a quién —</option>'
-      +gente.map(g=>'<option value="'+E(g[0])+'">'+E(g[1])+(g[2]?' · '+E(g[2]):'')+'</option>').join('')
+      +cjGrupos(gente)
       +'</select>'
       +'<textarea id="cjNota" placeholder="¿Algo que aclarar? (opcional)"></textarea>'
       +'<button class="abgo" id="cjGo">Entregar la caja</button>' : '')
@@ -539,14 +557,23 @@ function pintaCjSheet(){
        +mias.map(k=>'<div class="it"><b>'+E(k.caja)+'</b><span>$'+MX(k.monto)+'</span>'
          +'<span style="margin-left:auto">'+E(k.para)+' · '+E(k.cuando)+'</span></div>').join('')+'</div>'):'');
 
-  const tabRecibir = pend.length ? pend.map(k=>
-      '<div class="recibir" data-rec="'+E(k.id)+'">'
+  const tabRecibir = pend.length ? pend.map(k=>{
+      const f=Number(k.fondo!=null?k.fondo:k.monto)||0, v=Number(k.venta||0);
+      return '<div class="recibir" data-rec="'+E(k.id)+'">'
       +'<div class="t">'+(k.icono||'')+' '+E(k.caja)+'</div>'
-      +'<div class="s">Te la dejó <b>'+E(k.de)+'</b> el '+E(k.cuando)+' y contó $'+MX(k.monto)+'. '
-      +'Cuéntala tú antes de aceptarla.</div>'
+      +'<div class="s">Te la dejó <b>'+E(k.de)+'</b> el '+E(k.cuando)+': fondo $'+MX(f)
+      +(v?(' y venta $'+MX(v)):'')+'. Cuéntala tú antes de aceptarla.</div>'
+      +'<label class="dt" style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">El fondo</label>'
       +'<div class="flds"><input class="rcMonto" type="number" inputmode="decimal" step="0.01" '
-      +'value="'+Number(k.monto||0).toFixed(2)+'"></div>'
-      +'<button class="go">Contada y aceptada</button></div>').join('')
+      +'value="'+f.toFixed(2)+'"></div>'
+      +'<label class="dt" style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">La venta</label>'
+      +'<div class="flds"><input class="rcVenta" type="number" inputmode="decimal" step="0.01" '
+      +'value="'+v.toFixed(2)+'"></div>'
+      +'<button type="button" class="cjdif" style="background:none;border:0;color:var(--muted);'
+      +'font:inherit;font-size:12px;text-decoration:underline;padding:0 0 10px;cursor:pointer">'
+      +'Conté algo distinto — anotar por qué</button>'
+      +'<textarea class="rcNota" hidden placeholder="¿Qué contaste y por qué crees que no cuadra?"></textarea>'
+      +'<button class="go">Contada y aceptada</button></div>'; }).join('')
     : '<div class="lede" style="margin:0">Nadie te ha dejado una caja ahora mismo.</div>';
 
   $('cjCard').innerHTML=''
@@ -565,17 +592,20 @@ function pintaCjSheet(){
   $('cjCard').querySelectorAll('[data-cj]').forEach(l=>l.onclick=()=>{ CJPICK=l.dataset.cj; pintaCjSheet(); });
   const go=$('cjGo'); if(go) go.onclick=entregaCaja;
   $('cjCard').querySelectorAll('[data-rec] .go').forEach(b=>b.onclick=()=>recibeCaja(b.closest('[data-rec]')));
+  $('cjCard').querySelectorAll('[data-rec] .cjdif').forEach(b=>b.onclick=()=>{
+    const t=b.closest('[data-rec]').querySelector('.rcNota'); t.hidden=false; b.hidden=true; t.focus(); });
 }
 
 async function entregaCaja(){
   const btn=$('cjGo'), msg=$('cjMsg');
-  const quien=$('cjQuien').value, monto=$('cjMonto').value;
+  const quien=$('cjQuien').value, monto=$('cjMonto').value, venta=($('cjVenta')||{}).value||'0';
   if(!quien){ msg.style.color='#e08a8a'; msg.textContent='Elige a quién le entregas la caja.'; return; }
-  if(!monto){ msg.style.color='#e08a8a'; msg.textContent='Cuenta la caja y pon cuánto hay.'; return; }
+  if(!monto){ msg.style.color='#e08a8a'; msg.textContent='Cuenta el fondo y pon cuánto hay.'; return; }
   btn.disabled=true; const t=btn.textContent; btn.textContent='Entregando…'; msg.textContent='';
   try{
     const { data, error }=await sb.rpc('aud_caja_entregar',{p:{caja_id:CJPICK,
-      recibe_employee_id:quien, monto_contado:monto, nota:$('cjNota').value||null}});
+      recibe_employee_id:quien, monto_fondo:monto, monto_venta:venta,
+      nota:$('cjNota').value||null}});
     if(error) throw error;
     if(!data||!data.ok) throw new Error((data&&data.mensaje)||'No se pudo entregar.');
     msg.style.color='#7fe0b0'; msg.textContent='✓ '+data.mensaje;
@@ -589,8 +619,11 @@ async function recibeCaja(box){
   const btn=box.querySelector('.go'), msg=$('cjMsg');
   btn.disabled=true; const t=btn.textContent; btn.textContent='Aceptando…'; msg.textContent='';
   try{
+    const nt=box.querySelector('.rcNota');
     const { data, error }=await sb.rpc('aud_caja_recibir',{p:{id:box.dataset.rec,
-      monto_contado:box.querySelector('.rcMonto').value}});
+      monto_fondo:box.querySelector('.rcMonto').value,
+      monto_venta:(box.querySelector('.rcVenta')||{}).value||'0',
+      nota:(nt&&!nt.hidden&&nt.value.trim())||null}});
     if(error) throw error;
     if(!data||!data.ok) throw new Error((data&&data.mensaje)||'No se pudo aceptar.');
     msg.style.color = Math.abs(Number(data.diferencia||0))<0.01 ? '#7fe0b0' : '#e0b483';
