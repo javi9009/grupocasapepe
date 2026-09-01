@@ -749,9 +749,18 @@ function tile(et,val,sub,cls){return '<div class="tile'+(cls?' '+cls:'')+'"><spa
 function tiles(){
   const ini=D.saldo_inicial==null?null:Number(D.saldo_inicial);
   const cp=D.modo==='cashprotect';
-  const ent=cp?Number(D.cp_entradas||0):Number(D.cobrado_efectivo||0);
-  const sal=cp?Number(D.cp_salidas||0):Number(D.salidas_con_folio||0);
+  // Lo extraordinario —cargar los recicladores, un retiro a otra caja nuestra— también
+  // es parte del cuadre. Si no se ve en la suma, la resta de la pantalla no cierra.
+  const trIn=Number(D.traspaso_entra||0), trOut=Number(D.traspaso_sale||0);
+  const espj=Number(D.espejo||0);
+  const ent=(cp?Number(D.cp_entradas||0):Number(D.cobrado_efectivo||0))+trIn+Math.max(espj,0);
+  const sal=(cp?Number(D.cp_salidas||0):Number(D.salidas_con_folio||0))+trOut+Math.max(-espj,0);
   const esp=D.esperado==null?null:Number(D.esperado);
+  const extraEnt=trIn+Math.max(espj,0), extraSal=trOut+Math.max(-espj,0);
+  const detEnt=[cp?'depósitos':'cobrado',trIn?'traspaso $'+m(trIn):'',espj>0?'reflejo $'+m(espj):'']
+        .filter(Boolean).join(' + ');
+  const detSal=[cp?'salidas':'con folio',trOut?'traspaso $'+m(trOut):'',espj<0?'reflejo $'+m(-espj):'']
+        .filter(Boolean).join(' + ');
   const real=D.real==null?null:Number(D.real);
   const dif=D.diferencia==null?null:Number(D.diferencia);
   const sinFolio=Number(D.salidas_sin_folio||0);
@@ -759,16 +768,19 @@ function tiles(){
   let out='';
   out+=tile('Caja al iniciar',ini==null?'—':'$'+m(ini),'Lo que quedó al cierre de ayer');
   out+=op('+');
-  out+=tile('Ingresos','$'+m(ent),cp?'Neto de los depósitos, sin el cambio devuelto':'Efectivo cobrado en el día');
+  out+=tile('Ingresos','$'+m(ent),
+        extraEnt?detEnt:(cp?'Neto de los depósitos, sin el cambio devuelto':'Efectivo cobrado en el día'));
   out+=op('−');
   out+=tile('Egresos','$'+m(sal),
-        sinFolio>0?'$'+m(sinFolio)+' todavía sin justificar':'Salidas de efectivo',
+        extraSal?detSal:(sinFolio>0?'$'+m(sinFolio)+' todavía sin justificar':'Salidas de efectivo'),
         sinFolio>0?'warn':'');
   out+=op('=');
   out+=tile('Debería quedar',esp==null?'—':'$'+m(esp),'Apertura + ingresos − egresos');
   out+=op('vs');
   out+=tile('Hay en la caja',real==null?'—':'$'+m(real),
-        cp?'Lo que reporta CashProtect al cierre':'Lo que se contó en el arqueo');
+        D.falta_corte?'Todavía no ha llegado el corte de CashProtect de este día'
+          :(cp?'Lo que reporta CashProtect al cierre':'Lo que se contó en el arqueo'),
+        D.falta_corte?'warn':'');
   if(dif!==null && Math.abs(dif)>=1){
     out+=op('→');
     out+=tile('Descuadre',(dif>0?'+':'')+'$'+m(dif),
@@ -855,6 +867,22 @@ function formForzarDif(dif){
 }
 
 function bloqueSaldo(){
+  // Que no haya llegado el corte de la máquina no rompe la cadena: el día abre con lo
+  // que cerró el anterior y espera. Lo que no se sabe es cuánto hay, no cuánto había.
+  if(D.falta_corte){
+    const ini0=Number(D.saldo_inicial||0), esp0=Number(D.esperado||0);
+    return '<div class="card scroll" style="margin-bottom:14px"><table><thead><tr>'
+     +'<th>Cuadre de la caja</th><th class="n">Importe</th></tr></thead><tbody>'
+     +'<tr><td>Caja al iniciar<span class="sub">Lo que quedó al cierre de ayer</span></td>'
+       +'<td class="n">$'+m(ini0)+'</td></tr>'
+     +'<tr><td>Movimientos de hoy<span class="sub">Depósitos y salidas ya registrados</span></td>'
+       +'<td class="n">'+((esp0-ini0)>=0?'+ $':'− $')+m(Math.abs(esp0-ini0))+'</td></tr>'
+     +'<tr><td><b>Debería quedar</b></td><td class="n"><b>$'+m(esp0)+'</b></td></tr>'
+     +'<tr><td><b>Hay según CashProtect</b>'
+       +'<span class="sub">Todavía no ha llegado el corte de este día. Llega por correo cada noche.</span></td>'
+       +'<td class="n">'+chip('warn','Falta el corte')+'</td></tr>'
+     +'</tbody></table></div>';
+  }
   if(D.esperado==null){
     return '<div class="card" style="margin-bottom:14px"><div class="empty">'
       +(D.modo==='cashprotect'
@@ -865,6 +893,7 @@ function bloqueSaldo(){
   const ini2=Number(D.saldo_inicial||0);
   const ent=cp?Number(D.cp_entradas||0):Number(D.cobrado_efectivo||0);
   const sal=cp?Number(D.cp_salidas||0):Number(D.salidas_con_folio||0);
+  const trIn=Number(D.traspaso_entra||0), trOut=Number(D.traspaso_sale||0), espj=Number(D.espejo||0);
   const esp=Number(D.esperado), real=Number(D.real), dif=Number(D.diferencia||0);
   const rec=(D.dif_recaudacion===null||D.dif_recaudacion===undefined)?null:Number(D.dif_recaudacion);
   const fila=(et,val,sub,cls)=>'<tr'+(cls?' class="'+cls+'"':'')+'><td>'+et
@@ -874,7 +903,15 @@ function bloqueSaldo(){
    +'<th>Cuadre de la caja</th><th class="n">Importe</th></tr></thead><tbody>'
    +fila('Caja al iniciar','$'+m(ini2),'Lo que quedó al cierre de ayer')
    +fila('Ingresos','+ $'+m(ent),cp?'Neto de los depósitos, sin contar el cambio devuelto':'Efectivo cobrado en el día')
+   // Lo extraordinario tiene su propio renglón, pegado al lado que le toca: se ve de
+   // dónde salió y a dónde fue, en vez de aparecer sumado dentro de otra cifra.
+   +(trIn ?fila('Entró de otra caja','+ $'+m(trIn),'Carga de recicladores o traspaso desde otra caja nuestra'):'')
+   +(espj>0?fila('Reflejo de otro día','+ $'+m(espj),
+        'Dinero casado con otro día: el mismo importe va en contra allí'):'')
    +fila('Egresos','− $'+m(sal),'Salidas de efectivo')
+   +(trOut?fila('Salió a otra caja','− $'+m(trOut),'Traspaso a otra caja nuestra'):'')
+   +(espj<0?fila('Reflejo de otro día','− $'+m(-espj),
+        'Dinero casado con otro día: el mismo importe va a favor allí'):'')
    +fila('<b>Debería quedar</b>','<b>$'+m(esp)+'</b>','')
    +fila(cp?'Hay según CashProtect':'Se contó en el arqueo','$'+m(real),'')
    +(Math.abs(dif)<1
