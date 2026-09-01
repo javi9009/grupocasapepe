@@ -2044,7 +2044,9 @@ function vistaFuentes(){
     +'liquida uno a tres días después, y los pagos de Airbnb, que cobran la tarjeta el día de la reserva '
     +'y depositan al siguiente juntando CDMX y Puebla en un solo traspaso.</span></div>'
     +'<div class="drop" data-edo="zona">'
-    +'<div class="txt">Arrastra aquí el PDF tal como lo baja el banco. Se lee en tu navegador y antes de '
+    +'<div class="txt">Arrastra aquí el archivo tal como lo baja el banco: <b>PDF, Excel o CSV</b>. '
+    +'El Excel es mejor, porque trae el afiliado de la terminal y la comisión, que el PDF pierde. '
+    +'Se lee en tu navegador y antes de '
     +'guardar nada te enseño cuántos abonos y cargos entendí.</div>'
     +'<label class="mini" style="cursor:pointer">Elegir archivo<input type="file" accept=".pdf,.csv,.txt,.xlsx,.xls" hidden></label></div>'
     +'<div class="res" data-edores="1" hidden></div></div></div>'
@@ -2261,7 +2263,33 @@ function archivoAMatriz(f){
     }));
   }
   if(/\.pdf$/.test(nom)) return pdfAMatriz(f);
-  return f.text().then(aMatriz);
+  return f.text().then(t=>/"/.test(String(t).split(/\r?\n/)[0]||'') ? csvMatriz(t) : aMatriz(t));
+}
+/* Un CSV de verdad: un campo entrecomillado puede traer comas dentro. El estado de cuenta
+   de Banorte lo hace en la descripción detallada de cada SPEI, y partir ese renglón por
+   comas desalinea todas las columnas. Sólo se usa cuando el archivo trae comillas; los
+   cortes de terminal que no las traen siguen por el camino de siempre. */
+function csvMatriz(texto){
+  const t=String(texto||'').replace(/\r\n?/g,'\n');
+  const pri=t.split('\n')[0]||'';
+  let sep=',', n=-1;
+  [',',';','\t','|'].forEach(s=>{ const c=pri.split(s).length; if(c>n){ n=c; sep=s; } });
+  const filas=[]; let fila=[], campo='', dentro=false;
+  for(let i=0;i<t.length;i++){
+    const c=t[i];
+    if(dentro){
+      if(c==='"'){ if(t[i+1]==='"'){ campo+='"'; i++; } else dentro=false; }
+      else campo+=c;
+    }
+    else if(c==='"') dentro=true;
+    else if(c===sep){ fila.push(campo.trim()); campo=''; }
+    else if(c==='\n'){ fila.push(campo.trim()); campo='';
+      if(fila.some(x=>x!=='')) filas.push(fila); fila=[]; }
+    else campo+=c;
+  }
+  fila.push(campo.trim());
+  if(fila.some(x=>x!=='')) filas.push(fila);
+  return filas;
 }
 
 /* ---------- lector del estado de cuenta del banco ----------
@@ -2294,6 +2322,45 @@ function leeEstadoBanorte(matriz){
   });
   return {movs, malos};
 }
+/* El mismo estado de cuenta, pero en Excel o CSV. Banorte lo entrega en columnas:
+   CUENTA · FECHA DE OPERACIÓN · FECHA · REFERENCIA · DESCRIPCIÓN · COD. TRANSAC ·
+   SUCURSAL · DEPÓSITOS · RETIROS · SALDO · MOVIMIENTO · DESCRIPCIÓN DETALLADA.
+   El concepto se arma igual que en el PDF —descripción, código de transacción y
+   sucursal pegados— porque de ahí se reconoce el depósito de la terminal (060) y su
+   comisión (600/601). Si eso cambia, deja de cuadrar la terminal. */
+function leeEstadoBanorteTabla(matriz){
+  const M=matriz||[], movs=[], malos=[];
+  let h=-1, ix=null;
+  for(let i=0;i<Math.min(M.length,40);i++){
+    const fila=(M[i]||[]).map(SIN);
+    const j=re=>fila.findIndex(x=>x&&re.test(x));
+    const dep=j(/^dep(o)sitos?$/), ret=j(/^retiros?$/), fec=j(/fecha/);
+    if(dep>=0 && ret>=0 && fec>=0){
+      h=i;
+      ix={ fecha:j(/^fecha de operacion/), fecha2:fec, ref:j(/referencia/),
+           desc:j(/^descripcion$/), cod:j(/cod.*transac/), suc:j(/sucursal/),
+           dep:dep, ret:ret, saldo:j(/^saldo$/), mov:j(/^movimiento$/) };
+      break;
+    }
+  }
+  if(h<0) return {movs:[], malos:[]};
+  for(let i=h+1;i<M.length;i++){
+    const r=M[i]||[]; if(!r.length) continue;
+    const g=k=>(ix[k]>=0 && ix[k]<r.length)?String(r[ix[k]]==null?'':r[ix[k]]).trim():'';
+    const f=fechaDe(g('fecha'))||fechaDe(g('fecha2')); if(!f) continue;
+    const dep=numMX(g('dep')), ret=numMX(g('ret'));
+    let tipo=null, monto=null;
+    if(dep!==null && Math.abs(dep)>=0.005){ tipo='abono'; monto=Math.abs(dep); }
+    else if(ret!==null && Math.abs(ret)>=0.005){ tipo='cargo'; monto=Math.abs(ret); }
+    if(!tipo){ if(r.join('').length>6) malos.push(i+1); continue; }
+    movs.push({ fecha:f,
+                referencia:(g('ref')||g('mov')||'').replace(/^'/,''),
+                concepto:[g('desc'),g('cod'),g('suc')].filter(Boolean).join(' ')
+                          .replace(/\s+/g,' ').trim().slice(0,80),
+                tipo:tipo, monto:monto, saldo:numMX(g('saldo')) });
+  }
+  return {movs:movs, malos:malos};
+}
 // ¿Esto es un estado de cuenta y no un corte de terminal?
 function pareceEstadoCuenta(matriz){
   const t=(matriz||[]).slice(0,60).map(x=>Array.isArray(x)?x.join(' '):String(x)).join(' ').toUpperCase();
@@ -2306,9 +2373,11 @@ async function subeEstado(f, pinta1){
   let matriz;
   try{ matriz=await archivoAMatriz(f); }
   catch(err){ pinta1('bad',esc(String(err.message||err))); return; }
-  const r=leeEstadoBanorte(matriz||[]);
+  let r=leeEstadoBanorte(matriz||[]);
+  if(!r.movs.length) r=leeEstadoBanorteTabla(matriz||[]);
   if(!r.movs.length){
-    pinta1('bad','No reconocí ningún movimiento con la forma de un estado de cuenta de Banorte. '
+    pinta1('bad','No reconocí ningún movimiento con la forma de un estado de cuenta de Banorte, '
+      +'ni en renglones (como sale del PDF) ni en columnas (como sale del Excel o el CSV). '
       +'Si es de otro banco todavía no lo sé leer: mándamelo y lo agrego.');
     return; }
   const ab=r.movs.filter(x=>x.tipo==='abono'), ca=r.movs.filter(x=>x.tipo==='cargo');
