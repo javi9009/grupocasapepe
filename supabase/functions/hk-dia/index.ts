@@ -133,8 +133,60 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 // `lote` agrupa lo que no se puede partir entre dos personas: un dormitorio entero
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
 interface CamaDet { area_id: string; codigo: string; nombre: string; estatus: string; minutos: number }
-interface Tarea { area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
+interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null }
+interface Tarea { prof?: Prof; area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
+
+// Cada cuánto toca y con cuánta antelación se avisa. El morado es "ya piénsalo";
+// el rojo es "o lo metes ya, o se vence".
+const PERIODO: Record<string, number> = { semanal: 7, mensual: 30, semestral: 182 };
+const AVISO: Record<string, [number, number]> = { semanal: [3, 1], mensual: [15, 7], semestral: [90, 30] };
+const DIA = 86400000;
+
+// Cuándo vence la profunda de un área y cómo de cerca estamos. Devuelve null si el
+// área no lleva profunda o si todavía queda mucho: en ese caso no se enseña nada.
+function profDe(a: Record<string, unknown>, fecha: string): Prof | null {
+  const f = String(a.prof_frecuencia ?? '');
+  const per = PERIODO[f];
+  if (!per) return null;
+  const hoy = Date.parse(`${fecha}T12:00:00Z`);
+  const desde = a.prof_ultima ? Date.parse(`${String(a.prof_ultima)}T12:00:00Z`) : hoy;
+  let vence = new Date(desde + per * DIA);
+  // Día fijo: se ajusta a la ocurrencia MÁS CERCANA, no a la siguiente. Así, si un
+  // martes se hizo el miércoles, la rutina vuelve al martes y no se desplaza sola.
+  const dfijo = a.prof_dia == null ? null : Number(a.prof_dia);
+  if (dfijo != null && !Number.isNaN(dfijo)) {
+    if (f === 'semanal') {
+      const dif = ((dfijo - vence.getUTCDay()) + 7) % 7;
+      vence = new Date(vence.getTime() + (dif > 3 ? dif - 7 : dif) * DIA);
+    } else {
+      const dm = Math.min(28, Math.max(1, dfijo));
+      vence = new Date(Date.UTC(vence.getUTCFullYear(), vence.getUTCMonth(), dm, 12));
+    }
+  }
+  const dias = Math.round((vence.getTime() - hoy) / DIA);
+  const [morado, rojo] = AVISO[f];
+  const nivel = dias < 0 ? 'vencida' : dias <= rojo ? 'rojo' : dias <= morado ? 'morado' : '';
+  if (!nivel) return null;
+  return {
+    frecuencia: f, vence: vence.toISOString().slice(0, 10), dias, nivel,
+    minutos: Number(a.prof_minutos ?? 0) || 0,
+    checklist_id: a.prof_checklist_id ? String(a.prof_checklist_id) : null,
+  };
+}
+
+// Lo que se guarda en la tarea aparte de sus campos: por qué no da trabajo, si es
+// profunda, opcional, qué camas lleva dentro y cómo va su profunda pendiente.
+function metaDe(t: Tarea): Record<string, unknown> {
+  const base: Record<string, unknown> = t.sinTrabajo
+    ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false }
+    : t.profunda ? { profunda: true }
+    : t.opcional ? { opcional: true }
+    : t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 }
+    : {};
+  if (t.prof) base.prof = t.prof;
+  return base;
+}
 
 async function reparto(propKey: string, fecha: string) {
   const cfg = PROPS[propKey];
@@ -144,7 +196,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr, dndArr, nocheAyer] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
-    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria&limit=1000`),
+    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria,prof_frecuencia,prof_minutos,prof_dia,prof_ultima,prof_checklist_id&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
@@ -216,9 +268,14 @@ async function reparto(propKey: string, fecha: string) {
         continue;
       }
       if (!min) continue;
-      cuartos.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: `area:${a.id}` });
+      // La privada también lleva profunda semestral. El aviso viaja con su limpieza
+      // del día: el día que se meta, la profunda suma sus minutos encima.
+      cuartos.push({ prof: profDe(a, fecha) ?? undefined, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: `area:${a.id}` });
     } else {
       const chk = chkPorArea.get(String(a.id));
+      // Si a la zona se le acerca su profunda, el aviso viaja pegado a la tarea del
+      // día: el ama de llaves ve el color y decide qué día la mete.
+      const prof = profDe(a, fecha);
       // Una zona con checklist semanal (p.ej. la limpieza profunda de azotea de los lunes)
       // solo entra en el reparto el día que le toca.
       const frec = String(chk?.frecuencia ?? 'diaria');
@@ -250,7 +307,7 @@ async function reparto(propKey: string, fecha: string) {
           nocturnas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: minNoche, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0), lote: `noche:${a.id}`, titulo: `${a.nombre} · noche`, pase: veces > 1 ? 1 : undefined, pases: veces > 1 ? veces : undefined });
           continue;
         }
-        (opcional ? opcionales : publicas).push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
+        (opcional ? opcionales : publicas).push({ prof: n === 1 ? (prof ?? undefined) : undefined, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
       }
     }
   }
@@ -263,10 +320,12 @@ async function reparto(propKey: string, fecha: string) {
   for (const a of areas) {
     if (String(a.tipo) !== 'dorm') continue;
     const camas = Number((a.metadata as Record<string, unknown> | null)?.camas ?? 0) || null;
-    // La profunda de cada dormitorio viaja siempre SIN ASIGNAR, con su número de
-    // habitación, para programarla el día que toque.
-    const minProf = minDe('dorm', 'profunda', camas);
-    if (minProf) profundas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: `${a.nombre} · limpieza profunda`, piso: Number(a.piso ?? 0), tipo: 'dorm', estatus: 'profunda', minutos: minProf, checklist_id: chkProf ? String(chkProf.id) : null, orden: Number(a.orden ?? 0), lote: `prof:${a.id}`, profunda: true });
+    // La profunda del dormitorio es semestral: ya no sale todos los días. Aparece
+    // SIN ASIGNAR cuando entra en ventana —morado a los 3 meses, rojo el último—
+    // para que haya tiempo de meterla en un día con hueco.
+    const profD = profDe(a, fecha);
+    const minProf = profD ? (profD.minutos || minDe('dorm', 'profunda', camas) || 0) : 0;
+    if (profD && minProf) profundas.push({ prof: profD, area_id: String(a.id), codigo: String(a.codigo), nombre: `${a.nombre} · limpieza profunda`, piso: Number(a.piso ?? 0), tipo: 'dorm', estatus: 'profunda', minutos: minProf, checklist_id: profD.checklist_id ?? (chkProf ? String(chkProf.id) : null), orden: Number(a.orden ?? 0), lote: `prof:${a.id}`, profunda: true });
     if (noMolestar.has(String(a.id))) continue;   // dormitorio con letrero: no se toca
     const det = camasPorDorm.get(String(a.id)) ?? [];
     const tocado = dormsTocados.has(String(a.id));
@@ -488,7 +547,7 @@ async function reparto(propKey: string, fecha: string) {
       metadata: { sin_medir: p?.turno === 'nocturno' || p?.turno === 'front', capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
-    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
+    const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: metaDe(t), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));
     for (let i = 0; i < filas.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filas.slice(i, i + 100)) });
     salida.push({ colaborador: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'), turno: p?.turno ?? '-', horario: p ? `${p.hi}-${p.hf}` : '-', capacidad_min: p?.cap ?? 0, minutos: total, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, pisos, tareas: tareas.length, detalle: tareas.map((t) => `${t.codigo} (${t.estatus}, ${t.minutos}m)`) });
   }
@@ -506,7 +565,7 @@ async function reparto(propKey: string, fecha: string) {
   // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
   const sueltas = [...opsLibres, ...profundas, ...opcionales, ...libres];
   if (sueltas.length) {
-    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: t.sinTrabajo ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false } : (t.profunda ? { profunda: true } : (t.opcional ? { opcional: true } : (t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 } : {}))), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
+    const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: metaDe(t), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
     for (let i = 0; i < filasS.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filasS.slice(i, i + 100)) });
   }
   if (sobraOps.length) await crear(null, sobraOps, 'SIN CUBRIR · operativas');
