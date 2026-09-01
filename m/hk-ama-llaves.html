@@ -420,6 +420,8 @@ td.grab:hover{color:var(--gold)}
 .achip.dorm{background:#f4f1ea;border-color:#cfc7b5;color:var(--soft)}
 .achip.dorm::before{background:#a99c82}
 .achip.libre::before{background:none;border-left:3px dotted #c4bfb2;width:0;left:8px}
+.b.desval{border-color:#b4483c;color:#b4483c}
+.b.desval:hover{background:#b4483c;color:#fff}
 .leyenda{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11.5px;color:var(--soft)}
 .leyenda span{display:inline-flex;align-items:center;gap:6px}
 .leyenda i{width:4px;height:15px;border-radius:2px;display:inline-block}
@@ -451,6 +453,7 @@ td.grab:hover{color:var(--gold)}
     <button class="b gold" id="btnGen" title="Vuelve a leer Cloudbeds y rehace el reparto desde cero. Se pierden los movimientos que hayas hecho a mano.">⟳ Generar propuesta</button>
     <button class="b pri" id="btnVal" title="Cierra el reparto del día: a partir de aquí lo ven las recamaristas y ya no se regenera solo.">✓ Validar reparto</button>
     <button class="b" id="btnRe" title="Trae los últimos cambios de la base: útil si alguien más movió algo o una recamarista ya cerró un cuarto.">↻ Ver los últimos cambios</button>
+    <button class="b desval" id="btnDesval" hidden title="Devuelve el día a propuesta para volver a repartir. Solo mientras ninguna recamarista haya empezado su cuarto.">↩ Desvalidar reparto</button>
     <span id="asigResumen" class="pill" style="font-size:12px"></span>
     <span class="status" id="stA"></span>
   </div>
@@ -746,9 +749,16 @@ async function cargarReparto(){
   pintarAsignar();
 }
 
+// El día ya arrancó en cuanto alguien le dio a «Iniciar» a un cuarto —o ya lo cerró.
+function diaArrancado(){
+  return ASIG.some(a=>(a.hk_tareas||[]).some(t=>
+    t.iniciado_at || t.estado==='en_curso' || t.estado==='terminada' || t.estado==='no_realizada'));
+}
 function pintarKpis(){
-  if(!ASIG.length){ $('kpis').innerHTML=''; return; }
+  const bd=$('btnDesval');
+  if(!ASIG.length){ $('kpis').innerHTML=''; if(bd) bd.hidden=true; return; }
   const validado=ASIG.some(a=>a.estado!=='propuesta');
+  if(bd) bd.hidden = !(validado && !diaArrancado());
   let est=0,real=0,tot=0,hechas=0,sin=0;
   ASIG.forEach(a=>{
     if(a.turno==='front'||a.turno==='nocturno') return;   // apoyo, no carga del turno de día
@@ -810,6 +820,35 @@ $('btnVal').onclick=async()=>{
   st('Reparto validado · ya lo ven las recamaristas','ok');cargarReparto();
 };
 $('btnRe').onclick=()=>cargarReparto();
+
+// Desvalidar es solo para el reparto de prueba: el día vuelve a propuesta y se
+// puede regenerar. Se vuelve a comprobar contra la base por si alguien empezó un
+// cuarto mientras la pantalla estaba abierta.
+$('btnDesval').onclick=async()=>{
+  const {data:tt}=await sb.from('hk_tareas').select('id,estado,iniciado_at')
+    .eq('property_id',P()).eq('fecha',F());
+  const count=(tt||[]).filter(t=>t.iniciado_at||['en_curso','terminada','no_realizada'].includes(t.estado)).length;
+  if(count){
+    alert(`El día ya empezó: hay ${count} ${count===1?'cuarto tocado':'cuartos tocados'}.\n\n`+
+          `Ya no se puede desvalidar. Para mover trabajo, pasa cuartos de una recamarista a otra desde el informe.`);
+    cargarReparto();
+    return;
+  }
+  if(!confirm('¿Devolver el reparto a propuesta?\n\nLas recamaristas dejarán de verlo y se podrá volver a generar.')) return;
+  $('btnDesval').disabled=true;
+  const {data:{user}}=await sb.auth.getUser();
+  let nom=user?.email||'';
+  if(user){const{data:el}=await sb.from('empleado_login').select('nombre_display,nombre_completo').eq('user_id',user.id).maybeSingle();if(el)nom=el.nombre_display||el.nombre_completo||nom;}
+  const {error}=await sb.from('hk_asignaciones')
+    .update({estado:'propuesta',validado_por:null,validado_por_nombre:null,validado_at:null})
+    .eq('property_id',P()).eq('fecha',F());
+  $('btnDesval').disabled=false;
+  if(error)return st(error.message,'err');
+  try{ await sb.from('hk_eventos').insert({tipo:'deshacer',employee_nombre:nom,
+    nota:`Reparto del ${F()} devuelto a propuesta`, metadata:{fecha:F(),property_id:P(),accion:'desvalidar'}}); }catch(_e){}
+  st('Reparto devuelto a propuesta · ya se puede regenerar','ok');
+  cargarReparto();
+};
 
 // ---------------- REPARTO: listado + cajones ----------------
 // Izquierda: el listado del día. Derecha: un cajón por colaboradora con su pila.
