@@ -428,6 +428,11 @@ async function arranque(){
   const {data:{session}}=await sb.auth.getSession();
   if(!session){g.innerHTML='<div class="empty">Entra al panel con tu cuenta de Casa Pepe para ver el cuadre de efectivo.</div>';return;}
   ACC=await rpc('aud_panel_acceso');
+  // El selector sale de la plataforma entera, que incluye casas que la auditoría no
+  // cubre —Ateneo Virreyes—. Ofrecerlas es prometer una pantalla vacía.
+  try{ const AUD=await rpc('aud_propiedades_auditadas');
+       if(Array.isArray(AUD)&&AUD.length&&ACC&&Array.isArray(ACC.propiedades))
+         ACC.propiedades=ACC.propiedades.filter(p=>AUD.indexOf(p.id)>=0); }catch(e){}
   const PR=(ACC&&ACC.propiedades)||[];
   if(!PR.length){g.innerHTML='<div class="empty">Tu cuenta ('+esc(ACC?ACC.email:'')+') todavía no tiene acceso al cuadre de efectivo. Pídeselo a Javi.</div>';return;}
   g.innerHTML='';
@@ -439,6 +444,7 @@ async function arranque(){
   $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
     $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
     if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
+    if(sec==='dia'&&!CAJAS){pinta();await cargaCajas();}
     if(sec==='arqueo'&&!ARQ){pinta();await cargaCajas();await cargaArqueos();}
     if(sec==='ingresos'&&!TUR){pinta();await cargaCajas();await cargaTurnos();await cargaIngresos();}
     if(sec==='fondos'&&!FON){pinta();await cargaCajas();await cargaFondos();await cargaRelevos();}
@@ -522,6 +528,7 @@ async function carga(){
       +esc(propNombre||'esta propiedad')+'. Elige otra arriba.</div>'; }
   else { $('gate').innerHTML=''; }
   await cargaMes();
+  if(sec==='dia'){ await cargaCajas(); }
   if(sec==='arqueo'){ await cargaCajas(); await cargaArqueos(); }
   if(sec==='ingresos'){ await cargaCajas(); await cargaTurnos(); await cargaIngresos(); }
   if(sec==='fondos'){ await cargaCajas(); await cargaFondos(); await cargaRelevos(); }
@@ -788,6 +795,65 @@ function bloqueArrastre(){
    +'<div class="acciones" style="margin-top:8px"><button class="mini" type="button" id="resolver">Resolver diferencia y dejar la caja en verde</button></div>'
    +'<div class="sub" id="res_err"></div></div>';
 }
+/* ---------- Qué hacer con una diferencia ----------
+   Tres gestos, de más explicación a menos. El orden importa: forzar es lo último,
+   no lo primero. Si el 29 y el 30 se forzaran por separado quedarían registrados
+   $17,365 de pérdidas aceptadas cuando no se perdió un peso. */
+let accionDif=null;
+function accionesDif(dif){
+  const faltan = dif < 0;
+  const panel =
+    accionDif==='traspaso' ? formTraspasoDif(dif) :
+    accionDif==='espejo'   ? formEspejoDif(dif)   :
+    accionDif==='forzar'   ? formForzarDif(dif)   : '';
+  return '<div class="acciones" style="margin-top:10px">'
+    +'<button class="mini" type="button" data-accdif="traspaso">Se movió de otra caja</button> '
+    +'<button class="mini" type="button" data-accdif="espejo">Es el reflejo de otro día</button> '
+    +'<button class="mini" type="button" data-accdif="forzar">Acepto la diferencia</button>'
+    +'</div>'
+    +(panel?'<div class="form" style="margin-top:10px">'+panel+'</div>':'')
+    +'<div class="sub" id="res_err"></div>';
+}
+function formTraspasoDif(dif){
+  const L=((CAJAS&&CAJAS.cajas)||[]);
+  const cp=L.find(c=>c[7]==='cashprotect'), otras=L.filter(c=>c[7]!=='cashprotect');
+  if(!otras.length) return '<div class="sub" style="grid-column:1/-1">Primero abre la pestaña '
+    +'de Fondo de caja para que se carguen las cajas.</div>';
+  const entra = dif > 0;   // sobra dinero: entró de otra caja
+  return '<div class="sub" style="grid-column:1/-1">'
+    +(entra?'Hay dinero de más porque salió de otra caja nuestra —una carga de recicladores, por ejemplo—. '
+           :'Falta dinero porque se pasó a otra caja nuestra. ')
+    +'Esto no cuadra nada a la fuerza: apunta el movimiento que faltaba.</div>'
+    +'<label>'+(entra?'Salió de':'Entró en')+'<select id="td_caja">'
+      +otras.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[3])+'</option>').join('')+'</select></label>'
+    +'<label>Importe<input id="td_monto" type="number" step="0.01" min="0" value="'+Math.abs(dif).toFixed(2)+'"></label>'
+    +'<label style="grid-column:1/-1">Por qué<input id="td_motivo" type="text" '
+      +'placeholder="Carga de recicladores"></label>'
+    +'<input type="hidden" id="td_cp" value="'+esc(cp?cp[0]:'')+'">'
+    +'<div style="grid-column:1/-1"><button class="btn" type="button" id="td_go">Apuntar el movimiento</button></div>';
+}
+function formEspejoDif(dif){
+  const faltan = dif < 0;
+  return '<div class="sub" style="grid-column:1/-1">'
+    +'Cuando un día sale en contra y otro sale a favor por lo mismo, no falta dinero: es el mismo dinero '
+    +'apuntado tarde. Los dos días se cierran juntos y queda firmado con tu nombre. '
+    +'Este día va <b>'+(faltan?'en contra':'a favor')+'</b>, así que el otro tiene que ir '
+    +(faltan?'a favor':'en contra')+'.</div>'
+    +'<label>El otro día<input id="te_otro" type="date" value="'+esc(fechaISO(fecha))+'"></label>'
+    +'<label>Importe<input id="te_monto" type="number" step="0.01" min="0" value="'+Math.abs(dif).toFixed(2)+'"></label>'
+    +'<label style="grid-column:1/-1">Por qué<input id="te_motivo" type="text" '
+      +'placeholder="El archivo de CashProtect no listó el movimiento y apareció al día siguiente"></label>'
+    +'<div style="grid-column:1/-1"><button class="btn" type="button" id="te_go">Casar los dos días</button></div>';
+}
+function formForzarDif(dif){
+  return '<div class="sub" style="grid-column:1/-1">'
+    +'<b>Esto da el dinero por perdido.</b> No corrige el origen: sólo deja constancia de que alguien, '
+    +'con nombre y fecha, decidió cerrar la diferencia. Úsalo cuando ya no haya nada más que averiguar.</div>'
+    +'<label style="grid-column:1/-1">Por qué se acepta<input id="tf_motivo" type="text" '
+      +'placeholder="Revisado con el reporte de la máquina; no aparece el origen"></label>'
+    +'<div style="grid-column:1/-1"><button class="btn" type="button" id="resolver">Aceptar la diferencia</button></div>';
+}
+
 function bloqueSaldo(){
   if(D.esperado==null){
     return '<div class="card" style="margin-bottom:14px"><div class="empty">'
@@ -816,9 +882,7 @@ function bloqueSaldo(){
      : fila('<b>Descuadre de caja</b>','<b>'+(dif>0?'+':'')+'$'+m(dif)+'</b>',
         (dif>0?'Hay más dinero del que debería. Alguien metió efectivo sin registrar o se contó de más.'
               :'Falta ese dinero. O se abrió la caja sin registrarlo, o hubo un error de conteo.')
-        +(resuelto?'':'<div class="acciones" style="margin-top:8px">'
-           +'<button class="mini" type="button" id="resolver">Resolver diferencia y dejar la caja en verde</button></div>'
-           +'<div class="sub" id="res_err"></div>'), 'sev4'))
+        +(resuelto?'':accionesDif(dif)), 'sev4'))
    +'</tbody></table></div>'
    +(rec!==null && Math.abs(rec)>=1
      ? '<div class="nota"><b>Aparte:</b> ese día se cobraron $'+m(D.cobrado_efectivo)+' en efectivo y a la caja entraron $'
@@ -1489,17 +1553,54 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     }
     nota('Justificada con el folio '+r.folio+', contra '+r.cuenta+'.','ok'); justificando=null; carga(); return;
   }
+  const ad=e.target.closest('[data-accdif]');
+  if(ad){ accionDif = (accionDif===ad.dataset.accdif) ? null : ad.dataset.accdif; pinta(); return; }
+
+  // 1 · Se movió de otra caja. El dinero no se pierde: se apunta dónde estaba.
+  const td=e.target.closest('#td_go');
+  if(td){
+    const err=$('res_err'), dif=Number(D.diferencia||0);
+    const caja=$('td_caja').value, cp=$('td_cp').value, mo=$('td_motivo').value;
+    const p={monto:$('td_monto').value, motivo:mo, fecha:fechaISO(fecha)};
+    if(dif>0){ p.origen=caja; if(cp) p.destino=cp; } else { p.destino=caja; if(cp) p.origen=cp; }
+    td.disabled=true;
+    try{ const r=await rpc('aud_caja_traspasar',{p});
+         if(!r||!r.ok){ err.textContent=(r&&r.mensaje)||'No se pudo.'; err.style.color='var(--bad)'; td.disabled=false; return; }
+         accionDif=null; nota(r.mensaje,'ok'); carga(); }
+    catch(ex){ err.textContent=String(ex.message||ex); err.style.color='var(--bad)'; td.disabled=false; }
+    return;
+  }
+
+  // 2 · Es el reflejo de otro día. Ni pérdida ni movimiento: el mismo dinero dos veces.
+  const te=e.target.closest('#te_go');
+  if(te){
+    const err=$('res_err'), dif=Number(D.diferencia||0);
+    const otro=$('te_otro').value, hoy=fechaISO(fecha);
+    if(!otro||otro===hoy){ err.textContent='Elige el otro día.'; err.style.color='var(--bad)'; return; }
+    const sale = dif<0 ? hoy : otro, vuelve = dif<0 ? otro : hoy;
+    te.disabled=true;
+    try{ const r=await rpc('aud_caja_espejo',{p:{property_id:prop,fecha_sale:sale,fecha_vuelve:vuelve,
+           monto:$('te_monto').value, motivo:$('te_motivo').value}});
+         if(!r||!r.ok){ err.textContent=(r&&r.mensaje)||'No se pudo.'; err.style.color='var(--bad)'; te.disabled=false; return; }
+         accionDif=null; nota(r.mensaje,'ok'); carga(); }
+    catch(ex){ err.textContent=String(ex.message||ex); err.style.color='var(--bad)'; te.disabled=false; }
+    return;
+  }
+
+  // 3 · Forzar. Lo último, no lo primero.
   const rs=e.target.closest('#resolver');
   if(rs){
-    const mo=prompt('¿Cómo se resolvió la diferencia? (se guarda con tu nombre y fecha)','');
-    if(mo===null)return;
-    if(!mo.trim()){const x=$('res_err');if(x){x.textContent='Escribe el motivo.';x.style.color='var(--bad)';}return;}
+    // El botón del arrastre no lleva formulario propio: ahí se pregunta y ya.
+    const campo=$('tf_motivo');
+    const mo = campo ? campo.value : (prompt('¿Por qué se acepta la diferencia? (queda con tu nombre y fecha)','')||'');
+    if(!mo.trim()){const x=$('res_err');if(x){x.textContent='Escribe por qué se acepta.';x.style.color='var(--bad)';}return;}
     rs.disabled=true;
     let r;
     try{ r=await rpc('aud_caja_resolver',{p_property:prop,p_fecha:fecha,p_motivo:mo}); }
     catch(ex){const x=$('res_err');if(x){x.textContent='No se pudo: '+((ex&&ex.message)||ex);x.style.color='var(--bad)';}rs.disabled=false;return;}
     if(r&&r.error){const x=$('res_err');if(x){x.textContent='No se pudo: '+r.error;x.style.color='var(--bad)';}rs.disabled=false;return;}
-    nota('Diferencia resuelta. La caja queda en verde desde este día.','ok'); carga(); return;
+    accionDif=null;
+    nota('Diferencia aceptada. Queda firmada con tu nombre y la caja sigue desde aquí en verde.','ok'); carga(); return;
   }
   const dr=e.target.closest('#desresolver');
   if(dr){ dr.disabled=true;
