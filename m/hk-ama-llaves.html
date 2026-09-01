@@ -420,6 +420,19 @@ td.grab:hover{color:var(--gold)}
 .achip.dorm{background:#f4f1ea;border-color:#cfc7b5;color:var(--soft)}
 .achip.dorm::before{background:#a99c82}
 .achip.libre::before{background:none;border-left:3px dotted #c4bfb2;width:0;left:8px}
+.caja.ancha{max-width:640px}
+.proflist{margin:10px 0 4px;display:flex;flex-direction:column;gap:8px}
+.proflist .pf{border:1px solid var(--bd);border-radius:10px;padding:10px 12px;background:var(--bg2)}
+.proflist .pf.vencida{border-color:#efc4c4;background:#fdf4f4}
+.proflist .pf.ok{opacity:.62}
+.proflist .n{font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.proflist .n i{font-style:normal;font-size:11.5px;color:var(--soft)}
+.proflist .d{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.proflist .d .dia{font-size:12px;font-weight:600;padding:5px 10px;border:1px solid var(--bd);
+  border-radius:999px;background:var(--surface);color:var(--txt);cursor:pointer}
+.proflist .d .dia:hover{border-color:var(--accent);color:var(--accent)}
+.proflist .d .dia i{font-style:normal;font-weight:500;color:var(--soft)}
+.proflist .hecho{font-size:12px;font-weight:600;color:var(--accent)}
 .pill.prof{background:#f0e9fa;border-color:#d5c2f0;color:#5f34a0}
 .pill.prof.rojo,.pill.prof.vencida{background:#fbe9e9;border-color:#efc4c4;color:var(--bad)}
 tr.arow.p-morado td:first-child,.achip.p-morado{box-shadow:inset 3px 0 0 #7d4bc4}
@@ -832,11 +845,35 @@ $('btnVal').onclick=async()=>{
     const e=$('stA'); e.className='status err'; e.textContent=`${paraAsignar.length} sin asignar · repártelas para poder validar`;
     return;
   }
+  // Profundas que hoy están al límite o ya vencidas. No bloquean el día, pero no se
+  // cierra sin verlas: o se programan, o se cierra sabiendo que quedan a deber.
+  const pend=profPendientes();
+  if(pend.length && !VAL_FORZADO){ abrirProfundas(pend); return; }
+  VAL_FORZADO=false;
+  await hacerValidar(pend);
+};
+
+// Las que piden atención hoy: al límite (rojo) o pasadas de fecha.
+function profPendientes(){
+  const out=[];
+  const mete=(t,a)=>{ const q=t.metadata?.prof; if(q && (q.nivel==='rojo'||q.nivel==='vencida')) out.push({t,a,q}); };
+  ASIG.forEach(a=>(a.hk_tareas||[]).forEach(t=>mete(t,a)));
+  SUELTAS.forEach(t=>mete(t,{suelta:true}));
+  // Una misma área puede salir en dos pases: basta con avisar una vez.
+  const vistos=new Set();
+  return out.filter(x=>{ const k=String(x.t.area_id); if(vistos.has(k))return false; vistos.add(k); return true; })
+    .sort((x,y)=>x.q.dias-y.q.dias);
+}
+
+let VAL_FORZADO=false;
+
+async function hacerValidar(pend){
   const {data:{user}}=await sb.auth.getUser();
   let nom=user?.email||'';
   if(user){const{data:el}=await sb.from('empleado_login').select('nombre_display,nombre_completo').eq('user_id',user.id).maybeSingle();if(el)nom=el.nombre_display||el.nombre_completo||nom;}
   const {error}=await sb.from('hk_asignaciones').update({estado:'validada',validado_por:user?.id||null,validado_por_nombre:nom,validado_at:new Date().toISOString()}).eq('property_id',P()).eq('fecha',F());
   if(error)return st(error.message,'err');
+  await incidenciasProfundas((pend||[]).filter(x=>x.q.nivel==='vencida'));
   // Quien tenga el room audit se entera en el momento, sin que haya que avisarle a mano.
   for(const a of ASIG.filter(x=>x.turno==='front'&&x.employee_id&&(x.hk_tareas||[]).length)){
     try{
@@ -850,7 +887,117 @@ $('btnVal').onclick=async()=>{
     }catch(_e){}
   }
   st('Reparto validado · ya lo ven las recamaristas','ok');cargarReparto();
-};
+}
+
+// Una profunda que se pasa de fecha no es un descuido de la recamarista: es
+// programación. La incidencia va al ama de llaves del día y la ve gerencia.
+async function incidenciasProfundas(vencidas){
+  if(!vencidas.length) return;
+  const jefa=ASIG.find(a=>a.turno==='ama_llaves'&&a.employee_id)||null;
+  for(const {t,q} of vencidas){
+    try{
+      // Una sola incidencia por área y vencimiento, aunque se valide varios días.
+      const {data:ya}=await sb.from('incidencias').select('id')
+        .eq('tipo','hk_profunda_vencida').eq('resuelto',false)
+        .contains('metadata',{area_id:t.area_id,vence:q.vence}).limit(1);
+      if(ya&&ya.length) continue;
+      const ar=t.hk_areas||{};
+      const nombre=`${ar.codigo||''}${ar.nombre&&ar.nombre!==ar.codigo?` · ${ar.nombre}`:''}`;
+      await sb.from('incidencias').insert({
+        employee_id:jefa?jefa.employee_id:null,
+        nombre_display:jefa?jefa.nombre_display:'Ama de llaves',
+        tipo:'hk_profunda_vencida',
+        severidad:q.dias<-30?'urgente':'media',
+        descripcion:`${nombre}: limpieza profunda ${q.frecuencia} vencida hace ${-q.dias} días (tocaba el ${q.vence}). `
+          +(t._programada?`Queda programada para el ${t._programada}.`:'El día se cerró sin programarla.'),
+        fecha:F(), resuelto:false,
+        metadata:{modulo:'ama_llaves', property_id:P(), area_id:t.area_id, codigo:ar.codigo||null,
+          frecuencia:q.frecuencia, vence:q.vence, dias_retraso:-q.dias, imputa:'ama_llaves',
+          programada_para:t._programada||null},
+      });
+    }catch(_e){}
+  }
+}
+
+// Los días que vienen con más hueco: gente en turno por su horario menos la carga
+// media de las últimas semanas. Es una orientación, no una promesa.
+async function diasConHueco(n=14){
+  const hoy=F(), hasta=masDias(hoy,n), atras=masDias(hoy,-21);
+  const [{data:hor},{data:mapa},{data:prev},{data:conf}]=await Promise.all([
+    sb.from('horarios').select('fecha,puesto_id,hora_inicio,hora_fin').eq('property_id',P()).gte('fecha',hoy).lte('fecha',hasta),
+    sb.from('hk_puestos_map').select('puesto_id,turno').eq('activo',true),
+    sb.from('hk_asignaciones').select('fecha,minutos_estimados,turno').eq('property_id',P()).gte('fecha',atras).lt('fecha',hoy),
+    sb.from('hk_config').select('minutos_comida,horas_turno').eq('property_id',P()).maybeSingle(),
+  ]);
+  const comida=Number(conf?.minutos_comida??30);
+  const turnoDe={}; (mapa||[]).forEach(m=>turnoDe[m.puesto_id]=m.turno);
+  const LIMPIA=new Set(['recamarista','ama_llaves','areas_publicas']);
+  // Carga media de un día, mirando solo lo que se mide (ni front ni noche).
+  const porDia={};
+  (prev||[]).forEach(a=>{ if(a.turno==='front'||a.turno==='nocturno')return;
+    porDia[a.fecha]=(porDia[a.fecha]||0)+Number(a.minutos_estimados||0); });
+  const vals=Object.values(porDia);
+  const media=vals.length?vals.reduce((x,y)=>x+y,0)/vals.length:0;
+  const cap={};
+  (hor||[]).forEach(h=>{
+    if(!LIMPIA.has(turnoDe[h.puesto_id])||!h.hora_inicio||!h.hora_fin)return;
+    let d=hhmmM(h.hora_fin)-hhmmM(h.hora_inicio); if(d<0)d+=1440;
+    cap[h.fecha]=(cap[h.fecha]||0)+Math.max(0,d-comida);
+  });
+  return Array.from({length:n},(_,i)=>masDias(hoy,i+1))
+    .map(f=>({fecha:f, cap:cap[f]||0, hueco:Math.round((cap[f]||0)-media)}))
+    .filter(d=>d.cap>0)
+    .sort((a,b)=>b.hueco-a.hueco);
+}
+
+// La hoja que sale al validar con profundas pendientes.
+async function abrirProfundas(pend){
+  const e=$('stA'); e.className='status'; e.textContent='Buscando días con hueco…';
+  const dias=await diasConHueco(14);
+  e.textContent='';
+  const buenos=dias.filter(d=>d.hueco>0).slice(0,6);
+  const fmt=f=>{const d=new Date(f+'T12:00:00');return `${DIAS_SEM[d.getDay()].slice(0,3)} ${d.getDate()}/${d.getMonth()+1}`;};
+  const hm=m=>`${Math.round(m/60*10)/10} h`;
+  document.querySelectorAll('.modal').forEach(x=>x.remove());
+  const d=document.createElement('div'); d.className='modal';
+  d.innerHTML=`<div class="caja ancha">
+    <h4>${pend.length} limpieza${pend.length===1?'':'s'} profunda${pend.length===1?'':'s'} sin programar</h4>
+    <p class="sub">Puedes cerrar el día igual. Lo que quede vencido pasa a incidencia del ama de llaves.</p>
+    <div class="proflist">${pend.map((x,i)=>{
+      const ar=x.t.hk_areas||{};
+      return `<div class="pf ${x.q.nivel}" data-i="${i}">
+        <div class="n"><b>${esc(ar.codigo||'')}</b> ${esc(ar.nombre&&ar.nombre!==ar.codigo?ar.nombre:'')}
+          <span class="pill prof ${x.q.nivel}">${x.q.dias<0?`vencida hace ${-x.q.dias} d`:x.q.dias===0?'toca hoy':`en ${x.q.dias} d`}</span>
+          <i>profunda ${x.q.frecuencia}${x.q.minutos?` · ${x.q.minutos} min de más`:''}</i></div>
+        <div class="d">${buenos.length?buenos.map(b=>`<button type="button" class="dia" data-i="${i}" data-f="${b.fecha}"
+          title="Ese día sobran unas ${hm(b.hueco)} sobre la carga media">${fmt(b.fecha)} <i>+${hm(b.hueco)}</i></button>`).join('')
+          :'<span class="sub">No hay días con hueco en las próximas dos semanas.</span>'}</div>
+      </div>`;}).join('')}</div>
+    <div class="pie">
+      <button class="b" id="pfCerrar">Volver al reparto</button>
+      <button class="b pri" id="pfForzar">Validar de todas formas</button>
+    </div></div>`;
+  document.body.appendChild(d);
+  d.onclick=ev=>{ if(ev.target===d) d.remove(); };
+  d.querySelector('#pfCerrar').onclick=()=>d.remove();
+  d.querySelector('#pfForzar').onclick=()=>{ d.remove(); VAL_FORZADO=true; $('btnVal').click(); };
+  d.querySelectorAll('button.dia').forEach(b=>b.onclick=async()=>{
+    const x=pend[Number(b.dataset.i)];
+    b.disabled=true;
+    const {error}=await sb.from('hk_areas').update({prof_programada:b.dataset.f}).eq('id',x.t.area_id);
+    if(error){ b.disabled=false; return toastInf('No se pudo programar: '+error.message); }
+    x.t._programada=b.dataset.f;
+    const fila=d.querySelector(`.pf[data-i="${b.dataset.i}"]`);
+    fila.classList.add('ok');
+    fila.querySelector('.d').innerHTML=`<span class="hecho">✓ programada para el ${fmt(b.dataset.f)} · ese día entra sola en el reparto</span>`;
+    // Si ya no queda ninguna sin programar, se cierra el día sin más preguntas.
+    if(!d.querySelectorAll('.pf:not(.ok)').length){
+      toastInf('Todas programadas');
+      d.remove(); VAL_FORZADO=true; $('btnVal').click();
+    }
+  });
+}
+
 $('btnRe').onclick=()=>cargarReparto();
 
 // Desvalidar es solo para el reparto de prueba: el día vuelve a propuesta y se

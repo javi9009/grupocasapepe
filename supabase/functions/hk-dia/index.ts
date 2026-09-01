@@ -133,7 +133,7 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 // `lote` agrupa lo que no se puede partir entre dos personas: un dormitorio entero
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
 interface CamaDet { area_id: string; codigo: string; nombre: string; estatus: string; minutos: number }
-interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null }
+interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null; programada?: boolean }
 interface Tarea { prof?: Prof; area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
@@ -166,12 +166,15 @@ function profDe(a: Record<string, unknown>, fecha: string): Prof | null {
   }
   const dias = Math.round((vence.getTime() - hoy) / DIA);
   const [morado, rojo] = AVISO[f];
-  const nivel = dias < 0 ? 'vencida' : dias <= rojo ? 'rojo' : dias <= morado ? 'morado' : '';
+  // Si el ama de llaves la programó para hoy, entra aunque todavía no venza.
+  const prog = String(a.prof_programada ?? '') === fecha;
+  const nivel = prog ? 'programada' : dias < 0 ? 'vencida' : dias <= rojo ? 'rojo' : dias <= morado ? 'morado' : '';
   if (!nivel) return null;
   return {
     frecuencia: f, vence: vence.toISOString().slice(0, 10), dias, nivel,
     minutos: Number(a.prof_minutos ?? 0) || 0,
     checklist_id: a.prof_checklist_id ? String(a.prof_checklist_id) : null,
+    programada: prog || undefined,
   };
 }
 
@@ -196,7 +199,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr, dndArr, nocheAyer] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
-    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria,prof_frecuencia,prof_minutos,prof_dia,prof_ultima,prof_checklist_id&limit=1000`),
+    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria,prof_frecuencia,prof_minutos,prof_dia,prof_ultima,prof_programada,prof_checklist_id&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
@@ -209,6 +212,22 @@ async function reparto(propKey: string, fecha: string) {
     // Lo que hizo (o no) el turno de noche que acaba de terminar.
     rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${ayer}&select=area_id,estado,terminado_at,hk_asignaciones!inner(turno)&hk_asignaciones.turno=eq.nocturno`),
   ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>, Array<{ area_id: string; nota: string | null }>, Array<{ area_id: string; estado: string; terminado_at: string | null }>];
+
+  // Una profunda que se cerró reinicia el contador de su área: la siguiente se cuenta
+  // desde el día en que de verdad se hizo, no desde el que tocaba en el papel.
+  const desde200 = new Date(Date.parse(`${fecha}T00:00:00Z`) - 200 * DIA).toISOString().slice(0, 10);
+  try {
+    const hechas = await rest(`hk_tareas?property_id=eq.${P}&estado=eq.terminada&fecha=gte.${desde200}&fecha=lte.${fecha}&metadata->>prof=not.is.null&select=area_id,fecha&order=fecha`) as Array<{ area_id: string | null; fecha: string }>;
+    const ultima = new Map<string, string>();
+    for (const h of hechas) if (h.area_id) ultima.set(String(h.area_id), h.fecha);
+    for (const a of areas) {
+      const u = ultima.get(String(a.id));
+      if (!u || !a.prof_frecuencia) continue;
+      if (String(a.prof_ultima ?? '') >= u) continue;
+      await rest(`hk_areas?id=eq.${a.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ prof_ultima: u, prof_programada: null }) });
+      a.prof_ultima = u; a.prof_programada = null;
+    }
+  } catch { /* si falla, el reparto sigue: los avisos solo quedan un ciclo atrasados */ }
 
   // Qué zonas dejó cerradas la noche de ayer: esas ya no se piden hoy.
   const hechasAnoche = new Set((nocheAyer ?? []).filter((t) => t.estado === 'terminada').map((t) => String(t.area_id)));
@@ -280,7 +299,10 @@ async function reparto(propKey: string, fecha: string) {
       // solo entra en el reparto el día que le toca.
       const frec = String(chk?.frecuencia ?? 'diaria');
       if (frec !== 'diaria' && frec !== diaSemana) continue;
-      const min = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? minDe(tipo, 'rutina') ?? 0;
+      const minBase = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? minDe(tipo, 'rutina') ?? 0;
+      // Una profunda es la limpieza normal MÁS los puntos de profunda: el día que
+      // toca, el mismo pase cuesta lo suyo más lo que suma la profunda.
+      const min = minBase + (prof?.programada ? prof.minutos : 0);
       if (!min) continue;
       // La cocina de huéspedes y los baños comunes se limpian dos veces al día:
       // cada pase es una tarea aparte, para que se puedan repartir entre personas y turnos.
