@@ -451,7 +451,12 @@ tr.arow.p-rojo td:first-child,tr.arow.p-vencida td:first-child,
 .ficha .ff label.qk:has(input:checked){border-color:var(--accent);background:var(--accent-soft);
   color:var(--accent);font-weight:600}
 .ficha .ff label.qk input{margin:0;width:auto}
-#tblOps select{font-size:12px}
+#tblOps select,#tblOps input{font-size:12px}
+#tblOps .opNom{width:min(230px,100%)}
+#tblOps .opMin{width:64px}
+#tblOps .opHora{width:96px}
+#tblOps .opDel{padding:3px 9px;line-height:1.2}
+#tblOps td{vertical-align:middle}
 #tblOps tr.apagada{opacity:.5}
 .caja.ficha{max-width:660px}
 .ficha .tipos{display:flex;gap:10px;margin:4px 0 14px}
@@ -743,10 +748,13 @@ tr.arow.p-rojo td:first-child,tr.arow.p-vencida td:first-child,
   <p class="sub">Aquí se miden los minutos de cada zona común, uno por uno. Cambia el número, pulsa guardar y el reparto del día se vuelve a calcular. La casilla de la izquierda activa o deja en stand by la zona.</p>
   <div id="zonas"></div>
 
-  <h3>Tareas operativas del día</h3>
-  <p class="sub">No son limpiezas de una zona: son el reparto de cuartos, el armado de carros, la lavandería, el room audit y los blancos de la tarde. Aquí se dice de quién es cada una. Se guarda al momento.</p>
+  <div class="bar" style="margin-top:18px">
+    <h3 style="margin:0">Tareas operativas del día</h3>
+    <span style="margin-left:auto"><button class="b" id="btnNuevaOp">＋ Nueva tarea</button></span>
+  </div>
+  <p class="sub">No son limpiezas de una zona: son el reparto de cuartos, el armado de carros, la lavandería, el room audit y los blancos de la tarde. Todo se edita aquí y se guarda al momento. La casilla de la izquierda la deja en stand by.</p>
   <div class="wrap"><table id="tblOps"><thead><tr>
-    <th>Tarea</th><th class="num">Min</th><th>Hora</th><th>Quién la hace</th><th>Entra sola</th>
+    <th></th><th>Tarea</th><th class="num">Min</th><th>Hora</th><th>Día</th><th>Quién la hace</th><th>Entra sola</th><th></th>
   </tr></thead><tbody></tbody></table></div>
 
   <h3>Inventario de cuartos (Cloudbeds)</h3>
@@ -2577,19 +2585,26 @@ async function cargarAreas(){
 
 // Las tareas operativas: quién las hace y si entran solas en el reparto. Son pocas
 // y el cambio es deliberado, así que se guarda en cuanto se toca.
+const DIAS_OP=['','domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+const DIA_OP_LBL={'':'Todos los días',domingo:'Domingos',lunes:'Lunes',martes:'Martes',
+  miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábados'};
+
 async function cargarOps(){
   const {data:ops}=await sb.from('hk_tareas_op').select('*').eq('property_id',P()).order('orden');
   const tb=$('tblOps').tBodies[0];
-  if(!ops||!ops.length){ tb.innerHTML='<tr><td colspan="5" class="sub">Sin tareas operativas.</td></tr>'; return; }
+  if(!ops||!ops.length){ tb.innerHTML='<tr><td colspan="8" class="sub">Sin tareas operativas. Créalas con «＋ Nueva tarea».</td></tr>'; return; }
   tb.innerHTML=ops.map(o=>`<tr data-o="${o.id}" class="${o.activo?'':'apagada'}">
-    <td><b>${esc(o.nombre)}</b> <span class="pill">${esc(o.codigo)}</span></td>
-    <td class="num">${o.minutos}</td>
-    <td>${o.hora_sugerida?String(o.hora_sugerida).slice(0,5):'—'}</td>
+    <td><input type="checkbox" class="opAct" ${o.activo?'checked':''} title="Activa o deja en stand by"></td>
+    <td><input class="opNom" value="${esc(o.nombre)}"> <span class="pill">${esc(o.codigo)}</span></td>
+    <td class="num"><input class="opMin" type="number" min="0" step="5" value="${o.minutos??''}"></td>
+    <td><input class="opHora" type="time" value="${o.hora_sugerida?String(o.hora_sugerida).slice(0,5):''}"></td>
+    <td><select class="opDia">${DIAS_OP.map(k=>`<option value="${k}" ${String(o.dia_semana||'')===k?'selected':''}>${DIA_OP_LBL[k]}</option>`).join('')}</select></td>
     <td><select class="opTurno">${['','ama_llaves','recamarista','areas_publicas','front','nocturno']
       .map(k=>`<option value="${k}" ${String(o.turno||'')===k?'selected':''}>${TURNO_LBL[k]}</option>`).join('')}</select></td>
     <td><select class="opObl">
       <option value="1" ${o.obligatoria===false?'':'selected'}>Obligada</option>
       <option value="0" ${o.obligatoria===false?'selected':''}>Opcional</option></select></td>
+    <td><button class="b danger opDel" title="Eliminar esta tarea">✕</button></td>
   </tr>`).join('');
   tb.querySelectorAll('tr[data-o]').forEach(tr=>{
     const id=tr.dataset.o;
@@ -2597,10 +2612,36 @@ async function cargarOps(){
       const {error}=await sb.from('hk_tareas_op').update({...campos,updated_at:new Date().toISOString()}).eq('id',id);
       toastInf(error?('No se pudo guardar: '+error.message):'Guardado · regenera la propuesta para verlo');
     };
+    tr.querySelector('.opAct').onchange=e=>{ tr.classList.toggle('apagada',!e.target.checked); guarda({activo:e.target.checked}); };
+    tr.querySelector('.opNom').onchange=e=>{ const v=e.target.value.trim(); if(!v) return toastInf('La tarea necesita un nombre'); guarda({nombre:v}); };
+    tr.querySelector('.opMin').onchange=e=>guarda({minutos:Math.max(0,Number(e.target.value)||0)});
+    tr.querySelector('.opHora').onchange=e=>guarda({hora_sugerida:e.target.value||null});
+    tr.querySelector('.opDia').onchange=e=>guarda({dia_semana:e.target.value||null});
     tr.querySelector('.opTurno').onchange=e=>guarda({turno:e.target.value||null});
     tr.querySelector('.opObl').onchange=e=>guarda({obligatoria:e.target.value==='1'});
+    tr.querySelector('.opDel').onclick=async()=>{
+      const nom=tr.querySelector('.opNom').value;
+      if(!confirm(`¿Eliminar «${nom}»?\n\nSi solo quieres dejarla en stand by, desmarca la casilla de la izquierda.`)) return;
+      const {error}=await sb.from('hk_tareas_op').delete().eq('id',id);
+      if(error) return toastInf(error.message);
+      toastInf('Tarea eliminada'); cargarOps();
+    };
   });
 }
+
+$('btnNuevaOp').onclick=async()=>{
+  const nombre=prompt('¿Cómo se llama la tarea? (ej. Revisión de carros de la tarde)');
+  if(!nombre||!nombre.trim()) return;
+  const {data:ops}=await sb.from('hk_tareas_op').select('orden').eq('property_id',P()).order('orden',{ascending:false}).limit(1);
+  const {error}=await sb.from('hk_tareas_op').insert({
+    property_id:P(), codigo:codigoDe(nombre), nombre:nombre.trim(), minutos:30,
+    turno:null, hora_sugerida:null, dia_semana:null, obligatoria:true, activo:true,
+    orden:((ops&&ops[0]?.orden)||0)+10, metadata:{creado_en:'dashboard'},
+  });
+  if(error) return toastInf(error.message);
+  toastInf('Tarea creada · ponle sus minutos y de quién es');
+  cargarOps();
+};
 
 // Un solo guardado para toda la pestaña, igual que en tiempos estándar.
 function inputsZonas(){ return [...document.querySelectorAll('#zonas .min, #zonas .act, #zonas .vec, #zonas .obl')]; }
