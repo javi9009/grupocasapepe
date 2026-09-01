@@ -443,6 +443,9 @@ tr.arow.p-rojo td:first-child,tr.arow.p-vencida td:first-child,
 .profnota{margin:12px 0 0;padding:8px 10px;border-radius:8px;font-size:12.5px;line-height:1.55;
   background:#f6f1fd;color:#5f34a0}
 .profnota.rojo,.profnota.vencida{background:#fbeaea;color:var(--bad)}
+.pill.quien{background:#eef3fb;border-color:#c8d8ee;color:#2c5c94}
+#tblOps select{font-size:12px}
+#tblOps tr.apagada{opacity:.5}
 .caja.ficha{max-width:660px}
 .ficha .tipos{display:flex;gap:10px;margin:4px 0 14px}
 .ficha .tp{flex:1;border:1px solid var(--bd);border-radius:10px;padding:10px 12px;cursor:pointer;background:var(--bg2)}
@@ -731,6 +734,12 @@ tr.arow.p-rojo td:first-child,tr.arow.p-vencida td:first-child,
   </div>
   <p class="sub">Aquí se miden los minutos de cada zona común, uno por uno. Cambia el número, pulsa guardar y el reparto del día se vuelve a calcular. La casilla de la izquierda activa o deja en stand by la zona.</p>
   <div id="zonas"></div>
+
+  <h3>Tareas operativas del día</h3>
+  <p class="sub">No son limpiezas de una zona: son el reparto de cuartos, el armado de carros, la lavandería, el room audit y los blancos de la tarde. Aquí se dice de quién es cada una. Se guarda al momento.</p>
+  <div class="wrap"><table id="tblOps"><thead><tr>
+    <th>Tarea</th><th class="num">Min</th><th>Hora</th><th>Quién la hace</th><th>Entra sola</th>
+  </tr></thead><tbody></tbody></table></div>
 
   <h3>Inventario de cuartos (Cloudbeds)</h3>
   <div class="wrap"><table id="tblInv"><thead><tr>
@@ -2440,6 +2449,10 @@ const PROF_PERIODO={semanal:7,quincenal:15,mensual:30,trimestral:91,semestral:18
 const PROF_AVISO={semanal:[3,1],quincenal:[5,2],mensual:[15,7],trimestral:[45,15],semestral:[90,30],anual:[120,45]};
 const PROF_LBL={semanal:'semanal',quincenal:'quincenal',mensual:'mensual',trimestral:'trimestral',semestral:'semestral',anual:'anual'};
 let ZONAS=[], BASE_NOM={};
+// Quién hace una limpieza cuando no es el turno de cuartos.
+const QUIEN_LBL={front:'lo hace front',nocturno:'ruta de la noche',primer_turno:'quien abre'};
+const TURNO_LBL={ama_llaves:'Ama de llaves',recamarista:'Recamarista',areas_publicas:'Áreas públicas',
+  front:'Front · recepción',nocturno:'Turno de noche','':'Quien vaya más libre'};
 const DIAS_SEM=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
 function proxProf(z){
   const per=PROF_PERIODO[z.prof_frecuencia]; if(!per) return null;
@@ -2496,6 +2509,7 @@ async function cargarAreas(){
         ${z.piso?`<span class="pill">piso ${z.piso}</span>`:''}
         ${z.activo?'':'<span class="pill prov">stand by</span>'}
         ${z.obligatoria===false?'<span class="pill opc">no entra sola · se asigna a mano</span>':''}
+        ${QUIEN_LBL[z.metadata?.asignar_a]?`<span class="pill quien">${QUIEN_LBL[z.metadata.asignar_a]}</span>`:''}
         <input class="min" type="number" min="0" step="5" value="${min}" data-orig="${min}"> <span style="font-size:12px;color:var(--soft)">min</span>
         <select class="obl" data-orig="${z.obligatoria===false?0:1}" title="Si es obligada entra sola en el reparto el día que toca">
           <option value="1" ${z.obligatoria===false?'':'selected'}>Obligada</option>
@@ -2539,10 +2553,39 @@ async function cargarAreas(){
   });
   marcarSuciosZ();
 
+  await cargarOps();
+
   const g={};(inv||[]).forEach(a=>{const k=a.tipo;g[k]=g[k]||{1:0,2:0,3:0,4:0,o:0,t:0};const p=[1,2,3,4].includes(a.piso)?a.piso:'o';g[k][p]++;g[k].t++;});
   $('tblInv').tBodies[0].innerHTML=Object.entries(g).map(([k,v])=>`<tr><td>${TIPOLBL[k]||k}</td>
     <td class="num">${v[1]}</td><td class="num">${v[2]}</td><td class="num">${v[3]}</td><td class="num">${v[4]}</td>
     <td class="num">${v.o}</td><td class="num" style="font-weight:700">${v.t}</td></tr>`).join('');
+}
+
+// Las tareas operativas: quién las hace y si entran solas en el reparto. Son pocas
+// y el cambio es deliberado, así que se guarda en cuanto se toca.
+async function cargarOps(){
+  const {data:ops}=await sb.from('hk_tareas_op').select('*').eq('property_id',P()).order('orden');
+  const tb=$('tblOps').tBodies[0];
+  if(!ops||!ops.length){ tb.innerHTML='<tr><td colspan="5" class="sub">Sin tareas operativas.</td></tr>'; return; }
+  tb.innerHTML=ops.map(o=>`<tr data-o="${o.id}" class="${o.activo?'':'apagada'}">
+    <td><b>${esc(o.nombre)}</b> <span class="pill">${esc(o.codigo)}</span></td>
+    <td class="num">${o.minutos}</td>
+    <td>${o.hora_sugerida?String(o.hora_sugerida).slice(0,5):'—'}</td>
+    <td><select class="opTurno">${['','ama_llaves','recamarista','areas_publicas','front','nocturno']
+      .map(k=>`<option value="${k}" ${String(o.turno||'')===k?'selected':''}>${TURNO_LBL[k]}</option>`).join('')}</select></td>
+    <td><select class="opObl">
+      <option value="1" ${o.obligatoria===false?'':'selected'}>Obligada</option>
+      <option value="0" ${o.obligatoria===false?'selected':''}>Opcional</option></select></td>
+  </tr>`).join('');
+  tb.querySelectorAll('tr[data-o]').forEach(tr=>{
+    const id=tr.dataset.o;
+    const guarda=async campos=>{
+      const {error}=await sb.from('hk_tareas_op').update({...campos,updated_at:new Date().toISOString()}).eq('id',id);
+      toastInf(error?('No se pudo guardar: '+error.message):'Guardado · regenera la propuesta para verlo');
+    };
+    tr.querySelector('.opTurno').onchange=e=>guarda({turno:e.target.value||null});
+    tr.querySelector('.opObl').onchange=e=>guarda({obligatoria:e.target.value==='1'});
+  });
 }
 
 // Un solo guardado para toda la pestaña, igual que en tiempos estándar.
@@ -2710,6 +2753,7 @@ async function fichaLimpieza(z){
         <option value="0" ${z.obligatoria===false?'selected':''}>Opcional · la coloco yo</option></select></label>
       <label>Quién la hace<select id="fQuien">
         <option value="">El turno de limpieza</option>
+        <option value="front" ${z.metadata?.asignar_a==='front'?'selected':''}>Front · recepción</option>
         <option value="nocturno" ${z.metadata?.asignar_a==='nocturno'?'selected':''}>El turno de noche</option>
         <option value="primer_turno" ${z.metadata?.asignar_a==='primer_turno'?'selected':''}>Quien abre por la mañana</option>
       </select></label>

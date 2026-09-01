@@ -525,13 +525,27 @@ async function reparto(propKey: string, fecha: string) {
     ?? personas.filter((p) => p.turno !== 'front' && p.turno !== 'nocturno')
       .slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0] ?? null;
   const dePrimerTurno: Tarea[] = [];
+  const deFront: Tarea[] = [];
   const publicasResto: Tarea[] = [];
-  for (const t of publicas) (t.aQuien === 'primer_turno' && primerTurno ? dePrimerTurno : publicasResto).push(t);
+  for (const t of publicas) {
+    if (t.aQuien === 'front' && front) deFront.push(t);
+    else if (t.aQuien === 'primer_turno' && primerTurno) dePrimerTurno.push(t);
+    else publicasResto.push(t);
+  }
   if (dePrimerTurno.length && primerTurno) {
     const k = kp(primerTurno);
     usado.set(k, (usado.get(k) ?? 0) + dePrimerTurno.reduce((s, t) => s + t.minutos, 0));
     const arr = opsPorPersona.get(k) ?? []; arr.push(...dePrimerTurno); opsPorPersona.set(k, arr);
   }
+  // Lo de front va a su caja y no vuelve a repartirse: una tarea, un dueño. No se
+  // le suma a la carga del turno de limpieza porque front no la hace con esas horas.
+  if (deFront.length && front) {
+    const k = kp(front);
+    const arr = opsPorPersona.get(k) ?? []; arr.push(...deFront); opsPorPersona.set(k, arr);
+  }
+  // Una zona de front el día que no hay nadie de front no se pierde: vuelve al
+  // turno de limpieza, que es quien puede cubrirla.
+  if (!front) for (const t of publicas) if (t.aQuien === 'front') publicasResto.push(t);
 
   const rc = repartir(cuartos, poolCuartos, usado);
   for (const [i, ts] of rc.res) usado.set(kp(poolCuartos[i]), (usado.get(kp(poolCuartos[i])) ?? 0) + ts.reduce((s, t) => s + t.minutos, 0));
