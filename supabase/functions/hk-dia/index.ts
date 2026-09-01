@@ -134,7 +134,15 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
 interface CamaDet { area_id: string; codigo: string; nombre: string; estatus: string; minutos: number }
 interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null; programada?: boolean; base_area_id?: string | null; material?: string | null }
-interface Tarea { prof?: Prof; area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
+// Quién puede hacer una limpieza. Se guardó como texto durante un tiempo; ahora es
+// una lista, y el texto viejo se sigue leyendo como una lista de uno.
+function quienesDe(a: Record<string, unknown>): string[] {
+  const v = (a.metadata as Record<string, unknown> | null)?.asignar_a;
+  if (Array.isArray(v)) return v.map(String).filter(Boolean);
+  return v ? [String(v)] : [];
+}
+
+interface Tarea { prof?: Prof; area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; aQuienes?: string[]; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
 // Cada cuánto toca y con cuánta antelación se avisa. El morado es "ya piénsalo";
@@ -308,7 +316,7 @@ async function reparto(propKey: string, fecha: string) {
           piso: Number(a.piso ?? 0), tipo, estatus: 'profunda', minutos: minP,
           checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0),
           lote: `prof:${a.id}`, profunda: true, opcional: !obligadaP,
-          aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined,
+          aQuienes: quienesDe(a),
         });
         continue;
       }
@@ -327,7 +335,8 @@ async function reparto(propKey: string, fecha: string) {
       // Zonas del turno de noche: el auditor nocturno las deja hechas antes de que
       // entre el equipo de la mañana. Si la zona tiene dos pases, el de la noche
       // cubre el primero y el segundo sigue siendo de la tarde.
-      const deNoche = (a.metadata as Record<string, unknown> | null)?.asignar_a === 'nocturno';
+      const quienes = quienesDe(a);
+      const deNoche = quienes.includes('nocturno');
       const minNoche = Number((a.metadata as Record<string, unknown> | null)?.minutos_nocturno ?? 0) || min;
       // Cada pase lleva su nombre (mañana / tarde) para que no se confundan ni se
       // empiecen a la vez: el de la tarde no se abre hasta cerrar el de la mañana.
@@ -343,7 +352,7 @@ async function reparto(propKey: string, fecha: string) {
           nocturnas.push({ area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: minNoche, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0), lote: `noche:${a.id}`, titulo: `${a.nombre} · noche`, pase: veces > 1 ? 1 : undefined, pases: veces > 1 ? veces : undefined });
           continue;
         }
-        (opcional ? opcionales : publicas).push({ prof: n === 1 ? (prof ?? undefined) : undefined, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined });
+        (opcional ? opcionales : publicas).push({ prof: n === 1 ? (prof ?? undefined) : undefined, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: 'rutina', minutos: min, checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0) + (n - 1) * 1000, lote: `area:${a.id}:${n}`, pase: veces > 1 ? n : undefined, pases: veces > 1 ? veces : undefined, titulo: etiqueta ? `${a.nombre} · ${etiqueta}` : undefined, opcional, aQuienes: quienes });
       }
     }
   }
@@ -527,9 +536,13 @@ async function reparto(propKey: string, fecha: string) {
   const dePrimerTurno: Tarea[] = [];
   const deFront: Tarea[] = [];
   const publicasResto: Tarea[] = [];
+  // De todos los que pueden hacerla, se queda el primero que hoy esté en turno.
+  // Front antes que "quien abre", y si no hay ninguno, al equipo de limpieza: la
+  // zona nunca se pierde ni acaba en dos listas.
   for (const t of publicas) {
-    if (t.aQuien === 'front' && front) deFront.push(t);
-    else if (t.aQuien === 'primer_turno' && primerTurno) dePrimerTurno.push(t);
+    const L = t.aQuienes ?? (t.aQuien ? [t.aQuien] : []);
+    if (L.includes('front') && front) deFront.push(t);
+    else if (L.includes('primer_turno') && primerTurno) dePrimerTurno.push(t);
     else publicasResto.push(t);
   }
   if (dePrimerTurno.length && primerTurno) {
@@ -543,9 +556,6 @@ async function reparto(propKey: string, fecha: string) {
     const k = kp(front);
     const arr = opsPorPersona.get(k) ?? []; arr.push(...deFront); opsPorPersona.set(k, arr);
   }
-  // Una zona de front el día que no hay nadie de front no se pierde: vuelve al
-  // turno de limpieza, que es quien puede cubrirla.
-  if (!front) for (const t of publicas) if (t.aQuien === 'front') publicasResto.push(t);
 
   const rc = repartir(cuartos, poolCuartos, usado);
   for (const [i, ts] of rc.res) usado.set(kp(poolCuartos[i]), (usado.get(kp(poolCuartos[i])) ?? 0) + ts.reduce((s, t) => s + t.minutos, 0));
