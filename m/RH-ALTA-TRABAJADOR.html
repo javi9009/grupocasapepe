@@ -27,7 +27,7 @@ textarea{resize:vertical;min-height:54px}
 .note{background:#fff7e6;border-left:3px solid var(--gold);padding:8px 12px;border-radius:6px;font-size:12px;color:#6b5320;margin-bottom:16px}
 .code{display:flex;align-items:center;gap:10px}
 .code input{font-family:ui-monospace,monospace;font-weight:700;color:var(--accent);max-width:180px}
-</style></head><body>
+</style></head><body data-v="acceso-2"><!-- build: acceso-login + generar-acceso-existente -->
 <header>
   <a href="/">← Panel</a>
   <span class="ttl">Alta de Trabajador · <b>Grupo Casa Pepe</b></span>
@@ -106,9 +106,43 @@ textarea{resize:vertical;min-height:54px}
     <textarea id="notas" class="full" placeholder="Observaciones, condiciones, etc."></textarea>
   </div>
 
+  <div class="card">
+    <h2>Acceso de login (opcional)</h2>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:700;color:var(--txt)">
+      <input type="checkbox" id="gen_acceso" style="width:auto" onchange="document.getElementById('acceso_box').style.display=this.checked?'block':'none'">
+      Generar acceso de login al dar de alta
+    </label>
+    <div id="acceso_box" style="display:none;margin-top:12px">
+      <div class="grid">
+        <div><label>Correo de acceso</label><input id="acc_email" type="email" placeholder="se usa el de Contacto si lo dejas vacío"></div>
+        <div><label>Contraseña temporal</label>
+          <div class="code"><input id="acc_pass" value=""><button type="button" class="file" onclick="document.getElementById('acc_pass').value=genPass()" style="white-space:nowrap;cursor:pointer">↻ generar</button></div>
+        </div>
+      </div>
+      <div class="hint">El trabajador entra con este correo y contraseña temporal en <b>grupocasapepe.netlify.app</b>, y puede cambiarla con "¿Olvidaste tu contraseña?". Su horario queda precargado.</div>
+    </div>
+  </div>
+
   <div class="actions">
     <button class="btn" id="save" onclick="alta()">Dar de alta</button>
     <span class="msg" id="msg"></span>
+  </div>
+
+  <div class="card" style="margin-top:24px">
+    <h2>Generar acceso a un trabajador existente</h2>
+    <div class="grid">
+      <div class="full"><label>Trabajador</label>
+        <select id="ex_emp"><option value="">Cargando…</option></select></div>
+      <div><label>Correo de acceso <span class="req">*</span></label><input id="ex_email" type="email" placeholder="trabajador@correo.com"></div>
+      <div><label>Contraseña temporal <span class="req">*</span></label>
+        <div class="code"><input id="ex_pass" value=""><button type="button" class="file" onclick="document.getElementById('ex_pass').value=genPass()" style="white-space:nowrap;cursor:pointer">↻ generar</button></div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn" id="ex_save" onclick="generarAccesoExistente()">Crear acceso</button>
+      <span class="msg" id="ex_msg"></span>
+    </div>
+    <div class="hint">Crea el login para alguien que ya está en el catálogo (p. ej. quien no se dará de alta solo). Si ya tiene acceso, te avisa.</div>
   </div>
 </div>
 
@@ -116,8 +150,12 @@ textarea{resize:vertical;min-height:54px}
 const SBURL='https://rehophywchakfapivsbh.supabase.co';
 const KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const H={apikey:KEY,Authorization:'Bearer '+KEY};
+const ACCESO_FN=SBURL+'/functions/v1/crear-acceso-colaborador';
+const ADMIN_SECRET='cpp-rh-acceso-2026';
 const $=id=>document.getElementById(id);
 $('fecha_alta').value=new Date().toISOString().slice(0,10);
+
+function genPass(){const a='ABCDEFGHJKLMNPQRSTUVWXYZ',b='abcdefghijkmnpqrstuvwxyz',n='23456789';const p=x=>x[Math.floor(Math.random()*x.length)];return 'Pepe'+p(a)+p(b)+p(b)+p(n)+p(n)+p(n);}
 
 async function suggestCode(){
   try{
@@ -128,6 +166,37 @@ async function suggestCode(){
   }catch(e){ $('empleado_id').value='CPP-'+String(Date.now()).slice(-3); }
 }
 suggestCode();
+
+async function crearAcceso(employee_id,email,password){
+  const r=await fetch(ACCESO_FN,{method:'POST',headers:{...H,'Content-Type':'application/json'},
+    body:JSON.stringify({employee_id,email:(email||'').trim().toLowerCase(),password,secret:ADMIN_SECRET})});
+  const jx=await r.json().catch(()=>({error:'respuesta inválida'}));
+  if(!r.ok||jx.error) throw new Error(jx.error||('HTTP '+r.status));
+  return jx;
+}
+
+async function loadEmpleados(){
+  try{
+    const r=await fetch(SBURL+'/rest/v1/v_empleados_publico?select=id,empleado_id,nombre,puesto,area&order=nombre',{headers:H});
+    const rows=await r.json();
+    $('ex_emp').innerHTML='<option value="">— Elige un trabajador —</option>'+(rows||[]).map(e=>`<option value="${e.id}">${e.nombre}${e.puesto?' · '+e.puesto:''}</option>`).join('');
+  }catch(e){ $('ex_emp').innerHTML='<option value="">No se pudo cargar la lista</option>'; }
+}
+loadEmpleados();
+
+async function generarAccesoExistente(){
+  const m=$('ex_msg'); m.className='msg'; m.textContent='';
+  const employee_id=$('ex_emp').value, email=$('ex_email').value.trim(), pass=$('ex_pass').value.trim()||genPass();
+  if(!employee_id){ m.className='msg err'; m.textContent='Elige un trabajador.'; return; }
+  if(!/.+@.+\..+/.test(email)){ m.className='msg err'; m.textContent='Escribe un correo válido.'; return; }
+  $('ex_save').disabled=true; m.textContent='Creando acceso…';
+  try{
+    await crearAcceso(employee_id,email,pass);
+    m.className='msg ok'; m.textContent='✓ Acceso creado. Correo: '+email+' · Contraseña temporal: '+pass;
+    loadEmpleados();
+  }catch(e){ m.className='msg err'; m.textContent='⚠ '+e.message; }
+  finally{ $('ex_save').disabled=false; }
+}
 
 async function uploadFile(file, code, kind){
   if(!file) return null;
@@ -170,12 +239,23 @@ async function alta(){
       contrato_url, id_oficial_url, foto_url,
       notas:$('notas').value.trim()||null
     };
-    const r=await fetch(SBURL+'/rest/v1/employees',{method:'POST',headers:{...H,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify(row)});
+    const r=await fetch(SBURL+'/rest/v1/employees',{method:'POST',headers:{...H,'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(row)});
     if(!r.ok) throw new Error('Alta: '+r.status+' '+(await r.text()).slice(0,160));
-    msg.className='msg ok'; msg.textContent='✓ Trabajador '+code+' dado de alta. Ya aparece en el catálogo de horarios.';
-    ['nombre','puesto','area','horario_inicial','horas_semanales','telefono','email','rfc','curp','nss','sueldo_base','banco','clabe','titular_cuenta','contacto_emergencia','notas'].forEach(i=>$(i).value='');
+    const created=(await r.json())[0]; const newId=created&&created.id;
+    let extra='';
+    if($('gen_acceso').checked){
+      const accEmail=($('acc_email').value.trim()||$('email').value.trim());
+      const accPass=$('acc_pass').value.trim()||genPass();
+      if(!/.+@.+\..+/.test(accEmail)){ extra=' · ⚠ Trabajador creado, pero falta un correo válido para el acceso.'; }
+      else if(!newId){ extra=' · ⚠ No se pudo obtener el ID para crear el acceso.'; }
+      else{ try{ await crearAcceso(newId,accEmail,accPass); extra=' · ✓ Acceso: '+accEmail+' / '+accPass; }
+            catch(e){ extra=' · ⚠ Acceso no creado: '+e.message; } }
+    }
+    msg.className='msg ok'; msg.textContent='✓ Trabajador '+code+' dado de alta. Ya aparece en el catálogo de horarios.'+extra;
+    ['nombre','puesto','area','horario_inicial','horas_semanales','telefono','email','rfc','curp','nss','sueldo_base','banco','clabe','titular_cuenta','contacto_emergencia','notas','acc_email','acc_pass'].forEach(i=>$(i).value='');
     ['f_contrato','f_id','f_foto'].forEach(i=>$(i).value='');
-    suggestCode();
+    $('gen_acceso').checked=false; $('acceso_box').style.display='none';
+    suggestCode(); loadEmpleados();
   }catch(e){ msg.className='msg err'; msg.textContent='⚠ '+e.message; }
   finally{ $('save').disabled=false; }
 }
