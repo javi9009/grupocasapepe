@@ -133,14 +133,14 @@ const mins = (t: string | null) => { if (!t) return null; const [h, m] = t.split
 // `lote` agrupa lo que no se puede partir entre dos personas: un dormitorio entero
 // (su limpieza general + todas sus camas) va siempre a la misma recamarista.
 interface CamaDet { area_id: string; codigo: string; nombre: string; estatus: string; minutos: number }
-interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null; programada?: boolean }
+interface Prof { frecuencia: string; vence: string; dias: number; nivel: string; minutos: number; checklist_id: string | null; programada?: boolean; base_area_id?: string | null; material?: string | null }
 interface Tarea { prof?: Prof; area_id: string | null; codigo: string; nombre: string; piso: number; tipo: string; estatus: string; minutos: number; checklist_id: string | null; orden: number; lote: string; op_id?: string; titulo?: string; pase?: number; pases?: number; aQuien?: string; sinTrabajo?: boolean; opcional?: boolean; profunda?: boolean; camas?: CamaDet[]; minGeneral?: number; noMolestar?: boolean; hechoAnoche?: boolean }
 interface Persona { employee_id: string | null; nombre: string; turno: string; hi: string | null; hf: string | null; cap: number; bruta: number; admin: number }
 
 // Cada cuánto toca y con cuánta antelación se avisa. El morado es "ya piénsalo";
 // el rojo es "o lo metes ya, o se vence".
-const PERIODO: Record<string, number> = { semanal: 7, mensual: 30, semestral: 182 };
-const AVISO: Record<string, [number, number]> = { semanal: [3, 1], mensual: [15, 7], semestral: [90, 30] };
+const PERIODO: Record<string, number> = { semanal: 7, quincenal: 15, mensual: 30, trimestral: 91, semestral: 182, anual: 365 };
+const AVISO: Record<string, [number, number]> = { semanal: [3, 1], quincenal: [5, 2], mensual: [15, 7], trimestral: [45, 15], semestral: [90, 30], anual: [120, 45] };
 const DIA = 86400000;
 
 // Cuándo vence la profunda de un área y cómo de cerca estamos. Devuelve null si el
@@ -175,6 +175,8 @@ function profDe(a: Record<string, unknown>, fecha: string): Prof | null {
     minutos: Number(a.prof_minutos ?? 0) || 0,
     checklist_id: a.prof_checklist_id ? String(a.prof_checklist_id) : null,
     programada: prog || undefined,
+    base_area_id: a.base_area_id ? String(a.base_area_id) : null,
+    material: (a.material as string | null) || null,
   };
 }
 
@@ -183,7 +185,7 @@ function profDe(a: Record<string, unknown>, fecha: string): Prof | null {
 function metaDe(t: Tarea): Record<string, unknown> {
   const base: Record<string, unknown> = t.sinTrabajo
     ? { sin_trabajo: true, no_molestar: t.noMolestar ?? false, hecho_anoche: t.hechoAnoche ?? false }
-    : t.profunda ? { profunda: true }
+    : t.profunda ? { profunda: true, base_area_id: t.prof?.base_area_id ?? null, material: t.prof?.material ?? null }
     : t.opcional ? { opcional: true }
     : t.camas?.length ? { camas: t.camas, minutos_general: t.minGeneral ?? 0 }
     : {};
@@ -199,7 +201,7 @@ async function reparto(propKey: string, fecha: string) {
 
   const [confArr, areas, estatus, tiemposArr, checklists, horarios, mapaArr, adminArr, existentes, opsArr, dndArr, nocheAyer] = await Promise.all([
     rest(`hk_config?property_id=eq.${P}&select=*`),
-    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria,prof_frecuencia,prof_minutos,prof_dia,prof_ultima,prof_programada,prof_checklist_id&limit=1000`),
+    rest(`hk_areas?property_id=eq.${P}&activo=eq.true&select=id,tipo,codigo,nombre,piso,parent_id,minutos_override,minutos_por_estatus,orden,veces_dia,metadata,obligatoria,prof_frecuencia,prof_minutos,prof_dia,prof_ultima,prof_programada,prof_checklist_id,es_profunda,base_area_id,material&limit=1000`),
     rest(`hk_estatus_dia?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,estatus,check_in,check_out,solicita_limpieza&limit=1000`),
     rest(`hk_tiempos?property_id=eq.${P}&activo=eq.true&select=tipo_area,estatus,minutos,variante`),
     rest(`hk_checklists?property_id=eq.${P}&activo=eq.true&select=id,area_id,minutos_estimados,frecuencia`),
@@ -292,17 +294,29 @@ async function reparto(propKey: string, fecha: string) {
       cuartos.push({ prof: profDe(a, fecha) ?? undefined, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre), piso: Number(a.piso ?? 0), tipo, estatus: est, minutos: min, checklist_id: null, orden: Number(a.orden ?? 0), lote: `area:${a.id}` });
     } else {
       const chk = chkPorArea.get(String(a.id));
-      // Si a la zona se le acerca su profunda, el aviso viaja pegado a la tarea del
-      // día: el ama de llaves ve el color y decide qué día la mete.
       const prof = profDe(a, fecha);
+      // Una limpieza profunda tiene ficha propia: no sale a diario. Entra el día que
+      // se acerca su fecha —o el que el ama de llaves eligió— con sus minutos y su
+      // checklist. Si es obligada se reparte sola; si no, espera en SIN ASIGNAR.
+      if (a.es_profunda) {
+        if (!prof) continue;
+        const minP = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? 0;
+        if (!minP) continue;
+        const obligadaP = a.obligatoria !== false;
+        (obligadaP ? publicas : opcionales).push({
+          prof, area_id: String(a.id), codigo: String(a.codigo), nombre: String(a.nombre),
+          piso: Number(a.piso ?? 0), tipo, estatus: 'profunda', minutos: minP,
+          checklist_id: chk ? String(chk.id) : null, orden: Number(a.orden ?? 0),
+          lote: `prof:${a.id}`, profunda: true, opcional: !obligadaP,
+          aQuien: (a.metadata as Record<string, unknown> | null)?.asignar_a as string | undefined,
+        });
+        continue;
+      }
       // Una zona con checklist semanal (p.ej. la limpieza profunda de azotea de los lunes)
       // solo entra en el reparto el día que le toca.
       const frec = String(chk?.frecuencia ?? 'diaria');
       if (frec !== 'diaria' && frec !== diaSemana) continue;
-      const minBase = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? minDe(tipo, 'rutina') ?? 0;
-      // Una profunda es la limpieza normal MÁS los puntos de profunda: el día que
-      // toca, el mismo pase cuesta lo suyo más lo que suma la profunda.
-      const min = minBase + (prof?.programada ? prof.minutos : 0);
+      const min = (a.minutos_override as number | null) ?? (chk?.minutos_estimados as number | null) ?? minDe(tipo, 'rutina') ?? 0;
       if (!min) continue;
       // La cocina de huéspedes y los baños comunes se limpian dos veces al día:
       // cada pase es una tarea aparte, para que se puedan repartir entre personas y turnos.
