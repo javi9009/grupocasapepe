@@ -150,6 +150,8 @@ interface Persona { employee_id: string | null; nombre: string; turno: string; h
 const PERIODO: Record<string, number> = { semanal: 7, quincenal: 15, mensual: 30, trimestral: 91, semestral: 182, anual: 365 };
 const AVISO: Record<string, [number, number]> = { semanal: [3, 1], quincenal: [5, 2], mensual: [15, 7], trimestral: [45, 15], semestral: [90, 30], anual: [120, 45] };
 const DIA = 86400000;
+// Turnos que apoyan pero no se miden con las horas de limpieza del día.
+const SIN_MEDIR = new Set(['front', 'nocturno', 'experiencias']);
 
 // Cuándo vence la profunda de un área y cómo de cerca estamos. Devuelve null si el
 // área no lleva profunda o si todavía queda mucho: en ese caso no se enseña nada.
@@ -217,11 +219,11 @@ async function reparto(propKey: string, fecha: string) {
     rest('hk_puestos_map?activo=eq.true&select=puesto_id,turno'),
     rest(`hk_admin_turno?property_id=eq.${P}&activo=eq.true&select=turno,dia_semana,minutos,concepto`),
     rest(`hk_asignaciones?property_id=eq.${P}&fecha=eq.${fecha}&select=id,estado`),
-    rest(`hk_tareas_op?property_id=eq.${P}&activo=eq.true&select=id,codigo,nombre,minutos,turno,hora_sugerida,dia_semana,orden,obligatoria&order=orden`),
+    rest(`hk_tareas_op?property_id=eq.${P}&activo=eq.true&select=id,codigo,nombre,minutos,turno,turnos,hora_sugerida,dia_semana,orden,obligatoria&order=orden`),
     rest(`hk_no_molestar?property_id=eq.${P}&fecha=eq.${fecha}&select=area_id,nota`),
     // Lo que hizo (o no) el turno de noche que acaba de terminar.
     rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${ayer}&select=area_id,estado,terminado_at,hk_asignaciones!inner(turno)&hk_asignaciones.turno=eq.nocturno`),
-  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>, Array<{ area_id: string; nota: string | null }>, Array<{ area_id: string; estado: string; terminado_at: string | null }>];
+  ]) as [Array<Record<string, number>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, unknown>>, Array<Record<string, string>>, Array<{ turno: string; dia_semana: string | null; minutos: number; concepto: string }>, Array<{ id: string; estado: string }>, Array<{ id: string; codigo: string; nombre: string; minutos: number; turno: string | null; turnos: string[] | null; hora_sugerida: string | null; dia_semana: string | null; orden: number; obligatoria: boolean }>, Array<{ area_id: string; nota: string | null }>, Array<{ area_id: string; estado: string; terminado_at: string | null }>];
 
   // Una profunda que se cerró reinicia el contador de su área: la siguiente se cuenta
   // desde el día en que de verdad se hizo, no desde el que tocaba en el papel.
@@ -395,8 +397,9 @@ async function reparto(propKey: string, fecha: string) {
       estatus: 'operativa', minutos: Number(o.minutos || 0), checklist_id: null,
       orden: Number(o.orden ?? 0), lote: `op:${o.id}`, op_id: String(o.id),
       titulo: o.hora_sugerida ? `${o.nombre} · ${String(o.hora_sugerida).slice(0, 5)}` : String(o.nombre),
-      turnoPref: o.turno, opcional: o.obligatoria === false,
-    } as Tarea & { turnoPref: string | null }))
+      turnosPref: (o.turnos && o.turnos.length) ? o.turnos : (o.turno ? [o.turno] : []),
+      opcional: o.obligatoria === false,
+    } as Tarea & { turnosPref: string[] }))
     .filter((t) => t.minutos > 0);
 
   // El reparto lleva TODO el inventario: habitaciones y camas. Lo que hoy no tiene un
@@ -490,7 +493,9 @@ async function reparto(propKey: string, fecha: string) {
   const opsPorPersona = new Map<string, Tarea[]>();
   const sobraOps: Tarea[] = [];
   const opsLibres: Tarea[] = [];
-  const poraOps = personas.filter((p) => p.turno !== 'front' && p.turno !== 'nocturno');
+  // Una operativa sin dueño se le da a quien vaya más libre DEL EQUIPO DE LIMPIEZA:
+  // ni front, ni la noche, ni los guías hacen lo que no se les ha pedido.
+  const poraOps = personas.filter((p) => !SIN_MEDIR.has(p.turno));
   // Front tiene una sola caja al día: la de la jefa de front, y el día que descansa,
   // la del turno de front de la mañana. El room audit va siempre a esa persona.
   const JEFA_FRONT = '88b20af6-a1e4-4ac5-b400-f5253ba7e1b7';
@@ -501,20 +506,28 @@ async function reparto(propKey: string, fecha: string) {
     // Una operativa no obligatoria (el room audit, que puede hacer front) no se
     // reparte sola: viaja a SIN ASIGNAR para que el ama de llaves la coloque.
     if (t.opcional) { opsLibres.push(t); continue; }
-    const pref = (t as Tarea & { turnoPref?: string | null }).turnoPref;
-    // El room audit es de front: va a la caja de front, no a la recamarista más libre.
-    if (pref === 'front' && front) {
-      const arr = opsPorPersona.get(kp(front)) ?? []; arr.push(t); opsPorPersona.set(kp(front), arr);
-      continue;   // no le suma carga: front no se mide por horas de limpieza
-    }
-    // Una operativa con turno propio es de ese turno y de nadie más: el reparto de
-    // cuartos lo hace el ama de llaves, y si ese día no está, queda SIN CUBRIR.
-    if (pref) {
-      const suyos = personas.filter((p) => p.turno === pref);
-      if (!suyos.length) { sobraOps.push(t); continue; }
-      const p0 = suyos.slice().sort((a, b) => ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)))[0];
-      const arr0 = opsPorPersona.get(kp(p0)) ?? []; arr0.push(t); opsPorPersona.set(kp(p0), arr0);
-      usado.set(kp(p0), (usado.get(kp(p0)) ?? 0) + t.minutos);
+    const prefs = (t as Tarea & { turnosPref?: string[] }).turnosPref ?? [];
+    // Una operativa puede tener varios turnos que pueden hacerla. Se prueba en orden
+    // y se queda con el primero que ese día esté cubierto; el ama de llaves la mueve
+    // a mano si prefiere al otro. Si ninguno está en turno, queda SIN CUBRIR.
+    if (prefs.length) {
+      let puesta = false;
+      for (const pref of prefs) {
+        // Front tiene su propia caja, la del room audit, y no se mide por horas.
+        if (pref === 'front') {
+          if (!front) continue;
+          const arrF = opsPorPersona.get(kp(front)) ?? []; arrF.push(t); opsPorPersona.set(kp(front), arrF);
+          puesta = true; break;
+        }
+        const suyos = personas.filter((p) => p.turno === pref);
+        if (!suyos.length) continue;
+        const p0 = suyos.slice().sort((a, b) => ((usado.get(kp(a)) ?? 0) / (a.cap || 1)) - ((usado.get(kp(b)) ?? 0) / (b.cap || 1)))[0];
+        const arr0 = opsPorPersona.get(kp(p0)) ?? []; arr0.push(t); opsPorPersona.set(kp(p0), arr0);
+        // Los turnos que no limpian (guías, noche) no cargan horas de limpieza.
+        if (!SIN_MEDIR.has(pref)) usado.set(kp(p0), (usado.get(kp(p0)) ?? 0) + t.minutos);
+        puesta = true; break;
+      }
+      if (!puesta) sobraOps.push(t);
       continue;
     }
     const lista = poraOps.slice().sort((a, b) =>
@@ -531,7 +544,7 @@ async function reparto(propKey: string, fecha: string) {
   // La oficina la abre quien entra primero del equipo de limpieza. Si ese día no
   // hay nadie del turno de día, la zona queda SIN CUBRIR: no es de front.
   const primerTurno = poolCuartos[0]
-    ?? personas.filter((p) => p.turno !== 'front' && p.turno !== 'nocturno')
+    ?? personas.filter((p) => !SIN_MEDIR.has(p.turno))
       .slice().sort((a, b) => (a.hi ?? '').localeCompare(b.hi ?? ''))[0] ?? null;
   const dePrimerTurno: Tarea[] = [];
   const deFront: Tarea[] = [];
@@ -604,7 +617,7 @@ async function reparto(propKey: string, fecha: string) {
       property_id: P, fecha, employee_id: p?.employee_id ?? null, nombre_display: p?.nombre ?? (etiqueta ?? 'SIN ASIGNAR'),
       turno: p?.turno ?? 'recamarista', hora_inicio: p?.hi ?? null, hora_fin: p?.hf ?? null,
       estado: 'propuesta', minutos_estimados: total, pisos, generado_por: 'motor',
-      metadata: { sin_medir: p?.turno === 'nocturno' || p?.turno === 'front', capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
+      metadata: { sin_medir: !!p && SIN_MEDIR.has(p.turno), capacidad_min: p?.cap ?? 0, capacidad_bruta_min: p?.bruta ?? 0, admin_min: p?.admin ?? 0, carga_pct: p?.cap ? Math.round((total / p.cap) * 100) : null, sin_asignar: !p, bolsa_libre: sinAsignar, etiqueta: etiqueta ?? null },
     }) }) as Array<{ id: string }>;
     const aid = asig[0].id;
     const filas = tareas.map((t, idx) => ({ asignacion_id: aid, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: metaDe(t), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: idx + 1, estado: 'pendiente' }));

@@ -457,6 +457,14 @@ tr.arow.p-rojo td:first-child,tr.arow.p-vencida td:first-child,
 #tblOps .opHora{width:96px}
 #tblOps .opDel{padding:3px 9px;line-height:1.2}
 #tblOps td{vertical-align:middle}
+#tblOps .quienes.op{display:flex;flex-wrap:wrap;gap:5px;max-width:330px}
+#tblOps .quienes.op .qk{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:500;
+  border:1px solid var(--bd);border-radius:999px;padding:3px 9px;background:var(--surface);
+  color:var(--txt);cursor:pointer;white-space:nowrap}
+#tblOps .quienes.op .qk:has(input:checked){border-color:var(--accent);background:var(--accent-soft);
+  color:var(--accent);font-weight:700}
+#tblOps .quienes.op .qk input{margin:0;width:auto}
+#tblOps .quienes.op .ay{flex-basis:100%;font-style:normal;font-size:11px;color:var(--soft)}
 #tblOps tr.apagada{opacity:.5}
 .caja.ficha{max-width:660px}
 .ficha .tipos{display:flex;gap:10px;margin:4px 0 14px}
@@ -855,7 +863,7 @@ function pintarKpis(){
   if(bd) bd.hidden = !(validado && !diaArrancado());
   let est=0,real=0,tot=0,hechas=0,sin=0;
   ASIG.forEach(a=>{
-    if(a.turno==='front'||a.turno==='nocturno') return;   // apoyo, no carga del turno de día
+    if(SIN_MEDIR.has(a.turno)) return;   // apoyo, no carga del turno de día
     const ts=a.hk_tareas||[];
     est+=a.minutos_estimados||0; tot+=ts.length;
     hechas+=ts.filter(t=>t.estado==='terminada').length;
@@ -983,7 +991,7 @@ async function diasConHueco(n=14){
   const LIMPIA=new Set(['recamarista','ama_llaves','areas_publicas']);
   // Carga media de un día, mirando solo lo que se mide (ni front ni noche).
   const porDia={};
-  (prev||[]).forEach(a=>{ if(a.turno==='front'||a.turno==='nocturno')return;
+  (prev||[]).forEach(a=>{ if(SIN_MEDIR.has(a.turno))return;
     porDia[a.fecha]=(porDia[a.fecha]||0)+Number(a.minutos_estimados||0); });
   const vals=Object.values(porDia);
   const media=vals.length?vals.reduce((x,y)=>x+y,0)/vals.length:0;
@@ -1195,7 +1203,7 @@ function pintarAsignar(){
       // Lo que está sin asignar no cuenta como trabajo repartido: queda descartado
       // hasta que alguien se lo quede.
       const k=calcPila(a,c);
-      if(a.turno==='front'||a.turno==='nocturno'){ /* apoyo: no entra en la carga del día */ }
+      if(SIN_MEDIR.has(a.turno)){ /* apoyo: no entra en la carga del día */ }
       else if(a.employee_id){ tot+=k.total; if(k.extra>0) alerta++; } else sin+=k.total;
       const nv=nivel(k.pct,k.extra);
       const w=x=>Math.max(0,Math.min(100,x/k.jornada*100));
@@ -1203,7 +1211,7 @@ function pintarAsignar(){
       const abierto=ABIERTAS.has(a.id);
       // Ni front ni el turno de noche se miden en horas: front tiene su jornada en
       // recepción y el nocturno es apoyo. Se ven sus tareas, no su productividad.
-      const sinMedir = a.turno==='front' || a.turno==='nocturno';
+      const sinMedir = SIN_MEDIR.has(a.turno);
       if(sinMedir){
         const noche=a.turno==='nocturno';
         return `<div class="acol front ${noche?'noche':''}" data-a="${a.id}">
@@ -2467,6 +2475,8 @@ const PROF_LBL={semanal:'semanal',quincenal:'quincenal',mensual:'mensual',trimes
 let ZONAS=[], BASE_NOM={};
 // Quién hace una limpieza cuando no es el turno de cuartos.
 const QUIEN_LBL={front:'lo hace front',nocturno:'ruta de la noche',primer_turno:'quien abre'};
+// Turnos que apoyan pero no se miden con las horas de limpieza del día.
+const SIN_MEDIR=new Set(['front','nocturno','experiencias']);
 // Quién puede hacer una limpieza, en el orden en que el reparto los prueba.
 const QUIENES=[['nocturno','El turno de noche'],['front','Front · recepción'],
   ['primer_turno','Quien abre por la mañana']];
@@ -2474,7 +2484,10 @@ const QUIENES=[['nocturno','El turno de noche'],['front','Front · recepción'],
 const listaQuien=z=>{ const v=z?.metadata?.asignar_a;
   return Array.isArray(v)?v:(v?[v]:[]); };
 const TURNO_LBL={ama_llaves:'Ama de llaves',recamarista:'Recamarista',areas_publicas:'Áreas públicas',
-  front:'Front · recepción',nocturno:'Turno de noche','':'Quien vaya más libre'};
+  front:'Front · recepción',experiencias:'Guías · experiencias',nocturno:'Turno de noche','':'Quien vaya más libre'};
+// En el orden en que el reparto los prueba: el primero que ese día esté en turno.
+const TURNOS_OP=['ama_llaves','recamarista','areas_publicas','front','experiencias','nocturno'];
+const listaTurnos=o=>(o.turnos&&o.turnos.length)?o.turnos:(o.turno?[o.turno]:[]);
 const DIAS_SEM=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
 function proxProf(z){
   const per=PROF_PERIODO[z.prof_frecuencia]; if(!per) return null;
@@ -2599,8 +2612,9 @@ async function cargarOps(){
     <td class="num"><input class="opMin" type="number" min="0" step="5" value="${o.minutos??''}"></td>
     <td><input class="opHora" type="time" value="${o.hora_sugerida?String(o.hora_sugerida).slice(0,5):''}"></td>
     <td><select class="opDia">${DIAS_OP.map(k=>`<option value="${k}" ${String(o.dia_semana||'')===k?'selected':''}>${DIA_OP_LBL[k]}</option>`).join('')}</select></td>
-    <td><select class="opTurno">${['','ama_llaves','recamarista','areas_publicas','front','nocturno']
-      .map(k=>`<option value="${k}" ${String(o.turno||'')===k?'selected':''}>${TURNO_LBL[k]}</option>`).join('')}</select></td>
+    <td><span class="quienes op">${TURNOS_OP.map(k=>`<label class="qk">
+      <input type="checkbox" class="opT" value="${k}" ${listaTurnos(o).includes(k)?'checked':''}> ${TURNO_LBL[k]}</label>`).join('')}
+      <i class="ay">${listaTurnos(o).length?'':'Sin marcar nada la hace quien vaya más libre del equipo de limpieza.'}</i></span></td>
     <td><select class="opObl">
       <option value="1" ${o.obligatoria===false?'':'selected'}>Obligada</option>
       <option value="0" ${o.obligatoria===false?'selected':''}>Opcional</option></select></td>
@@ -2617,7 +2631,12 @@ async function cargarOps(){
     tr.querySelector('.opMin').onchange=e=>guarda({minutos:Math.max(0,Number(e.target.value)||0)});
     tr.querySelector('.opHora').onchange=e=>guarda({hora_sugerida:e.target.value||null});
     tr.querySelector('.opDia').onchange=e=>guarda({dia_semana:e.target.value||null});
-    tr.querySelector('.opTurno').onchange=e=>guarda({turno:e.target.value||null});
+    tr.querySelectorAll('.opT').forEach(c=>c.onchange=()=>{
+      const v=[...tr.querySelectorAll('.opT:checked')].map(x=>x.value);
+      const ay=tr.querySelector('.quienes .ay');
+      if(ay) ay.textContent=v.length?'':'Sin marcar nada la hace quien vaya más libre del equipo de limpieza.';
+      guarda({turnos:v.length?v:null, turno:null});
+    });
     tr.querySelector('.opObl').onchange=e=>guarda({obligatoria:e.target.value==='1'});
     tr.querySelector('.opDel').onclick=async()=>{
       const nom=tr.querySelector('.opNom').value;
