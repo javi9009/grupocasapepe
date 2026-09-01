@@ -392,7 +392,11 @@ const opcionesCat=()=>CAT_SALIDA.map(c=>'<option value="'+c[0]+'">'+c[1]+(c[2]?'
 const _EST_SALIDA_UNUSED={emitido:['Esperando salida','warn'],entregado:['Entregado','info'],
   conciliado:['Cuadrado con CashProtect','ok'],vencido:['Venció sin usarse','none'],cancelado:['Cancelado','none']};
 const DENOM=[1000,500,200,100,50,20,10,5,2,1];
-const SEC=[['resumen','Toda la caja'],['dia','El día'],['arqueo','Arqueo de caja']];
+// Cinco pantallas, y cada una responde una pregunta sola. Antes «Arqueo de caja»
+// llevaba dentro cuatro cosas distintas —el árbol de cajas, el ingreso por turno, el
+// relevo y el conteo— y no se sabía a cuál mirar.
+const SEC=[['resumen','Toda la caja'],['dia','El día'],['arqueo','Arqueo de caja'],
+           ['ingresos','Ingresos'],['fondos','Fondo de caja']];
 
 let ACC=null, prop=null, propNombre='', fecha=null, sec='dia', D=null, cargando=false;
 let MES=[], RES=null, justificando=null, CTAS=null;
@@ -435,7 +439,9 @@ async function arranque(){
   $('secnav').addEventListener('click',async e=>{const b=e.target.closest('[data-s]');if(!b)return;sec=b.dataset.s;
     $('secnav').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.s===sec));
     if(sec==='resumen'&&!RES){pinta();await cargaResumen();}
-    if(sec==='arqueo'&&!CAJAS){pinta();await cargaCajas();await cargaTurnos();await cargaArqueos();await cargaRelevos();}
+    if(sec==='arqueo'&&!ARQ){pinta();await cargaCajas();await cargaArqueos();}
+    if(sec==='ingresos'&&!TUR){pinta();await cargaCajas();await cargaTurnos();await cargaIngresos();}
+    if(sec==='fondos'&&!FON){pinta();await cargaCajas();await cargaFondos();await cargaRelevos();}
     pinta();});
   // El árbol de cajas se abre y se cierra en el sitio, y los movimientos de cada una
   // se piden sólo cuando alguien la abre.
@@ -454,6 +460,8 @@ async function arranque(){
     if(ag){ ag.disabled=true; await guardaArqueo(); ag.disabled=false; return; }
     const tg=e.target.closest('[data-turgo]');
     if(tg){ tg.disabled=true; await guardaTurnos(); tg.disabled=false; return; }
+    const fg=e.target.closest('[data-fondogo]');
+    if(fg){ fg.disabled=true; await guardaAjusteFondo(); fg.disabled=false; return; }
     const go=e.target.closest('[data-cajago]');
     if(go){ go.disabled=true; await guardaCaja(go.dataset.cajago); return; }
     const fi=e.target.closest('.cajafila');
@@ -504,7 +512,7 @@ async function carga(){
   cargando=true;justificando=null;
   // Las cajas son de una propiedad y de una fecha: al cambiar cualquiera de las dos
   // hay que volver a pedirlas, o se queda pintado lo de la propiedad anterior.
-  CAJAS=null; TUR=null; ARQ=null; REL=null; LIBRO={}; cajaAbierta=null; formCaja=null;
+  CAJAS=null; TUR=null; ARQ=null; REL=null; FON=null; ING=null; LIBRO={}; cajaAbierta=null; formCaja=null;
   pinta();
   D=await rpc('aud_caja_dia',{p_property:prop,p_fecha:fecha});
   // El aviso se limpia cuando la propiedad si responde: antes se quedaba pegado de la
@@ -514,7 +522,9 @@ async function carga(){
       +esc(propNombre||'esta propiedad')+'. Elige otra arriba.</div>'; }
   else { $('gate').innerHTML=''; }
   await cargaMes();
-  if(sec==='arqueo'){ await cargaCajas(); await cargaTurnos(); await cargaArqueos(); await cargaRelevos(); }
+  if(sec==='arqueo'){ await cargaCajas(); await cargaArqueos(); }
+  if(sec==='ingresos'){ await cargaCajas(); await cargaTurnos(); await cargaIngresos(); }
+  if(sec==='fondos'){ await cargaCajas(); await cargaFondos(); await cargaRelevos(); }
   cargando=false;pinta();
 }
 function iso(d){const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
@@ -625,17 +635,22 @@ async function centraTiraEn(f){
 async function cargaCuentas(){ try{const r=await rpc('aud_cuentas_gasto'); CTAS=(r&&!r.error)?r:{};}catch(e){CTAS={};} }
 async function cargaResumen(){ const r=await rpc('aud_caja_resumen'); RES=(r&&!r.error)?r:[]; }
 
+const SEC_TIT={resumen:'Toda la caja',arqueo:'Arqueo de caja',ingresos:'Ingresos',fondos:'Fondo de caja'};
 function pinta(){
   const esRes = sec==='resumen';
+  // El fondo de caja no es de un día: es una cadena de manos. Ni la tira de días ni
+  // los tiles del día dicen nada ahí.
+  const deDia = (sec==='dia'||sec==='arqueo'||sec==='ingresos');
   $('propsub').textContent=esRes?'Grupo Casa Pepe':(propNombre+(D?(D.modo==='cashprotect'?' · CashProtect':' · arqueo manual'):''));
-  $('titulo').textContent=esRes?'Toda la caja':(fecha?fmtFecha(fecha):'');
-  $('secmes').hidden=esRes;
+  $('titulo').textContent=esRes?'Toda la caja':(deDia&&fecha?fmtFecha(fecha):(SEC_TIT[sec]||''));
+  $('secmes').hidden=!deDia;
   if(cargando){$('tiles').innerHTML='';$('cuerpo').innerHTML='<div class="empty">Cargando…</div>';return;}
   if(esRes){ $('tiles').innerHTML=''; $('cuerpo').innerHTML=vistaResumen(); return; }
+  if(sec==='fondos'){ $('tiles').innerHTML=''; $('cuerpo').innerHTML=vistaFondos(); return; }
   if(!D){$('tiles').innerHTML='';$('cuerpo').innerHTML='';return;}
-  $('tiles').innerHTML=tiles();
+  $('tiles').innerHTML = sec==='dia'?tiles():'';
   $('tira').innerHTML=pintaTira();
-  $('cuerpo').innerHTML = sec==='dia'?vistaDia() : vistaArqueo();
+  $('cuerpo').innerHTML = sec==='dia'?vistaDia() : (sec==='ingresos'?vistaIngresos():vistaArqueo());
 }
 
 // ── Tira de los últimos 30 días ───────────────────────────────────────────
@@ -1212,18 +1227,163 @@ async function guardaCaja(que){
   }catch(e){ di('bad', esc(String(e.message||e))); }
 }
 
+/* ---------- El histórico del ingreso por turno ----------
+   Un día suelto no dice nada. La serie sí: qué turnos se quedan en blanco y qué días
+   no cuadran contra lo que los sistemas dicen que se cobró en efectivo. */
+let ING=null, FON=null;
+async function cargaIngresos(){
+  try{ const r=await rpc('aud_ingresos_historico',{p_property:prop,p_dias:30});
+       ING=(r&&!r.error)?r:null; }catch(e){ ING=null; }
+}
+function bloqueIngresosHistorico(){
+  if(!ING) return '';
+  const TT=ING.turnos||[], D2=(ING.dias||[]).filter(d=>Number(d.n)>0||Number(d.vendido)>0);
+  if(!D2.length) return '';
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Histórico por turno</h2>'
+    +'<p class="lede">Los últimos 30 días. Un turno vacío no es un cero: es un turno que nadie capturó.</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Día</th>'
+    +TT.map(t=>'<th class="n">'+esc(t[1])+'</th>').join('')
+    +'<th class="n">Capturado</th><th class="n">Se vendió</th><th class="n">Diferencia</th>'
+    +'<th>Quién</th></tr></thead><tbody>'
+    +D2.map(d=>{
+      const cap=d.capturado||{}, dif=Number(d.total||0)-Number(d.vendido||0), ok=Math.abs(dif)<1;
+      return '<tr'+(fechaISO(fecha)===d.fecha?' class="sum"':'')+'>'
+        +'<td class="mono">'+esc(fmtCorto(d.fecha))+'</td>'
+        +TT.map(t=>{ const v=cap[t[0]];
+            return '<td class="n">'+(v===undefined
+              ?'<span class="sub" style="margin:0;color:var(--faint)">—</span>':m(v))+'</td>'; }).join('')
+        +'<td class="n"><b>'+m(d.total)+'</b></td>'
+        +'<td class="n">'+m(d.vendido)+'</td>'
+        +'<td class="n">'+(ok?'<span class="chip ok">Cuadra</span>'
+                             :'<b style="color:var(--bad)">'+m(dif)+'</b>')+'</td>'
+        +'<td>'+esc(d.quien||'—')+'</td></tr>';
+    }).join('')+'</tbody></table></div></section>';
+}
+
+/* ---------- El fondo cambiando de manos ----------
+   Quién se la dejó a quién, cuánto contó cada uno y en qué quedó. Esto no sale de
+   ningún POS: lo escriben las dos personas al entregar y al recibir. */
+async function cargaFondos(){
+  try{ const hoy=hoyCDMX();
+       const r=await rpc('aud_fondos_caja',{p_property:prop,p_desde:null,p_hasta:hoy});
+       FON=(r&&!r.error)?r:null; }catch(e){ FON=null; }
+}
+const ENT_ET={confirmado_entrega:['bad','Sin aceptar'],con_diferencia:['warn','Contaron distinto'],
+  validado:['ok','Aceptada']};
+function bloqueEntregas(){
+  if(!FON) return '';
+  const P=FON.pendientes||[], R=FON.relevos||[];
+  const alerta = P.length
+    ? '<section class="sec" style="margin-top:26px"><div class="sechead"><h2>Pide atención</h2>'
+      +'<p class="lede">Cajas que nadie ha aceptado, o donde quien entregó y quien recibió contaron distinto.</p></div>'
+      +'<div class="card">'+P.map(k=>{
+          const sin=k.estado==='confirmado_entrega';
+          return '<div class="exc-item'+(sin?'':' warn')+'" style="border-radius:0;box-shadow:none;border-left-width:3px">'
+            +'<div><b>'+(k.icono||'')+' '+esc(k.caja)+'</b> · '+esc(k.cuando)
+            +'<span class="sub">'+esc(k.de)+' → '+esc(k.para)+' · '+esc(k.que_pasa)+'</span>'
+            +(k.nota?'<span class="sub">📝 '+esc(k.nota)+'</span>':'')+'</div>'
+            +'<div class="exc-m">'+(sin?m(k.entregado):m(k.diferencia))+'</div></div>'; }).join('')
+      +'</div></section>'
+    : '';
+  if(!R.length) return alerta
+    +'<section class="sec" style="margin-top:26px"><div class="sechead"><h2>El fondo, de mano en mano</h2></div>'
+    +'<div class="empty">Todavía no hay ningún relevo registrado. El relevo se hace desde el reloj de '
+    +'soypepe: al marcar «Me voy» y al marcar «Llegué».</div></section>';
+  return alerta
+    +'<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>El fondo, de mano en mano</h2>'
+    +'<p class="lede">Lo que pasa de turno en turno no es sólo el fondo: es el fondo más la venta que se '
+    +'lleva anotada, hasta que de noche el auditor lo recoge todo.</p></div>'
+    +'<div class="card scroll"><table><thead><tr><th>Cuándo</th><th>Caja</th><th>De → a</th>'
+    +'<th class="n">Fondo</th><th class="n">Venta</th><th class="n">Recibió</th>'
+    +'<th class="n">Diferencia</th><th>Cómo quedó</th></tr></thead><tbody>'
+    +R.map(k=>{
+      const et=ENT_ET[k.estado]||['none',k.estado];
+      const dif=Number(k.diferencia||0);
+      return '<tr><td class="mono">'+esc(k.cuando)+'</td>'
+        +'<td>'+(k.icono||'')+' '+esc(k.caja)+(k.cierra_dia?' '+chip('info','cierre'):'')+'</td>'
+        +'<td>'+esc(k.de)+' → '+esc(k.para)+(k.nota?'<span class="sub">📝 '+esc(k.nota)+'</span>':'')+'</td>'
+        +'<td class="n">'+m(k.fondo_entrega)+'</td><td class="n">'+m(k.venta_entrega)+'</td>'
+        +'<td class="n">'+(k.recibido==null?'—':m(k.recibido))+'</td>'
+        +'<td class="n">'+(k.recibido==null?'—':(Math.abs(dif)<0.01?'<span class="chip ok">0.00</span>'
+             :'<b style="color:var(--bad)">'+m(dif)+'</b>'))+'</td>'
+        +'<td>'+chip(et[0],et[1])+'</td></tr>';
+    }).join('')+'</tbody></table></div></section>';
+}
+
+/* ---------- Ajustar el fondo ----------
+   Un fondo se reponía o se recortaba sin dejar rastro. Aquí un retiro o un ingreso
+   queda como movimiento con fecha, importe y motivo escrito. */
+function bloqueAjusteFondo(){
+  const L=((CAJAS&&CAJAS.cajas)||[]).filter(c=>c[7]!=='cashprotect');
+  if(!L.length||!(CAJAS&&CAJAS.puede_mover)) return '';
+  return '<section class="sec" style="margin-top:26px"><div class="sechead">'
+    +'<h2>Ajustar el fondo</h2>'
+    +'<p class="lede">Reponer un fondo o recortarlo. Queda como movimiento con fecha y motivo, '
+    +'igual que un gasto: el saldo no cambia por arte de magia.</p></div>'
+    +'<div class="form">'
+    +'<label>Caja<select id="f_caja">'
+      +L.map(c=>'<option value="'+esc(c[0])+'">'+esc(c[3])+'</option>').join('')+'</select></label>'
+    +'<label>Qué pasa<select id="f_tipo">'
+      +'<option value="ingreso">Entra dinero al fondo (reposición)</option>'
+      +'<option value="retiro">Sale dinero del fondo (retiro)</option></select></label>'
+    +'<label>Importe<input id="f_monto" type="number" step="0.01" min="0" placeholder="0.00"></label>'
+    +'<label>Fecha<input id="f_fecha" type="date" value="'+esc(fechaISO(fecha)||hoyCDMX())+'"></label>'
+    +'<label style="grid-column:1/-1">Por qué<input id="f_motivo" type="text" '
+      +'placeholder="Se repone el fondo tras el pago de la nómina"></label>'
+    +'<div style="grid-column:1/-1"><button class="btn" type="button" data-fondogo="1">Guardar el ajuste</button>'
+    +'<span class="res" id="f_res" hidden style="margin-left:10px"></span></div>'
+    +'</div></section>';
+}
+async function guardaAjusteFondo(){
+  const el=$('f_res'); el.hidden=false; el.className='res'; el.textContent='Guardando…';
+  const caja=$('f_caja').value, tipo=$('f_tipo').value;
+  const p={monto:$('f_monto').value, motivo:$('f_motivo').value, fecha:$('f_fecha').value};
+  if(tipo==='retiro') p.origen=caja; else p.destino=caja;
+  try{
+    const r=await rpc('aud_caja_traspasar',{p});
+    if(!r||!r.ok){ el.className='res bad'; el.textContent=(r&&r.mensaje)||'No se pudo guardar.'; return; }
+    el.className='res ok'; el.textContent='✓ '+r.mensaje;
+    CAJAS=null; LIBRO={}; FON=null; await cargaCajas(); await cargaFondos(); pinta();
+  }catch(e){ el.className='res bad'; el.textContent=String(e.message||e); }
+}
+
+/* ── Arqueo de caja ──────────────────────────────────────────────────────────
+   Una sola cosa: cuánto había de verdad en el cajón. Ni ingresos ni relevos. */
 function vistaArqueo(){
+  return '<section class="sec"><div class="sechead"><h2>Contar la caja</h2>'
+   +'<p class="lede">Aquí se carga lo que <b>de verdad</b> había en el cajón el día que alguien lo contó. '
+   +'El sistema no pregunta cuánto debería haber —eso ya lo sabe— sólo qué encontraste. '
+   +'Si las dos cifras no coinciden, la diferencia se enseña; no se corrige sola.</p></div></section>'
+   +bloqueArqueos()
+   +bloqueContar();
+}
+
+/* ── Ingresos ────────────────────────────────────────────────────────────────
+   El efectivo que cada turno entrega a la caja grande, y la serie de los días. */
+function vistaIngresos(){
+  return '<section class="sec"><div class="sechead"><h2>El ingreso por turno</h2>'
+   +'<p class="lede">Lo que cada turno entregó en billetes a la caja grande, comparado con lo que '
+   +'los sistemas dicen que se cobró en efectivo. El consumo de la terraza cargado al cuarto no se '
+   +'cuenta dos veces: se descuenta antes de comparar.</p></div></section>'
+   +bloqueTurnos()
+   +bloqueIngresosHistorico();
+}
+
+/* ── Fondo de caja ───────────────────────────────────────────────────────────
+   Dónde está el efectivo, cómo va pasando de mano en mano, y el ajuste del fondo. */
+function vistaFondos(){
   const hayCP=((CAJAS&&CAJAS.cajas)||[]).some(c=>c[7]==='cashprotect');
-  return '<section class="sec"><div class="sechead"><h2>Dónde está el efectivo</h2>'
+  return '<section class="sec"><div class="sechead"><h2>¿Dónde está mi efectivo?</h2>'
    +'<p class="lede">Todo el dinero en billetes de esta propiedad, caja por caja. Toca cualquiera para ver de dónde '
    +'salió cada peso.'
    +(hayCP?' CashProtect no lleva libro aquí: su saldo lo dice la propia máquina.'
           :' Aquí no hay CashProtect, así que todo el efectivo se lleva a mano.')+'</p></div>'
    +bloqueCajas()+'</section>'
-   +bloqueTurnos()
-   +bloqueRelevos()
-   +bloqueArqueos()
-   +bloqueContar();
+   +bloqueAjusteFondo()
+   +bloqueEntregas()
+   +bloqueRelevos();
 }
 
 /* ---------- Contar una caja ----------
