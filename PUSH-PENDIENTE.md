@@ -1,137 +1,64 @@
-# Numerito en el icono y notificaciones push — estado
+# Avisos al teléfono (Web Push) — cómo funciona
 
-**Fecha:** 2026-08-31
-
----
-
-## Lo que ya funciona (subido)
-
-`app-badge.js` pone en el icono de la app el número de pendientes:
-notificaciones sin leer + conversaciones del chat con mensajes sin leer.
-
-Se recalcula:
-- al abrir la app
-- al volver a ella (`visibilitychange`, `focus`)
-- cada 60 segundos mientras está abierta
-- al marcar notificaciones como leídas
-- al abrir una conversación del chat (`markRead`)
-
-### Para que el equipo lo vea
-
-**Tienen que instalar la app en la pantalla de inicio.** En una pestaña
-normal del navegador la Badging API no hace nada — no falla, se ignora.
-
-- **Android/Chrome:** menú ⋮ → "Añadir a pantalla de inicio" / "Instalar app"
-- **iPhone/Safari:** botón compartir → "Añadir a pantalla de inicio".
-  Requiere iOS 16.4 o superior.
+**Actualizado:** 2026-09-02 · antes este archivo describía lo que faltaba; ya está montado.
 
 ---
 
-## Lo que NO funciona todavía
+## Qué hace
 
-**Con la app cerrada el número no se actualiza.** Si a alguien le llega un
-mensaje mientras no tiene la app abierta, el icono sigue mostrando el
-número viejo hasta que la abra.
+Cuando a un colaborador le entra cualquier cosa, le suena y vibra el teléfono
+aunque tenga la app cerrada: mensaje del chat, tarea asignada, contrato por
+firmar, bono conseguido, respuesta de dirección en el buzón, avisos de
+housekeeping, nómina, vacaciones… Todo lo que ya escribe en la tabla
+`notificaciones` dispara aviso, sin tocar nada más.
 
-Esto no se puede arreglar con más JavaScript en la página: hace falta que
-el celular reciba un aviso del servidor aunque la app esté cerrada. Eso es
-Web Push.
+Al tocar el aviso se abre SoyPepe en la pantalla que corresponde
+(`accion->>'url'` de la notificación, o `/soypepe/` si no trae ninguna).
 
----
+## Las cinco piezas
 
-## Lo que falta para Web Push
+| Pieza | Dónde | Qué hace |
+|---|---|---|
+| `push-avisos.js` (raíz) | cliente | Pide permiso con un botón y guarda la suscripción en `push_subscriptions`. Si el permiso ya estaba dado, re-suscribe solo al entrar. |
+| Botón "Activar avisos" | `soypepe/index.html`, panel de Notificaciones | Único sitio donde se pide el permiso. Nunca al cargar. |
+| `push` + `notificationclick` | `soypepe/service-worker.js` y `sp/service-worker.js` | Pintan el aviso con vibración `[200,100,200,100,300]` y el numerito del icono; al tocarlo traen la app al frente. |
+| Edge Function `push-notif` | Supabase | Manda el push a todos los teléfonos vivos de esa persona y desactiva los que devuelven 410. |
+| Trigger `notificaciones_push_trg` | Postgres | `AFTER INSERT` en `notificaciones` → `pg_net` → `push-notif`. Si falla, **nunca** tumba la notificación. |
 
-### 1. Claves VAPID (las tiene que generar Javi)
+El chat va por su cuenta: `m/mensajes.html` llama directamente a `push-chat`,
+que ya existía. No pasa por `notificaciones`, así que no hay avisos duplicados.
 
-```bash
-npx web-push generate-vapid-keys
-```
+## Claves y secretos
 
-Devuelve una clave pública y una privada. La pública va en el código; la
-privada es secreta y va en Supabase:
+- VAPID pública (va en el cliente): `BE1A8YAVdUnW0_y7zFiURL0As5fTFkbYy2Z0A30KnOOYQI5w4MF-LLUGk5saVuscA0991BGXKiM57BHshQQdKFQ`
+- VAPID privada: dentro de las funciones `push-notif` y `push-chat` en Supabase. No la copies a ningún otro sitio.
+- El trigger llama a la función con la cabecera `x-cpp-secret`. Si la cambias, cámbiala en los dos lados a la vez o dejan de llegar avisos.
 
-```bash
-supabase secrets set VAPID_PUBLIC_KEY=...
-supabase secrets set VAPID_PRIVATE_KEY=...
-supabase secrets set VAPID_SUBJECT=mailto:javi@casapepe.mx
-```
+## Lo que hay que decirle al equipo
 
-### 2. Tabla de suscripciones
+**Hay que instalar la app en la pantalla de inicio y pulsar "Activar avisos"
+una vez.** Sin esos dos pasos no llega nada.
 
-```sql
-create table push_suscripciones (
-  id           uuid primary key default gen_random_uuid(),
-  email        text not null,
-  endpoint     text not null unique,
-  p256dh       text not null,
-  auth         text not null,
-  user_agent   text,
-  created_at   timestamptz default now()
-);
-alter table push_suscripciones enable row level security;
--- política: cada quien ve y borra sólo las suyas
-```
+- **Android/Chrome:** menú ⋮ → "Instalar app" / "Añadir a pantalla de inicio".
+- **iPhone/Safari:** botón compartir → "Añadir a pantalla de inicio". Requiere
+  iOS 16.4 o superior, y **sólo funciona desde el icono**, no desde Safari.
 
-### 3. Pedir permiso y suscribir (en el cliente)
+Después: SoyPepe → campana → "Activar avisos" → permitir.
 
-Al entrar a SoyPepe, `Notification.requestPermission()` y luego
-`registration.pushManager.subscribe(...)` con la clave pública. La
-suscripción resultante se guarda en la tabla de arriba.
+El sonido y la vibración los manda el sistema operativo, no la web: si el
+teléfono tiene la app silenciada o en modo "no molestar", el aviso llega pero
+callado. Eso se arregla en los ajustes del teléfono, no aquí.
 
-**Ojo:** el permiso hay que pedirlo tras un gesto del usuario (un botón
-"Activar avisos"), no al cargar. Si se pide de golpe, muchos lo bloquean
-y luego cuesta revertirlo.
+## Mantenimiento
 
-### 4. Service worker: recibir el push
+- Las suscripciones caducan. `push-notif` marca `activo=false` en cuanto un
+  endpoint devuelve 404/410, así que la tabla se limpia sola.
+- Para ver si un aviso salió: `select status_code, content from net._http_response order by created desc limit 5;`
+- Para ver quién tiene teléfono dado de alta: `select email, activo, created_at from push_subscriptions order by created_at desc;`
 
-En `soypepe/service-worker.js` faltan dos listeners:
+## Lo que queda por decidir (operación, no técnica)
 
-```js
-self.addEventListener('push', (e) => {
-  const d = e.data ? e.data.json() : {};
-  e.waitUntil((async () => {
-    if (typeof d.badge === 'number') {
-      try { await navigator.setAppBadge(d.badge); } catch (err) {}
-    }
-    await self.registration.showNotification(d.titulo || 'Casa Pepe', {
-      body: d.cuerpo || '',
-      icon: '/soypepe/icon-192.png',
-      data: { url: d.url || '/soypepe/' }
-    });
-  })());
-});
-
-self.addEventListener('notificationclick', (e) => {
-  e.notification.close();
-  e.waitUntil(clients.openWindow(e.notification.data.url));
-});
-```
-
-### 5. Edge Function que envía
-
-Una función que se dispare al insertar en `chat_mensajes` o en
-`notificaciones` (trigger de Postgres o Realtime), calcule el total de
-pendientes de cada destinatario y le mande el push con ese número.
-
-Va en `supabase/functions/push-enviar/`.
-
----
-
-## Advertencias
-
-- **iOS es quisquilloso.** Web Push sólo funciona con la PWA instalada,
-  desde iOS 16.4. En Safari normal no llega nada.
-- **Las suscripciones caducan.** Hay que borrar de la tabla las que
-  devuelvan 410 Gone al enviar, o la tabla se llena de basura y cada envío
-  se hace más lento.
-- **Pensar antes el ruido.** Si cada mensaje de cada grupo manda push, el
-  equipo va a silenciar la app en una semana. Conviene decidir qué
-  merece push: ¿sólo menciones y tickets asignados? ¿mensajes directos sí
-  y grupos no? Eso es una decisión de operación, no técnica.
-
----
-
-## Siguiente paso
-
-Javi genera las claves VAPID y decide qué eventos merecen push. Con eso
-se puede montar el resto.
+Ahora mismo **todo** lo que entra en `notificaciones` manda push. Si el equipo
+empieza a silenciar la app por ruido, el sitio donde se recorta es el trigger
+`notificaciones_push()`: ahí se puede filtrar por tipo de aviso o por horario
+sin tocar el resto del sistema.

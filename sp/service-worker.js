@@ -2,7 +2,7 @@
    Estrategia: network-first para el HTML (la app vive en Supabase, siempre fresca),
    cache-first para iconos. Suficiente para que la PWA sea instalable y abra offline
    con el último shell conocido. */
-const CACHE = 'soypepe-v1';
+const CACHE = 'soypepe-v2';
 const ICONS = ['/soypepe/icon-192.png', '/soypepe/icon-512.png', '/soypepe/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -39,4 +39,42 @@ self.addEventListener('fetch', (e) => {
       return r;
     }))
   );
+});
+
+/* ── Avisos al teléfono (Web Push) — mismo comportamiento que /soypepe/ ── */
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_e) { d = {}; }
+  e.waitUntil((async () => {
+    if (typeof d.badge === 'number') {
+      try {
+        if (d.badge > 0) await navigator.setAppBadge(d.badge);
+        else await navigator.clearAppBadge();
+      } catch (_e) { /* navegador sin Badging API: el aviso igual se muestra */ }
+    }
+    await self.registration.showNotification(d.title || 'Casa Pepe', {
+      body: d.body || '',
+      icon: d.icon || '/soypepe/icon-192.png',
+      badge: '/soypepe/icon-192.png',
+      tag: d.tag || 'casapepe',
+      renotify: true,
+      vibrate: [200, 100, 200, 100, 300],
+      data: { url: d.url || '/sp/' }
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const destino = (e.notification.data && e.notification.data.url) || '/sp/';
+  e.waitUntil((async () => {
+    const lista = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of lista) {
+      if (c.url.indexOf(self.location.origin) === 0 && 'focus' in c) {
+        try { await c.navigate(destino); } catch (_e) {}
+        return c.focus();
+      }
+    }
+    return clients.openWindow(destino);
+  })());
 });
