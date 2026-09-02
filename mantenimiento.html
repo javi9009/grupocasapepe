@@ -403,7 +403,8 @@ function autoReco(of,tarea){
    herreria:'Revisa soldaduras y óxido; lija, aplica anticorrosivo y verifica firmeza.',
    electronica_it:'Revisa conexiones y prueba funcionamiento; limpia polvo y ventilación.',
    general:'Haz la revisión completa, deja el área limpia y reporta cualquier anomalía.'};
-  return m[of]||m.general;
+  const base=m[of]||m.general;
+  return tarea?`«${tarea}»: ${base}`:base;
 }
 let CAL={plan:[],cols:[],weeks:[],locs:{}};
 
@@ -1090,11 +1091,11 @@ async function renderPrev(){
       <span class="muted" style="font-size:12px">Filtrar:</span>
       ${ofChips.map(o=>`<button class="btn ghost sm" style="${FILT===o[0]?'border-color:var(--accent);color:var(--accent)':''}" onclick="window.PREV_FILT='${o[0]}';renderPrev()">${o[1]}</button>`).join('')}
     </div>
-    <div class="card"><div class="scroll"><table><thead><tr><th>Trabajo</th><th>Oficio</th><th>Subtareas</th><th>Dónde</th><th class="num">h/año</th><th>Ejecución</th><th></th></tr></thead>
-    <tbody>${list.length?list.map(r=>{const n=alcanceN(r.alcance||'especifico');const reco=r.recomendacion||r.ficha_texto;const subs=subsDe(r);const pers=[...new Set(subs.map(s=>s.periodicidad))].join(', ');
-      return `<tr><td>${esc(r.tarea)}${r.critico?' <span class="chip c-react">crítico</span>':''}${reco?`<details class="reco"><summary>ver ficha</summary><div class="txt">${esc(reco)}</div></details>`:''}</td>
+    <div class="card"><div class="scroll"><table><thead><tr><th>Trabajo</th><th>Oficio</th><th>Periodicidad</th><th>Dónde</th><th class="num">h/año</th><th>Ejecución</th><th></th></tr></thead>
+    <tbody>${list.length?list.map(r=>{const n=alcanceN(r.alcance||'especifico');const reco=r.recomendacion||r.ficha_texto||autoReco(r.oficio||'general',r.tarea);
+      return `<tr><td>${esc(r.tarea)}${r.critico?' <span class="chip c-react">crítico</span>':''}${reco?`<details class="reco"><summary>ver recomendación</summary><div class="txt">${esc(reco)}</div></details>`:''}</td>
       <td>${r.oficio?esc(ofNombre(r.oficio)):'—'}</td>
-      <td><button class="btn ghost sm" onclick="editSubs('${r.id}')">🧩 ${subs.length} subtarea${subs.length!==1?'s':''}</button><div class="muted" style="font-size:11px">${esc(pers)}</div></td>
+      <td>${esc(r.periodicidad||'—')}</td>
       <td>${(r.alcance||'especifico')==='especifico'?esc(r.ubic?.nombre||'—'):`${ALCANCE[r.alcance]} <span class="muted">(${n})</span>`}</td>
       <td class="num">${prevHorasAnio(r).toFixed(1)}</td>
       <td>${r.ejecucion==='externo'?`<span class="chip c-info">🏢 ${esc(r.empresa||'externo')}</span>${r.presupuesto?`<div class="muted" style="font-size:11px">${money(r.presupuesto)}</div>`:''}`:'<span class="chip c-prev">interno</span>'}</td>
@@ -1117,11 +1118,12 @@ function prevForm(r){ r=r||{};
       <div><label>Presupuesto ($)</label><input id="pPresu" type="number" min="0" value="${r.presupuesto||''}"></div>
       <div><label>Contacto</label><input id="pProv" value="${esc(r.proveedor_contacto||'')}"></div>
     </div>
-    <div class="full"><label>Ficha / recomendación (la ve el técnico)</label><textarea id="pRec" rows="3" placeholder="Tareas, herramientas y notas de seguridad…">${esc(r.recomendacion||r.ficha_texto||'')}</textarea></div>
+    <div class="full"><label>Recomendación para el técnico <span class="muted" style="font-weight:400">(si la dejas vacía, se genera sola por oficio + elemento)</span></label><textarea id="pRec" rows="3" placeholder="Se autogenera por oficio y elemento; edítala si quieres…">${esc(r.recomendacion||r.ficha_texto||'')}</textarea></div>
   </div>`;
 }
 function prevPayload(){
   const eje=$("#pEje").value;
+  const _reco=$("#pRec").value.trim()||autoReco($("#pOf").value||'general',$("#pTarea").value.trim());
   return { tarea:$("#pTarea").value.trim(), alcance:$("#pAlc").value,
     ubicacion_id:($("#pAlc").value==='especifico'?($("#pUbic").value||null):null),
     periodicidad:$("#pPer").value, minutos_estimados:parseInt($("#pMin").value)||null,
@@ -1129,7 +1131,7 @@ function prevPayload(){
     empresa:eje==='externo'?($("#pEmp").value.trim()||null):null,
     presupuesto:eje==='externo'?(parseFloat($("#pPresu").value)||null):null,
     proveedor_contacto:eje==='externo'?($("#pProv").value.trim()||null):null,
-    recomendacion:$("#pRec").value.trim()||null, ficha_texto:$("#pRec").value.trim()||null };
+    recomendacion:_reco, ficha_texto:_reco };
 }
 async function addPrev(){
   const {data:ubis}=await sb.from("mtto_ubicaciones").select("id,nombre").eq("property_id",PROP.id).order("orden");
@@ -1159,7 +1161,7 @@ async function generarPlanPrev(anio){
   if(!confirm("Regenerar el plan "+anio+" de preventivos INTERNOS. Se rehará la lista de trabajos del año y quedarán TODOS en «por asignar» en el Calendario (Juan/Manuel los colocan). ¿Continuar?"))return;
   toast("Generando plan…");
   await sb.from("mtto_preventivo_plan").delete().eq("property_id",PROP.id).eq("anio",anio);
-  const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
+  const {data,error}=await sb.rpc("mtto_generar_plan_prop",{p_prop:PROP.id,p_anio:anio});
   if(error)return toast(error.message);
   toast("Plan "+anio+" listo · "+(data||0)+" trabajos en «por asignar»");renderPrev();}
 async function soltarPreventivos(){
