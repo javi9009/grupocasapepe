@@ -283,20 +283,24 @@ async function ensureRutinas(){
 
 const DONE=t=>['resuelto','cerrado'].includes(t.estado);
 const doneDate=t=>((t.resuelto_at||t.cerrado_at||'')+'').slice(0,10);
-// Capacidad por día: 8h menos la parte diaria de reservas (reactivos+admin+consumos)
-function capDia(){ const c=CFG||{};
-  const horas=+c.horas_dia||8, dias=+c.dias_semana||6;
-  const reservaSem=(+c.reserva_reactivo_h||0)+(+c.admin_h||0)+(+c.consumos_h||0);
+// Capacidad por día: 8h menos reservas. Reserva diaria = LECTURA de medidores
+// (30 min, todos los días). Las horas de ADMIN van SOLO el lunes (briefing).
+const LECT_MIN=30;
+function capDiaFor(d){ const c=CFG||{};
+  const horas=+c.horas_dia||8;
   const capMin=Math.round(horas*60);
-  const reservaMin=Math.round(reservaSem/(dias||6)*60);
-  return { capMin, reservaMin, dispMin:Math.max(0,capMin-reservaMin) };
+  let reservaMin=LECT_MIN;                              // lectura, todos los días
+  if(d===0) reservaMin+=Math.round((+c.admin_h||0)*60); // admin/briefing solo lunes
+  reservaMin=Math.min(reservaMin,capMin);
+  return { capMin, reservaMin, dispMin:Math.max(0,capMin-reservaMin), esLunes:d===0 };
 }
-function pilaDia(planMin, cap){ const {capMin,reservaMin,dispMin}=cap;
+function pilaDia(planMin, cap){ const {capMin,reservaMin,dispMin,esLunes}=cap;
   const over=Math.max(0,planMin-dispMin), fill=Math.min(planMin,dispMin);
   const pR=reservaMin/capMin*100, pF=fill/capMin*100;
   const cls=over>0?'bad':(planMin>0&&planMin>=dispMin*0.9?'warn':'');
+  const resTxt=`${fmtDur(reservaMin)} reservadas (${esLunes?'lectura + briefing':'lectura'})`;
   const lbl= over>0 ? `⚠️ ${fmtDur(planMin)} planeado · te pasas ${fmtDur(over)} (libre ${fmtDur(dispMin)}/día)`
-                    : `⏱️ ${fmtDur(planMin)} / ${fmtDur(dispMin)} libres · ${fmtDur(reservaMin)} reservadas`;
+                    : `⏱️ ${fmtDur(planMin)} / ${fmtDur(dispMin)} libres · ${resTxt}`;
   return `<div class="dpwrap"><div class="dpila ${cls}"><i class="res" style="width:${pR}%"></i><i class="fil" style="width:${pF}%"></i></div><div class="dplbl">${lbl}</div></div>`;
 }
 function paint(){
@@ -336,14 +340,14 @@ function paint(){
     const sinDia=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!t.dia_programado);
     html+=`<div class="sechd">🗂️ Por hacer (sin día) · arrástralos a un día</div>`;
     html+=sinDia.length?sinDia.map(t=>card(t,ro)).join(''):'<div class="empty" style="padding:16px">Todo agendado 👍</div>';
-    const cap=capDia();
     for(let d=0;d<7;d++){ const ds=addDays(WK,d);
       const esWork = WORKSET.size? WORKSET.has(ds) : d<6;
       if(!esWork) continue;
       const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t));
       const act=rows.filter(t=>t.dia_programado===ds&&['en_proceso','pausado'].includes(t.estado));
-      const planMin=[...dr,...act].reduce((s,t)=>s+(t.minutos_estimados||0),0);
-      html+=`<div class="daySec"><div class="dhd"><b>${DIAS[d]} ${ds.slice(8,10)}</b>${ds===today?'<span class="hoychip">hoy</span>':''}</div>${pilaDia(planMin,cap)}</div>`;
+      // el tiempo de lectura/briefing ya va en la reserva; no lo contamos otra vez
+      const planMin=[...dr,...act].filter(t=>!(t.metadata&&t.metadata.rutina)).reduce((s,t)=>s+(t.minutos_estimados||0),0);
+      html+=`<div class="daySec"><div class="dhd"><b>${DIAS[d]} ${ds.slice(8,10)}</b>${ds===today?'<span class="hoychip">hoy</span>':''}</div>${pilaDia(planMin,capDiaFor(d))}</div>`;
       html+= dr.length? dr.map(t=>card(t,ro)).join('') : `<div class="empty" style="padding:12px">Sin trabajos este día</div>`;
     }
     const semTerm=rows.filter(DONE);
