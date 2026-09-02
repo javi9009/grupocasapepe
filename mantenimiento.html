@@ -1000,7 +1000,7 @@ async function renderPrev(){
   PREV_SUBS={};
   if(rows.length){ const {data:subs}=await sb.from("mtto_preventivo_subtarea").select("*").eq("activo",true).in("catalogo_id",rows.map(r=>r.id));
     (subs||[]).forEach(s=>{(PREV_SUBS[s.catalogo_id]=PREV_SUBS[s.catalogo_id]||[]).push(s);}); }
-  // Cobertura anual
+  // Cálculo de carga anual: alimenta los KPIs de arriba (horas, personas)
   const interno=rows.filter(r=>r.ejecucion!=='externo'), externo=rows.filter(r=>r.ejecucion==='externo');
   const hInt=interno.reduce((s,r)=>s+prevHorasAnio(r),0);
   const hExt=externo.reduce((s,r)=>s+prevHorasAnio(r),0);
@@ -1016,15 +1016,10 @@ async function renderPrev(){
   // Agrupación POR MÁQUINA (¿la caldera recibió todos sus mtto?)
   const MAQ={};(plan||[]).filter(p=>p.equipo_id&&p.eq).forEach(p=>{const k=p.equipo_id;const m=MAQ[k]=MAQ[k]||{nom:p.eq.nombre,area:p.eq.ubic?.nombre||'—',hechas:0,pend:0,tot:0};m.tot++;if(p.estado==='hecho')m.hechas++;else m.pend++;});
   const maqRows=Object.values(MAQ).sort((a,b)=>b.pend-a.pend).map(m=>`<tr><td>${esc(m.nom)}</td><td class="muted">${esc(m.area)}</td><td class="num">${m.hechas}</td><td class="num"><b style="color:${m.pend?'var(--warn)':'var(--ok)'}">${m.pend}</b></td><td class="num">${m.tot}</td></tr>`).join('');
-  // Calendario del plan: carga por semana (52) — qué semana toca qué
-  window.PREV_PLAN=plan||[]; const hoyWk=mondayOf(hoyMX());
-  const WK={};(plan||[]).forEach(p=>{const k=p.semana_programada;if(!k)return;const w=WK[k]=WK[k]||{n:0,min:0,hechas:0};w.n++;w.min+=(p.minutos_estimados||0);if(p.estado==='hecho')w.hechas++;});
-  const wkKeys=Object.keys(WK).sort();
-  const maxN=Math.max(1,...wkKeys.map(k=>WK[k].n));
-  const calStrip=wkKeys.map(k=>{const w=WK[k];const h=Math.round(8+22*w.n/maxN);const past=k<hoyWk;const isHoy=k===hoyWk;
-    const col=w.hechas>=w.n?'var(--ok)':(past?'var(--bad)':'var(--accent)');
-    const d=new Date(k+'T12:00:00Z');const lbl=(d.getUTCMonth()+1)+'/'+d.getUTCDate();
-    return `<button title="${lbl} · ${w.n} tareas · ${Math.round(w.min/60)}h" onclick="planSemana('${k}')" style="flex:0 0 auto;min-width:8px;width:8px;border:0;border-radius:2px;padding:0;cursor:pointer;height:${h}px;background:${col};opacity:${past&&w.hechas<w.n?0.95:0.7};outline:${isHoy?'2px solid var(--ink)':'none'}"></button>`;}).join('');
+  // El calendario en barras se quitó de esta pestaña (Javi, 2-sep). Se conserva
+  // PREV_PLAN porque planSemana() sigue existiendo; hoy ya no tiene botón que
+  // la llame, así que si no se va a reenganchar se puede borrar.
+  window.PREV_PLAN=plan||[];
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
   const ofChips=[['','Todos'],['interno','Internos'],['externo','Externos']].concat(OFICIOS);
@@ -1035,22 +1030,10 @@ async function renderPrev(){
       <div class="kpi"><div class="n" style="color:var(--accent)">${Math.round(hInt)} h</div><div class="l">horas de preventivo/año (interno)</div></div>
       <div class="kpi"><div class="n" style="color:var(--accent)">${personas.toFixed(1)}</div><div class="l">personas solo para preventivos</div></div>
     </div>
-    <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div style="flex:1;min-width:200px"><b>Cobertura anual ${anio}</b> — las tareas por habitación/área repartidas en el año.
-        <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
-      </div>
-    </div></div>
-    <div class="card"><div class="pad" style="font-size:12.5px;color:var(--muted)">
-      <b>Internos vs externos.</b> Los <b>internos</b> los programan Juan o Manuel en el <a onclick="go('cal')" style="color:var(--accent);cursor:pointer;font-weight:600">🗓️ Calendario</a> (no los asigna solo el sistema). Los <b>externos</b> son obligados (los llama Administración con Mantenimiento) y se preasignan como pedido desde <a onclick="go('prog')" style="color:var(--accent);cursor:pointer;font-weight:600">Reparto</a> → «Preasignar externos».
-    </div></div>
-    ${calStrip?`<div class="card"><div class="pad"><b>Calendario del plan ${anio}</b> <span class="muted" style="font-size:12px">— cada barra es una semana; altura = nº de tareas. Clic para ver esa semana. <span style="color:var(--bad)">rojo</span>=vencida sin hacer · <span style="color:var(--accent)">verde-azul</span>=próxima · <span style="color:var(--ok)">verde</span>=hecha.</span>
-      <div style="display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:8px;overflow-x:auto">${calStrip}</div></div></div>`:''}
     ${maqRows?`<div class="card"><h3 style="margin:0">Por máquina (revisa que cada equipo tenga sus mtto)</h3><div class="scroll"><table><thead><tr><th>Máquina</th><th>Área</th><th class="num">hechas</th><th class="num">pend.</th><th class="num">plan/año</th></tr></thead><tbody>${maqRows}</tbody></table></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
+      <button class="btn ghost sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
       <span class="muted" style="font-size:12px">Filtrar:</span>
       ${ofChips.map(o=>`<button class="btn ghost sm" style="${FILT===o[0]?'border-color:var(--accent);color:var(--accent)':''}" onclick="window.PREV_FILT='${o[0]}';renderPrev()">${o[1]}</button>`).join('')}
     </div>
