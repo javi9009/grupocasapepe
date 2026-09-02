@@ -97,6 +97,9 @@ button{font-family:inherit}
 .act .go{background:var(--accent);color:#fff}
 .act .end{background:var(--gold);color:#16130f}
 .act .off{background:var(--bg3);color:var(--txt3)}
+.act .nomol{background:var(--surface,#fff);color:#8a6212;border:1px solid #e8d4a8;font-weight:700;font-size:14px;padding:11px}
+.res.nom{background:#fff8ea;color:#8a6212;border-radius:12px;padding:11px 12px;margin-top:11px;font-size:13.5px;line-height:1.45}
+.res.nom .tk{color:#a58348;font-size:12px}
 .chkl{margin-top:10px;border-top:1px solid var(--bg3);padding-top:8px}
 .chkl summary{font-size:12.5px;font-weight:700;color:var(--txt2);cursor:pointer;list-style:none}
 .chkl summary::-webkit-details-marker{display:none}
@@ -309,6 +312,27 @@ const esAudit=t=>String(t.hk_tareas_op?.codigo||'')==='ROOM_AUDIT';
 const SUPERVISORES=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casapepe.mx','housekeeping.cdmx@casapepe.mx','housekeeping.puebla@casapepe.mx'];
 const PROPS_CON_CUARTOS=['45e69775-d877-4507-a9e1-a45bd3400dc5','febfbef6-7fd1-4b45-84d9-13533e8dcb72'];
 let ES_SUPER=false, PROP=null;
+// Si el ama de llaves descansa, el día lo lleva quien abre cuartos: la
+// recamarista que entra más temprano, y si no hay ninguna, áreas públicas.
+let ENCARGADA=null;
+async function calcularEncargada(){
+  ENCARGADA=null;
+  if(!PROP) return;
+  const {data}=await sb.from('hk_asignaciones')
+    .select('id,employee_id,turno,hora_inicio,nombre_display')
+    .eq('fecha',FECHA).eq('property_id',PROP);
+  const dia=(data||[]).filter(a=>a.employee_id);
+  if(!dia.length||dia.some(a=>a.turno==='ama_llaves')) return;
+  const orden=['recamarista','areas_publicas'];
+  ENCARGADA=dia.filter(a=>orden.includes(a.turno))
+    .sort((x,y)=>orden.indexOf(x.turno)-orden.indexOf(y.turno)
+      ||String(x.hora_inicio||'').localeCompare(String(y.hora_inicio||''))
+      ||String(x.nombre_display||'').localeCompare(String(y.nombre_display||'')))[0]||null;
+}
+const soyEncargada=()=>!!(ENCARGADA&&MIA&&ENCARGADA.id===MIA.id);
+// Ve el reparto entero y puede repartir: supervisión, el ama de llaves, o quien
+// la cubre el día que descansa.
+const llevaElDia=()=>ES_SUPER||!!(MIA&&MIA.turno==='ama_llaves')||soyEncargada();
 
 $('hoy').textContent=new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'});
 function toast(t){const e=$('tst');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2200);}
@@ -430,7 +454,8 @@ async function cargar(){
   // del día sigue apareciendo, que ahí es donde se reparte.
   AUDIT=(MIA?.hk_tareas||[]).filter(esAudit);
   if(MIA) MIA.hk_tareas=(MIA.hk_tareas||[]).filter(t=>!esAudit(t));
-  const veTodas = ES_SUPER || (MIA&&MIA.turno==='ama_llaves');
+  await calcularEncargada();
+  const veTodas = llevaElDia();
   if(veTodas && PROP){
     const {data:t}=await sb.from('hk_asignaciones')
       .select('*,hk_tareas(id,orden,estatus_area,minutos_estimados,minutos_reales,estado,iniciado_at,comentario,pase,pases,partes,es_extra,tarea_op_id,metadata,area_id,hk_areas(codigo,nombre,piso),hk_tareas_op(codigo,nombre,hora_sugerida))')
@@ -444,7 +469,7 @@ async function cargar(){
 
 function pintar(){
   const w=$('wrap');
-  const veTodas = ES_SUPER || (MIA&&MIA.turno==='ama_llaves');
+  const veTodas = llevaElDia();
   if(!MIA && !veTodas){w.innerHTML='<div class="ph">Hoy no tienes cuartos asignados.<br><br>Si crees que es un error, avísale al ama de llaves.</div>';return;}
   if(!MIA) VISTA='rep';
   const pendiente = MIA ? MIA.estado==='propuesta' : (TODAS.some(a=>a.estado==='propuesta'));
@@ -513,10 +538,11 @@ function pintar(){
       <div><b>${hechas}/${ts.length}</b>cuartos</div>
       <div><b>${Math.round(estim/60*10)/10} h</b>asignadas</div>
     </div>
+    ${soyEncargada()?'<div class="s" style="margin-top:8px">Hoy no está el ama de llaves: <b>el día lo llevas tú</b>. Puedes ver el reparto completo y pasarle trabajo a quien haga falta.</div>':''}
     ${MIA.turno==='nocturno'?'<div class="s" style="margin-top:8px">Tu ruta de la noche es apoyo al equipo de la mañana: marca inicio y fin igual, pero no se te mide el tiempo ni genera horas extra.</div>':'<div class="pila" id="pilaBox"></div>'}
   </div>`;
 
-  if(MIA && (MIA.turno==='nocturno' || ES_SUPER || MIA.turno==='ama_llaves')){
+  if(MIA && (MIA.turno==='nocturno' || llevaElDia())){
     html+=`<div class="auditcard dnd">
       <div class="t">🚫 No molestar de esta noche</div>
       <div class="s">Apunta los cuartos con letrero. Los que marques <b>no entran en el reparto de mañana</b>, así el equipo de la mañana no los cuenta.</div>
@@ -563,11 +589,14 @@ function pintar(){
       ${chklHtml(t)}
       ${t.estado==='terminada'
         ? `<div class="res">Hecho en <b>${t.minutos_reales} min</b> ${dif>0?`<span class="fast">· ${dif} min menos de lo previsto</span>`:dif<0?`<span class="slow">· ${-dif} min más</span>`:''}${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`
+        : t.estado==='no_realizada'
+        ? `<div class="res nom">🚫 No se limpió · ${esc(MOTIVOS.find(m=>m.codigo===t.motivo_codigo)?.nombre||'el huésped no quiso')}${t.comentario?`<br>“${esc(t.comentario)}”`:''}<br><span class="tk">No cuenta en tu día: se te descontó de lo asignado.</span></div>`
         : `<div class="act">
             ${t.estado==='en_curso'
               ? `<button class="end" data-fin="${t.id}">Terminar limpieza · <b data-crono="${t.iniciado_at}">0 min</b></button>`
               : `<button class="go" data-ini="${t.id}" ${(pendiente||enCurso)?'disabled':''} style="${(pendiente||enCurso)?'background:var(--bg3);color:var(--txt3)':''}">${libre?'Limpiarla de todos modos':'Iniciar limpieza'}</button>`}
-          </div>`}
+          </div>
+          ${(a.tipo&&!op&&!pendiente&&t.estado!=='en_curso')?`<div class="act"><button class="nomol" data-nom="${t.id}">🚫 No quisieron limpieza</button></div>`:''}`}
     </div>`;}).join('');
 
   if(!ts.length)html+='<div class="ph">No hay tareas en tu orden de hoy.</div>';
@@ -578,8 +607,8 @@ function pintar(){
   engancharAnadir(w);
   pintarPila();
   arrancarReloj();
-  w.querySelectorAll('[data-ini]').forEach(b=>b.onclick=()=>iniciar(b.dataset.ini));
-  w.querySelectorAll('[data-fin]').forEach(b=>b.onclick=()=>abrirFin(b.dataset.fin));
+  // Aquí también va el botón de «no molestar»: la tarjeta se pinta en esta vista.
+  engancharCuartos(w);
 }
 // Checklist del manual (FOR.APU.00X / PDO.ADL.001). De referencia: se puede palomear
 // para no perder el hilo, pero no bloquea el cierre del cuarto.
@@ -842,7 +871,7 @@ function mejorDestino(min,preferId){
 function abrirAnadir(){
   if(!ZONAS.length) return toast('Todavía no cargan las áreas');
   const gente=(TODAS||[]).filter(a=>a.employee_id);
-  const puedeElegir = gente.length>1 && (ES_SUPER || (MIA&&MIA.turno==='ama_llaves'));
+  const puedeElegir = gente.length>1 && llevaElDia();
   const box=$('addQuienBox');
   box.dataset.puede=puedeElegir?'1':'0';
   box.hidden=!puedeElegir;
