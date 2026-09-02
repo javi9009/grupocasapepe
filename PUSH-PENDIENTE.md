@@ -25,8 +25,12 @@ Al tocar el aviso se abre SoyPepe en la pantalla que corresponde
 | Edge Function `push-notif` | Supabase | Manda el push a todos los teléfonos vivos de esa persona y desactiva los que devuelven 410. |
 | Trigger `notificaciones_push_trg` | Postgres | `AFTER INSERT` en `notificaciones` → `pg_net` → `push-notif`. Si falla, **nunca** tumba la notificación. |
 
-El chat va por su cuenta: `m/mensajes.html` llama directamente a `push-chat`,
-que ya existía. No pasa por `notificaciones`, así que no hay avisos duplicados.
+El chat va por su cuenta: `m/mensajes.html` escribe **dos** cosas por mensaje
+—una fila en `notificaciones` (para la campana) y una llamada a `push-chat`—.
+Por eso el trigger **se salta** toda notificación cuya `accion->>'url'` empiece
+por `/m/mensajes.html`: sin ese filtro cada mensaje llegaba al teléfono dos
+veces. Efecto lateral asumido: "te añadieron a un grupo" no manda push, se ve
+sólo en la campana.
 
 ## Claves y secretos
 
