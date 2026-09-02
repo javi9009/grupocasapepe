@@ -148,6 +148,9 @@
   .achip.dos{border-color:var(--accent)} .achip .x{margin-left:auto;color:var(--muted);cursor:pointer;font-weight:700;padding:0 2px}
   .sqrow{padding:0 14px 2px} .sq{font-size:11px;font-weight:600;padding:4px 8px;border-radius:6px;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--rule);white-space:nowrap}
   .sq.obl{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)} .sq.r{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)} .sq.c{background:var(--warn-bg);color:var(--warn)}
+  .sq.mv{cursor:grab} .sq.mv:hover{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)} .sq.mv:active{cursor:grabbing}
+  .sq.mv.drag{opacity:.4}
+  .pitem,.achip,.sq.mv{-webkit-user-select:none;user-select:none}
   .pend details.pgrp>summary{list-style:none;cursor:pointer;padding:9px 12px;font-size:12.5px;font-weight:600;border-bottom:1px solid var(--rule);background:var(--surface)}
   .pend details.pgrp>summary::-webkit-details-marker{display:none}
   .pend details.pgrp>summary::before{content:'▸ ';color:var(--muted)}
@@ -1294,6 +1297,7 @@ async function renderProg(){
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
   PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS};
+  window.PROG_SQREG=[];
   const cols=board.map(t=>cajonHtml(t,enSemana,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal)).join('');
   // --- 4 grupos de "por asignar" ---
   const reactivos=pend.filter(r=>r.clasificacion==='reactivo');
@@ -1412,18 +1416,19 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
     ${oblMin?`<div class="afila" style="margin-top:-2px"><span style="font-size:11px;color:var(--ink-2)">🔒 Obligatorio: lecturas + briefing · ${(oblMin/60).toFixed(1)}h</span></div>`:''}
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
     <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">turno ${objetivo.toFixed(0)}h</span></div>
-    <div class="afila sqrow" style="margin-top:6px;flex-wrap:wrap;gap:5px">${cajonSquares(mine,cap)}</div>
+    <div class="afila sqrow" style="margin-top:6px;flex-wrap:wrap;gap:5px">${cajonSquares(mine,cap,t.id)}</div>
     ${mine.length?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn ghost sm" style="flex:1" onclick="toggleCajon('${t.id}')">${open?'▴ ocultar lista':'▾ ver los '+mine.length+' trabajos'}</button>${open?`<button class="btn ghost sm" title="Quitar solo los seleccionados (✓)" onclick="quitarSeleccionados('${t.id}')">☑️ Quitar selección</button>`:''}<button class="btn ghost sm" title="Quitar todos de la semana" onclick="quitarGrupoSemana('${t.id}')">🗑️ Vaciar</button></div>`:''}
     <div class="achips" data-drop="${t.id}">${(!mine.length)?vacio:(open?chips:'<div class="muted" style="font-size:11px;padding:3px 2px">Lista oculta · arrastra aquí para asignar</div>')}</div></div>`;
 }
-function cajonSquares(mine,cap){
+function cajonSquares(mine,cap,tecId){
   const sq=[]; const nd=cap.lectDias||0;
-  if(nd) sq.push(`<span class="sq obl" title="Lecturas obligatorias de la semana">🔒 ${nd} lecturas</span>`);
-  if((+cap.admin||0)>0) sq.push(`<span class="sq obl" title="Briefing / admin obligatorio">🔒 briefing</span>`);
+  if(nd) sq.push(`<span class="sq obl" title="Lecturas obligatorias (no se mueven)">🔒 ${nd} lecturas</span>`);
+  if((+cap.admin||0)>0) sq.push(`<span class="sq obl" title="Briefing obligatorio (no se mueve)">🔒 briefing</span>`);
   const byU={}; mine.forEach(r=>{const k=(r.ubic&&r.ubic.nombre)||'sin área';(byU[k]=byU[k]||[]).push(r);});
-  Object.keys(byU).sort((a,b)=>byU[b].length-byU[a].length).forEach(u=>{const n=byU[u].length;
-    const cls=byU[u].every(r=>r.clasificacion==='preventivo')?'':(byU[u].some(r=>r.clasificacion==='reactivo')?'r':'c');
-    sq.push(`<span class="sq ${cls}" title="${esc(u)}">${n} en ${esc(u)}</span>`);});
+  Object.keys(byU).sort((a,b)=>byU[b].length-byU[a].length).forEach(u=>{const arr=byU[u];const ids=arr.map(r=>r.id);
+    window.PROG_SQREG=window.PROG_SQREG||[]; const idx=window.PROG_SQREG.length; window.PROG_SQREG.push({ids,tec:tecId,lugar:u});
+    const cls=arr.every(r=>r.clasificacion==='preventivo')?'':(arr.some(r=>r.clasificacion==='reactivo')?'r':'c');
+    sq.push(`<span class="sq mv ${cls}" draggable="true" data-sq="${idx}" onclick="sqMenu(${idx})" title="Arrastra a otro colaborador para pasárselos, o a la lista para desasignar · o toca para elegir">${arr.length} en ${esc(u)}</span>`);});
   if(!sq.length) sq.push('<span class="muted" style="font-size:11px">Sin trabajos asignados</span>');
   return sq.join('');
 }
@@ -1556,21 +1561,37 @@ async function genPrevUno(catId,tec){const r=PROG_STATE.prevCat.find(x=>x.id===c
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),preventivo:true});
   closeModal();toast('Preventivo programado');renderProg();}
 function wireDrag(){
-  let dragTk=null,dragProf=null,dragPrev=null,dragPP=null;
-  document.querySelectorAll('.pitem,.achip').forEach(el=>{
-    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');dragPP=el.getAttribute('data-prevplan');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||dragPP||'');}catch(_){}});
+  let dragTk=null,dragProf=null,dragPrev=null,dragPP=null,dragSq=null;
+  const clr=()=>{dragTk=null;dragProf=null;dragPrev=null;dragPP=null;dragSq=null;};
+  document.querySelectorAll('.pitem,.achip,.sq.mv').forEach(el=>{
+    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');dragPP=el.getAttribute('data-prevplan');dragSq=el.getAttribute('data-sq');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||dragPP||dragSq||'');}catch(_){}});
     el.addEventListener('dragend',()=>el.classList.remove('drag'));
   });
   document.querySelectorAll('.achips').forEach(z=>{
     z.addEventListener('dragover',e=>{e.preventDefault();z.parentElement.classList.add('over');});
     z.addEventListener('dragleave',()=>z.parentElement.classList.remove('over'));
     z.addEventListener('drop',e=>{e.preventDefault();z.parentElement.classList.remove('over');const tec=z.getAttribute('data-drop');
-      if(dragPP)genPrevPlan(dragPP,tec);else if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;dragPP=null;});
+      if(dragSq!=null)moverGrupo(+dragSq,tec);else if(dragPP)genPrevPlan(dragPP,tec);else if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);clr();});
   });
   const pl=document.querySelector('.pend');
-  if(pl){pl.addEventListener('dragover',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk))e.preventDefault();});
-    pl.addEventListener('drop',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk)){e.preventDefault();quitarSemana(dragTk);dragTk=null;}});}
+  if(pl){pl.addEventListener('dragover',e=>{if(dragSq!=null||(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk)))e.preventDefault();});
+    pl.addEventListener('drop',e=>{if(dragSq!=null){e.preventDefault();desasignarGrupo(+dragSq);clr();}
+      else if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk)){e.preventDefault();quitarSemana(dragTk);clr();}});}
 }
+function sqMenu(idx){const s=(window.PROG_SQREG||[])[idx];if(!s)return;
+  const otros=PROG_STATE.board.filter(t=>t.id!==s.tec);
+  const opts=otros.map(t=>`<button class="btn sm" style="margin:3px" onclick="moverGrupo(${idx},'${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
+  modal(`<h3>${s.ids.length} en ${esc(s.lugar)}</h3><div class="pad">
+    <div class="muted" style="font-size:13px;margin-bottom:10px">Mueve estos ${s.ids.length} trabajo(s) a otro colaborador, o regrésalos a «por asignar».</div>
+    <label>Pasar a otro colaborador</label><div>${opts||'<span class="muted">No hay otro colaborador</span>'}</div>
+    <div style="margin-top:12px"><button class="btn ghost sm" onclick="desasignarGrupo(${idx})">↩️ Regresar a «por asignar» (desasignar)</button></div>
+    </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
+async function moverGrupo(idx,tec){const s=(window.PROG_SQREG||[])[idx];if(!s||!tec)return;
+  const {error}=await sb.from('mtto_tickets').update({asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado'}).in('id',s.ids);
+  if(error)return toast(error.message); closeModal(); toast(s.ids.length+' pasado(s) a '+tecName(tec)); renderProg();}
+async function desasignarGrupo(idx){const s=(window.PROG_SQREG||[])[idx];if(!s)return;
+  const {error}=await sb.from('mtto_tickets').update({semana_programada:null,estado:'validado'}).in('id',s.ids);
+  if(error)return toast(error.message); closeModal(); toast(s.ids.length+' regresado(s) a «por asignar»'); renderProg();}
 function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
