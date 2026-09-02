@@ -432,6 +432,24 @@ let PROG_WK=mondayOf(new Date());
 let PROG_STATE=null;
 const OFICIOS=[['albanileria','🧱 Albañilería'],['carpinteria','🪵 Carpintería'],['electricidad','⚡ Electricidad'],['plomeria','🚿 Plomería'],['pintura','🎨 Pintura'],['climatizacion','❄️ Climatización'],['gas_calderas','🔥 Gas/Calderas'],['cerrajeria','🔑 Cerrajería'],['herreria','🔩 Herrería'],['jardineria','🌿 Jardinería'],['limpieza_profunda','🧽 Limpieza profunda'],['electronica_it','🖥️ Electrónica/IT'],['general','🧰 General']];
 function ofNombre(c){const o=OFICIOS.find(x=>x[0]===c);return o?o[1]:c;}
+const MESABR=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function fmtRange(mon){const d=new Date(mon+'T00:00:00'),e=new Date(d);e.setDate(e.getDate()+6);
+  return d.getDate()+' '+MESABR[d.getMonth()]+' – '+e.getDate()+' '+MESABR[e.getMonth()];}
+function weekOpts(cur){const base=mondayOf(new Date()),today=base,wl=[];
+  for(let i=-3;i<=12;i++){const d=new Date(base+'T00:00:00');d.setDate(d.getDate()+i*7);wl.push(d.toISOString().slice(0,10));}
+  if(!wl.includes(cur))wl.push(cur); wl.sort();
+  return wl.map(w=>`<option value="${w}" ${w===cur?'selected':''}>${w===today?'Esta semana · ':''}${fmtRange(w)}</option>`).join('');}
+function shiftWk(n){const d=new Date(PROG_WK+'T00:00:00');d.setDate(d.getDate()+n*7);PROG_WK=d.toISOString().slice(0,10);renderProg();}
+const OF_MIN={albanileria:180,carpinteria:120,electricidad:60,plomeria:90,pintura:240,climatizacion:90,gas_calderas:120,cerrajeria:45,herreria:120,jardineria:60,limpieza_profunda:360,electronica_it:60,general:60};
+function estimMin(r){ if(r.minutos_estimados) return {min:r.minutos_estimados,prop:false};
+  let m = (r.oficio&&OF_MIN[r.oficio]!=null)?OF_MIN[r.oficio]:(r.clasificacion==='preventivo'?60:(r.clasificacion==='reactivo'?45:90));
+  const t=((r.titulo||'')+' '+(r.descripcion||'')).toLowerCase();
+  if(/pintar|pintura|repintar|barniz/.test(t)) m=Math.max(m,180);
+  if(/caldera|boiler|bomba|hidroneum/.test(t)) m=Math.max(m,120);
+  if(/fuga|gotera|filtraci/.test(t)) m=Math.max(m,60);
+  if(/foco|lampara|luminaria|contacto|apagador/.test(t)) m=Math.min(m,30);
+  if(/cerradura|chapa|llave/.test(t)) m=Math.min(m,45);
+  return {min:m,prop:true}; }
 function urCls(s){return s>=55?'hi':(s>=30?'md':'lo');}
 function clsDot(c){const m={reactivo:'var(--bad)',correctivo:'var(--warn)',preventivo:'var(--ok)'};return '<span style="width:8px;height:8px;border-radius:50%;flex:none;background:'+(m[c]||'var(--none)')+'"></span>';}
 function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia';const d=u.urgencia_detalle,p=[];
@@ -444,11 +462,12 @@ function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia'
   return p.join(' · ')||'Sin señales de urgencia';}
 
 async function renderProg(){
-  const [cfgR,tkR,profR,urgR]=await Promise.all([
+  const [cfgR,tkR,profR,urgR,catR]=await Promise.all([
     sb.from('mtto_config').select('*').eq('property_id',PROP.id).maybeSingle(),
     sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso']),
     sb.from('mtto_profundo_plan').select('*, ubic:ubicacion_id(nombre,codigo)').eq('property_id',PROP.id).eq('estado','pendiente'),
-    sb.rpc('mtto_urgencias',{p_property:PROP.id})
+    sb.rpc('mtto_urgencias',{p_property:PROP.id}),
+    sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
   const disp=c.horas_dia*c.dias_semana, objetivo=disp-c.reserva_reactivo_h-c.admin_h-c.consumos_h;
@@ -459,18 +478,21 @@ async function renderProg(){
     .sort((a,b)=>b._u-a._u);
   const prof=(profR.data||[]).filter(p=>new Date(p.semana_programada)<=new Date(PROG_WK))
     .sort((a,b)=>new Date(a.semana_programada)-new Date(b.semana_programada));
+  const RANK={venc:0,pend:1,ok:2};
+  const yaTk=new Set(tks.filter(r=>r.preventivo_catalogo_id&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK).map(r=>r.preventivo_catalogo_id));
+  const prevCat=(catR.data||[]).filter(r=>!yaTk.has(r.id)).map(r=>Object.assign({},r,{_est:prevEstado(r)})).sort((a,b)=>RANK[a._est.k]-RANK[b._est.k]);
   const local=TECS.filter(t=>t.property_id===PROP.id);
   const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||''));
   const board=local.slice();
   if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
-  PROG_STATE={enSemana,pend,prof,board,objetivo,c,jefe};
+  PROG_STATE={enSemana,pend,prof,prevCat,board,objetivo,c,jefe};
   const cols=board.map(t=>cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal)).join('');
   const pitems=pend.length?pend.map(pitemHtml).join(''):'<div class="center">Nada por asignar</div>';
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div><label style="margin:0">Semana (lunes)</label><input type="date" id="wk" value="${PROG_WK}" style="width:auto"></div>
+      <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
       <div class="muted" style="font-size:13px;flex:1">Capacidad programable por técnico: <b>${objetivo.toFixed(1)} h</b> · reservado ${c.reserva_reactivo_h}h reactivo + ${c.admin_h}h admin + ${c.consumos_h}h consumos</div>
       <button class="btn ghost sm" onclick="genPrev()">＋ Preventivos del catálogo</button>
     </div></div>
@@ -479,10 +501,10 @@ async function renderProg(){
         <div class="hd">🗂️ Pendientes por urgencia · ${pend.length}</div>
         ${pitems}
         ${prof.length?`<div class="hd" style="border-top:1px solid var(--rule)">🧽 Mto profundo por cuarto (vence) · ${prof.length}</div>${prof.map(profHtml).join('')}`:''}
+        ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos del catálogo · ${prevCat.length}</div>${prevCat.map(prevHtml).join('')}`:''}
       </div>
       <div class="cols">${cols}</div>
     </div>`;
-  $('#wk').onchange=e=>{PROG_WK=mondayOf(e.target.value);renderProg();};
   wireDrag();
 }
 function cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal){
@@ -514,7 +536,7 @@ function pitemHtml(r){const u=r._u||0;
     <div class="t">${clsChip(r.clasificacion)} <span>${esc(r.titulo||'—')}</span>${r.es_para_dos?' <span class="chip c-info">👥 2</span>':''}</div>
     <div class="m"><span class="ur ${urCls(u)}" title="${esc(urTitle(r._ud))}">⚡ ${u}</span>
       <span>${esc(r.ubic?r.ubic.nombre:'—')}</span>
-      <span onclick="event.stopPropagation();editMin('${r.id}',${r.minutos_estimados||0})" style="cursor:pointer;text-decoration:underline dotted">${r.minutos_estimados||'?'} min</span>
+      <span onclick="event.stopPropagation();editMin('${r.id}',${estimMin(r).min})" style="cursor:pointer;text-decoration:underline dotted">${estimMin(r).prop?'~':''}${estimMin(r).min} min${estimMin(r).prop?' est.':''}</span>
       ${r.oficio?`<span class="chip c-info">${esc(ofNombre(r.oficio))}</span>`:''}</div></div>`;}
 function profHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);
   return `<div class="pitem" data-prof="${p.id}" draggable="true" onclick="profMenu('${p.id}')">
@@ -524,10 +546,10 @@ function tkMenu(id){const r=PROG_STATE.pend.concat(PROG_STATE.enSemana).find(x=>
   const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="asignar('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
   const inWk=r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK;
   modal(`<h3>${esc(r.titulo||'Trabajo')}</h3><div class="pad">
-    <div class="muted" style="font-size:13px;margin-bottom:10px">${clsChip(r.clasificacion)} · ${esc(r.ubic?r.ubic.nombre:'—')} · ${r.minutos_estimados||'?'} min${r.oficio?' · '+esc(ofNombre(r.oficio)):''}</div>
+    <div class="muted" style="font-size:13px;margin-bottom:10px">${clsChip(r.clasificacion)} · ${esc(r.ubic?r.ubic.nombre:'—')} · ${estimMin(r).prop?'~':''}${estimMin(r).min} min${estimMin(r).prop?' (estimado)':''}${r.oficio?' · '+esc(ofNombre(r.oficio)):''}</div>
     <label>Asignar a la semana (${PROG_WK})</label><div>${opts||'<span class="muted">Sin técnicos</span>'}</div>
     <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn ghost sm" onclick="editMin('${id}',${r.minutos_estimados||0})">Editar minutos</button>
+      <button class="btn ghost sm" onclick="editMin('${id}',${estimMin(r).min})">Editar minutos</button>
       <button class="btn ghost sm" onclick="toggleDos('${id}',${r.es_para_dos?1:0})">${r.es_para_dos?'Quitar «entre 2»':'Marcar «entre 2»'}</button>
       <button class="btn ghost sm" onclick="setOficio('${id}')">Oficio</button>
       ${inWk?`<button class="btn ghost sm" onclick="quitarSemana('${id}')">Sacar de la semana</button>`:''}
@@ -536,14 +558,20 @@ function profMenu(id){const p=PROG_STATE.prof.find(x=>x.id===id);if(!p)return;
   const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genProfundo('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
   modal(`<h3>Mto profundo · ${esc(p.ubic?p.ubic.nombre:'')}</h3><div class="pad">
     <div class="muted" style="font-size:13px;margin-bottom:10px">Trabajo entre 2 · ${p.minutos_estimados} min · plan ${p.semana_programada}</div>
-    <label>Programar esta semana y asignar</label><div>${opts}</div></div>
+    <label>Programar esta semana y asignar</label><div>${opts}</div>
+    <div style="margin-top:10px"><button class="btn ghost sm" onclick="editMinProf('${id}',${p.minutos_estimados||360})">Editar minutos estimados</button></div></div>
     <div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
-async function asignar(id,tec){const {error}=await sb.from('mtto_tickets').update({asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado'}).eq('id',id);
+async function asignar(id,tec){const r=PROG_STATE.pend.concat(PROG_STATE.enSemana).find(x=>x.id===id);
+  const patch={asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado'};
+  if(r&&!r.minutos_estimados)patch.minutos_estimados=estimMin(r).min;
+  const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id);
   if(error)return toast(error.message);await ev(id,'programado',{semana:PROG_WK,tecnico:tecName(tec)});closeModal();toast('Asignado a '+tecName(tec));renderProg();}
 async function quitarSemana(id){const {error}=await sb.from('mtto_tickets').update({semana_programada:null,estado:'validado'}).eq('id',id);
   if(error)return toast(error.message);closeModal();renderProg();}
 async function editMin(id,cur){const v=prompt('Minutos estimados para este trabajo:',cur||'');if(v===null)return;const m=parseInt(v)||null;
   const {error}=await sb.from('mtto_tickets').update({minutos_estimados:m}).eq('id',id);if(error)return toast(error.message);closeModal();renderProg();}
+async function editMinPrev(id,cur){const v=prompt('Minutos estimados (preventivo del catálogo):',cur||'');if(v===null)return;const m=parseInt(v)||null;const {error}=await sb.from('mtto_preventivos_catalogo').update({minutos_estimados:m}).eq('id',id);if(error)return toast(error.message);closeModal();renderProg();}
+async function editMinProf(id,cur){const v=prompt('Minutos estimados (mto profundo):',cur||'');if(v===null)return;const m=parseInt(v)||null;const {error}=await sb.from('mtto_profundo_plan').update({minutos_estimados:m}).eq('id',id);if(error)return toast(error.message);closeModal();renderProg();}
 async function toggleDos(id,cur){const {error}=await sb.from('mtto_tickets').update({es_para_dos:!cur}).eq('id',id);if(error)return toast(error.message);closeModal();renderProg();}
 function setOficio(id){modal(`<h3>Oficio / competencia</h3><div class="pad"><div style="display:flex;flex-wrap:wrap;gap:6px">
   ${OFICIOS.map(o=>`<button class="btn ghost sm" onclick="saveOficio('${id}','${o[0]}')">${o[1]}</button>`).join('')}</div></div>
@@ -558,17 +586,40 @@ async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===pl
   await sb.from('mtto_profundo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',planId);
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),profundo:true});
   closeModal();toast('Profundo programado · '+nom);renderProg();}
+function prevHtml(r){const e=r._est;
+  return `<div class="pitem" data-prev="${r.id}" draggable="true" onclick="prevMenu('${r.id}')">
+    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(r.tarea||'—')}</span></div>
+    <div class="m"><span class="ur ${e.k==='venc'?'hi':(e.k==='pend'?'md':'lo')}">${esc(e.txt)}</span>
+      <span>${esc(r.ubic?r.ubic.nombre:'—')}</span><span>${esc(r.periodicidad||'')}</span>
+      <span>${r.minutos_estimados||'?'} min</span>${r.oficio?`<span class="chip c-info">${esc(ofNombre(r.oficio))}</span>`:''}</div></div>`;}
+function prevMenu(id){const r=PROG_STATE.prevCat.find(x=>x.id===id);if(!r)return;
+  const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genPrevUno('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
+  const reco=r.recomendacion||r.ficha_texto;
+  modal(`<h3>${esc(r.tarea||'Preventivo')}</h3><div class="pad">
+    <div class="muted" style="font-size:13px;margin-bottom:10px">${esc(r.ubic?r.ubic.nombre:'—')} · ${esc(r.periodicidad||'')} · ${r.minutos_estimados||'?'} min · ${esc(r._est.txt)}</div>
+    <label>Programar esta semana y asignar</label><div>${opts}</div>
+    <div style="margin-top:10px"><button class="btn ghost sm" onclick="editMinPrev('${id}',${r.minutos_estimados||60})">Editar minutos estimados</button></div>
+    ${reco?`<details class="reco" style="margin-top:10px"><summary>ver ficha / recomendación</summary><div class="txt">${esc(reco)}</div></details>`:''}
+    </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
+async function genPrevUno(catId,tec){const r=PROG_STATE.prevCat.find(x=>x.id===catId);if(!r)return;
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:catId,
+    clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,
+    titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:r.minutos_estimados,
+    asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true}).select('id').single();
+  if(error)return toast(error.message);
+  await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),preventivo:true});
+  closeModal();toast('Preventivo programado');renderProg();}
 function wireDrag(){
-  let dragTk=null,dragProf=null;
+  let dragTk=null,dragProf=null,dragPrev=null;
   document.querySelectorAll('.pitem,.achip').forEach(el=>{
-    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||'');}catch(_){}});
+    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||'');}catch(_){}});
     el.addEventListener('dragend',()=>el.classList.remove('drag'));
   });
   document.querySelectorAll('.achips').forEach(z=>{
     z.addEventListener('dragover',e=>{e.preventDefault();z.parentElement.classList.add('over');});
     z.addEventListener('dragleave',()=>z.parentElement.classList.remove('over'));
     z.addEventListener('drop',e=>{e.preventDefault();z.parentElement.classList.remove('over');const tec=z.getAttribute('data-drop');
-      if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;});
+      if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;});
   });
   const pl=document.querySelector('.pend');
   if(pl){pl.addEventListener('dragover',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk))e.preventDefault();});
