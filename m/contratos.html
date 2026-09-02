@@ -54,6 +54,7 @@ textarea{min-height:54px;resize:vertical}
 <div id="pend" class="state">Cargando…</div>
 </div>
 
+<div id="alertaEtapas"></div>
 <div class="card hide" id="formCard">
 <h2 id="formTtl">Aceptar alta & generar contrato</h2>
 <div class="grid">
@@ -171,15 +172,46 @@ function bonoAdd(){
 }
 function bonoQuita(i){BONOS_ADD.splice(i,1);renderBonosAdded();}
 function chainOf(cat){if(cat==='practicante')return {n:1,meses:4,label:'1 carta compromiso de prácticas (programa de 480 h ≈ 16 semanas, sin salario ni relación laboral)'};return cat==='confianza'?{n:2,meses:3,label:'2 contratos de 3 meses (180 días de prueba)'}:{n:3,meses:1,label:'3 contratos de 1 mes (90 días de prueba)'};}
-let MACHOTE='',MACHOTE_PRACT='',FIRMA_PATRON='';
+let MACHOTE='',MACHOTE_PRACT='',MACHOTE_INDET='',FIRMA_PATRON='';
 async function loadFirma(){try{const {data}=await sb.from('firma_titular').select('data_uri').eq('clave','patron').maybeSingle();FIRMA_PATRON=(data&&data.data_uri)||'';}catch(e){FIRMA_PATRON='';}}
 async function loadMachote(){try{MACHOTE=await fetch('/m/contrato-machote.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE='';}
-try{MACHOTE_PRACT=await fetch('/m/carta-practicas-machote.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_PRACT='';}}
+try{MACHOTE_PRACT=await fetch('/m/carta-practicas-machote.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_PRACT='';}
+try{MACHOTE_INDET=await fetch('/m/contrato-machote-indeterminado.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_INDET='';}}
+/* ---- Etapa contractual: dónde va cada quien en su cadena de prueba ---- */
+let CSALL=[];
+function estadoContrato(empId){
+ const cs=(CSALL||[]).filter(c=>c.employee_id===empId&&c.estatus!=='cancelado');
+ if(!cs.length) return {estado:'sin_contrato'};
+ if(cs.some(c=>c.tipo==='indeterminado')) return {estado:'planta'};
+ const pr=cs.filter(c=>c.tipo!=='carta_practicas');
+ if(!pr.length) return {estado:'practicante'};
+ const L=pr[0]; // csAll viene ordenado por created_at desc
+ const hoy=new Date().toISOString().slice(0,10);
+ const total=+L.total_contratos||1, num=+L.numero||1;
+ const vencido=L.vigencia_fin&&String(L.vigencia_fin).slice(0,10)<hoy;
+ if(num>=total&&vencido) return {estado:'planta_pendiente', numero:num+1, total, base:L};
+ if(vencido) return {estado:'renovacion_pendiente', numero:num+1, total, base:L};
+ return {estado:'en_prueba', numero:num, total, base:L};
+}
+function pintaAlertaEtapas(){
+ const box=$('alertaEtapas'); if(!box) return;
+ const plantas=[],renov=[];
+ EMPS.forEach(e=>{const st=estadoContrato(e.id);
+  if(st.estado==='planta_pendiente')plantas.push({e,st});
+  else if(st.estado==='renovacion_pendiente')renov.push({e,st});});
+ let h='';
+ if(plantas.length)h+='<div style="border:1px solid #d98c8c;background:#FBECEC;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#8f2f2f">⚠ Terminaron su periodo de prueba — el sistema solo permitirá emitirles contrato de PLANTA (tiempo indeterminado):</b>'
+  +plantas.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — contrato ${x.st.total} de ${x.st.total} venció el ${fmtd(x.st.base.vigencia_fin)}</span><button class="btn" onclick="openForm('${x.e.id}')">Emitir planta →</button></div>`).join('')+'</div>';
+ if(renov.length)h+='<div style="border:1px solid #e0c98c;background:#FBF4E4;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#7a5b17">⏰ Renovaciones de prueba vencidas:</b>'
+  +renov.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — toca el contrato ${x.st.numero} de ${x.st.total} (venció el ${fmtd(x.st.base.vigencia_fin)})</span><button class="btn" onclick="openForm('${x.e.id}')">Renovar →</button></div>`).join('')+'</div>';
+ box.innerHTML=h;
+}
 function edadDe(fn){if(!fn)return '';try{const b=new Date((''+fn).slice(0,10)+'T00:00:00');const n=new Date();let a=n.getFullYear()-b.getFullYear();if(n.getMonth()<b.getMonth()||(n.getMonth()===b.getMonth()&&n.getDate()<b.getDate()))a--;return a>0?(''+a):'';}catch(e){return '';}}
 const HOSPEDAJE_TXT='PRESTACIÓN DE HOSPEDAJE: El patrón otorga al trabajador hospedaje con un valor de $3,500.00 MXN mensuales, consistente en una litera en habitación compartida con acceso a baño y limpieza una vez por semana. No incluye desayuno ni comidas. El hospedaje es renovable cada mes y podrá ser cancelado en cualquier momento sin necesidad de justificación.';
 function fillMachote(e,c){
   const esPract=c.categoria==='practicante';
-  const TPL=esPract?MACHOTE_PRACT:MACHOTE;
+  const esIndet=c.tipo==='indeterminado';
+  const TPL=esPract?MACHOTE_PRACT:(esIndet?MACHOTE_INDET:MACHOTE);
   if(!TPL) return buildContrato(e,c);
   const bonosTxt=bonosTexto(c.bonos)||'N/A';
   const map={
@@ -190,7 +222,8 @@ function fillMachote(e,c){
     trabajador_email:e.email||'', trabajador_afore:e.afore||'',
     rol:c.rol||'', ubicacion:((window.PROPDIR&&PROPDIR[e.property_id])||c.ubicacion||e.sede||''),
     salario_bruto:money(c.salario_bruto), salario_letra:'',
-    bonos:bonosTxt, vigencia:(c.dias?c.dias+' días':''), fecha_fin:fmtd(c.vigencia_fin),
+    bonos:bonosTxt, vigencia:(c.tipo==='indeterminado'?'indeterminado':(c.dias?c.dias+' días':'')), fecha_fin:(c.vigencia_fin?fmtd(c.vigencia_fin):'—'),
+    antiguedad_desde:fmtd(e.fecha_inicio_labores||c.fecha_inicio),
     jornada:c.jornada||'', dia_descanso:c.dia_descanso||'', horario:c.horario||'',
     otras_consideraciones:([(c.hospedaje?HOSPEDAJE_TXT:''),(c.otros||'')].filter(Boolean).join(' ')||'N/A'),
     patron_razon:c.patron||'', patron_representante:'Javier Puente García',
@@ -224,6 +257,8 @@ try{const {data:rs}=await sb.from('rangos_salariales').select('puesto');const RO
 try{const {data:props}=await sb.from('properties').select('id,direccion');window.PROPDIR={};(props||[]).forEach(p=>{PROPDIR[p.id]=p.direccion||'';});}catch(e){}
 // contratos (una sola lectura, reutilizada)
 const {data:csAll}=await sb.from('contratos').select('*').order('created_at',{ascending:false});
+CSALL=csAll||[];
+try{pintaAlertaEtapas();}catch(e){}
 // actas / llamadas / reconocimientos pendientes de firma
 const {data:actas}=await sb.from('actas_administrativas').select('*').is('firma_url',null).order('fecha_emision',{ascending:false});
 
@@ -291,6 +326,13 @@ $('f_sal').value=SEL.salario_bruto||SEL.sueldo_base||'';
 $('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';$('f_edad').value=edadDe(SEL.fecha_nacimiento)||'';
 BONOS_ADD=[];renderBonosList();$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
 calcVig();
+try{
+ const st=estadoContrato(SEL.id);
+ if(st.estado==='planta'){$('chainInfo').innerHTML='<b>Ya tiene contrato de PLANTA (tiempo indeterminado).</b> No procede generar otro contrato.';}
+ else if(st.estado==='planta_pendiente'){$('chainInfo').innerHTML='<b style="color:#8f2f2f">&#9888; Termin&oacute; su periodo de prueba</b> (contrato '+st.total+' de '+st.total+' venci&oacute; el '+fmtd(st.base.vigencia_fin)+'). El sistema <b>solo permite emitir el contrato de PLANTA (tiempo indeterminado)</b>, reconociendo su antig&uuml;edad desde el inicio.';}
+ else if(st.estado==='renovacion_pendiente'){$('chainInfo').innerHTML='<b style="color:#7a5b17">&#9200; Renovaci&oacute;n:</b> se generar&aacute; el <b>contrato '+st.numero+' de '+st.total+'</b> de su cadena de prueba (el anterior venci&oacute; el '+fmtd(st.base.vigencia_fin)+').';}
+ else if(st.estado==='en_prueba'){$('chainInfo').innerHTML+=' <b>Nota:</b> ya tiene el contrato '+st.numero+' de '+st.total+' vigente'+(st.base.vigencia_fin?(' hasta el '+fmtd(st.base.vigencia_fin)):'')+'.';}
+}catch(e){}
 $('formCard').scrollIntoView({behavior:'smooth'});
 }
 function closeForm(){$('formCard').classList.add('hide');SEL=null;}
@@ -352,13 +394,20 @@ const _req=esPract
  :[['rfc','RFC'],['curp','CURP'],['nss','NSS'],['direccion','Domicilio']];
 const _faltan=_req.filter(x=>!SEL[x[0]]).map(x=>x[1]);
 if(_faltan.length){m.className='msg err';m.textContent='Faltan datos del trabajador: '+_faltan.join(', ')+'. Complételos en ID maestro (sábana Base) antes de generar el contrato.';return;}
-const ch=chainOf(cat); const fin=addMonths(inicio,ch.meses);
-const dias=Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1;
+const ch=chainOf(cat); let fin=addMonths(inicio,ch.meses);
+let dias=Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1;
+// Etapa contractual: el sistema decide que toca (obligatorio)
+const st=estadoContrato(SEL.id);
+if(st.estado==='planta'){m.className='msg err';m.textContent='Ya tiene contrato de planta - no procede otro contrato.';return;}
+let tipoDoc=esPract?'carta_practicas':'prueba', numeroDoc=1, totalDoc=ch.n;
+if(!esPract&&st.estado==='planta_pendiente'){tipoDoc='indeterminado';numeroDoc=st.numero;totalDoc=st.total;fin=null;dias=null;}
+else if(!esPract&&(st.estado==='renovacion_pendiente'||st.estado==='en_prueba')){numeroDoc=st.numero===undefined?1:(st.estado==='en_prueba'?st.numero:st.numero);totalDoc=st.total;}
+if(!esPract&&st.estado==='renovacion_pendiente'){numeroDoc=st.numero;}
 const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,
 bonos:esPract?null:{puntualidad:BONOS_ADD.some(b=>b.punt),
  lista:BONOS_ADD.filter(b=>!b.punt).map(b=>({id:b.id,nombre:b.nombre,monto:b.monto}))},
 jornada:'48 horas semanales, de lunes a sábado',dia_descanso:'Domingo',horario:$('f_horario').value.trim()||null,
-fecha_inicio:inicio,vigencia_fin:fin.toISOString().slice(0,10),dias,numero:1,total_contratos:ch.n,tipo:esPract?'carta_practicas':'prueba',
+fecha_inicio:inicio,vigencia_fin:(fin?fin.toISOString().slice(0,10):null),dias,numero:numeroDoc,total_contratos:totalDoc,tipo:tipoDoc,
 ubicacion:($('f_ubic')?$('f_ubic').value:null)||SEL.sede||null,edad:($('f_edad')?$('f_edad').value:null),hospedaje:($('f_hospedaje')&&$('f_hospedaje').value==='si'),otros:$('f_otros').value.trim()||null};
 PENDING={emp:SEL,c,ch};
 $('doc').innerHTML=fillMachote(SEL,c);
@@ -387,15 +436,18 @@ try{
 const esPract=c.categoria==='practicante';
 const row={employee_id:emp.id,nombre:emp.nombre,patron:c.patron,rol:c.rol,categoria:c.categoria,salario_bruto:c.salario_bruto,bonos:c.bonos,
 jornada:c.jornada,dia_descanso:c.dia_descanso,horario:c.horario,fecha_inicio:c.fecha_inicio,vigencia_fin:c.vigencia_fin,dias:c.dias,
-numero:1,total_contratos:ch.n,tipo:c.tipo||'prueba',otros:c.otros,estatus:'enviado_pendiente_firma',contrato_html:html,created_by:SESSEMAIL};
+numero:c.numero||1,total_contratos:c.total_contratos||ch.n,tipo:c.tipo||'prueba',otros:c.otros,estatus:'enviado_pendiente_firma',contrato_html:html,created_by:SESSEMAIL};
 const r=await sb.from('contratos').insert(row);if(r.error)throw new Error(r.error.message);
-const empUpd={fecha_inicio_labores:c.fecha_inicio,contrato_categoria:c.categoria,tipo_contrato:c.tipo||'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'};
+const esIndet=c.tipo==='indeterminado';
+const empUpd={contrato_categoria:c.categoria,tipo_contrato:c.tipo||'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'};
+if(!esIndet)empUpd.fecha_inicio_labores=c.fecha_inicio; // la planta conserva la fecha de inicio original (antiguedad)
+if(esIndet)empUpd.prueba_planta='planta';
 if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;empUpd.bono_puntualidad=!!(c.bonos&&c.bonos.puntualidad);}
 await sb.from('employees').update(empUpd).eq('id',emp.id);
 try{const _ord=['solicitada','info_recibida','aceptada','activa','notificada','expediente','integrada'];const _ci=_ord.indexOf(emp.alta_etapa||'solicitada');const _h=Array.isArray(emp.alta_historial)?emp.alta_historial:[];const _u={alta_historial:[..._h,{etapa:'contrato_enviado',fecha:new Date().toISOString(),por:SESSEMAIL}]};if(_ci>-1&&_ci<_ord.indexOf('activa'))_u.alta_etapa='activa';await sb.from('employees').update(_u).eq('id',emp.id);}catch(e){}
 try{await sb.from('notificaciones').insert({employee_id:emp.id,titulo:esPract?'📄 Tienes tu carta de prácticas por firmar':'📄 Tienes un contrato por firmar',cuerpo:esPract?'Tu carta compromiso de prácticas está lista. Revísala y fírmala desde SoyPepe.':'Tu contrato está listo. Revísalo y fírmalo desde SoyPepe.',icono:'📄'});}catch(e){}
 $('doc').setAttribute('contenteditable','false');PENDING=null;$('ov').classList.remove('show');closeForm();
-m.className='msg ok';m.textContent='✓ Contrato enviado al trabajador para firma (1 de '+ch.n+').';load();
+m.className='msg ok';m.textContent=esIndet?'✓ Contrato de PLANTA enviado al trabajador para firma.':'✓ Contrato enviado al trabajador para firma ('+(c.numero||1)+' de '+(c.total_contratos||ch.n)+').';load();
 }catch(e){m.className='msg err';m.textContent='⚠ '+e.message;$('ovSend').disabled=false;}
 }
 loadMachote();loadFirma();loadBonosCat();load();

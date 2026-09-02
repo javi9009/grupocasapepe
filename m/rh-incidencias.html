@@ -63,6 +63,7 @@ td.auto input{background:#f1f7f4}
 </div>
 </details>
 <div id="valPanel" style="margin:2px 16px 10px;padding:10px 14px;background:#fff;border:1px solid var(--bd);border-radius:10px;font-size:12px;display:none"></div>
+<div id="etapaPanel" style="margin:2px 16px 10px;padding:10px 14px;background:#fff;border:1px solid var(--bd);border-radius:10px;font-size:12px;display:none"></div>
 <div class="wrap"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
 </div>
 
@@ -288,6 +289,42 @@ function bind(){document.querySelectorAll('#tbody input[data-k]').forEach(el=>el
  document.querySelectorAll('#tbody [data-bon]').forEach(bt=>bt.onclick=e=>{e.stopPropagation();showBonos(bt.dataset.bon);});
  document.querySelectorAll('#tbody [data-val]').forEach(cb=>cb.onchange=async()=>{status('guardando…');await setVal(cb.dataset.val,cb.checked);status('✓','ok');render();});
 }
+/* --- Etapa contractual: prueba (operativo/confianza), planta pendiente e indeterminados --- */
+let CONTR=null;
+async function renderEtapas(){
+ const p=$('etapaPanel'); if(!p) return;
+ if(CONTR===null){ try{ CONTR=await sb('/contratos?select=employee_id,tipo,numero,total_contratos,vigencia_fin,estatus,categoria&order=created_at.desc')||[]; }catch(e){ CONTR=[]; } }
+ const hoy=new Date().toISOString().slice(0,10);
+ const est=e=>{
+  const cs=CONTR.filter(c=>c.employee_id===e.id&&c.estatus!=='cancelado');
+  if(!cs.length) return {k:'sin'};
+  if(cs.some(c=>c.tipo==='indeterminado')) return {k:'planta'};
+  const pr=cs.filter(c=>c.tipo!=='carta_practicas');
+  if(!pr.length) return {k:'pract'};
+  const L=pr[0], total=+L.total_contratos||1, num=+L.numero||1;
+  const venc=L.vigencia_fin&&String(L.vigencia_fin).slice(0,10)<hoy;
+  if(num>=total&&venc) return {k:'plantaPend',L,total,num};
+  return {k:'prueba',L,total,num,cat:(L.categoria||e.categoria_laboral||'operativo'),venc};
+ };
+ const gr={pruebaOp:[],pruebaConf:[],plantaPend:[],planta:[],pract:[],sin:[]};
+ emps.forEach(e=>{const x=est(e);
+  if(x.k==='prueba')(x.cat==='confianza'?gr.pruebaConf:gr.pruebaOp).push({e,x});
+  else if(x.k==='plantaPend')gr.plantaPend.push({e,x});
+  else if(x.k==='planta')gr.planta.push({e,x});
+  else if(x.k==='pract')gr.pract.push({e,x});
+  else gr.sin.push({e,x});});
+ const nom=e=>[e.nombre,e.apellido].filter(Boolean).join(' ');
+ const li=(arr,extra)=>arr.map(({e,x})=>'<span style="display:inline-block;margin:2px 8px 2px 0;padding:2px 8px;border:1px solid var(--bd);border-radius:10px;background:#fffdf8">'+nom(e)+(extra?extra(x):'')+'</span>').join('')||'<span style="color:var(--soft)">nadie</span>';
+ const fv=d=>d?new Date(String(d).slice(0,10)+'T00:00:00').toLocaleDateString('es-MX',{day:'numeric',month:'short'}):'';
+ p.innerHTML='<b>Etapa contractual del equipo</b> <span style="color:var(--soft)">(fuente: contratos emitidos en Aceptación & Contratos)</span>'
+  +(gr.plantaPend.length?'<div style="margin-top:6px;padding:6px 10px;background:#FBECEC;border:1px solid #d98c8c;border-radius:8px"><b style="color:#8f2f2f">⚠ Terminaron su prueba — hay que emitirles contrato de PLANTA:</b><br>'+li(gr.plantaPend,x=>' · '+x.total+'/'+x.total+' venció '+fv(x.L.vigencia_fin))+' <a href="/m/contratos" target="_top" style="font-weight:700">Ir a contratos →</a></div>':'')
+  +'<div style="margin-top:6px"><b style="color:#1F6BA8">En prueba · Operativos ('+gr.pruebaOp.length+'):</b> '+li(gr.pruebaOp,x=>' · '+x.num+'/'+x.total+(x.L.vigencia_fin?(' vence '+fv(x.L.vigencia_fin)):''))+'</div>'
+  +'<div style="margin-top:4px"><b style="color:#7a5b17">En prueba · Confianza ('+gr.pruebaConf.length+'):</b> '+li(gr.pruebaConf,x=>' · '+x.num+'/'+x.total+(x.L.vigencia_fin?(' vence '+fv(x.L.vigencia_fin)):''))+'</div>'
+  +'<div style="margin-top:4px"><b style="color:#137A56">Indeterminados / planta ('+gr.planta.length+'):</b> '+li(gr.planta)+'</div>'
+  +(gr.pract.length?'<div style="margin-top:4px"><b>Practicantes ('+gr.pract.length+'):</b> '+li(gr.pract)+'</div>':'')
+  +(gr.sin.length?'<div style="margin-top:4px;color:var(--soft)"><b>Sin contrato en plataforma ('+gr.sin.length+'):</b> '+li(gr.sin)+'</div>':'');
+ p.style.display='block';
+}
 async function loadExtras(){
  heByEmp={};bonByEmp={};
  try{const hs=await sb('/horas_extra_quincena?select=*&quincena=eq.'+encodeURIComponent(quincena)+'&order=fecha')||[];hs.forEach(x=>{(heByEmp[x.employee_id]=heByEmp[x.employee_id]||[]).push(x);});}catch(e){}
@@ -298,6 +335,7 @@ async function loadQ(){
  rows=await sb('/incidencias_quincenal?select=*&quincena=eq.'+encodeURIComponent(quincena))||[];
  await loadExtras();
  render(); status('✓','ok');
+ try{renderEtapas();}catch(e){}
 }
 $('valTodos').onclick=async()=>{
  const vv=vis().filter(r=>!r.validado&&canValidar(r.employee_id));
