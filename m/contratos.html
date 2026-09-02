@@ -59,13 +59,18 @@ textarea{min-height:54px;resize:vertical}
 <div class="grid">
 <div><label>Colaborador</label><input id="f_nom" readonly></div>
 <div><label>Fecha de inicio de labores *</label><input id="f_inicio" type="date"></div>
-<div><label>Rol / Puesto *</label><select id="f_rol"><option value="">— elige del tabulador —</option></select></div>
+<div><label>Rol / Puesto *</label><select id="f_rol" onchange="renderBonosList()"><option value="">— elige del tabulador —</option></select></div>
 <div><label>Categoría *</label><select id="f_cat" onchange="calcVig()"><option value="operativo">Operativo (prueba 3×1 mes)</option><option value="confianza">Confianza (prueba 2×3 meses)</option><option value="practicante">Practicante (carta compromiso, sin salario)</option></select></div>
-<div><label>Ubicación</label><select id="f_ubic"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
+<div><label>Ubicación</label><select id="f_ubic" onchange="renderBonosList()"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
 <div><label>Salario bruto mensual (MXN) *</label><input id="f_sal" type="number" step="0.01"></div>
 <div><label>Edad</label><input id="f_edad" type="number" min="16" max="90"></div>
-<div class="full"><label>Bonos del catálogo (según rol y área — marca uno o varios)</label><div id="bonosList" style="display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto;border:1px solid var(--rule,#ddd);border-radius:8px;padding:8px;font-size:13px">Cargando catálogo…</div></div>
-<div class="full"><label>Otros bonos / complementos (texto libre)</label><input id="f_bonos" placeholder="Ej. comisión de ventas tours 5%, propinas…"></div>
+<div class="full"><label>Bonos (añade uno o varios — se van acumulando)</label>
+  <div id="bonosAdded" style="display:flex;flex-direction:column;gap:4px;font-size:13px"></div>
+  <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+    <select id="bonoSel" style="flex:1"></select>
+    <button type="button" onclick="bonoAdd()" style="border:1px solid var(--rule,#d2c8b6);background:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;white-space:nowrap">＋ Añadir bono</button>
+  </div>
+</div>
 <div class="full"><label>Horario</label><input id="f_horario" placeholder="Ej. Lun–Sáb 07:00–15:00, descansa domingo"></div>
 <div><label>Incluye hospedaje</label><select id="f_hospedaje"><option value="no">No</option><option value="si">Sí ($3,500/mes)</option></select></div>
 <div class="full"><label>Otros puntos a considerar</label><textarea id="f_otros" placeholder="Cláusulas o condiciones especiales"></textarea></div>
@@ -89,7 +94,7 @@ const SBURL='https://rehophywchakfapivsbh.supabase.co';
 const KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlaG9waHl3Y2hha2ZhcGl2c2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTU3MDgsImV4cCI6MjA5Njk3MTcwOH0.kntapjLdn0jUr62pre6uqFaf2RPfun6-DujIkshVd8Y';
 const sb=supabase.createClient(SBURL,KEY);
 const $=id=>document.getElementById(id);
-const EMPCOLS='id,empleado_id,nombre,apellido,puesto,area,sede,categoria_laboral,salario_bruto,sueldo_base,email,rfc,curp,nss,direccion,nacionalidad,estado_civil,afore,fecha_nacimiento,beneficiarios,horario_inicial,contrato_estatus,fecha_alta,fecha_inicio_labores,alta_etapa,alta_historial';
+const EMPCOLS='id,empleado_id,nombre,apellido,puesto,area,sede,tramo,categoria_laboral,salario_bruto,sueldo_base,email,rfc,curp,nss,direccion,nacionalidad,estado_civil,afore,fecha_nacimiento,beneficiarios,horario_inicial,contrato_estatus,fecha_alta,fecha_inicio_labores,alta_etapa,alta_historial';
 let EMPS=[],SEL=null,SESSEMAIL='',NAME={},BUZ=[];
 function addMonths(d,m){const x=new Date(d+'T00:00:00');x.setMonth(x.getMonth()+m);x.setDate(x.getDate()-1);return x;}
 function fmtd(d){if(!d)return '—';return new Date((''+d).slice(0,10)+'T00:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'});}
@@ -120,8 +125,9 @@ function bonoAreaDe(e){
 function bonoElegible(x,e){
  if(x.activo===false)return false;
  const csv=s=>String(s||'').toLowerCase().split(/[,;/]+/).map(v=>v.trim()).filter(Boolean);
- const tr=csv(x.tramos); if(tr.length){const mio=((e&&e.tramo)||'').toLowerCase(); if(!mio||!tr.some(v=>mio.includes(v)||v.includes(mio)))return false;}
- const sd=csv(x.sedes); if(sd.length){const mia=((e&&e.sede)||'').toLowerCase(); if(!mia||!sd.some(v=>mia.includes(v)||v.includes(mia)))return false;}
+ // tramo: solo excluye si el empleado TIENE tramo y no coincide (si no está capturado, se muestra y decide el admin)
+ const tr=csv(x.tramos); if(tr.length){const mio=((e&&e.tramo)||'').toLowerCase(); if(mio&&!tr.some(v=>mio.includes(v)||v.includes(mio)))return false;}
+ const sd=csv(x.sedes); if(sd.length){const mia=((e&&e.sede)||'').toLowerCase(); if(mia&&!sd.some(v=>mia.includes(v)||v.includes(mia)))return false;}
  return true;
 }
 function bonosTexto(b){
@@ -133,15 +139,37 @@ function bonosTexto(b){
  return parts.join('. ');
 }
 function bonoMontoTxt(x){if(x.monto_mensual)return money(x.monto_mensual)+'/mes';if(x.monto_trimestral)return money(x.monto_trimestral)+'/trim';if(x.monto_anual)return money(x.monto_anual)+'/año';return 'monto por definir';}
-function renderBonosList(e){
- const box=$('bonosList'); if(!box)return;
- const areaDef=bonoAreaDe(e);
- const cat=BONOSCAT.filter(x=>x.area===areaDef&&bonoElegible(x,e));
- let h='<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bono_punt"> <span><b>Bono de puntualidad (10% del salario)</b> — se pierde con 1 retardo o falta en la quincena</span></label>';
- h+=cat.map(x=>'<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="bonoCat" value="'+x.id+'" data-nombre="'+esc(x.nombre)+'" data-monto="'+esc(bonoMontoTxt(x))+'"> <span>'+esc(x.nombre)+' <span style="color:#888">('+esc(x.tipo||'objetivo')+' · '+esc(bonoMontoTxt(x))+')</span></span></label>').join('');
- if(!cat.length)h+='<div style="color:#888">Sin bonos de catálogo para el área «'+esc(areaDef||'—')+'» — puedes usar el campo de texto libre.</div>';
- box.innerHTML=h;
+function formEmpBonos(){
+ // El área/rol y la ubicación se leen del FORMULARIO (lo que estás eligiendo), no solo de la ficha
+ const rol=($('f_rol')&&$('f_rol').value)||'';
+ return {puesto:rol||(SEL&&SEL.puesto)||'', area:rol?'':((SEL&&SEL.area)||''),
+   sede:($('f_ubic')&&$('f_ubic').value)||(SEL&&SEL.sede)||'', tramo:(SEL&&SEL.tramo)||''};
 }
+let BONOS_ADD=[];
+async function renderBonosList(){
+ const sel=$('bonoSel'); if(!sel)return;
+ if(!BONOSCAT.length){sel.innerHTML='<option>Cargando catálogo…</option>';try{await loadBonosCat();}catch(e){}}
+ const e=formEmpBonos();
+ const areaDef=bonoAreaDe(e);
+ const mios=BONOSCAT.filter(x=>x.area===areaDef&&bonoElegible(x,e));
+ const otros=BONOSCAT.filter(x=>!mios.includes(x));
+ sel.innerHTML='<option value="__punt">Bono de puntualidad (10% del salario) — se pierde con 1 retardo o falta</option>'
+  +(mios.length?('<optgroup label="Su área · '+esc(areaDef)+'">'+mios.map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+' ('+esc(bonoMontoTxt(x))+')</option>').join('')+'</optgroup>'):'')
+  +'<optgroup label="Todo el catálogo">'+otros.map(x=>'<option value="'+x.id+'">'+esc(x.area)+' · '+esc(x.nombre)+' ('+esc(bonoMontoTxt(x))+')</option>').join('')+'</optgroup>';
+ renderBonosAdded();
+}
+function renderBonosAdded(){
+ const box=$('bonosAdded'); if(!box)return;
+ box.innerHTML=BONOS_ADD.length?BONOS_ADD.map((b,i)=>'<div style="display:flex;gap:8px;align-items:center;border:1px solid var(--rule,#d2c8b6);border-radius:8px;padding:5px 10px;background:#fff"><span style="flex:1">'+(b.punt?'<b>Bono de puntualidad (10%)</b> — se pierde con 1 retardo o falta':esc(b.nombre)+' <span style="color:#888">('+esc(b.monto)+')</span>')+'</span><button type="button" onclick="bonoQuita('+i+')" style="border:1px solid #e0b3b3;background:#fff;color:#b03434;border-radius:6px;cursor:pointer;padding:1px 7px">✕</button></div>').join('')
+  :'<div style="color:#888;font-size:12px">Sin bonos añadidos.</div>';
+}
+function bonoAdd(){
+ const v=$('bonoSel').value; if(!v)return;
+ if(v==='__punt'){ if(!BONOS_ADD.some(b=>b.punt))BONOS_ADD.push({punt:true}); }
+ else{ if(BONOS_ADD.some(b=>b.id===v))return; const x=BONOSCAT.find(c=>String(c.id)===v); if(!x)return; BONOS_ADD.push({id:x.id,nombre:x.nombre,monto:bonoMontoTxt(x)}); }
+ renderBonosAdded();
+}
+function bonoQuita(i){BONOS_ADD.splice(i,1);renderBonosAdded();}
 function chainOf(cat){if(cat==='practicante')return {n:1,meses:4,label:'1 carta compromiso de prácticas (programa de 480 h ≈ 16 semanas, sin salario ni relación laboral)'};return cat==='confianza'?{n:2,meses:3,label:'2 contratos de 3 meses (180 días de prueba)'}:{n:3,meses:1,label:'3 contratos de 1 mes (90 días de prueba)'};}
 let MACHOTE='',MACHOTE_PRACT='',FIRMA_PATRON='';
 async function loadFirma(){try{const {data}=await sb.from('firma_titular').select('data_uri').eq('clave','patron').maybeSingle();FIRMA_PATRON=(data&&data.data_uri)||'';}catch(e){FIRMA_PATRON='';}}
@@ -261,7 +289,7 @@ $('f_rol').value=SEL.puesto||'';
 $('f_cat').value=/practicante/i.test(SEL.puesto||'')?'practicante':((SEL.categoria_laboral==='confianza')?'confianza':'operativo');
 $('f_sal').value=SEL.salario_bruto||SEL.sueldo_base||'';
 $('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';$('f_edad').value=edadDe(SEL.fecha_nacimiento)||'';
-renderBonosList(SEL);$('f_bonos').value='';$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
+BONOS_ADD=[];renderBonosList();$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
 calcVig();
 $('formCard').scrollIntoView({behavior:'smooth'});
 }
@@ -320,16 +348,15 @@ const inicio=$('f_inicio').value, rol=$('f_rol').value.trim(), cat=$('f_cat').va
 const esPract=cat==='practicante';
 if(!inicio||!rol||(!sal&&!esPract)){m.className='msg err';m.textContent=esPract?'Faltan fecha o rol.':'Faltan fecha, rol o salario.';return;}
 const _req=esPract
- ?[['curp','CURP'],['direccion','Domicilio'],['fecha_nacimiento','Fecha de nacimiento']]
- :[['rfc','RFC'],['curp','CURP'],['nss','NSS'],['direccion','Domicilio'],['fecha_nacimiento','Fecha de nacimiento']];
+ ?[['curp','CURP'],['direccion','Domicilio']]
+ :[['rfc','RFC'],['curp','CURP'],['nss','NSS'],['direccion','Domicilio']];
 const _faltan=_req.filter(x=>!SEL[x[0]]).map(x=>x[1]);
 if(_faltan.length){m.className='msg err';m.textContent='Faltan datos del trabajador: '+_faltan.join(', ')+'. Complételos en ID maestro (sábana Base) antes de generar el contrato.';return;}
 const ch=chainOf(cat); const fin=addMonths(inicio,ch.meses);
 const dias=Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1;
 const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,
-bonos:esPract?null:{puntualidad:!!($('bono_punt')&&$('bono_punt').checked),
- lista:[...document.querySelectorAll('.bonoCat:checked')].map(b=>({id:b.value,nombre:b.dataset.nombre,monto:b.dataset.monto})),
- otros:$('f_bonos').value.trim()||null},
+bonos:esPract?null:{puntualidad:BONOS_ADD.some(b=>b.punt),
+ lista:BONOS_ADD.filter(b=>!b.punt).map(b=>({id:b.id,nombre:b.nombre,monto:b.monto}))},
 jornada:'48 horas semanales, de lunes a sábado',dia_descanso:'Domingo',horario:$('f_horario').value.trim()||null,
 fecha_inicio:inicio,vigencia_fin:fin.toISOString().slice(0,10),dias,numero:1,total_contratos:ch.n,tipo:esPract?'carta_practicas':'prueba',
 ubicacion:($('f_ubic')?$('f_ubic').value:null)||SEL.sede||null,edad:($('f_edad')?$('f_edad').value:null),hospedaje:($('f_hospedaje')&&$('f_hospedaje').value==='si'),otros:$('f_otros').value.trim()||null};
