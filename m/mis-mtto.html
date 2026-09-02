@@ -70,7 +70,8 @@
   <div id="app" style="display:none">
     <div class="topbar">
       <a class="btn blue sm" href="/m/lecturas.html">📷 Lecturas</a>
-      <button class="btn ghost sm" onclick="addTrabajo()">＋ Añadir trabajo</button>
+      <button class="btn ghost sm" id="btnAdd" onclick="addTrabajo()">＋ Añadir trabajo</button>
+      <span id="verWrap"></span>
       <div class="wk"><button class="arrow" onclick="shiftWk(-1)">‹</button><b id="wkLbl"></b><button class="arrow" onclick="shiftWk(1)">›</button></div>
     </div>
     <div class="cap" id="cap"></div>
@@ -93,7 +94,7 @@ const CLS={reactivo:['c-react','Reactivo'],correctivo:['c-correc','Correctivo'],
 const hoyMX=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'});
 function mondayOf(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);return x.toISOString().slice(0,10);}
 function rango(mon){const M=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];const d=new Date(mon+'T00:00:00'),e=new Date(d);e.setDate(e.getDate()+6);return d.getDate()+' '+M[d.getMonth()]+' – '+e.getDate()+' '+M[e.getMonth()];}
-let ME=null, EMP=null, WK=mondayOf(new Date()), curId=null, PROPID=null;
+let ME=null, EMP=null, WK=mondayOf(new Date()), curId=null, PROPID=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[];
 
 function showMsg(t,ok){const m=$('msg');m.className='msg show '+(ok?'ok':'bad');m.textContent=t;setTimeout(()=>m.classList.remove('show'),4000);}
 function modal(h){$('modal').innerHTML=h;$('modalBg').classList.add('on');}
@@ -108,34 +109,43 @@ async function boot(){
   const {data:el}=await sb.from('empleado_login').select('employee_id,nombre_display,nombre_completo').eq('user_id',ME.id).maybeSingle();
   if(!el){$('login').style.display='block';$('app').style.display='none';return;}
   EMP=el.employee_id;
-  const {data:emp}=await sb.from('employees').select('nombre,nombre_display,property_id').eq('id',EMP).maybeSingle();
+  const {data:emp}=await sb.from('employees').select('nombre,nombre_display,property_id,rol').eq('id',EMP).maybeSingle();
   PROPID=emp?emp.property_id:null;
   $('sub').textContent=(el.nombre_display||el.nombre_completo||'')+' · plan semanal';
+  VIEWEMP=EMP;
+  const ROLES_SUP=['Director','Gerente Operativo','Gerente Administrativo','Gerencia','Dueño','Owner'];
+  const CORP=['javi@casapepe.mx','hola.puebla@casapepe.mx'];
+  SUP=(emp&&ROLES_SUP.includes(emp.rol))||CORP.includes((ME.email||'').toLowerCase());
+  if(SUP){ TECLIST=await loadTecs(); renderVerSelector(); }
   render();
 }
 window.shiftWk=n=>{const d=new Date(WK+'T00:00:00');d.setDate(d.getDate()+n*7);WK=d.toISOString().slice(0,10);render();};
 
 async function render(){
   $('wkLbl').textContent=rango(WK);
+  const ro=SUP && VIEWEMP && VIEWEMP!==EMP;
+  const bAdd=$('btnAdd'); if(bAdd) bAdd.style.display=ro?'none':'';
+  const who=VIEWEMP||EMP;
   const {data,error}=await sb.from('mtto_tickets')
     .select('*, ubic:ubicacion_id(nombre,ficha_texto,recomendacion)')
-    .eq('asignado_a',EMP).eq('semana_programada',WK)
+    .eq('asignado_a',who).eq('semana_programada',WK)
     .in('estado',['validado','programado','en_proceso','resuelto']).order('prioridad');
   if(error){$('list').innerHTML='<div class="empty">Error: '+esc(error.message)+'</div>';return;}
   const rows=data||[];
   const pend=rows.filter(r=>['validado','programado','en_proceso'].includes(r.estado));
   const min=pend.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const hechos=rows.filter(r=>['resuelto'].includes(r.estado)).length;
-  $('cap').innerHTML=`Semana <b>${rango(WK)}</b> · <b>${pend.length}</b> por hacer (${(min/60).toFixed(1)} h)${hechos?` · <b>${hechos}</b> terminados`:''}`;
+  $('cap').innerHTML=`${ro?`👁️ Viendo el plan de <b>${esc(VIEWNAME)}</b> · solo lectura<br>`:''}Semana <b>${rango(WK)}</b> · <b>${pend.length}</b> por hacer (${(min/60).toFixed(1)} h)${hechos?` · <b>${hechos}</b> terminados`:''}`;
   if(!rows.length){$('list').innerHTML='<div class="empty">No tienes trabajos asignados esta semana.<br>Cuando el coordinador lance la asignación, aparecerán aquí.</div>';return;}
-  $('list').innerHTML=rows.map(cardHtml).join('');
+  $('list').innerHTML=rows.map(r=>cardHtml(r,ro)).join('');
 }
-function cardHtml(t){
+function cardHtml(t,ro){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||''];
   const foto=t.foto_url?`<img class="foto" src="${esc(t.foto_url)}" alt="foto">`:'';
   const ficha=t.ubic&&(t.ubic.recomendacion||t.ubic.ficha_texto)?`<details class="ficha"><summary>Ficha / qué hacer aquí</summary><div class="txt">${esc(t.ubic.recomendacion||t.ubic.ficha_texto)}</div></details>`:'';
   let acts='', extra='';
-  if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado · espera cierre de quien lo pidió</span>`; }
+  if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado${ro?'':' · espera cierre de quien lo pidió'}</span>`; }
+  else if(ro){ extra=`<span class="state">${t.estado==='en_proceso'?'⏱️ En proceso':'📋 Programado'}</span>`; }
   else if(t.estado==='en_proceso'){ acts=`<button class="btn sm" onclick="terminar('${t.id}')">📸 Terminar + foto</button>`; }
   else { // validado/programado
     if(t.requiere_compra){ extra=`<div class="blk" id="blk-${t.id}">🛒 Espera la compra de Roberto para poder iniciar</div>`; acts=`<button class="btn sm" onclick="iniciar('${t.id}')">Iniciar</button>`; }
@@ -225,6 +235,21 @@ window.saveTrabajo=async()=>{
 };
 async function nombreEmp(){ const {data}=await sb.from('employees').select('nombre_display,nombre').eq('id',EMP).maybeSingle(); return data?(data.nombre_display||data.nombre):null; }
 
+async function loadTecs(){
+  const {data:t1}=await sb.from('employees').select('id,nombre,nombre_display').ilike('puesto','%mantenimiento%').eq('estatus','activo');
+  const {data:perm}=await sb.from('usuario_permisos').select('email').in('pagina_codigo',['PAG-SP-LECTURAS','PAG-SP-MISMTTO']);
+  const emails=[...new Set((perm||[]).map(p=>p.email).filter(Boolean))];
+  let t2=[]; if(emails.length){ const r=await sb.from('employees').select('id,nombre,nombre_display').in('email',emails).eq('estatus','activo'); t2=r.data||[]; }
+  const map={}; [...(t1||[]),...t2].forEach(e=>{ if(e.id!==EMP) map[e.id]=e; });
+  return Object.values(map).sort((a,b)=>((a.nombre_display||a.nombre)||'').localeCompare((b.nombre_display||b.nombre)||''));
+}
+function renderVerSelector(){
+  if(!SUP){$('verWrap').innerHTML='';return;}
+  const opts=[`<option value="${EMP}">Mi plan</option>`].concat(TECLIST.map(t=>`<option value="${t.id}">${esc(t.nombre_display||t.nombre)}</option>`));
+  $('verWrap').innerHTML=`<select id="verTec" class="btn ghost sm" style="padding:8px 10px" onchange="setVer(this.value)">${opts.join('')}</select>`;
+  const s=$('verTec'); if(s) s.value=VIEWEMP;
+}
+window.setVer=v=>{ VIEWEMP=v; const t=TECLIST.find(x=>x.id===v); VIEWNAME=(v===EMP)?'tú':(t?(t.nombre_display||t.nombre):''); render(); };
 boot();
 </script>
 </body>
