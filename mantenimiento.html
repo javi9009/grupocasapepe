@@ -494,6 +494,7 @@ async function renderProg(){
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
       <div class="muted" style="font-size:13px;flex:1">Capacidad programable por técnico: <b>${objetivo.toFixed(1)} h</b> · reservado ${c.reserva_reactivo_h}h reactivo + ${c.admin_h}h admin + ${c.consumos_h}h consumos</div>
+      <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar ${c.min_preventivo_h||8}h de preventivos</button>
       <button class="btn ghost sm" onclick="genPrev()">＋ Preventivos del catálogo</button>
     </div></div>
     <div class="progwrap">
@@ -512,6 +513,8 @@ function cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal){
   const workMin=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const travelMin=(t._flota&&mine.length)?(c.horas_dia/2)*60:0;
   const total=workMin+travelMin, capMin=objetivo*60||1;
+  const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const minPrev=(c.min_preventivo_h||8)*60, prevOk=prevMin>=minPrev;
   const pct=Math.min(100,Math.round(total/capMin*100));
   const nv=pct>=95?'bad':(pct>=75?'warn':'');
   const w=x=>Math.max(0,Math.min(100,x/capMin*100));
@@ -526,6 +529,7 @@ function cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal){
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
       <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
+    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${(c.min_preventivo_h||8)}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">reserva ${c.reserva_reactivo_h}h react · ${c.admin_h}h admin · ${c.consumos_h}h consumos</span></div>
     <div class="achips" data-drop="${t.id}">${chips}</div></div>`;
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
@@ -624,6 +628,19 @@ function wireDrag(){
   const pl=document.querySelector('.pend');
   if(pl){pl.addEventListener('dragover',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk))e.preventDefault();});
     pl.addEventListener('drop',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk)){e.preventDefault();quitarSemana(dragTk);dragTk=null;}});}
+}
+async function autoPrevAssign(){
+  if(!PROG_STATE)return; const need=(PROG_STATE.c.min_preventivo_h||8)*60;
+  const due=PROG_STATE.prevCat.slice(); let di=0; const inserts=[];
+  for(const t of PROG_STATE.board){
+    let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
+    while(cur<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
+      inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
+      cur+=min; }
+  }
+  if(!inserts.length)return toast('No hay preventivos pendientes por preasignar');
+  const {error}=await sb.from('mtto_tickets').insert(inserts);
+  if(error)return toast(error.message); toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
 }
 async function genPrev(){
   const {data:cat}=await sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).eq("activo",true).order("periodicidad");
