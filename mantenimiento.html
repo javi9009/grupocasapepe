@@ -342,25 +342,50 @@ async function renderTablero(){
     </div></div>`;
 }
 
-/* TICKETS */
-let TK_F={estado:"",clas:""};
+/* CORRECTIVOS Y PENDIENTES */
+let TK_F={estado:"",clas:"",tec:"",abiertos:true};
 async function renderTickets(){
-  const {data,error}=await sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false});
+  const wkMon=mondayOf(hoyMX());
+  const [{data,error},{data:planAtras}]=await Promise.all([
+    sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false}),
+    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada")
+  ]);
   if(error)throw error; let rows=data||[];
+  // Preventivos como ticket que ya debían estar hechos
+  const tkAtras=rows.filter(r=>r.clasificacion==="preventivo"&&!["resuelto","cerrado","cancelado"].includes(r.estado)&&r.semana_programada&&mondayOf(r.semana_programada)<wkMon).length;
+  const atras=(planAtras||[]);
+  if(TK_F.abiertos)rows=rows.filter(r=>!["cerrado","cancelado","resuelto"].includes(r.estado));
   if(TK_F.estado)rows=rows.filter(r=>r.estado===TK_F.estado);
   if(TK_F.clas)rows=rows.filter(r=>r.clasificacion===TK_F.clas);
-  $("#view").innerHTML=`
-    <div class="filters">
+  if(TK_F.tec)rows=rows.filter(r=>r.asignado_a===TK_F.tec);
+  const atrasBox=(atras.length||tkAtras)?`<div class="card" style="border-color:var(--bad)"><div class="pad">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:var(--bad)">⏰ Preventivos atrasados</b>
+      <span class="chip c-react">${atras.length} por lugar</span>${tkAtras?`<span class="chip c-react">${tkAtras} en tickets</span>`:''}
+      ${atras.length?`<button class="btn sm" style="margin-left:auto" onclick="reprogTodos()">Reprogramar a esta semana</button>`:''}</div>
+    ${atras.length?`<div class="scroll" style="margin-top:8px;max-height:34vh"><table><tbody>${atras.slice(0,60).map(p=>`<tr><td>${esc((p.cat&&p.cat.tarea)||'Preventivo')} <span class="muted">· ${esc(p.ubic?p.ubic.nombre:'—')}</span></td><td class="muted num" style="font-size:12px">vencía ${p.semana_programada}</td><td class="num"><button class="btn ghost sm" onclick="reprogUno('${p.id}')">↻ esta semana</button></td></tr>`).join('')}</tbody></table></div>`:''}
+    <div class="muted" style="font-size:12px;margin-top:6px">Aparecen en <a onclick="go('prog')" style="color:var(--accent);cursor:pointer">Reparto de tareas</a> para asignarse.</div>
+  </div></div>`:'';
+  $("#view").innerHTML=atrasBox+`
+    <div class="filters" style="align-items:center;gap:8px">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600"><input type="checkbox" style="width:auto" ${TK_F.abiertos?'checked':''} onchange="TK_F.abiertos=this.checked;renderTickets()">Solo abiertos</label>
       <select onchange="TK_F.estado=this.value;renderTickets()"><option value="">Todos los estados</option>
-        ${["nuevo","validado","programado","en_proceso","resuelto","cerrado","cancelado"].map(s=>`<option ${TK_F.estado===s?"selected":""}>${s}</option>`).join("")}</select>
+        ${["nuevo","validado","programado","en_proceso","pausado","resuelto","cerrado","cancelado"].map(s=>`<option ${TK_F.estado===s?"selected":""}>${s}</option>`).join("")}</select>
       <select onchange="TK_F.clas=this.value;renderTickets()"><option value="">Toda clasificación</option>
         ${["reactivo","correctivo","preventivo"].map(s=>`<option ${TK_F.clas===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select onchange="TK_F.tec=this.value;renderTickets()"><option value="">Todo técnico</option>${tecOptions(TK_F.tec)}</select>
     </div>
     <div class="card"><div class="scroll"><table>
       <thead><tr><th>Reporte</th><th>Ubicación</th><th>Clasif.</th><th>Estado</th><th class="num">Min est.</th><th>Técnico</th><th></th></tr></thead>
-      <tbody>${rows.length?rows.map(ticketRow).join(""):'<tr><td colspan="7" class="center">Sin tickets</td></tr>'}</tbody>
+      <tbody>${rows.length?rows.map(ticketRow).join(""):'<tr><td colspan="7" class="center">Sin tickets con ese filtro</td></tr>'}</tbody>
     </table></div></div>`;
 }
+async function reprogUno(id){const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:mondayOf(hoyMX())}).eq("id",id);
+  if(error)return toast(error.message);toast("Reprogramado a esta semana");renderTickets();}
+async function reprogTodos(){const wk=mondayOf(hoyMX());
+  const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:wk}).eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wk);
+  if(error)return toast(error.message);toast("Atrasados reprogramados a esta semana");renderTickets();}
+async function editMinTk(id,cur){const v=prompt("Minutos estimados:",cur||"");if(v===null)return;const m=parseInt(v)||null;
+  const {error}=await sb.from("mtto_tickets").update({minutos_estimados:m}).eq("id",id);if(error)return toast(error.message);toast("Tiempo actualizado");renderTickets();}
 function ticketRow(t){
   const foto=t.foto_url?` <a class="lnk" href="${esc(t.foto_url)}" target="_blank">📷</a>`:"";
   return `<tr>
@@ -376,6 +401,7 @@ function ticketActions(t){
   if(["validado","programado"].includes(t.estado))a.push(`<button class="btn sm" onclick="iniciar('${t.id}')">Iniciar</button>`);
   if(t.estado==="en_proceso")a.push(`<button class="btn sm" onclick="resolver('${t.id}')">Resolver</button>`);
   if(t.estado==="resuelto")a.push(`<button class="btn ghost sm" onclick="cerrar('${t.id}')">Cerrar</button>`);
+  if(!["cerrado","cancelado","resuelto"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="editMinTk('${t.id}',${t.minutos_estimados||0})" title="Editar tiempo estimado">✎ min</button>`);
   if(!["cerrado","cancelado"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="compraMenu('${t.id}')" title="Compras / requiere compra">🛒</button>`);
   return a.join("")||`<span class="muted">—</span>`;
 }
