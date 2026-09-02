@@ -226,7 +226,7 @@ const VIEWS=[
   {k:"prog",t:"Reparto de tareas"},
   {k:"prod",t:"Productividad semanal"},
   {k:"prev",t:"Preventivos"},
-  {k:"tickets",t:"Correctivos y pendientes"},
+  {k:"tickets",t:"Tickets"},
   {k:"config",t:"⚙️ Turnos"},
   {k:"lect",t:"Lecturas"},
 ];
@@ -342,8 +342,8 @@ async function renderTablero(){
     </div></div>`;
 }
 
-/* CORRECTIVOS Y PENDIENTES */
-let TK_F={estado:"",clas:"",tec:"",abiertos:true};
+/* TICKETS */
+let TK_F={estado:"",clas:"",tec:"",oficio:"",q:"",desde:"",abiertos:true};
 async function renderTickets(){
   const wkMon=mondayOf(hoyMX());
   const [{data,error},{data:planAtras}]=await Promise.all([
@@ -358,6 +358,9 @@ async function renderTickets(){
   if(TK_F.estado)rows=rows.filter(r=>r.estado===TK_F.estado);
   if(TK_F.clas)rows=rows.filter(r=>r.clasificacion===TK_F.clas);
   if(TK_F.tec)rows=rows.filter(r=>r.asignado_a===TK_F.tec);
+  if(TK_F.oficio)rows=rows.filter(r=>r.oficio===TK_F.oficio);
+  if(TK_F.desde)rows=rows.filter(r=>(r.reportado_at||"").slice(0,10)>=TK_F.desde);
+  if(TK_F.q){const q=TK_F.q.toLowerCase();rows=rows.filter(r=>[r.titulo,r.descripcion,r.ubic&&r.ubic.nombre,r.reportado_por_nombre,r.asignado_nombre,ofNombre(r.oficio||"")].some(x=>(x||"").toLowerCase().includes(q)));}
   const atrasBox=(atras.length||tkAtras)?`<div class="card" style="border-color:var(--bad)"><div class="pad">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:var(--bad)">⏰ Preventivos atrasados</b>
       <span class="chip c-react">${atras.length} por lugar</span>${tkAtras?`<span class="chip c-react">${tkAtras} en tickets</span>`:''}
@@ -366,13 +369,17 @@ async function renderTickets(){
     <div class="muted" style="font-size:12px;margin-top:6px">Aparecen en <a onclick="go('prog')" style="color:var(--accent);cursor:pointer">Reparto de tareas</a> para asignarse.</div>
   </div></div>`:'';
   $("#view").innerHTML=atrasBox+`
-    <div class="filters" style="align-items:center;gap:8px">
+    <div class="filters" style="align-items:center;gap:8px;flex-wrap:wrap">
+      <input type="search" placeholder="🔍 Buscar (área, nombre, quién solicitó, oficio…)" value="${esc(TK_F.q)}" style="min-width:240px;flex:1" onchange="TK_F.q=this.value;renderTickets()">
       <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600"><input type="checkbox" style="width:auto" ${TK_F.abiertos?'checked':''} onchange="TK_F.abiertos=this.checked;renderTickets()">Solo abiertos</label>
       <select onchange="TK_F.estado=this.value;renderTickets()"><option value="">Todos los estados</option>
         ${["nuevo","validado","programado","en_proceso","pausado","resuelto","cerrado","cancelado"].map(s=>`<option ${TK_F.estado===s?"selected":""}>${s}</option>`).join("")}</select>
       <select onchange="TK_F.clas=this.value;renderTickets()"><option value="">Toda clasificación</option>
         ${["reactivo","correctivo","preventivo"].map(s=>`<option ${TK_F.clas===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select onchange="TK_F.oficio=this.value;renderTickets()"><option value="">Todo oficio</option>${OFICIOS.map(o=>`<option value="${o[0]}" ${TK_F.oficio===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
       <select onchange="TK_F.tec=this.value;renderTickets()"><option value="">Todo técnico</option>${tecOptions(TK_F.tec)}</select>
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--muted)">desde <input type="date" value="${esc(TK_F.desde)}" onchange="TK_F.desde=this.value;renderTickets()"></label>
+      ${(TK_F.q||TK_F.oficio||TK_F.desde||TK_F.estado||TK_F.clas||TK_F.tec)?`<button class="btn ghost sm" onclick="TK_F={estado:'',clas:'',tec:'',oficio:'',q:'',desde:'',abiertos:TK_F.abiertos};renderTickets()">Limpiar</button>`:''}
     </div>
     <div class="card"><div class="scroll"><table>
       <thead><tr><th>Reporte</th><th>Ubicación</th><th>Clasif.</th><th>Estado</th><th class="num">Min est.</th><th>Técnico</th><th></th></tr></thead>
@@ -386,22 +393,28 @@ async function reprogTodos(){const wk=mondayOf(hoyMX());
   if(error)return toast(error.message);toast("Atrasados reprogramados a esta semana");renderTickets();}
 async function editMinTk(id,cur){const v=prompt("Minutos estimados:",cur||"");if(v===null)return;const m=parseInt(v)||null;
   const {error}=await sb.from("mtto_tickets").update({minutos_estimados:m}).eq("id",id);if(error)return toast(error.message);toast("Tiempo actualizado");renderTickets();}
+async function cancelarTk(id){const m=prompt("Cancelar ticket — motivo (opcional):");if(m===null)return;
+  const {error}=await sb.from("mtto_tickets").update({estado:"cancelado",comentario_cierre:m||"Cancelado por gerencia",cerrado_por:USER.id,cerrado_por_nombre:USER.email,cerrado_at:new Date().toISOString()}).eq("id",id);
+  if(error)return toast(error.message);try{await ev(id,"cancelado",{motivo:m||null});}catch(_){}toast("Ticket cancelado");renderTickets();}
 function ticketRow(t){
   const foto=t.foto_url?` <a class="lnk" href="${esc(t.foto_url)}" target="_blank">📷</a>`:"";
+  const fecha=t.reportado_at?new Date(t.reportado_at).toLocaleDateString("es-MX",{day:"2-digit",month:"short"}):"";
+  const quien=[t.reportado_por_nombre?("por "+t.reportado_por_nombre):"", fecha].filter(Boolean).join(" · ");
+  const stCls=t.estado==="pausado"?"c-correc":(["resuelto","cerrado"].includes(t.estado)?"c-prev":(t.estado==="cancelado"?"c-info":""));
   return `<tr>
-    <td><b>${esc(t.titulo||"(sin título)")}</b>${foto}${t.requiere_compra?' <span class="chip c-info">🛒 compra</span>':''}<div class="muted" style="font-size:12px">${esc((t.descripcion||"").slice(0,70))}</div></td>
+    <td><b>${esc(t.titulo||"(sin título)")}</b>${foto}${t.requiere_compra?' <span class="chip c-info">🛒 compra</span>':''}${t.oficio?` <span class="chip c-info">${esc(ofNombre(t.oficio))}</span>`:''}<div class="muted" style="font-size:12px">${esc((t.descripcion||"").slice(0,70))}${quien?` · <i>${esc(quien)}</i>`:''}</div></td>
     <td>${esc(t.ubic?.nombre||"—")}</td><td>${clsChip(t.clasificacion)}</td>
-    <td><span class="st">${esc(t.estado)}</span></td><td class="num">${t.minutos_estimados??"—"}</td>
+    <td>${stCls?`<span class="chip ${stCls}">${esc(t.estado)}</span>`:`<span class="st">${esc(t.estado)}</span>`}</td><td class="num">${t.minutos_estimados??"—"}</td>
     <td class="muted" style="font-size:12px">${esc(t.asignado_nombre||"—")}</td>
     <td><div class="row-actions">${ticketActions(t)}</div></td></tr>`;
 }
 function ticketActions(t){
-  // Este dashboard es LISTADO/gestión — no se inicia trabajo aquí (eso lo hace el
-  // técnico en su app). Solo validar/estimar, asignar, editar tiempo y compras.
+  // Solo REVISIÓN/gestión. La asignación (técnico + semana) se hace en Reparto de
+  // tareas para no corromper las semanas; aquí no se asigna ni se inicia trabajo.
   const a=[];
-  if(t.estado==="nuevo")a.push(`<button class="btn sm" onclick="validar('${t.id}')">Validar y asignar</button>`);
   if(!["cerrado","cancelado","resuelto"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="editMinTk('${t.id}',${t.minutos_estimados||0})" title="Editar tiempo estimado">✎ min</button>`);
   if(!["cerrado","cancelado"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="compraMenu('${t.id}')" title="Compras / requiere compra">🛒</button>`);
+  if(!["cerrado","cancelado"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="cancelarTk('${t.id}')" title="Cancelar ticket" style="color:var(--bad)">✕ Cancelar</button>`);
   return a.join("")||`<span class="muted">—</span>`;
 }
 async function validar(id){
