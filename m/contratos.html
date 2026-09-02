@@ -189,9 +189,19 @@ function estadoContrato(empId){
  const hoy=new Date().toISOString().slice(0,10);
  const total=+L.total_contratos||1, num=+L.numero||1;
  const vencido=L.vigencia_fin&&String(L.vigencia_fin).slice(0,10)<hoy;
- if(num>=total&&vencido) return {estado:'planta_pendiente', numero:num+1, total, base:L};
- if(vencido) return {estado:'renovacion_pendiente', numero:num+1, total, base:L};
- return {estado:'en_prueba', numero:num, total, base:L};
+ // Periodo TOTAL de prueba: desde el inicio del PRIMER contrato, 3 meses (operativo) o 6 (confianza).
+ // Regla legal: si venció una renovación y la persona siguió trabajando, el contrato anterior sigue
+ // vigente; agotado el periodo de prueba total toca PLANTA, aunque falten contratos de la cadena.
+ let ini=null; pr.forEach(c=>{const f=c.fecha_inicio&&String(c.fecha_inicio).slice(0,10); if(f&&(!ini||f<ini))ini=f;});
+ const emp=EMPS.find(e=>e.id===empId);
+ if(!ini&&emp&&emp.fecha_inicio_labores) ini=String(emp.fecha_inicio_labores).slice(0,10);
+ let finPrueba=null;
+ if(ini){const d=new Date(ini+'T00:00:00');d.setMonth(d.getMonth()+((L.categoria==='confianza')?6:3));d.setDate(d.getDate()-1);finPrueba=d;}
+ const finPruebaS=finPrueba?finPrueba.toISOString().slice(0,10):null;
+ if(finPruebaS&&hoy>finPruebaS) return {estado:'planta_pendiente', numero:num+1, total, base:L, finPrueba, ini};
+ if(num>=total&&vencido) return {estado:'planta_pendiente', numero:num+1, total, base:L, finPrueba, ini};
+ if(vencido) return {estado:'renovacion_pendiente', numero:num+1, total, base:L, finPrueba, ini};
+ return {estado:'en_prueba', numero:num, total, base:L, finPrueba, ini};
 }
 function pintaAlertaEtapas(){
  const box=$('alertaEtapas'); if(!box) return;
@@ -200,10 +210,10 @@ function pintaAlertaEtapas(){
   if(st.estado==='planta_pendiente')plantas.push({e,st});
   else if(st.estado==='renovacion_pendiente')renov.push({e,st});});
  let h='';
- if(plantas.length)h+='<div style="border:1px solid #d98c8c;background:#FBECEC;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#8f2f2f">⚠ Terminaron su periodo de prueba — el sistema solo permitirá emitirles contrato de PLANTA (tiempo indeterminado):</b>'
-  +plantas.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — contrato ${x.st.total} de ${x.st.total} venció el ${fmtd(x.st.base.vigencia_fin)}</span><button class="btn" onclick="openForm('${x.e.id}')">Emitir planta →</button></div>`).join('')+'</div>';
- if(renov.length)h+='<div style="border:1px solid #e0c98c;background:#FBF4E4;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#7a5b17">⏰ Renovaciones de prueba vencidas:</b>'
-  +renov.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — toca el contrato ${x.st.numero} de ${x.st.total} (venció el ${fmtd(x.st.base.vigencia_fin)})</span><button class="btn" onclick="openForm('${x.e.id}')">Renovar →</button></div>`).join('')+'</div>';
+ if(plantas.length)h+='<div style="border:1px solid #d98c8c;background:#FBECEC;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#8f2f2f">⚠ Agotaron su periodo de prueba — el sistema solo permitirá emitirles contrato de PLANTA (tiempo indeterminado):</b>'
+  +plantas.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — prueba concluida${x.st.finPrueba?(' el '+fmtd(x.st.finPrueba.toISOString().slice(0,10))):''} (último contrato venció el ${fmtd(x.st.base.vigencia_fin)}; por ley siguió vigente al continuar trabajando)</span><button class="btn" onclick="openForm('${x.e.id}')">Emitir planta →</button></div>`).join('')+'</div>';
+ if(renov.length)h+='<div style="border:1px solid #e0c98c;background:#FBF4E4;border-radius:10px;padding:12px 14px;margin-bottom:10px"><b style="color:#7a5b17">⏰ Renovaciones de prueba vencidas</b> <span style="color:#7a5b17">(el contrato anterior sigue vigente por ley; el siguiente cubre solo los días de prueba restantes):</span>'
+  +renov.map(x=>`<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><span style="flex:1">${esc(x.e.nombre||'')} · ${esc(x.st.base.rol||x.e.puesto||'')} — contrato ${x.st.numero} de ${x.st.total}, por los días restantes${x.st.finPrueba?(' hasta el '+fmtd(x.st.finPrueba.toISOString().slice(0,10))):''}</span><button class="btn" onclick="openForm('${x.e.id}')">Renovar →</button></div>`).join('')+'</div>';
  box.innerHTML=h;
 }
 function edadDe(fn){if(!fn)return '';try{const b=new Date((''+fn).slice(0,10)+'T00:00:00');const n=new Date();let a=n.getFullYear()-b.getFullYear();if(n.getMonth()<b.getMonth()||(n.getMonth()===b.getMonth()&&n.getDate()<b.getDate()))a--;return a>0?(''+a):'';}catch(e){return '';}}
@@ -328,9 +338,10 @@ BONOS_ADD=[];renderBonosList();$('f_otros').value='';if($('f_hospedaje'))$('f_ho
 calcVig();
 try{
  const st=estadoContrato(SEL.id);
+ if(st.estado==='planta_pendiente'||st.estado==='renovacion_pendiente'){$('f_inicio').value=new Date().toISOString().slice(0,10);}
  if(st.estado==='planta'){$('chainInfo').innerHTML='<b>Ya tiene contrato de PLANTA (tiempo indeterminado).</b> No procede generar otro contrato.';}
- else if(st.estado==='planta_pendiente'){$('chainInfo').innerHTML='<b style="color:#8f2f2f">&#9888; Termin&oacute; su periodo de prueba</b> (contrato '+st.total+' de '+st.total+' venci&oacute; el '+fmtd(st.base.vigencia_fin)+'). El sistema <b>solo permite emitir el contrato de PLANTA (tiempo indeterminado)</b>, reconociendo su antig&uuml;edad desde el inicio.';}
- else if(st.estado==='renovacion_pendiente'){$('chainInfo').innerHTML='<b style="color:#7a5b17">&#9200; Renovaci&oacute;n:</b> se generar&aacute; el <b>contrato '+st.numero+' de '+st.total+'</b> de su cadena de prueba (el anterior venci&oacute; el '+fmtd(st.base.vigencia_fin)+').';}
+ else if(st.estado==='planta_pendiente'){$('chainInfo').innerHTML='<b style="color:#8f2f2f">&#9888; Agot&oacute; su periodo de prueba</b>'+(st.finPrueba?(' (concluy&oacute; el '+fmtd(st.finPrueba.toISOString().slice(0,10))+')'):'')+'. Al seguir trabajando, por ley el contrato anterior sigui&oacute; vigente y el sistema <b>solo permite emitir el contrato de PLANTA (tiempo indeterminado)</b>, reconociendo su antig&uuml;edad desde el inicio.';}
+ else if(st.estado==='renovacion_pendiente'){$('chainInfo').innerHTML='<b style="color:#7a5b17">&#9200; Renovaci&oacute;n:</b> se generar&aacute; el <b>contrato '+st.numero+' de '+st.total+'</b> <b>solo por los d&iacute;as de prueba restantes</b>'+(st.finPrueba?(', hasta el <b>'+fmtd(st.finPrueba.toISOString().slice(0,10))+'</b>'):'')+' (el anterior venci&oacute; el '+fmtd(st.base.vigencia_fin)+' pero sigui&oacute; vigente por ley al continuar trabajando).';}
  else if(st.estado==='en_prueba'){$('chainInfo').innerHTML+=' <b>Nota:</b> ya tiene el contrato '+st.numero+' de '+st.total+' vigente'+(st.base.vigencia_fin?(' hasta el '+fmtd(st.base.vigencia_fin)):'')+'.';}
 }catch(e){}
 $('formCard').scrollIntoView({behavior:'smooth'});
@@ -401,8 +412,11 @@ const st=estadoContrato(SEL.id);
 if(st.estado==='planta'){m.className='msg err';m.textContent='Ya tiene contrato de planta - no procede otro contrato.';return;}
 let tipoDoc=esPract?'carta_practicas':'prueba', numeroDoc=1, totalDoc=ch.n;
 if(!esPract&&st.estado==='planta_pendiente'){tipoDoc='indeterminado';numeroDoc=st.numero;totalDoc=st.total;fin=null;dias=null;}
-else if(!esPract&&(st.estado==='renovacion_pendiente'||st.estado==='en_prueba')){numeroDoc=st.numero===undefined?1:(st.estado==='en_prueba'?st.numero:st.numero);totalDoc=st.total;}
-if(!esPract&&st.estado==='renovacion_pendiente'){numeroDoc=st.numero;}
+else if(!esPract&&st.estado==='renovacion_pendiente'){
+ numeroDoc=st.numero;totalDoc=st.total;
+ if(st.finPrueba){fin=st.finPrueba;dias=Math.max(1,Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1);} // solo los días restantes de prueba
+}
+else if(!esPract&&st.estado==='en_prueba'){numeroDoc=st.numero;totalDoc=st.total;}
 const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,
 bonos:esPract?null:{puntualidad:BONOS_ADD.some(b=>b.punt),
  lista:BONOS_ADD.filter(b=>!b.punt).map(b=>({id:b.id,nombre:b.nombre,monto:b.monto}))},
@@ -440,7 +454,7 @@ numero:c.numero||1,total_contratos:c.total_contratos||ch.n,tipo:c.tipo||'prueba'
 const r=await sb.from('contratos').insert(row);if(r.error)throw new Error(r.error.message);
 const esIndet=c.tipo==='indeterminado';
 const empUpd={contrato_categoria:c.categoria,tipo_contrato:c.tipo||'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'};
-if(!esIndet)empUpd.fecha_inicio_labores=c.fecha_inicio; // la planta conserva la fecha de inicio original (antiguedad)
+if(!esIndet&&(c.numero||1)===1)empUpd.fecha_inicio_labores=c.fecha_inicio; // solo el PRIMER contrato fija la fecha de inicio; renovaciones y planta conservan la antigüedad
 if(esIndet)empUpd.prueba_planta='planta';
 if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;empUpd.bono_puntualidad=!!(c.bonos&&c.bonos.puntualidad);}
 await sb.from('employees').update(empUpd).eq('id',emp.id);

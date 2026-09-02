@@ -403,20 +403,44 @@ async function loadContratosEmitir(){
   const hoy=new Date(); const hoyS=hoy.toISOString().slice(0,10); const limS=new Date(Date.now()+60*864e5).toISOString().slice(0,10);
   let emps=[],cons=[];
   try{ const r=await sb.from('employees').select('id,empleado_id,nombre,nombre_display,area,sede,property_id,alta_etapa,puesto,estatus'); emps=r.data||[]; }catch(e){}
-  try{ const r=await sb.from('contratos').select('employee_id,estatus,vigencia_fin'); cons=r.data||[]; }catch(e){}
+  try{ const r=await sb.from('contratos').select('employee_id,estatus,vigencia_fin,tipo,numero,total_contratos,categoria,fecha_inicio,created_at').order('created_at',{ascending:false}); cons=r.data||[]; }catch(e){}
   const empById={}; emps.forEach(e=>empById[e.id]=e);
-  const maxVig={},tieneFirmado={};
-  cons.forEach(k=>{ if(k.estatus==='firmado'){ tieneFirmado[k.employee_id]=true; if(k.vigencia_fin&&(!maxVig[k.employee_id]||k.vigencia_fin>maxVig[k.employee_id])) maxVig[k.employee_id]=k.vigencia_fin; } });
+  const byEmp={},tieneFirmado={};
+  cons.forEach(k=>{ if(k.estatus==='cancelado')return; (byEmp[k.employee_id]=byEmp[k.employee_id]||[]).push(k); if(k.estatus==='firmado')tieneFirmado[k.employee_id]=true; });
   const rows=[];
-  // 1) renovaciones: contrato firmado cuyo último vencimiento cae dentro de 60 días (o ya venció)
-  Object.keys(maxVig).forEach(id=>{ const e=empById[id]; if(!e)return; if(e.estatus&&e.estatus!=='activo'&&e.estatus!=='pendiente_alta')return; if(maxVig[id]<=limS) rows.push({e:e,tipo:'renovar',fecha:maxVig[id]}); });
-  // 2) primer contrato: alta activa/aceptada sin ningún contrato firmado
+  // Renovaciones con la regla de prueba: 3 meses (operativo) / 6 (confianza) desde el PRIMER contrato.
+  // Prueba agotada => toca PLANTA (el contrato anterior siguió vigente por ley). Si quedan días => prueba solo por lo restante.
+  Object.keys(byEmp).forEach(id=>{ const e=empById[id]; if(!e)return; if(e.estatus&&e.estatus!=='activo'&&e.estatus!=='pendiente_alta')return;
+    const cs=byEmp[id]; if(cs.some(k=>k.tipo==='indeterminado'))return; // ya es planta
+    const pr=cs.filter(k=>k.tipo!=='carta_practicas'&&k.estatus==='firmado'); if(!pr.length)return;
+    const L=pr[0], total=+L.total_contratos||1, num=+L.numero||1, cat=(L.categoria==='confianza')?'confianza':'operativo';
+    let maxV=null; pr.forEach(k=>{ if(k.vigencia_fin&&(!maxV||k.vigencia_fin>maxV))maxV=k.vigencia_fin; });
+    let ini=null; pr.forEach(k=>{ const f=k.fecha_inicio&&String(k.fecha_inicio).slice(0,10); if(f&&(!ini||f<ini))ini=f; });
+    let finP=null; if(ini){ const d=new Date(ini+'T00:00:00'); d.setMonth(d.getMonth()+((cat==='confianza')?6:3)); d.setDate(d.getDate()-1); finP=d.toISOString().slice(0,10); }
+    if(!maxV)return;
+    const agotada=(finP&&hoyS>finP)||(num>=total&&maxV<hoyS);
+    if(agotada) rows.push({e,tipo:'planta',fecha:maxV,finP,num,total,cat});
+    else if(maxV<=limS) rows.push({e,tipo:'renovar',fecha:maxV,finP,num,total,cat});
+  });
+  // Altas nuevas sin contrato firmado
   emps.forEach(e=>{ if(['activa','aceptada'].indexOf(e.alta_etapa)>=0 && !tieneFirmado[e.id] && e.estatus!=='baja') rows.push({e:e,tipo:'nuevo',fecha:hoyS}); });
   let vis=rows.filter(r=>isAdmin||inScope({area:r.e.area||'',sede:r.e.sede}));
   vis.sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
   if(!vis.length){c.innerHTML='<div class="empty">No hay contratos por emitir en los próximos 60 días 🎉</div>';return;}
-  c.innerHTML='<div class="det" style="margin-bottom:8px">Contratos que deben emitirse en los próximos <b>60 días</b>: renovaciones por vencimiento y altas nuevas sin contrato. El botón abre <b>Contratos & Aceptación</b> (la misma página) para editar y enviar — sin funciones duplicadas.</div>'+vis.map(r=>{const e=r.e;const dd=Math.ceil((new Date(r.fecha)-hoy)/864e5);const venc=r.tipo==='renovar';const etq=venc?(dd<0?('Vencido hace '+(-dd)+' d'):('Vence en '+dd+' d')):'Nuevo · sin contrato';const bc=dd<0?'border-color:#5a2f2a':(dd<=15?'border-color:#5a431f':'');
-    return `<div class="item" style="${bc}"><div class="top"><span class="nm">${esc(e.nombre||e.nombre_display||'—')}</span><span class="pill g">${esc(altaUbic(e))}</span><span class="pill">${esc(e.empleado_id||'sin ID')}</span><span class="pill">${esc(e.puesto||'')}</span><span class="pill ${venc?'r':'s'}">${etq}${venc?(' · '+esc(r.fecha)):''}</span></div><div class="acts"><a class="btn lnk" href="/m/contratos.html?emp=${e.id}">→ Editar / emitir contrato</a></div></div>`;}).join('');
+  const card=r=>{const e=r.e;const dd=Math.ceil((new Date(r.fecha)-hoy)/864e5);
+    let etq='',pc='s';
+    if(r.tipo==='planta'){etq='Prueba agotada'+(r.finP?(' el '+r.finP):'')+' → PLANTA';pc='r';}
+    else if(r.tipo==='renovar'){etq='Contrato '+(r.num+1)+' de '+r.total+' · '+(dd<0?('vencido hace '+(-dd)+' d'):('vence en '+dd+' d'))+(r.finP?(' · prueba hasta '+r.finP):'');pc='r';}
+    else etq='Nuevo · sin contrato';
+    const bc=(r.tipo==='planta'||dd<0)?'border-color:#5a2f2a':(dd<=15?'border-color:#5a431f':'');
+    return `<div class="item" style="${bc}"><div class="top"><span class="nm">${esc(e.nombre||e.nombre_display||'—')}</span><span class="pill g">${esc(altaUbic(e))}</span><span class="pill">${esc(e.empleado_id||'sin ID')}</span><span class="pill">${esc(e.puesto||'')}</span><span class="pill ${pc}">${etq}</span></div><div class="acts"><a class="btn lnk" href="/m/contratos.html?emp=${e.id}">→ Editar / emitir contrato</a></div></div>`;};
+  const gPlanta=vis.filter(r=>r.tipo==='planta'),gOp=vis.filter(r=>r.tipo==='renovar'&&r.cat==='operativo'),gConf=vis.filter(r=>r.tipo==='renovar'&&r.cat==='confianza'),gNvo=vis.filter(r=>r.tipo==='nuevo');
+  const sec=(t,arr,col)=>arr.length?('<div style="margin:12px 0 6px;font-weight:800;color:'+col+'">'+t+' ('+arr.length+')</div>'+arr.map(card).join('')):'';
+  c.innerHTML='<div class="det" style="margin-bottom:8px">Contratos que deben emitirse en los próximos <b>60 días</b>, agrupados por tipo de renovación. Regla: agotado el periodo de prueba (3 meses operativo / 6 confianza desde el primer contrato) toca <b>planta</b>; si quedan días de prueba, el siguiente contrato cubre <b>solo lo restante</b>. El botón abre <b>Contratos & Aceptación</b> para editar y enviar.</div>'
+    +sec('🏛 A PLANTA — prueba agotada, contrato indeterminado obligatorio',gPlanta,'#e08c8c')
+    +sec('⏳ EN PRUEBA · Operativos — renovar por los días restantes',gOp,'#e0b96a')
+    +sec('⏳ EN PRUEBA · Confianza — renovar por los días restantes',gConf,'#8fb7e0')
+    +sec('🆕 ALTAS NUEVAS — sin contrato',gNvo,'#9cd326');
 }
 
 boot();
