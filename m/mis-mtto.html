@@ -284,11 +284,17 @@ async function ensureRutinas(){
   const lectDias=(p.lectura_dias||[]).map(Number);
   const lm=Math.round((+p.lectura_horas||0.5)*60)||30;
   const worksOn=ds=>{ const dw=dowIdx(ds); return WORKSET.size? WORKSET.has(ds) : (p.dias_trabajo||[]).map(Number).includes(dw); };
+  // Solo el colaborador DESIGNADO en ⚙️ genera medidores/briefing (evita que cada quien los cree).
+  const mediOwner=(CFG&&CFG.medidores_emp_id)||null, briefOwner=(CFG&&CFG.briefing_emp_id)||null;
+  const doMedi=!mediOwner || mediOwner===EMP, doBrief=!briefOwner || briefOwner===EMP;
+  // Guardia de "ya existe" robusto: por (persona, día, tipo) y solo activos — NO depende de la semana,
+  // así aunque una rutina se quede sin semana no se duplica.
   const existe=async(clave,ds)=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
-      .eq('asignado_a',EMP).eq('semana_programada',WK).eq('origen','rutina').eq('dia_programado',ds).eq('metadata->>rutina',clave).limit(1);
+      .eq('asignado_a',EMP).eq('origen','rutina').eq('dia_programado',ds).eq('metadata->>rutina',clave)
+      .in('estado',['nuevo','validado','programado','en_proceso']).limit(1);
     return (data&&data[0])||null; };
   // --- LECTURA: se asigna a la semana y se DESDOBLA por cada día que toca ---
-  for(let d=0;d<7;d++){ const ds=addDays(WK,d);
+  if(doMedi) for(let d=0;d<7;d++){ const ds=addDays(WK,d);
     if(!lectDias.includes(dowIdx(ds))||!worksOn(ds)) continue;
     let m=await existe('medidores',ds);
     if(!m){ const {data:ins}=await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
@@ -304,7 +310,7 @@ async function ensureRutinas(){
   }
   // --- BRIEFING (día de admin del puesto) ---
   const bds=addDays(WK,+p.admin_dia||0);
-  if(worksOn(bds)){ const b=await existe('briefing',bds);
+  if(doBrief && worksOn(bds)){ const b=await existe('briefing',bds);
     if(!b) await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
         titulo:'Briefing semanal del equipo',descripcion:'Reunión de arranque de semana: pendientes, urgencias y prioridades. Dale Iniciar y Terminar (dura lo que dure).',
         minutos_estimados:30,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:bds,
