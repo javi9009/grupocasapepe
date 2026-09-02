@@ -348,7 +348,7 @@ async function renderTickets(){
   const wkMon=mondayOf(hoyMX());
   const [{data,error},{data:planAtras}]=await Promise.all([
     sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false}),
-    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada")
+    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea), sub:subtarea_id(descripcion)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada")
   ]);
   if(error)throw error; let rows=data||[];
   // Preventivos como ticket que ya debían estar hechos
@@ -365,7 +365,7 @@ async function renderTickets(){
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:var(--bad)">⏰ Preventivos atrasados</b>
       <span class="chip c-react">${atras.length} por lugar</span>${tkAtras?`<span class="chip c-react">${tkAtras} en tickets</span>`:''}
       ${atras.length?`<button class="btn sm" style="margin-left:auto" onclick="reprogTodos()">Reprogramar a esta semana</button>`:''}</div>
-    ${atras.length?`<div class="scroll" style="margin-top:8px;max-height:34vh"><table><tbody>${atras.slice(0,60).map(p=>`<tr><td>${esc((p.cat&&p.cat.tarea)||'Preventivo')} <span class="muted">· ${esc(p.ubic?p.ubic.nombre:'—')}</span></td><td class="muted num" style="font-size:12px">vencía ${p.semana_programada}</td><td class="num"><button class="btn ghost sm" onclick="reprogUno('${p.id}')">↻ esta semana</button></td></tr>`).join('')}</tbody></table></div>`:''}
+    ${atras.length?`<div class="scroll" style="margin-top:8px;max-height:34vh"><table><tbody>${atras.slice(0,60).map(p=>`<tr><td>${esc(planNom(p))} <span class="muted">· ${esc(p.ubic?p.ubic.nombre:'—')}</span></td><td class="muted num" style="font-size:12px">vencía ${p.semana_programada}</td><td class="num"><button class="btn ghost sm" onclick="reprogUno('${p.id}')">↻ esta semana</button></td></tr>`).join('')}</tbody></table></div>`:''}
     <div class="muted" style="font-size:12px;margin-top:6px">Aparecen en <a onclick="go('prog')" style="color:var(--accent);cursor:pointer">Reparto de tareas</a> para asignarse.</div>
   </div></div>`:'';
   $("#view").innerHTML=atrasBox+`
@@ -511,7 +511,7 @@ function solicitarCompra(ticketId){
     <div class="full"><label>Link (cotización, carrito o producto)</label><input id="scLink" placeholder="https://…"></div>
     <div><label>Costo estimado</label><input id="scCosto" type="number" min="0" placeholder="MXN"></div>
     <div><label>Foto de cotización (URL)</label><input id="scFoto" placeholder="opcional"></div>
-  </div><p class="muted" style="font-size:12px;margin-top:8px">Se le avisa a Roberto (Administración) y el trabajo queda a la espera de la compra.</p>
+  </div><p class="muted" style="font-size:12px;margin-top:8px">Se avisa a Administración y el trabajo queda a la espera de la compra.</p>
   </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button>
     <button class="btn sm" onclick="saveSolicitarCompra('${ticketId}')">Enviar solicitud</button></div>`);
 }
@@ -542,7 +542,11 @@ const ALCANCE={especifico:'📍 Un área',habitaciones:'🛏️ Todas las habita
 let PREV_UBIS={nHab:0,nArea:0};
 function alcanceN(a){ const {nHab,nArea}=PREV_UBIS; return a==='habitaciones'?nHab:(a==='areas'?nArea:(a==='todo'?nHab+nArea:1)); }
 function vecesAnio(per){ return 365/(PER_DAYS[per]||30); }
-function prevHorasAnio(r){ return alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad)*(r.minutos_estimados||0)/60; }
+let PREV_SUBS={};   // catalogo_id -> [subtareas]
+const ROUTINE=new Set(['diaria','semanal']);  // rutina del técnico, no genera ticket
+function subsDe(r){ return PREV_SUBS[r.id]&&PREV_SUBS[r.id].length? PREV_SUBS[r.id] : [{periodicidad:r.periodicidad,minutos_estimados:r.minutos_estimados,oficio:r.oficio,descripcion:r.tarea}]; }
+function subsProg(r){ return subsDe(r).filter(st=>!ROUTINE.has(st.periodicidad)); }
+function prevHorasAnio(r){ const n=alcanceN(r.alcance||'especifico'); return subsProg(r).reduce((s,st)=>s+n*vecesAnio(st.periodicidad)*(st.minutos_estimados||0)/60,0); }
 async function renderPrev(){
   const anio=new Date().getFullYear();
   const [{data,error},{data:ub},{data:pu},{data:plan}]=await Promise.all([
@@ -553,18 +557,22 @@ async function renderPrev(){
   ]);
   if(error)throw error; const rows=data||[];
   PREV_UBIS={nHab:(ub||[]).filter(u=>u.tipo==='habitacion').length, nArea:(ub||[]).filter(u=>u.tipo==='area').length};
+  // Subtareas por preventivo (la previsión real = subtareas × áreas × veces/año)
+  PREV_SUBS={};
+  if(rows.length){ const {data:subs}=await sb.from("mtto_preventivo_subtarea").select("*").eq("activo",true).in("catalogo_id",rows.map(r=>r.id));
+    (subs||[]).forEach(s=>{(PREV_SUBS[s.catalogo_id]=PREV_SUBS[s.catalogo_id]||[]).push(s);}); }
   // Cobertura anual
   const interno=rows.filter(r=>r.ejecucion!=='externo'), externo=rows.filter(r=>r.ejecucion==='externo');
   const hInt=interno.reduce((s,r)=>s+prevHorasAnio(r),0);
   const hExt=externo.reduce((s,r)=>s+prevHorasAnio(r),0);
-  const instInt=interno.reduce((s,r)=>s+alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad),0);
+  const instInt=interno.reduce((s,r)=>{const n=alcanceN(r.alcance||'especifico');return s+subsProg(r).reduce((a,st)=>a+n*vecesAnio(st.periodicidad),0);},0);
   const presu=externo.reduce((s,r)=>s+(+r.presupuesto||0),0);
   // Capacidad: una persona ≈ jornada del turno (h/sem) × 48 semanas útiles
   const sems=(pu||[]).map(p=>+p.horas_semana||48).filter(x=>x>0);
   const semAvg=sems.length?sems.reduce((a,b)=>a+b,0)/sems.length:48;
   const capPersona=semAvg*48; const personas=capPersona?hInt/capPersona:0;
-  // Desglose por OFICIO (solo interno)
-  const OFI={}; interno.forEach(r=>{const o=r.oficio||'general';OFI[o]=(OFI[o]||0)+prevHorasAnio(r);});
+  // Desglose por OFICIO (por subtarea × área, solo interno; sin rutina diaria/semanal)
+  const OFI={}; interno.forEach(r=>{const n=alcanceN(r.alcance||'especifico');subsProg(r).forEach(st=>{const o=st.oficio||r.oficio||'general';OFI[o]=(OFI[o]||0)+n*vecesAnio(st.periodicidad)*(st.minutos_estimados||0)/60;});});
   const ofiRows=Object.keys(OFI).sort((a,b)=>OFI[b]-OFI[a]).map(o=>`<tr><td>${esc(ofNombre(o))}</td><td class="num">${Math.round(OFI[o])} h</td><td class="num"><b>${(OFI[o]/capPersona).toFixed(1)}</b></td></tr>`).join('');
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
@@ -592,13 +600,12 @@ async function renderPrev(){
       <span class="muted" style="font-size:12px">Filtrar:</span>
       ${ofChips.map(o=>`<button class="btn ghost sm" style="${FILT===o[0]?'border-color:var(--accent);color:var(--accent)':''}" onclick="window.PREV_FILT='${o[0]}';renderPrev()">${o[1]}</button>`).join('')}
     </div>
-    <div class="card"><div class="scroll"><table><thead><tr><th>Trabajo</th><th>Oficio</th><th>Periodicidad</th><th>Dónde</th><th class="num">Min</th><th class="num">h/año</th><th>Ejecución</th><th></th></tr></thead>
-    <tbody>${list.length?list.map(r=>{const n=alcanceN(r.alcance||'especifico');const reco=r.recomendacion||r.ficha_texto;
+    <div class="card"><div class="scroll"><table><thead><tr><th>Trabajo</th><th>Oficio</th><th>Subtareas</th><th>Dónde</th><th class="num">h/año</th><th>Ejecución</th><th></th></tr></thead>
+    <tbody>${list.length?list.map(r=>{const n=alcanceN(r.alcance||'especifico');const reco=r.recomendacion||r.ficha_texto;const subs=subsDe(r);const pers=[...new Set(subs.map(s=>s.periodicidad))].join(', ');
       return `<tr><td>${esc(r.tarea)}${r.critico?' <span class="chip c-react">crítico</span>':''}${reco?`<details class="reco"><summary>ver ficha</summary><div class="txt">${esc(reco)}</div></details>`:''}</td>
       <td>${r.oficio?esc(ofNombre(r.oficio)):'—'}</td>
-      <td><span class="st">${esc(r.periodicidad)}</span></td>
+      <td><button class="btn ghost sm" onclick="editSubs('${r.id}')">🧩 ${subs.length} subtarea${subs.length!==1?'s':''}</button><div class="muted" style="font-size:11px">${esc(pers)}</div></td>
       <td>${(r.alcance||'especifico')==='especifico'?esc(r.ubic?.nombre||'—'):`${ALCANCE[r.alcance]} <span class="muted">(${n})</span>`}</td>
-      <td class="num">${r.minutos_estimados??'—'}</td>
       <td class="num">${prevHorasAnio(r).toFixed(1)}</td>
       <td>${r.ejecucion==='externo'?`<span class="chip c-info">🏢 ${esc(r.empresa||'externo')}</span>${r.presupuesto?`<div class="muted" style="font-size:11px">${money(r.presupuesto)}</div>`:''}`:'<span class="chip c-prev">interno</span>'}</td>
       <td class="num" style="white-space:nowrap"><button class="btn ghost sm" onclick="editPrev('${r.id}')">Editar</button> <button class="btn ghost sm" onclick="cancelPrev('${r.id}')">✕</button></td></tr>`;}).join(''):'<tr><td class="muted" style="padding:16px">Sin preventivos con ese filtro.</td></tr>'}</tbody></table></div></div>`;
@@ -663,6 +670,39 @@ async function generarPlanPrev(anio){
   const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
   if(error)return toast(error.message);
   toast("Plan "+anio+" listo · "+(data||0)+" instancias");renderPrev();}
+const PER_OPTS=['diaria','semanal','quincenal','mensual','bimestral','trimestral','cuatrimestral','semestral','anual'];
+function subRowHtml(s){s=s||{};return `<tr data-sub="${s.id||''}" data-new="${s.id?'0':'1'}">
+  <td><input class="sD" value="${esc(s.descripcion||'')}" placeholder="qué se hace"></td>
+  <td><select class="sP">${PER_OPTS.map(p=>`<option ${(s.periodicidad||'mensual')===p?'selected':''}>${p}</option>`).join('')}</select></td>
+  <td><input class="sM" type="number" min="1" value="${s.minutos_estimados||''}" style="width:70px"></td>
+  <td><select class="sO"><option value="">— oficio —</option>${OFICIOS.map(o=>`<option value="${o[0]}" ${s.oficio===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></td>
+  <td><button class="btn ghost sm" onclick="this.closest('tr').remove()">✕</button></td></tr>`;}
+async function editSubs(catId){
+  const [{data:cat},{data:subs}]=await Promise.all([
+    sb.from("mtto_preventivos_catalogo").select("tarea").eq("id",catId).single(),
+    sb.from("mtto_preventivo_subtarea").select("*").eq("catalogo_id",catId).eq("activo",true).order("orden")
+  ]);
+  window.SUB_CAT=catId;
+  modal(`<h3>Subtareas · ${esc(cat?cat.tarea:'')}</h3><div class="pad">
+    <p class="muted" style="font-size:12px;margin:0 0 8px">Cada subtarea genera su propio ticket, según su periodicidad y en cada lugar del alcance.</p>
+    <div class="scroll"><table><thead><tr><th>Descripción</th><th>Periodicidad</th><th>Min</th><th>Oficio</th><th></th></tr></thead>
+    <tbody id="subBody">${(subs||[]).map(subRowHtml).join('')||subRowHtml({})}</tbody></table></div>
+    <button class="btn ghost sm" style="margin-top:8px" onclick="document.getElementById('subBody').insertAdjacentHTML('beforeend', subRowHtml({}))">＋ Subtarea</button>
+    </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button><button class="btn sm" onclick="saveSubs()">Guardar</button></div>`);
+}
+window.subRowHtml=subRowHtml;
+async function saveSubs(){
+  const catId=window.SUB_CAT; const trs=[...document.querySelectorAll('#subBody tr')];
+  const ups=[],ins=[]; let orden=0;
+  for(const tr of trs){ const d=tr.querySelector('.sD').value.trim(); const p=tr.querySelector('.sP').value; const m=parseInt(tr.querySelector('.sM').value)||null; const o=tr.querySelector('.sO').value||null; const id=tr.getAttribute('data-sub');
+    if(!d&&!m)continue;
+    const row={descripcion:d||null,periodicidad:p,minutos_estimados:m,oficio:o,orden:orden++};
+    if(id&&tr.getAttribute('data-new')==='0'){row.id=id;ups.push(row);}else{row.catalogo_id=catId;ins.push(row);}
+  }
+  for(const u of ups){const id=u.id;delete u.id;await sb.from("mtto_preventivo_subtarea").update(u).eq("id",id);}
+  if(ins.length)await sb.from("mtto_preventivo_subtarea").insert(ins);
+  closeModal();toast("Subtareas guardadas");renderPrev();
+}
 
 /* PROGRAMACIÓN — reparto semanal estilo Ama de Llaves */
 let PROG_WK=mondayOf(new Date());
@@ -721,7 +761,7 @@ async function renderProg(){
     sb.rpc('mtto_urgencias',{p_property:PROP.id}),
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
-  const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
+  const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico), sub:subtarea_id(descripcion)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
   // Config por puesto (48h base) para cada técnico
   const {data:puR}=await sb.from('mtto_puesto').select('*');
@@ -854,18 +894,19 @@ async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===pl
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),profundo:true});
   closeModal();toast('Profundo programado · '+nom);renderProg();}
 // --- Preventivos por lugar (plan anual) ---
-function prevPlanHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);const nom=(p.cat&&p.cat.tarea)||'Preventivo';
+function planNom(p){const t=(p.cat&&p.cat.tarea)||'Preventivo';const d=p.sub&&p.sub.descripcion;return d&&d!==t?`${t} · ${d}`:t;}
+function prevPlanHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);
   return `<div class="pitem" data-prevplan="${p.id}" draggable="true" onclick="prevPlanMenu('${p.id}')">
-    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(nom)}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''}</div>
+    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(planNom(p))}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''}</div>
     <div class="m"><span class="ur ${late?'hi':'md'}">${late?'vencido':'vence'} ${p.semana_programada}</span><span>📍 ${esc(p.ubic?p.ubic.nombre:'—')}</span><span>${p.minutos_estimados||'?'} min</span></div></div>`;}
 function prevPlanMenu(id){const p=PROG_STATE.prevPlan.find(x=>x.id===id);if(!p)return;
   const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genPrevPlan('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
-  modal(`<h3>${esc((p.cat&&p.cat.tarea)||'Preventivo')} · ${esc(p.ubic?p.ubic.nombre:'')}</h3><div class="pad">
+  modal(`<h3>${esc(planNom(p))} · ${esc(p.ubic?p.ubic.nombre:'')}</h3><div class="pad">
     <div class="muted" style="font-size:13px;margin-bottom:10px">📍 ${esc(p.ubic?p.ubic.nombre:'—')} · ${p.minutos_estimados||'?'} min · ${esc(ofNombre(p.oficio||'general'))} · plan ${p.semana_programada}</div>
     <label>Programar esta semana y asignar</label><div>${opts||'<span class="muted">Sin técnicos</span>'}</div></div>
     <div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
 async function genPrevPlan(planId,tec){const p=PROG_STATE.prevPlan.find(x=>x.id===planId);if(!p)return;
-  const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lugar=p.ubic?p.ubic.nombre:'';
+  const nom=planNom(p); const lugar=p.ubic?p.ubic.nombre:'';
   const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
     preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
     oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
@@ -964,7 +1005,7 @@ async function autoPrevAssign(){
   let pi=0,ci=0; const inserts=[]; const planUsed=[];
   for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
     let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
-    while(cur<need && pi<duePlan.length){ const p=duePlan[pi++]; const min=p.minutos_estimados||30; const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lug=p.ubic?p.ubic.nombre:'';
+    while(cur<need && pi<duePlan.length){ const p=duePlan[pi++]; const min=p.minutos_estimados||30; const nom=planNom(p); const lug=p.ubic?p.ubic.nombre:'';
       inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:p.catalogo_id,clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,oficio:p.oficio||null,titulo:(nom+' · '+lug).slice(0,80),descripcion:nom+' en '+lug,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,metadata:{prev_plan_id:p.id}});
       planUsed.push(p.id); cur+=min; }
     while(cur<need && ci<dueCat.length){ const r=dueCat[ci++]; const min=r.minutos_estimados||estimMin(r).min;
