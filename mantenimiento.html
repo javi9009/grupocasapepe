@@ -789,6 +789,12 @@ function estimMin(r){ if(r.minutos_estimados) return {min:r.minutos_estimados,pr
   if(/cerradura|chapa|llave/.test(t)) m=Math.min(m,45);
   return {min:m,prop:true}; }
 function urCls(s){return s>=55?'hi':(s>=30?'md':'lo');}
+// Score de urgencia para una instancia del plan (mismo criterio que la vista para preventivos):
+// crítico +20, y +8 por cada semana de atraso (tope 30).
+function planUrg(p){ const crit=(p&&p.cat&&p.cat.critico)?20:0;
+  const wk=new Date(((p&&p.semana_programada)||'2999-01-01')+'T12:00:00Z');
+  const wl=Math.max(0,Math.floor((Date.now()-wk.getTime())/6048e5));
+  return crit + Math.min(30, wl*8); }
 function clsDot(c){const m={reactivo:'var(--bad)',correctivo:'var(--warn)',preventivo:'var(--ok)'};return '<span style="width:8px;height:8px;border-radius:50%;flex:none;background:'+(m[c]||'var(--none)')+'"></span>';}
 function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia';const d=u.urgencia_detalle,p=[];
   if(d.bloquea_servicio)p.push('Bloquea servicio +'+d.bloquea_servicio);
@@ -822,7 +828,7 @@ async function renderProg(){
   const RANK={venc:0,pend:1,ok:2};
   const yaTk=new Set(tks.filter(r=>r.preventivo_catalogo_id&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK).map(r=>r.preventivo_catalogo_id));
   const prevCat=(catR.data||[]).filter(r=>!yaTk.has(r.id)).map(r=>Object.assign({},r,{_est:prevEstado(r)})).sort((a,b)=>RANK[a._est.k]-RANK[b._est.k]);
-  const prevPlan=(planR||[]);
+  const prevPlan=(planR||[]).slice().sort((a,b)=>planUrg(b)-planUrg(a));
   const local=TECS.filter(t=>t.property_id===PROP.id);
   const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||''));
   const board=local.slice();
@@ -845,7 +851,7 @@ async function renderProg(){
         <div class="hd">🗂️ Pendientes por urgencia · ${pend.length}</div>
         ${pitems}
         ${prof.length?`<div class="hd" style="border-top:1px solid var(--rule)">🧽 Mto profundo por cuarto (vence) · ${prof.length}</div>${prof.map(profHtml).join('')}`:''}
-        ${prevPlan.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos por lugar (vence) · ${prevPlan.length}</div>${prevPlan.map(prevPlanHtml).join('')}`:''}
+        ${prevPlan.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos por lugar · por urgencia · ${prevPlan.length}</div>${prevPlan.map(prevPlanHtml).join('')}`:''}
         ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🗂️ Catálogo de preventivos (área única) · ${prevCat.length}</div>${prevGroups(prevCat)}`:''}
       </div>
       <div class="cols">${cols}</div>
@@ -943,7 +949,7 @@ async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===pl
 function planNom(p){const t=(p.cat&&p.cat.tarea)||'Preventivo';const d=p.sub&&p.sub.descripcion;return d&&d!==t?`${t} · ${d}`:t;}
 function prevPlanHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);
   return `<div class="pitem" data-prevplan="${p.id}" draggable="true" onclick="prevPlanMenu('${p.id}')">
-    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(planNom(p))}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''}</div>
+    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(planNom(p))}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''} <span class="ur ${urCls(planUrg(p))}" title="urgencia">⚡${planUrg(p)}</span></div>
     <div class="m"><span class="ur ${late?'hi':'md'}">${late?'vencido':'vence'} ${p.semana_programada}</span><span>📍 ${esc(p.ubic?p.ubic.nombre:'—')}</span><span>${p.minutos_estimados||'?'} min</span></div></div>`;}
 function prevPlanMenu(id){const p=PROG_STATE.prevPlan.find(x=>x.id===id);if(!p)return;
   const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genPrevPlan('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
@@ -1047,12 +1053,8 @@ async function lanzarAsignacion(){
 async function autoPrevAssign(){
   if(!PROG_STATE)return;
   // Primero las instancias por lugar que vencen (plan anual), luego el catálogo suelto
-  // Prioridad de abordaje: primero críticos, luego los más vencidos (semana más antigua)
-  const duePlan=(PROG_STATE.prevPlan||[]).slice().sort((a,b)=>{
-    const ca=a.cat&&a.cat.critico?1:0, cb=b.cat&&b.cat.critico?1:0;
-    if(ca!==cb)return cb-ca;
-    return (a.semana_programada||'').localeCompare(b.semana_programada||'');
-  });
+  // Prioridad de abordaje por score de urgencia (crítico + atraso)
+  const duePlan=(PROG_STATE.prevPlan||[]).slice().sort((a,b)=>planUrg(b)-planUrg(a));
   const dueCat=PROG_STATE.prevCat.slice();
   let pi=0,ci=0; const inserts=[]; const planUsed=[];
   for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
