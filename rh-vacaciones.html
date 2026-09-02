@@ -101,6 +101,7 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
   <section class="card">
     <h2 style="margin:0 0 4px;font-size:1.05rem">El queso del equipo</h2>
     <p style="margin:0 0 4px;color:var(--muted);font-size:.88rem">Todas las vacaciones en una rebanada: lo del año, lo tomado, lo solicitado, y lo acumulado de años anteriores como el pedazo punteado que agranda el queso. Se corta por sede y por equipo con los filtros de arriba.</p>
+    <p style="margin:0 0 4px;color:var(--muted);font-size:.82rem">🌴 Son un derecho <b>irrenunciable</b> (art. 79 LFT): se disfrutan, no se cambian por dinero. Lo acumulado de años anteriores tiene <b>vigencia de 18 meses</b>; hay que programarlo antes de que venza (el aviso naranja en cada fila marca a quién se le acerca la fecha).</p>
     <p style="margin:0 0 14px" class="ambito" id="ambito"></p>
     <div class="queso" id="queso"></div>
     <div class="stats" id="qstats"></div>
@@ -120,7 +121,11 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
   <footer class="pie">Fuente: Supabase <code class="k">Ateneo-del-viaje</code> · <code class="k">employees</code> (saldos LFT),
   <code class="k">vacaciones_solicitudes</code> (pendientes y pre-aprobadas) y <code class="k">asistencias</code> (faltas y retrasos del año laboral;
   los retrasos de más de 4 h no cuentan: casi siempre son checadas olvidadas). La renovación es el aniversario de entrada. Los saldos se editan en Pepes.
-  El valor en pesos es salario diario (bruto ÷ 30) × días; no incluye la prima vacacional del 25 % que marca la LFT.</footer>
+  El valor en pesos es salario diario (bruto ÷ 30) × días; no incluye la prima vacacional del 25 % que marca la LFT.
+  <br><br><b>Regla legal:</b> las vacaciones son un derecho <b>irrenunciable</b> (art. 79 LFT): se disfrutan, no se cambian por dinero (solo se pagan en finiquito
+  si termina la relación laboral). El patrón debe otorgarlas dentro de los 6 meses tras el aniversario y el derecho tiene una vigencia total de <b>18 meses</b>
+  desde el aniversario que las generó; al abrir esta pantalla, lo acumulado de años anteriores que rebasa esa vigencia se marca automáticamente como
+  <b>vencido</b> (prescripción, art. 81 LFT) y queda registrado en <code class="k">vacaciones_prescripciones</code>.</footer>
 </div>
 
 <script>
@@ -142,15 +147,18 @@ function aniversarios(f){ // último y próximo aniversario de la fecha de entra
 const MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
 function fmt(d){return d.getDate()+' '+MES[d.getMonth()]+' '+String(d.getFullYear()).slice(2);}
 function calc(r){
- const anio=Number(r.vac_anio)||0, ant=Number(r.vac_anteriores)||0, tom=Number(r.vac_tomadas)||0;
+ const anio=Number(r.vac_anio)||0, ant=Number(r.vac_anteriores)||0, tom=Number(r.vac_tomadas)||0, venc=Number(r.vac_vencidas)||0;
  const sol=SOL[r.id]||0;
  const tot=anio+ant;
  const pend=(r.vac_pendientes!=null)?Number(r.vac_pendientes):(tot-tom);
  const an=aniversarios(r.fecha_inicio_labores);
+ // vigencia de lo acumulado: prescribe 6 meses después del último aniversario (18 meses del aniversario que lo generó)
+ let vence=null,venceDias=null;
+ if(an&&ant>0){vence=new Date(an.ult);vence.setMonth(vence.getMonth()+6);venceDias=Math.round((vence-new Date())/86400000);}
  const a=ASIS[r.id]||{faltas:0,retardos:0};
  let faltas=0,retardos=0;
  if(an){for(const x of (a.list||[])){if(new Date(x.fecha+'T00:00:00')>=an.ult){if(x.estatus==='falta')faltas++;else if(x.estatus==='retardo'&&!(Number(x.minutos_retraso)>240))retardos++;}}}
- return {anio,ant,tom,sol,tot,pend,an,faltas,retardos};
+ return {anio,ant,tom,sol,tot,pend,an,faltas,retardos,venc,vence,venceDias};
 }
 function fila(r){
  const c=calc(r);
@@ -166,11 +174,14 @@ function fila(r){
  let dots='';
  for(let i=0;i<Math.min(c.ant,MAXD);i++){const cls=i<usadosDots?' class="used"':(i<usadosDots+solDots?' class="sol"':'');dots+=`<u${cls}></u>`;}
  if(c.ant>MAXD)dots+=`<em>+${c.ant-MAXD}</em>`;
- const tip=`Del año: ${c.anio} · Tomadas: ${c.tom} · Solicitadas: ${c.sol} · Acumuladas: ${c.ant} · Pendientes: ${c.pend}`;
+ const tip=`Del año: ${c.anio} · Tomadas: ${c.tom} · Solicitadas: ${c.sol} · Acumuladas: ${c.ant} · Pendientes: ${c.pend}`+(c.venc?` · Vencidas (prescripción LFT): ${c.venc}`:'');
  const renCls=c.an?(c.an.dias<=30?'soon':(c.an.dias<=60?'mid':'')):'';
  const asis=(c.faltas||c.retardos)
    ?`<span>${c.faltas?`<b>${c.faltas} falta${c.faltas>1?'s':''}</b>`:''}${c.faltas&&c.retardos?' · ':''}${c.retardos?`${c.retardos} retraso${c.retardos>1?'s':''}`:''} en su año laboral</span>`
    :'<span>sin faltas ni retrasos en su año laboral</span>';
+ const avisoVig=(c.ant>0&&c.vence)
+   ?`<span style="color:${c.venceDias<=45?'#A5432C':'var(--muted)'}"> · lo acumulado vence el ${fmt(c.vence)}${c.venceDias<=45?` (¡${c.venceDias}d, prográmalas!)`:''}</span>`:'';
+ const avisoVenc=c.venc?`<span style="color:var(--faint)"> · ${c.venc} día${c.venc>1?'s':''} vencido${c.venc>1?'s':''} (prescripción LFT)</span>`:'';
  return `<div class="row">
   <div class="who"><b>${esc(nombre)}</b><em>${esc([r.puesto,r.sede].filter(Boolean).join(' · '))}</em></div>
   <div class="mid">
@@ -178,7 +189,7 @@ function fila(r){
       <div class="bar">${segTom?`<i class="tom" style="width:${pct(segTom)}%"></i>`:''}${segSol?`<i class="sol" style="width:${pct(segSol)}%"></i>`:''}</div>
       ${c.ant?`<div class="dots">${dots}</div>`:''}
     </div>
-    <div class="sub">${asis}</div>
+    <div class="sub">${asis}${avisoVig}${avisoVenc}</div>
   </div>
   <div class="score ${c.pend<=0?'low':''}"><b>${c.pend}</b> de ${c.tot} días
     ${c.an?`<em class="${renCls}">renueva ${fmt(c.an.prox)} (${c.an.dias}d)</em>`:'<em>sin fecha de entrada</em>'}
@@ -192,10 +203,10 @@ function arco(cx,cy,r,a0,a1){ // arco SVG en grados (0° = arriba)
  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${(a1-a0)>180?1:0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 function pintaQueso(rows){
- let tAnio=0,tTom=0,tSol=0,tAnt=0,tFaltas=0,vAnt=0,vPend=0;
+ let tAnio=0,tTom=0,tSol=0,tAnt=0,tFaltas=0,vAnt=0,vPend=0,tVenc=0;
  for(const r of rows){
   const c=calc(r);
-  tAnio+=c.anio;tTom+=c.tom;tSol+=c.sol;tAnt+=c.ant;tFaltas+=c.faltas;
+  tAnio+=c.anio;tTom+=c.tom;tSol+=c.sol;tAnt+=c.ant;tFaltas+=c.faltas;tVenc+=c.venc;
   const diario=(Number(r.salario_bruto)||0)/30;
   vAnt+=diario*c.ant;
   vPend+=diario*Math.max(0,c.pend);
@@ -232,7 +243,8 @@ function pintaQueso(rows){
  $('#qstats').innerHTML=`
   <div class="stat ${tFaltas?'bad':''}"><b>${tFaltas}</b><span>faltas del personal en sus años laborales en curso</span></div>
   <div class="stat warn"><b>${fmt$(vAnt)}</b><span>valor de las vacaciones de años anteriores (salario diario × días)</span></div>
-  <div class="stat warn"><b>${fmt$(vPend)}</b><span>valor de todas las vacaciones no tomadas — lo que habría que pagar hoy</span></div>`;
+  <div class="stat warn"><b>${fmt$(vPend)}</b><span>valor de todas las vacaciones no tomadas — lo que habría que pagar hoy</span></div>
+  ${tVenc?`<div class="stat"><b>${tVenc}</b><span>días vencidos por prescripción LFT (18 meses): ya no se toman ni se pagan</span></div>`:''}`;
 }
 function pinta(){
  const s=$('#fSede').value,ar=$('#fArea').value,q=($('#fTxt').value||'').trim().toLowerCase(),o=$('#fOrden').value;
@@ -260,7 +272,9 @@ function pinta(){
 }
 (async()=>{
  try{
-  DATA=await sb('/employees?select=id,empleado_id,nombre,apellido,nombre_display,puesto,area,sede,property_id,fecha_inicio_labores,salario_bruto,vac_anio,vac_anteriores,vac_tomadas,vac_pendientes&estatus=eq.activo&order=nombre');
+  // Prescripción LFT: al abrir, vence lo acumulado de años anteriores cuya vigencia (18 meses) ya pasó
+  try{await fetch(SB+'/rpc/vac_prescribir',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:'{}'});}catch(e){}
+  DATA=await sb('/employees?select=id,empleado_id,nombre,apellido,nombre_display,puesto,area,sede,property_id,fecha_inicio_labores,salario_bruto,vac_anio,vac_anteriores,vac_vencidas,vac_tomadas,vac_pendientes&estatus=eq.activo&order=nombre');
   try{const sol=await sb('/vacaciones_solicitudes?select=employee_id,dias_solicitados,estado&estado=in.(pendiente,pre_aprobada)');
    sol.forEach(x=>{SOL[x.employee_id]=(SOL[x.employee_id]||0)+(Number(x.dias_solicitados)||0);});}catch(e){}
   try{const asis=await sb('/asistencias?select=employee_id,fecha,estatus,minutos_retraso&estatus=in.(falta,retardo)');
