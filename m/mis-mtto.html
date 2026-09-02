@@ -32,7 +32,15 @@
   .filts{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
   .filts .f{background:var(--card);border:1px solid var(--line);color:var(--ink2);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer}
   .filts .f.on{background:var(--blue2);color:#dbe7ff;border-color:var(--blue2)}
-  .cap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 13px;margin-bottom:12px;font-size:13px;color:var(--ink2)} .cap b{color:var(--ink)}
+  .cap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:12px;font-size:13px;color:var(--ink2)} .cap b{color:var(--ink)}
+  .prow{display:flex;align-items:center;gap:9px;margin:3px 0}
+  .pk{font-size:12px;color:var(--ink2);min-width:78px;font-weight:700}
+  .pbar{flex:1;height:9px;border-radius:6px;background:var(--bg);overflow:hidden;border:1px solid var(--line)}
+  .pbar i{display:block;height:100%;background:var(--brand);border-radius:6px;transition:width .35s}
+  .pbar.low i{background:var(--warn)} .pbar.full i{background:var(--ok)}
+  .pv{font-size:12px;color:var(--ink2);min-width:42px;text-align:right} .pv b{color:var(--ink)}
+  .psub{font-size:11.5px;color:var(--ink2);margin-top:6px}
+  .fotod .foto{margin-top:8px} .fotod summary{color:var(--brand)}
   .sechd{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:14px 2px 8px}
   .task{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px;margin-bottom:11px}
   .task.act{border-color:var(--brand)} .task.pau{border-color:var(--warn)}
@@ -150,7 +158,7 @@ function guessRiesgo(t){ if(t.riesgo_nota!=null)return t.riesgo_nota; const of=t
   if(/quimic|cloro|acido|solvente/.test(tx))return 'Usa guantes y ventila; nunca mezcles químicos.';
   return ''; }
 
-let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set();
+let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set(), CFG=null;
 
 function toast(t,ok=true){const m=$('msg');m.textContent=t;m.className='msg show'+(ok?'':' bad');setTimeout(()=>m.classList.remove('show'),3200);}
 function modal(h){$('modal').innerHTML=h;$('modalBg').classList.add('on');}
@@ -168,6 +176,7 @@ async function boot(){
   const {data:emp}=await sb.from('employees').select('nombre,nombre_display,property_id,rol').eq('id',EMP).maybeSingle();
   PROPID=emp?emp.property_id:null; EMPNAME=emp?(emp.nombre_display||emp.nombre):(el.nombre_display||'');
   $('sub').textContent=EMPNAME+' · plan';
+  try{ const {data:cfg}=await sb.from('mtto_config').select('medidores_emp_id,briefing_emp_id').eq('property_id',PROPID).maybeSingle(); CFG=cfg||null; }catch(_){ CFG=null; }
   const CORP=['javi@casapepe.mx','hola.puebla@casapepe.mx'];
   const RS=['Director','Gerente Operativo','Gerente Administrativo','Gerencia','Dueño','Owner'];
   SUP=(emp&&RS.includes(emp.rol))||CORP.includes((ME.email||'').toLowerCase());
@@ -203,15 +212,17 @@ async function render(){
   const ro=SUP&&VIEWEMP&&VIEWEMP!==EMP;
   $('btnAdd').style.display=ro?'none':'';
   const who=VIEWEMP||EMP;
-  const {data,error}=await sb.from('mtto_tickets')
-    .select('*, ubic:ubicacion_id(nombre,ficha_texto,recomendacion)')
-    .eq('asignado_a',who).eq('semana_programada',WK)
-    .in('estado',['validado','programado','en_proceso','pausado','resuelto']).order('prioridad');
-  if(error){$('list').innerHTML='<div class="empty">Error: '+esc(error.message)+'</div>';return;}
-  TICKS=data||[];
   WORKSET=new Set();
   try{ const {data:hor}=await sb.from('horarios').select('fecha').eq('employee_id',who).gte('fecha',WK).lte('fecha',addDays(WK,6));
     (hor||[]).forEach(h=>{ if(h.fecha) WORKSET.add(h.fecha.slice(0,10)); }); }catch(_){}
+  // Rutinas fijas (medidores diario / briefing lunes) — solo en tu propio plan y en la semana en curso
+  if(!ro && who===EMP && WK===mondayOf(new Date())){ try{ await ensureRutinas(); }catch(_){} }
+  const {data,error}=await sb.from('mtto_tickets')
+    .select('*, ubic:ubicacion_id(nombre,ficha_texto,recomendacion)')
+    .eq('asignado_a',who).eq('semana_programada',WK)
+    .in('estado',['validado','programado','en_proceso','pausado','resuelto','cerrado']).order('prioridad');
+  if(error){$('list').innerHTML='<div class="empty">Error: '+esc(error.message)+'</div>';return;}
+  TICKS=data||[];
   // entrantes: reactivos sin dueño de mi propiedad (solo en mi propio plan)
   ENTR=[];
   if(!ro && PROPID){
@@ -224,6 +235,45 @@ async function render(){
   scheduleTimer();
 }
 
+// Rutinas fijas: medidores (a diario) y briefing (lunes). Se autogeneran sin
+// cron: la primera vez que abres tu plan en el día, se crea el ticket si falta.
+async function ensureRutinas(){
+  if(!CFG||!PROPID) return;
+  const today=hoyMX();
+  const worksToday = WORKSET.size? WORKSET.has(today) : true;
+  const existe=async clave=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
+      .eq('asignado_a',EMP).eq('semana_programada',WK).eq('origen','rutina')
+      .eq('dia_programado',today).eq('metadata->>rutina',clave).limit(1);
+    return (data&&data[0])||null; };
+  // --- MEDIDORES (diario) ---
+  if(CFG.medidores_emp_id===EMP && worksToday){
+    let m=await existe('medidores');
+    if(!m){ const {data:ins}=await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
+        titulo:'Revisar medidores (agua, luz, gas)',descripcion:'Lectura diaria de medidores. Captúrala en 📷 Lecturas.',
+        minutos_estimados:15,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
+        oficio:'general',recomendacion:'Abre 📷 Lecturas (arriba), toma foto de cada medidor y captura agua/luz/gas.',prioridad:1,
+        metadata:{rutina:'medidores'}}).select('id,estado').maybeSingle(); m=ins||m; }
+    // Autocerrar si ya hay lectura de hoy
+    if(m && !['resuelto','cerrado'].includes(m.estado)){
+      const {data:lec}=await sb.from('mtto_lecturas').select('id').eq('property_id',PROPID).eq('fecha',today).limit(1);
+      if(lec&&lec[0]){ await sb.from('mtto_tickets').update({estado:'cerrado',resuelto_at:new Date().toISOString(),
+        cerrado_at:new Date().toISOString(),cerrado_por:ME.id,cerrado_por_nombre:EMPNAME,minutos_reales:15,
+        comentario_cierre:'Lectura capturada en Lecturas'}).eq('id',m.id); }
+    }
+  }
+  // --- BRIEFING (lunes) ---
+  if(CFG.briefing_emp_id===EMP && dowIdx(today)===0 && worksToday){
+    const b=await existe('briefing');
+    if(!b){ await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
+        titulo:'Briefing semanal del equipo',descripcion:'Reunión de arranque de semana: repasa pendientes, urgencias y prioridades.',
+        minutos_estimados:30,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
+        oficio:'general',recomendacion:'Revisa lo que quedó de la semana pasada y acuerda las prioridades de esta.',prioridad:1,
+        metadata:{rutina:'briefing'}}); }
+  }
+}
+
+const DONE=t=>['resuelto','cerrado'].includes(t.estado);
+const doneDate=t=>((t.resuelto_at||t.cerrado_at||'')+'').slice(0,10);
 function paint(){
   const ro=SUP&&VIEWEMP&&VIEWEMP!==EMP;
   const today=hoyMX();
@@ -232,10 +282,17 @@ function paint(){
   const enr=FILT&&FILT!=='reactivo'?[]:ENTR;
   const activas=rows.filter(t=>['en_proceso','pausado'].includes(t.estado));
   let html='';
-  // cabecera resumen
-  const pend=rows.filter(t=>['validado','programado','en_proceso','pausado'].includes(t.estado));
+
+  // ---- Avance del día y de la semana ----
+  const esHoy=t=> DONE(t) ? doneDate(t)===today : ((t.dia_programado===today)||(!t.dia_programado)||['en_proceso','pausado'].includes(t.estado));
+  const diaTot=rows.filter(esHoy), diaHecho=diaTot.filter(DONE);
+  const semTot=rows, semHecho=rows.filter(DONE);
   const trabajadoMin=rows.reduce((s,t)=>s+workedMin(t),0);
-  $('cap').innerHTML=`${ro?`👁️ Plan de <b>${esc(VIEWNAME)}</b><br>`:''}${VIEW==='hoy'?'Hoy':'Semana '+rango(WK)} · <b>${pend.length}</b> por hacer · trabajado <b>${fmtDur(trabajadoMin)}</b>`;
+  const bar=(hecho,tot)=>{const p=tot?Math.round(hecho/tot*100):0;const cls=p>=100?'full':(p>=50?'':'low');return `<div class="pbar ${cls}"><i style="width:${p}%"></i></div>`;};
+  $('cap').innerHTML=`${ro?`<div style="margin-bottom:8px">👁️ Plan de <b>${esc(VIEWNAME)}</b></div>`:''}
+    <div class="prow"><span class="pk">📅 Hoy</span>${bar(diaHecho.length,diaTot.length)}<span class="pv"><b>${diaHecho.length}</b>/${diaTot.length}</span></div>
+    <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semHecho.length,semTot.length)}<span class="pv"><b>${semHecho.length}</b>/${semTot.length}</span></div>
+    <div class="psub">${diaTot.length-diaHecho.length} por hacer hoy · trabajado <b>${fmtDur(trabajadoMin)}</b></div>`;
 
   // ENTRANTES (reactivos del día para tomar)
   if(!ro && enr.length){ html+=`<div class="sechd">🔔 Reactivos del día · tómalos para tu plan</div>`+enr.map(t=>entrCard(t)).join(''); }
@@ -244,20 +301,22 @@ function paint(){
   if(activas.length){ html+=`<div class="sechd">⏱️ En curso</div>`+activas.map(t=>card(t,ro)).join(''); }
 
   if(VIEW==='hoy'){
-    const hoyRows=rows.filter(t=>!['en_proceso','pausado','resuelto'].includes(t.estado) && (t.dia_programado===today || !t.dia_programado));
+    const hoyRows=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado) && !DONE(t) && (t.dia_programado===today || !t.dia_programado));
     html+=`<div class="sechd">📋 Para hacer hoy</div>`;
     html+=hoyRows.length?hoyRows.map(t=>card(t,ro)).join(''):'<div class="empty">Nada por hacer hoy. Revisa «Esta semana» o toma un reactivo.</div>';
-    const term=rows.filter(t=>t.estado==='resuelto'&&t.resuelto_at&&t.resuelto_at.slice(0,10)===today);
+    const term=rows.filter(t=>DONE(t)&&doneDate(t)===today);
     if(term.length) html+=`<div class="sechd">✅ Terminados hoy</div>`+term.map(t=>card(t,ro)).join('');
   } else {
-    // Semana: sin día + por día
-    const sinDia=rows.filter(t=>!['en_proceso','pausado','resuelto'].includes(t.estado)&&!t.dia_programado);
+    // Semana: sin día + por día + terminados
+    const sinDia=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!t.dia_programado);
     html+=`<div class="sechd">🗂️ Por hacer (sin día)</div>`;
     html+=sinDia.length?sinDia.map(t=>card(t,ro)).join(''):'<div class="empty" style="padding:16px">Todo agendado 👍</div>';
     for(let d=0;d<7;d++){ const ds=addDays(WK,d);
-      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado));
+      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t));
       if(dr.length) html+=`<div class="sechd">${DIAS[d]} ${ds.slice(8,10)}</div>`+dr.map(t=>card(t,ro)).join('');
     }
+    const semTerm=rows.filter(DONE);
+    if(semTerm.length) html+=`<div class="sechd">✅ Terminados esta semana (${semTerm.length})</div>`+semTerm.map(t=>card(t,ro)).join('');
   }
   if(!TICKS.length && !enr.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Cuando el coordinador lance la asignación, aparecerán aquí.</div>';
   $('list').innerHTML=html;
@@ -277,7 +336,8 @@ function entrCard(t){
 function card(t,ro){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||''];
   const reco=guessReco(t), riesgo=guessRiesgo(t);
-  const foto=t.foto_url?`<img class="foto" src="${esc(t.foto_url)}" alt="foto">`:'';
+  const foto=t.foto_url?`<details class="ficha fotod"><summary>📷 Ver foto del reporte</summary><img class="foto" loading="lazy" src="${esc(t.foto_url)}" alt="foto"></details>`:'';
+  const rut=(t.metadata&&t.metadata.rutina)||'';
   const ficha=t.ubic&&(t.ubic.recomendacion||t.ubic.ficha_texto)?`<details class="ficha"><summary>Ficha del lugar</summary><div class="txt">${esc(t.ubic.recomendacion||t.ubic.ficha_texto)}</div></details>`:'';
   let timer='';
   if(t.estado==='en_proceso'&&t.iniciado_at){ timer=`<div class="timer run">▶ Trabajando · ${fmtDur(workedMin(t))} (de ${t.minutos_estimados||'?'} min)</div>`; }
@@ -292,7 +352,8 @@ function card(t,ro){
     acts=`<button class="btn" style="flex:1" onclick="iniciar('${t.id}')">▶️ Iniciar</button><button class="btn ghost sm" onclick="agendar('${t.id}')">${dbtn}</button>`;
   }
   const cls=t.estado==='en_proceso'?'task act':(t.estado==='pausado'?'task pau':'task');
-  return `<div class="${cls}"><div class="h"><span class="ic">${t.origen==='mto_profundo'?'🧽':(t.clasificacion==='preventivo'?'🛠️':'🔧')}</span>
+  const ic=rut==='medidores'?'🔢':(rut==='briefing'?'🗒️':(t.origen==='mto_profundo'?'🧽':(t.clasificacion==='preventivo'?'🛠️':'🔧')));
+  return `<div class="${cls}"><div class="h"><span class="ic">${ic}</span>
     <div style="flex:1"><div class="nm">${esc(t.titulo||'Trabajo')}</div>
       <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span><span>⏱️ ${t.minutos_estimados||'?'} min</span>${t.oficio?`<span class="chip c-info">${esc(OFN[t.oficio]||t.oficio)}</span>`:''}${t.es_para_dos?'<span class="chip c-info">👥 2</span>':''}${t.dia_programado?`<span class="chip c-info">📅 ${DIAS[dowIdx(t.dia_programado)]}</span>`:''}</div></div>
     <span class="state">${esc(t.estado)}</span></div>
