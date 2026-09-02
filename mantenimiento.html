@@ -152,6 +152,38 @@
   html.embed header.top .brand, html.embed #who, html.embed #btnSalir{display:none}
   html.embed header.top{padding:4px 0;box-shadow:none;border-bottom:1px solid var(--rule);background:var(--ground)}
   html.embed header.top .top-in:empty, html.embed header.top:has(.top-in > #propWrap:empty){display:none}
+  /* ---- Calendario visual de preventivos ---- */
+  .calbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .calkpi{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:7px 12px;font-size:13px}
+  .calkpi b{font-size:1.15rem}
+  .calwrap{overflow:auto;max-height:78vh;border:1px solid var(--rule);border-radius:12px;background:var(--surface)}
+  table.calx{border-collapse:separate;border-spacing:0;font-size:11.5px;min-width:100%}
+  table.calx th,table.calx td{border-right:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:0}
+  table.calx thead th{position:sticky;top:0;z-index:3;background:var(--surface-2);font-weight:600;text-align:center;padding:4px 6px;vertical-align:bottom}
+  table.calx thead tr:first-child th{top:0}
+  table.calx thead tr.colrow th{top:26px;z-index:3}
+  table.calx .areah{font-family:inherit;font-weight:700;font-size:12px;color:var(--accent-ink,#0C5C40);border-bottom:2px solid var(--rule-2)}
+  table.calx .colh{cursor:pointer;min-width:66px;max-width:66px;width:66px;line-height:1.15;color:var(--ink);white-space:normal}
+  table.calx .colh:hover{background:var(--accent-soft)}
+  table.calx .colh .oi{font-size:14px;display:block}
+  table.calx th.corner{position:sticky;left:0;z-index:5;background:var(--surface-2);min-width:96px;text-align:left;padding:5px 8px}
+  table.calx td.wk,table.calx th.wk{position:sticky;left:0;z-index:2;background:var(--surface);text-align:left;padding:4px 8px;min-width:96px;white-space:nowrap;font-weight:600}
+  table.calx td.wk .mo{display:block;font-size:10px;color:var(--accent-ink,#0C5C40);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+  table.calx td.wk .dt{color:var(--muted);font-weight:400;font-size:10.5px}
+  table.calx tr.poolrow td.wk{color:var(--warn)}
+  table.calx td.cell{height:30px;vertical-align:middle;text-align:center}
+  .cchip{display:inline-block;min-width:40px;padding:3px 5px;border-radius:6px;font-weight:700;cursor:grab;
+    border:1px solid;line-height:1.1;touch-action:none;user-select:none;font-variant-numeric:tabular-nums}
+  .cchip small{font-weight:500;opacity:.75}
+  .cchip.n2::after{content:"×"attr(data-n)}
+  table.calx td.wktot{position:sticky;right:0;z-index:2;background:var(--surface);text-align:center;font-weight:700;min-width:64px;padding:3px 6px;font-variant-numeric:tabular-nums}
+  table.calx th.corner.r{left:auto;right:0;z-index:5}
+  table.calx tfoot td,table.calx tfoot th{position:sticky;bottom:0;z-index:3;background:var(--surface-2);font-weight:700;text-align:center;padding:4px 6px}
+  table.calx tfoot th.wk{left:0;z-index:4}
+  .calghost{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);opacity:.92}
+  table.calx td.cell.drop{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--accent-soft)}
+  .perleg{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);align-items:center}
+  .perleg i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:3px;vertical-align:-1px}
 </style>
 </head>
 <body>
@@ -231,6 +263,7 @@ const VIEWS=[
   {k:"prog",t:"Reparto de tareas"},
   {k:"prod",t:"Productividad semanal"},
   {k:"prev",t:"Preventivos"},
+  {k:"cal",t:"🗓️ Calendario"},
   {k:"tickets",t:"Tickets"},
   {k:"config",t:"⚙️ Turnos"},
   {k:"lect",t:"Lecturas"},
@@ -307,9 +340,151 @@ async function render(){
     if(CUR==="prev")return renderPrev();
     if(CUR==="prog")return renderProg();
     if(CUR==="prod")return renderProductividad();
+    if(CUR==="cal")return renderCalendario();
     if(CUR==="lect")return renderLect();
     if(CUR==="config")return renderConfig();
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc(e.message)+'</div>';}
+}
+
+/* ============ CALENDARIO VISUAL DE PREVENTIVOS ============ */
+const CAP_SEM_MIN=13*60; // tope 13 h/semana de preventivos
+const PER_META={semanal:['Semanal','#6B7280'],quincenal:['Quincenal','#3B82C4'],mensual:['Mensual','#137A56'],
+  bimestral:['Bimestral','#0E9BA6'],trimestral:['Trimestral','#B4791F'],cuatrimestral:['Cuatrim.','#C6771A'],
+  semestral:['Semestral','#C15B2E'],anual:['Anual','#9E3B2E']};
+function perColor(p){return (PER_META[p]||[])[1]||'#6B7280';}
+function ofIcon(c){const o=OFICIOS.find(x=>x[0]===c);return o?o[1].split(' ')[0]:'🔧';}
+function fmtH(min){min=Math.round(min||0);return (min/60).toFixed(1).replace(/\.0$/,'')+'h';}
+function colKeyOf(r){return r.catalogo_id+'|'+(r.subtarea_id||'');}
+function areaDe(r){const a=r.cat&&r.cat.alcance; if(a==='habitaciones')return 'Habitaciones';
+  if(a==='areas'||a==='todo')return 'Áreas comunes'; return (r.ubic&&r.ubic.nombre)||'Otros';}
+let CAL={plan:[],cols:[],weeks:[],cellIds:{}};
+
+async function renderCalendario(){
+  const anio=new Date().getFullYear();
+  const {data,error}=await sb.from('mtto_preventivo_plan')
+    .select('id,semana_programada,minutos_estimados,oficio,periodicidad,catalogo_id,subtarea_id,ubicacion_id, cat:catalogo_id(tarea,alcance,oficio), sub:subtarea_id(descripcion), ubic:ubicacion_id(nombre,tipo)')
+    .eq('property_id',PROP.id).eq('anio',anio);
+  if(error)throw error;
+  const plan=data||[]; CAL.plan=plan;
+  if(!plan.length){ $("#view").innerHTML='<div class="card"><div class="pad">No hay plan generado para '+anio+'. Genéralo en <b>Preventivos</b> → «Generar plan».</div></div>'; return; }
+  // Columnas: área -> trabajo
+  const colMap={};
+  plan.forEach(r=>{const k=colKeyOf(r); if(!colMap[k])colMap[k]={key:k,area:areaDe(r),label:(r.sub&&r.sub.descripcion)||(r.cat&&r.cat.tarea)||'Trabajo',oficio:r.oficio||(r.cat&&r.cat.oficio)||'general',per:r.periodicidad,catId:r.catalogo_id};});
+  const areaOrder=['Habitaciones','Áreas comunes'];
+  const cols=Object.values(colMap).sort((a,b)=>{const aa=areaOrder.indexOf(a.area),bb=areaOrder.indexOf(b.area);const ax=aa<0?9:aa,bx=bb<0?9:bb; if(a.area!==b.area)return ax-bx||a.area.localeCompare(b.area); return a.label.localeCompare(b.label);});
+  CAL.cols=cols;
+  // Semanas continuas de min a max
+  const withWk=plan.filter(r=>r.semana_programada), pool=plan.filter(r=>!r.semana_programada);
+  let weeks=[];
+  if(withWk.length){const ws=withWk.map(r=>r.semana_programada).sort(); let d=new Date(ws[0]+'T12:00:00Z'); const end=new Date(ws[ws.length-1]+'T12:00:00Z');
+    while(d<=end){weeks.push(d.toISOString().slice(0,10)); d=new Date(d.getTime()+6048e5);} }
+  CAL.weeks=weeks;
+  // Índices
+  const cellIds={}, colTot={}, weekTot={}, poolByCol={};
+  withWk.forEach(r=>{const ck=colKeyOf(r),k=r.semana_programada+'@@'+ck;(cellIds[k]=cellIds[k]||{ids:[],min:0,per:r.periodicidad});cellIds[k].ids.push(r.id);cellIds[k].min+=(r.minutos_estimados||0);
+    colTot[ck]=(colTot[ck]||0)+(r.minutos_estimados||0); weekTot[r.semana_programada]=(weekTot[r.semana_programada]||0)+(r.minutos_estimados||0);});
+  pool.forEach(r=>{const ck=colKeyOf(r);(poolByCol[ck]=poolByCol[ck]||{ids:[],min:0,per:r.periodicidad});poolByCol[ck].ids.push(r.id);poolByCol[ck].min+=(r.minutos_estimados||0);});
+  CAL.cellIds=cellIds; CAL.poolByCol=poolByCol;
+  const overWeeks=weeks.filter(w=>(weekTot[w]||0)>CAP_SEM_MIN).length;
+  const totalMin=withWk.reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  // Cabeceras de área (colspan)
+  const areaGroups=[]; cols.forEach(c=>{const g=areaGroups[areaGroups.length-1]; if(g&&g.area===c.area)g.n++; else areaGroups.push({area:c.area,n:1});});
+  const chip=(min,per,ids,n)=>`<span class="cchip" data-chip data-ids="${ids.join(',')}" style="background:${perColor(per)}22;border-color:${perColor(per)};color:${perColor(per)}">${Math.round(min)}<small>m</small>${n>1?` ×${n}`:''}</span>`;
+  const mo=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  let prevMo=-1;
+  const rows=weeks.map((w,i)=>{const d=new Date(w+'T12:00:00Z');const m=d.getUTCMonth();const showMo=m!==prevMo;prevMo=m;
+    const wt=weekTot[w]||0; const ratio=wt/CAP_SEM_MIN; const wc=ratio>1?'var(--bad)':(ratio>=.85?'var(--warn)':'var(--ok)');
+    const cells=cols.map(c=>{const cd=cellIds[w+'@@'+c.key]; return `<td class="cell" data-cell data-week="${w}" data-col="${c.key}">${cd?chip(cd.min,cd.per,cd.ids,cd.ids.length):''}</td>`;}).join('');
+    return `<tr data-week="${w}"><td class="wk">${showMo?`<span class="mo">${mo[m]}</span>`:''}S${i+1} <span class="dt">${w.slice(8,10)}/${w.slice(5,7)}</span></td>${cells}<td class="wktot" style="color:${wc}">${fmtH(wt)}</td></tr>`;}).join('');
+  // Fila POOL (por asignar) arriba
+  const poolCells=cols.map(c=>{const pd=poolByCol[c.key]; return `<td class="cell" data-cell data-week="POOL" data-col="${c.key}">${pd?chip(pd.min,pd.per,pd.ids,pd.ids.length):''}</td>`;}).join('');
+  const poolTotN=pool.length;
+  const poolRow=`<tr class="poolrow" data-week="POOL"><td class="wk">◻ Por asignar</td>${poolCells}<td class="wktot" style="color:${poolTotN?'var(--warn)':'var(--muted)'}">${poolTotN||'—'}</td></tr>`;
+  // Fila total abajo
+  const foot=cols.map(c=>{const t=colTot[c.key]||0; const falta=CAL.poolByCol[c.key]?` <span style="color:var(--warn)" title="faltan por asignar">⚠${CAL.poolByCol[c.key].ids.length}</span>`:''; return `<td>${fmtH(t)}${falta}</td>`;}).join('');
+  const legend=Object.keys(PER_META).map(p=>`<span><i style="background:${PER_META[p][1]}"></i>${PER_META[p][0]}</span>`).join('');
+  $("#view").innerHTML=`
+    <div class="calbar">
+      <div class="calkpi"><b style="color:${poolTotN?'var(--bad)':'var(--ok)'}">${poolTotN}</b> por asignar</div>
+      <div class="calkpi"><b style="color:${overWeeks?'var(--bad)':'var(--ok)'}">${overWeeks}</b> semanas sobre 13h</div>
+      <div class="calkpi"><b>${fmtH(totalMin)}</b> programadas · ${withWk.length} tareas</div>
+      <div class="perleg" style="margin-left:auto">${legend}</div>
+    </div>
+    <div class="muted" style="font-size:12px;margin:0 0 8px">Arrastra una celda a otra semana (mouse o táctil). Suéltala en <b>◻ Por asignar</b> para quitarla. Clic en el nombre del trabajo abre su ficha. Tope: <b>13 h/semana</b>.</div>
+    <div class="calwrap"><table class="calx">
+      <thead>
+        <tr><th class="corner" rowspan="2">Semana</th>${areaGroups.map(g=>`<th class="areah" colspan="${g.n}">${esc(g.area)}</th>`).join('')}<th class="corner r" rowspan="2">Sem.<br>/13h</th></tr>
+        <tr class="colrow">${cols.map(c=>`<th class="colh" onclick="fichaTrabajo('${c.catId}')" title="${esc(c.label)}"><span class="oi">${ofIcon(c.oficio)}</span>${esc(c.label.length>26?c.label.slice(0,25)+'…':c.label)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>${poolRow}${rows}</tbody>
+      <tfoot><tr><th class="wk">Programado/año</th>${foot}<td></td></tr></tfoot>
+    </table></div>`;
+  calWireDrag();
+}
+
+// ---- Arrastre (mouse + táctil) por puntero ----
+function calWireDrag(){
+  const wrap=document.querySelector('.calwrap'); if(!wrap)return;
+  let drag=null,ghost=null,lastDrop=null;
+  wrap.querySelectorAll('[data-chip]').forEach(ch=>{
+    ch.addEventListener('pointerdown',e=>{
+      e.preventDefault();
+      const cell=ch.closest('[data-cell]');
+      drag={ids:ch.dataset.ids.split(','),col:cell.dataset.col,fromWeek:cell.dataset.week,chip:ch};
+      ghost=ch.cloneNode(true); ghost.className='cchip calghost'; document.body.appendChild(ghost);
+      ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+      ch.setPointerCapture(e.pointerId);
+    });
+    ch.addEventListener('pointermove',e=>{
+      if(!drag)return; ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+      const el=document.elementFromPoint(e.clientX,e.clientY);
+      const cell=el&&el.closest?el.closest('[data-cell]'):null;
+      if(lastDrop&&lastDrop!==cell)lastDrop.classList.remove('drop');
+      if(cell&&cell.dataset.col===drag.col){cell.classList.add('drop');lastDrop=cell;} else lastDrop=null;
+    });
+    ch.addEventListener('pointerup',async e=>{
+      if(!drag)return; if(ghost)ghost.remove();
+      const el=document.elementFromPoint(e.clientX,e.clientY);
+      const cell=el&&el.closest?el.closest('[data-cell]'):null;
+      if(lastDrop)lastDrop.classList.remove('drop');
+      const d=drag; drag=null;
+      if(cell&&cell.dataset.col===d.col&&cell.dataset.week!==d.fromWeek){
+        const toWeek=cell.dataset.week==='POOL'?null:cell.dataset.week;
+        const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWeek,estado:'pendiente',ticket_id:null}).in('id',d.ids);
+        if(error)return toast(error.message);
+        toast(toWeek?('Movido a '+toWeek):'Quitado de la semana'); renderCalendario();
+      }
+    });
+  });
+}
+
+async function fichaTrabajo(catId){
+  const [{data:cat},{data:insts}]=await Promise.all([
+    sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre)').eq('id',catId).single(),
+    sb.from('mtto_preventivo_plan').select('id,semana_programada,minutos_estimados, ubic:ubicacion_id(nombre)').eq('catalogo_id',catId).eq('property_id',PROP.id).order('semana_programada',{nullsFirst:true})
+  ]);
+  if(!cat)return toast('No encontrado');
+  const list=(insts||[]);
+  const rowsH=list.map(x=>`<tr><td>${esc(x.ubic?x.ubic.nombre:'—')}</td><td>${x.semana_programada?('sem '+x.semana_programada):'<span style="color:var(--warn)">por asignar</span>'}</td><td class="num">${x.minutos_estimados||'?'}m</td><td class="num">${x.semana_programada?`<button class="btn ghost sm" onclick="desasignarInst('${x.id}','${catId}')">Desasignar</button>`:''}</td></tr>`).join('');
+  modal(`<h3>${esc(cat.tarea||'Trabajo')} <span class="chip c-info">${esc(ofNombre(cat.oficio||'general'))}</span></h3><div class="pad">
+    <div class="form-grid">
+      <div class="full"><label>🎯 Objetivo — cómo nos gustaría que quede (estético / funcional / confort)</label><textarea id="fObj" rows="2" placeholder="Ej. que la regadera dé presión pareja y sin fugas; el mueble sin rayones, barnizado uniforme…">${esc(cat.objetivo||'')}</textarea></div>
+      <div class="full"><label>🛠️ Qué se debe hacer (procedimiento)</label><textarea id="fProc" rows="3" placeholder="Pasos concretos del trabajo…">${esc(cat.procedimiento||cat.ficha_texto||'')}</textarea></div>
+      <div class="full"><label>⛑️ Prevención de riesgos laborales</label><textarea id="fRie" rows="2" placeholder="EPP, corte de energía/agua/gas, señalización, trabajo en altura…">${esc(cat.prevencion_riesgos||'')}</textarea></div>
+      <div class="full"><label>💡 Recomendación para el técnico (opcional)</label><textarea id="fReco" rows="2">${esc(cat.recomendacion||'')}</textarea></div>
+    </div>
+    <div style="margin-top:12px"><b>Instancias en el plan · ${list.length}</b>
+      <div class="scroll" style="max-height:210px;margin-top:6px"><table><thead><tr><th>Dónde</th><th>Semana</th><th class="num">min</th><th></th></tr></thead><tbody>${rowsH||'<tr><td class="muted">Sin instancias</td></tr>'}</tbody></table></div></div>
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button><button class="btn sm" onclick="saveFicha('${catId}')">Guardar ficha</button></div>`);
+}
+async function saveFicha(catId){
+  const patch={objetivo:$("#fObj").value.trim()||null,procedimiento:$("#fProc").value.trim()||null,prevencion_riesgos:$("#fRie").value.trim()||null,recomendacion:$("#fReco").value.trim()||null};
+  const {error}=await sb.from('mtto_preventivos_catalogo').update(patch).eq('id',catId);
+  if(error)return toast(error.message); closeModal(); toast('Ficha guardada');
+}
+async function desasignarInst(id,catId){
+  const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id);
+  if(error)return toast(error.message); toast('Desasignado · va a «por asignar»'); fichaTrabajo(catId);
 }
 
 /* TABLERO */
