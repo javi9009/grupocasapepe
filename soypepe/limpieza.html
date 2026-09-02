@@ -208,6 +208,7 @@ button{font-family:inherit}
 .hecho.nom{background:#fff8ea;color:#8a6212}
 .hecho.nom .tk{color:#a58348}
 .auditcard.dnd{border-left-color:#8a6212}
+.auditcard.val{border-left-color:var(--gold,#c79a3a);background:#fffaf0}
 .dndlista{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
 .dndlista .ch{font-size:12px;font-weight:700;background:#fff0d6;color:#8a6212;border:1px solid #e8d4a8;
   border-radius:999px;padding:4px 10px;display:inline-flex;align-items:center;gap:6px}
@@ -495,6 +496,7 @@ function pintar(){
   }
 
   if(veTodas&&VISTA==='rep'){
+    html+=tarjetaValidar();
     html+=`<div class="hero"><div class="n">Reparto del ${new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{day:'numeric',month:'long'})}</div>
       <div class="s">${pendiente?'Propuesta del sistema · revísala y valídala antes de arrancar el turno.':'Ya validado por '+esc((MIA||TODAS.find(a=>a.validado_por_nombre)||{}).validado_por_nombre||'—')+'.'}</div></div>`;
     if(!TODAS.length){ w.innerHTML=html+'<div class="ph">Todavía no hay reparto para hoy en esta sede.</div>'; engancharTabs(); return; }
@@ -531,6 +533,7 @@ function pintar(){
       : `<div class="ph" style="padding:16px">Reparto validado${(()=>{const v=(MIA||TODAS.find(a=>a.validado_at)||{}).validado_at;return v?' a las '+new Date(v).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'';})()}.</div>`;
     w.innerHTML=html;
     engancharTabs();
+    engancharValidar(w);
     engancharCuartos(w);
     engancharAnadir(w);
     arrancarReloj();
@@ -556,6 +559,8 @@ function pintar(){
     ${soyEncargada()?'<div class="s" style="margin-top:8px">Hoy no está el ama de llaves: <b>el día lo llevas tú</b>. Puedes ver el reparto completo y pasarle trabajo a quien haga falta.</div>':''}
     ${MIA.turno==='nocturno'?'<div class="s" style="margin-top:8px">Tu ruta de la noche es apoyo al equipo de la mañana: marca inicio y fin igual, pero no se te mide el tiempo ni genera horas extra.</div>':'<div class="pila" id="pilaBox"></div>'}
   </div>`;
+
+  html+=tarjetaValidar();
 
   if(MIA && (MIA.turno==='nocturno' || llevaElDia())){
     html+=`<div class="auditcard dnd">
@@ -622,6 +627,7 @@ function pintar(){
   engancharAnadir(w);
   pintarPila();
   arrancarReloj();
+  engancharValidar(w);
   // Aquí también va el botón de «no molestar»: la tarjeta se pinta en esta vista.
   engancharCuartos(w);
 }
@@ -720,6 +726,115 @@ function esperaPase(t){
   [MIA,...TODAS].filter(Boolean).forEach(a=>(a.hk_tareas||[]).forEach(x=>todas.push(x)));
   const previo=todas.find(x=>x.area_id===t.area_id&&x.pase===t.pase-1);
   return !!previo && previo.estado!=='terminada';
+}
+
+// ── Validar el reparto desde el teléfono ──────────────────────────────────
+// Es lo mismo que hace el botón «✓ Validar reparto» del módulo de Ama de
+// Llaves (m/hk-ama-llaves.html): los mismos candados, la misma incidencia por
+// profunda vencida y el mismo aviso a quien lleva el room audit. Si cambia
+// allí, cambia aquí.
+function tarjetaValidar(){
+  if(!llevaElDia() || !(TODAS||[]).some(a=>a.estado==='propuesta')) return '';
+  return `<div class="auditcard val">
+    <div class="t">✓ Falta validar el reparto de hoy</div>
+    <div class="s">Mientras siga en propuesta nadie puede empezar sus cuartos, ni tú. Revísalo en «Reparto del día» y ciérralo.</div>
+    <button class="btn go" id="btnValidar">Validar el reparto</button></div>`;
+}
+
+// Las profundas que hoy piden atención: al límite o ya pasadas de fecha.
+function profPendientes(){
+  const out=[], vistos=new Set();
+  (TODAS||[]).forEach(a=>(a.hk_tareas||[]).forEach(t=>{
+    const q=t.metadata?.prof;
+    if(!q || (q.nivel!=='rojo' && q.nivel!=='vencida')) return;
+    const k=String(t.area_id); if(vistos.has(k)) return; vistos.add(k);
+    out.push({t,q});
+  }));
+  return out.sort((x,y)=>x.q.dias-y.q.dias);
+}
+
+async function validarReparto(){
+  const b=$('btnValidar'); if(b){ b.disabled=true; b.textContent='Validando…'; }
+  const suelto=()=>{ if(b){ b.disabled=false; b.textContent='Validar el reparto'; } };
+  try{
+    // 1. Nada que pida limpieza hoy puede quedarse sin dueño.
+    const pide=t=>!t.metadata?.sin_trabajo && !t.metadata?.opcional && !t.metadata?.profunda && t.minutos_estimados>0;
+    const huerfanas=[];
+    (TODAS||[]).filter(a=>!a.employee_id).forEach(a=>(a.hk_tareas||[]).forEach(t=>{ if(pide(t)) huerfanas.push(t); }));
+    const {data:sueltas}=await sb.from('hk_tareas')
+      .select('id,titulo,minutos_estimados,metadata,hk_areas(codigo)')
+      .eq('property_id',PROP).eq('fecha',FECHA).is('asignacion_id',null);
+    (sueltas||[]).forEach(t=>{ if(pide(t)) huerfanas.push(t); });
+    if(huerfanas.length){
+      const nom=t=>t.hk_areas?.codigo||t.titulo||'—';
+      alert(`Todavía no se puede validar.\n\nQuedan ${huerfanas.length} ${huerfanas.length===1?'tarea sin dueño':'tareas sin dueño'}:\n`
+        +huerfanas.slice(0,10).map(nom).join(', ')+(huerfanas.length>10?`, y ${huerfanas.length-10} más`:'')
+        +`\n\nHay que repartirlas desde el módulo de Ama de Llaves.`);
+      return suelto();
+    }
+    // 2. Las profundas retrasadas no bloquean, pero no se cierra sin verlas:
+    //    quedan a deber y se reportan a gerencia.
+    const pend=profPendientes();
+    if(pend.length){
+      const l=pend.slice(0,6).map(x=>`· ${x.t.hk_areas?.codigo||x.t.titulo||'—'} (${x.q.nivel==='vencida'?`vencida hace ${-x.q.dias} días`:`toca en ${x.q.dias} días`})`).join('\n');
+      if(!confirm(`Hay ${pend.length} limpieza${pend.length===1?'':'s'} profunda${pend.length===1?'':'s'} que piden atención:\n${l}${pend.length>6?`\n· y ${pend.length-6} más`:''}`
+        +`\n\nSi validas desde aquí el día se cierra sin programarlas y las vencidas se reportan a gerencia. Para programarlas, valida desde el módulo de Ama de Llaves.\n\n¿Validar igual?`)) return suelto();
+    }
+    // 3. Cerrar el día.
+    const {data:{user}}=await sb.auth.getUser();
+    const {error}=await sb.from('hk_asignaciones').update({
+      estado:'validada', validado_por:user?.id||null, validado_por_nombre:NOMBRE,
+      validado_at:new Date().toISOString(),
+    }).eq('property_id',PROP).eq('fecha',FECHA).eq('estado','propuesta');
+    if(error){ toast('No se pudo validar: '+error.message); return suelto(); }
+    await incidenciasProfundas(pend.filter(x=>x.q.nivel==='vencida'));
+    await avisarRoomAudit();
+    toast('Reparto validado · ya pueden empezar');
+    await cargar();
+  }catch(e){ toast('No se pudo validar'); suelto(); }
+}
+
+// Una profunda vencida es una incidencia del ama de llaves, nunca de la
+// recamarista. Una sola por área y vencimiento, aunque se valide varios días.
+async function incidenciasProfundas(vencidas){
+  if(!vencidas.length) return;
+  const jefa=(TODAS||[]).find(a=>a.turno==='ama_llaves'&&a.employee_id)||null;
+  for(const {t,q} of vencidas){
+    try{
+      const {data:ya}=await sb.from('incidencias').select('id')
+        .eq('tipo','hk_profunda_vencida').eq('resuelto',false)
+        .contains('metadata',{area_id:t.area_id,vence:q.vence}).limit(1);
+      if(ya&&ya.length) continue;
+      const ar=t.hk_areas||{};
+      const nombre=`${ar.codigo||''}${ar.nombre&&ar.nombre!==ar.codigo?` · ${ar.nombre}`:''}`;
+      await sb.from('incidencias').insert({
+        employee_id:jefa?jefa.employee_id:null,
+        nombre_display:jefa?jefa.nombre_display:'Ama de llaves',
+        tipo:'hk_profunda_vencida',
+        severidad:q.dias<-30?'urgente':'media',
+        descripcion:`${nombre}: limpieza profunda ${q.frecuencia} vencida hace ${-q.dias} días (tocaba el ${q.vence}). El día se cerró sin programarla.`,
+        fecha:FECHA, resuelto:false,
+        metadata:{modulo:'ama_llaves', property_id:PROP, area_id:t.area_id, codigo:ar.codigo||null,
+          frecuencia:q.frecuencia, vence:q.vence, dias_retraso:-q.dias, imputa:'ama_llaves',
+          programada_para:null},
+      });
+    }catch(_e){}
+  }
+}
+
+// Quien tenga el room audit se entera en el momento, sin que haya que avisarle.
+async function avisarRoomAudit(){
+  for(const a of (TODAS||[]).filter(x=>x.turno==='front'&&x.employee_id&&(x.hk_tareas||[]).length)){
+    try{
+      const {data:lk}=await sb.from('empleado_login').select('user_id').eq('employee_id',a.employee_id).maybeSingle();
+      await sb.from('notificaciones').insert({
+        employee_id:a.employee_id, user_id:lk?.user_id||null,
+        titulo:'🔎 Te toca el room audit',
+        cuerpo:'Revisa los cuartos con llegada de hoy y marca cada uno: listo, con detalle o para cambiar.',
+        icono:'🔎', accion:{url:'/soypepe/room-audit.html',tipo:'hk_audit',fecha:FECHA},
+      });
+    }catch(_e){}
+  }
 }
 
 function engancharCuartos(root){
@@ -1056,6 +1171,9 @@ $('addBtn').onclick=async()=>{
   cargar();
 };
 
+function engancharValidar(root){
+  const b=root.querySelector('#btnValidar'); if(b) b.onclick=validarReparto;
+}
 function engancharTabs(){
   document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{VISTA=b.dataset.v;pintar();});
 }
