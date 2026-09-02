@@ -306,15 +306,35 @@ async function render(){
 }
 
 /* TABLERO */
+function consumoKpi(lbl,v,obj,unit,dec){const val=v==null?'—':v.toFixed(dec);const r=v==null?null:v/obj;
+  const col=r==null?'var(--muted)':(r<=1?'var(--ok)':(r<=1.25?'var(--warn)':'var(--bad)'));
+  return `<div class="kpi"><div class="n" style="color:${col}">${val}<span style="font-size:13px;color:var(--muted)"> ${unit}</span></div><div class="l">${lbl} · obj ${obj} ${unit}</div></div>`;}
 async function renderTablero(){
   const anio=new Date().getFullYear();
-  const [{data:tk},{data:sum},{data:lec},{data:plan},{data:ext}]=await Promise.all([
+  const win30=(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);})();
+  const [{data:tk},{data:sum},{data:lec},{data:plan},{data:ext},{data:cc},{data:recs}]=await Promise.all([
     sb.from("mtto_tickets").select("estado,clasificacion,minutos_estimados,minutos_reales,asignado_nombre").eq("property_id",PROP.id),
     sb.from("mtto_suministros").select("estatus,costo,material,descripcion,semana").eq("property_id",PROP.id),
-    sb.from("mtto_lecturas").select("huespedes,fecha").eq("property_id",PROP.id),
+    sb.from("mtto_lecturas").select("huespedes,fecha,agua_lectura,luz_lectura,gas_pct").eq("property_id",PROP.id),
     sb.from("mtto_preventivo_plan").select("estado,oficio").eq("property_id",PROP.id).eq("anio",anio),
-    sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,presupuesto,critico,empresa,ultimo_realizado, eq:equipo_id(nombre)").eq("property_id",PROP.id).eq("ejecucion","externo").eq("activo",true)
+    sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,presupuesto,critico,empresa,ultimo_realizado, eq:equipo_id(nombre)").eq("property_id",PROP.id).eq("ejecucion","externo").eq("activo",true),
+    sb.from("mtto_consumo_config").select("*").eq("property_id",PROP.id).maybeSingle(),
+    sb.from("mtto_gas_recargas").select("fecha,litros").eq("property_id",PROP.id).gte("fecha",win30)
   ]);
+  const CC=cc||{agua_factor_litros:1000,luz_factor_kwh:1,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
+  // Consumo por huésped-noche vs objetivo del mes (agua y luz del último par de lecturas; gas L/h-n de 30 días)
+  const asc=[...(lec||[])].sort((a,b)=>a.fecha<b.fecha?-1:1);
+  const gnBetween=(fromExcl,toIncl)=>{let s=0,any=false;asc.forEach(r=>{if(r.fecha>fromExcl&&r.fecha<=toIncl&&r.huespedes!=null){s+=Number(r.huespedes);any=true;}});return any?s:null;};
+  let aguaH=null,luzH=null,consFecha=null;
+  for(let i=asc.length-1;i>=1;i--){const c=asc[i],p=asc[i-1];const gn=gnBetween(p.fecha,c.fecha);if(!gn)continue;
+    if(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura)aguaH=(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros)/gn;
+    if(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura)luzH=(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh)/gn;
+    if(aguaH!=null||luzH!=null){consFecha=c.fecha;break;}}
+  const hn30=asc.filter(r=>r.fecha>=win30).reduce((s,r)=>s+(Number(r.huespedes)||0),0);
+  const gLit30=(recs||[]).reduce((s,r)=>s+(Number(r.litros)||0),0);
+  const gasH=(hn30>0&&gLit30>0)?gLit30/hn30:null;
+  const mIdx=new Date().getMonth();
+  const oAgua=CC.obj_agua[mIdx],oLuz=CC.obj_luz[mIdx],oGas=CC.obj_gas[mIdx];
   const T=tk||[];
   const open=T.filter(t=>!["cerrado","cancelado","resuelto"].includes(t.estado));
   const react=open.filter(t=>t.clasificacion==="reactivo").length;
@@ -344,7 +364,6 @@ async function renderTablero(){
   $("#view").innerHTML=`
     <div class="kpis">
       <div class="kpi"><div class="n" style="color:${eficCol(eGlobal)}">${eGlobal==null?'—':eGlobal+'%'}</div><div class="l">eficiencia acumulada</div></div>
-      <div class="kpi"><div class="n">${costoHuesped==null?'—':money(costoHuesped)}</div><div class="l">suministros por huésped</div></div>
       <div class="kpi" style="cursor:pointer" onclick="verTickets('reactivo')"><div class="n" style="color:${react?'var(--bad)':'inherit'}">${react}</div><div class="l">reactivos abiertos</div></div>
       <div class="kpi" style="cursor:pointer" onclick="verTickets('correctivo')"><div class="n" style="color:${corr?'var(--warn)':'inherit'}">${corr}</div><div class="l">correctivos por resolver</div></div>
       <div class="kpi"><div class="n" style="color:${comprasPend.length?'var(--warn)':'inherit'}">${comprasPend.length}</div><div class="l">compras pendientes${comprasCosto?` · ${money(comprasCosto)}`:''}</div></div>
@@ -359,17 +378,19 @@ async function renderTablero(){
         ${done.length?'':'<div class="muted" style="font-size:12px">Aún no hay trabajos terminados con tiempo real.</div>'}
       </div></div>
 
-      <div class="card"><h3 style="margin:0">Suministros</h3><div class="pad">
-        <div style="display:flex;gap:18px;flex-wrap:wrap">
-          <div><div class="muted" style="font-size:12px">Coste por huésped</div><div style="font-size:1.5rem;font-weight:700">${costoHuesped==null?'—':money(costoHuesped)}</div></div>
-          <div><div class="muted" style="font-size:12px">Gasto total</div><div style="font-size:1.5rem;font-weight:700">${money(costoTot)}</div></div>
-          <div><div class="muted" style="font-size:12px">Huéspedes (lecturas)</div><div style="font-size:1.5rem;font-weight:700">${huesp||'—'}</div></div>
+      <div class="card"><h3 style="margin:0">Consumos por huésped/noche <span class="muted" style="font-weight:500;font-size:12px">· vs objetivo de ${['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][mIdx]}</span>
+        <button class="btn ghost sm" style="float:right;margin-top:-2px" onclick="go('lect')">Ver detalle ›</button></h3><div class="pad">
+        <div class="kpis" style="margin:0">
+          ${consumoKpi('💧 Agua',aguaH,oAgua,'L',0)}
+          ${consumoKpi('⚡ Luz',luzH,oLuz,'kWh',1)}
+          ${consumoKpi('🔥 Gas',gasH,oGas,'L',1)}
         </div>
-        <div style="margin-top:12px"><b>Compras pendientes de hacer · ${comprasPend.length}</b>
-          ${comprasPend.length?`<div class="scroll" style="max-height:180px;margin-top:6px"><table><tbody>${comprasPend.slice(0,20).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px;margin-top:4px">Nada por comprar 👍</div>'}
-        </div>
+        <p class="muted" style="font-size:11.5px;margin:8px 0 0">Verde ≤ objetivo · ámbar hasta +25% · rojo arriba.${consFecha?` Agua/luz: última lectura (${consFecha}).`:''} Gas: litros de recarga ÷ huésped-noches (30 días).</p>
       </div></div>
     </div>
+
+    <div class="card"><h3 style="margin:0">Compras pendientes de hacer · ${comprasPend.length}${comprasCosto?` <span class="muted" style="font-weight:500;font-size:13px">· ${money(comprasCosto)}</span>`:''}</h3>
+      ${comprasPend.length?`<div class="scroll"><table><tbody>${comprasPend.slice(0,20).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="pad muted" style="font-size:12px">Nada por comprar 👍</div>'}</div>
 
     <div class="card"><h3 style="margin:0">Preventivos logrados por categoría (${anio})</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th>Avance</th><th class="num">hechos/plan</th></tr></thead><tbody>${catRows||'<tr><td class="muted" style="padding:12px">Sin plan generado</td></tr>'}</tbody></table></div></div>
 
