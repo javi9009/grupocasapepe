@@ -189,9 +189,15 @@
   table.calx .addcell{border:1px dashed var(--rule-2);background:none;color:var(--faint);border-radius:6px;width:22px;height:22px;line-height:1;cursor:pointer;font-size:14px;padding:0}
   table.calx .addcell:hover{border-color:var(--accent);color:var(--accent)}
   table.calx .colh.room{min-width:52px;max-width:52px;width:52px;cursor:default;font-weight:700}
-  table.calx col.colhi{background:rgba(19,122,86,.09)}
-  table.calx tbody tr:hover td.cell{background:rgba(19,122,86,.05)}
-  table.calx tbody tr:hover td.wk{background:var(--surface-2)}
+  table.calx col.colhi{background:rgba(19,122,86,.10)}
+  table.calx tbody tr.rowhi td.cell{background:rgba(19,122,86,.06)}
+  table.calx tbody tr.rowhi td.wk{background:var(--surface-2)}
+  table.calx .foot3{font-size:10px;line-height:1.35;text-align:center}
+  .lwrow{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--rule);border-radius:9px;margin-bottom:5px;cursor:pointer;background:var(--surface)}
+  .lwrow:hover{border-color:var(--rule-2);background:var(--surface-3)}
+  .lwrow .oi{font-size:16px}
+  .lwrow .lwnm{flex:1;min-width:0}
+  .lwrow .lwmin{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink-2);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -354,7 +360,7 @@ async function render(){
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc((e&&e.message)||e)+'</div>';}
 }
 
-/* ============ CALENDARIO VISUAL DE PREVENTIVOS (v2) ============ */
+/* ============ CALENDARIO VISUAL DE PREVENTIVOS (v3) ============ */
 const CAP_SEM_MIN=13*60; // tope 13 h/semana de preventivos
 const PER_META={semanal:['Semanal','#6B7280'],quincenal:['Quincenal','#3B82C4'],mensual:['Mensual','#137A56'],
   bimestral:['Bimestral','#0E9BA6'],trimestral:['Trimestral','#B4791F'],cuatrimestral:['Cuatrim.','#C6771A'],
@@ -362,64 +368,71 @@ const PER_META={semanal:['Semanal','#6B7280'],quincenal:['Quincenal','#3B82C4'],
 function perColor(p){return (PER_META[p]||[])[1]||'#6B7280';}
 function ofIcon(c){const o=OFICIOS.find(x=>x[0]===c);return o?o[1].split(' ')[0]:'🔧';}
 function fmtH(min){min=Math.round(min||0);return (min/60).toFixed(1).replace(/\.0$/,'')+'h';}
-function colKeyOf(r){return r.catalogo_id+'|'+(r.subtarea_id||'');}
-function esHab(r){return r.cat&&r.cat.alcance==='habitaciones';}
 function areaDe(r){const a=r.cat&&r.cat.alcance; if(a==='habitaciones')return 'Habitaciones';
   if(a==='areas'||a==='todo')return 'Áreas comunes'; return (r.ubic&&r.ubic.nombre)||'Otros';}
 function roomLbl(n){return String(n||'').replace(/habitaci[oó]n/i,'').trim();}
-let CAL={plan:[],cols:[],weeks:[],rooms:[]};
+function autoReco(of,tarea){
+  const m={plomeria:'Cierra la llave de paso, revisa empaques y sellos, prueba sin fugas y verifica presión.',
+   electricidad:'Corta el circuito en el tablero y confirma sin tensión; revisa apriete de conexiones y aislamientos.',
+   gas_calderas:'Cierra el gas, ventila y verifica que no haya fugas con agua jabonosa antes y después.',
+   climatizacion:'Limpia filtros y serpentín, revisa drenaje y niveles; prueba enfriamiento y ruidos.',
+   carpinteria:'Revisa bisagras y ajustes; lija y retoca el acabado donde haga falta.',
+   cerrajeria:'Lubrica el mecanismo y prueba apertura/cierre; revisa que la llave o tarjeta funcione suave.',
+   pintura:'Protege pisos y muebles, resana y lija; aplica en capas parejas y deja secar.',
+   herreria:'Revisa soldaduras y óxido; lija, aplica anticorrosivo y verifica firmeza.',
+   electronica_it:'Revisa conexiones y prueba funcionamiento; limpia polvo y ventilación.',
+   general:'Haz la revisión completa, deja el área limpia y reporta cualquier anomalía.'};
+  return m[of]||m.general;
+}
+let CAL={plan:[],cols:[],weeks:[],locs:{}};
 
 async function renderCalendario(){
   const anio=new Date().getFullYear();
   const {data,error}=await sb.from('mtto_preventivo_plan')
-    .select('id,semana_programada,minutos_estimados,oficio,periodicidad,catalogo_id,subtarea_id,ubicacion_id, cat:catalogo_id(tarea,alcance,oficio,ejecucion), sub:subtarea_id(descripcion), ubic:ubicacion_id(nombre,tipo)')
+    .select('id,semana_programada,minutos_estimados,oficio,periodicidad,estado,recomendacion,catalogo_id,subtarea_id,ubicacion_id, cat:catalogo_id(tarea,alcance,oficio,ejecucion), sub:subtarea_id(descripcion), ubic:ubicacion_id(nombre,tipo)')
     .eq('property_id',PROP.id).eq('anio',anio);
   if(error)throw error;
   const plan=data||[]; CAL.plan=plan;
   if(!plan.length){ $("#view").innerHTML='<div class="card"><div class="pad">No hay plan generado para '+anio+'. Genéralo en <b>Preventivos</b> → «Generar plan».</div></div>'; return; }
-  const colKey=r=>esHab(r)&&r.ubicacion_id ? ('R'+r.ubicacion_id) : colKeyOf(r);
-  // Columnas de HABITACIÓN (1 por cuarto) y de TRABAJO (áreas/equipos)
-  const roomMap={}, trabMap={};
-  plan.forEach(r=>{
-    if(esHab(r)&&r.ubicacion_id){ if(!roomMap[r.ubicacion_id])roomMap[r.ubicacion_id]={id:r.ubicacion_id,nombre:(r.ubic&&r.ubic.nombre)||r.ubicacion_id}; }
-    else { const k=colKeyOf(r); if(!trabMap[k])trabMap[k]={key:k,area:areaDe(r),label:(r.sub&&r.sub.descripcion)||(r.cat&&r.cat.tarea)||'Trabajo',oficio:r.oficio||(r.cat&&r.cat.oficio)||'general',per:r.periodicidad,catId:r.catalogo_id}; }
-  });
-  const rooms=Object.values(roomMap).sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
-  const trabCols=Object.values(trabMap).sort((a,b)=>a.area!==b.area?a.area.localeCompare(b.area):a.label.localeCompare(b.label));
-  const cols=[]; rooms.forEach(rm=>cols.push({type:'room',key:'R'+rm.id,area:'Habitaciones',roomId:rm.id,label:roomLbl(rm.nombre)}));
-  trabCols.forEach(c=>cols.push(Object.assign({type:'trab'},c)));
-  CAL.cols=cols; CAL.rooms=rooms;
-  // Semanas jul→dic (ampliando si hay algo fuera)
-  const withWk=plan.filter(r=>r.semana_programada), pool=plan.filter(r=>!r.semana_programada);
+  // Cada UBICACIÓN (habitación o área) es una columna. null -> General.
+  const locMap={};
+  plan.forEach(r=>{const id=r.ubicacion_id||'GEN'; if(!locMap[id])locMap[id]={id, nombre:r.ubicacion_id?((r.ubic&&r.ubic.nombre)||id):'General', tipo:r.ubicacion_id?((r.ubic&&r.ubic.tipo)||'area'):'general'};});
+  CAL.locs=locMap;
+  const grp=l=>l.tipo==='habitacion'?0:(l.tipo==='general'?2:1);
+  const locs=Object.values(locMap).sort((a,b)=>grp(a)!==grp(b)?grp(a)-grp(b):String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
+  const cols=locs.map(l=>({key:'L'+l.id, locId:l.id, area:l.tipo==='habitacion'?'Habitaciones':(l.tipo==='general'?'General':'Áreas'), room:l.tipo==='habitacion', label:l.tipo==='habitacion'?roomLbl(l.nombre):l.nombre}));
+  CAL.cols=cols;
+  const colKey=r=>'L'+(r.ubicacion_id||'GEN');
+  // Semanas jul->dic (ampliando)
   const mondayISO=(dt)=>{const d=new Date(dt);const w=(d.getUTCDay()+6)%7;d.setUTCDate(d.getUTCDate()-w);return d.toISOString().slice(0,10);};
+  const withWk=plan.filter(r=>r.semana_programada), pool=plan.filter(r=>!r.semana_programada);
   let ini=mondayISO(anio+'-07-01T12:00:00Z'), fin=mondayISO(anio+'-12-31T12:00:00Z');
   if(withWk.length){const ws=withWk.map(r=>r.semana_programada).sort(); if(ws[0]<ini)ini=ws[0]; if(ws[ws.length-1]>fin)fin=ws[ws.length-1];}
-  let weeks=[]; let d=new Date(ini+'T12:00:00Z'); const end=new Date(fin+'T12:00:00Z');
-  while(d<=end){weeks.push(d.toISOString().slice(0,10)); d=new Date(d.getTime()+6048e5);}
+  let weeks=[]; let dd=new Date(ini+'T12:00:00Z'); const end=new Date(fin+'T12:00:00Z');
+  while(dd<=end){weeks.push(dd.toISOString().slice(0,10)); dd=new Date(dd.getTime()+6048e5);}
   CAL.weeks=weeks;
   // Índices
-  const cellIds={}, colTot={}, weekTot={}, poolByCol={};
-  withWk.forEach(r=>{const ck=colKey(r),k=r.semana_programada+'@@'+ck;(cellIds[k]=cellIds[k]||{ids:[],min:0,per:r.periodicidad});cellIds[k].ids.push(r.id);cellIds[k].min+=(r.minutos_estimados||0);
-    colTot[ck]=(colTot[ck]||0)+(r.minutos_estimados||0); weekTot[r.semana_programada]=(weekTot[r.semana_programada]||0)+(r.minutos_estimados||0);});
-  pool.forEach(r=>{const ck=colKey(r);(poolByCol[ck]=poolByCol[ck]||{ids:[],min:0,per:r.periodicidad});poolByCol[ck].ids.push(r.id);poolByCol[ck].min+=(r.minutos_estimados||0);});
+  const cellIds={}, weekTot={}, colProg={}, colHechas={}, colTotal={}, poolByCol={};
+  plan.forEach(r=>{const ck=colKey(r), mn=r.minutos_estimados||0;
+    colTotal[ck]=(colTotal[ck]||0)+mn; if(r.estado==='hecho')colHechas[ck]=(colHechas[ck]||0)+mn;
+    if(r.semana_programada){const k=r.semana_programada+'@@'+ck;(cellIds[k]=cellIds[k]||{ids:[],min:0});cellIds[k].ids.push(r.id);cellIds[k].min+=mn;
+      colProg[ck]=(colProg[ck]||0)+mn; weekTot[r.semana_programada]=(weekTot[r.semana_programada]||0)+mn;}
+    else {(poolByCol[ck]=poolByCol[ck]||{ids:[],min:0});poolByCol[ck].ids.push(r.id);poolByCol[ck].min+=mn;}});
   const overWeeks=weeks.filter(w=>(weekTot[w]||0)>CAP_SEM_MIN).length;
   const totalMin=withWk.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const areaGroups=[]; cols.forEach(c=>{const g=areaGroups[areaGroups.length-1]; if(g&&g.area===c.area)g.n++; else areaGroups.push({area:c.area,n:1});});
-  const roomChip=(min,ids)=>`<span class="cchip rc" data-chip data-ids="${ids.join(',')}" title="${ids.length} tareas · ${Math.round(min)}m — clic para ver/editar">🧽 ${ids.length}·${Math.round(min)}m</span>`;
-  const trabChip=(min,per,ids,n,catId)=>`<span class="cchip" data-chip data-cat="${catId}" data-ids="${ids.join(',')}" style="background:${perColor(per)}22;border-color:${perColor(per)};color:${perColor(per)}">${Math.round(min)}<small>m</small>${n>1?` ×${n}`:''}</span>`;
-  const cellHtml=(c,w)=>{const cd=cellIds[w+'@@'+c.key];
-    if(c.type==='room'){const inner=cd?roomChip(cd.min,cd.ids):`<button class="addcell" onclick="roomWeekModal('${c.roomId}','${w}')" title="Agregar mto profundo a este cuarto">＋</button>`;
-      return `<td class="cell roomcell" data-cell data-week="${w}" data-col="${c.key}" data-room="${c.roomId}">${inner}</td>`;}
-    return `<td class="cell" data-cell data-week="${w}" data-col="${c.key}">${cd?trabChip(cd.min,c.per,cd.ids,cd.ids.length,c.catId):''}</td>`;};
+  const locChip=(min,ids)=>`<span class="cchip rc" data-chip data-ids="${ids.join(',')}" title="${ids.length} tareas · ${Math.round(min)}m — clic para ver/editar">${ids.length}·${Math.round(min)}m</span>`;
+  const cellHtml=(c,w)=>{const cd=cellIds[w+'@@'+c.key]; const inner=cd?locChip(cd.min,cd.ids):`<button class="addcell" onclick="locWeekModal('${c.locId}','${w}')" title="Añadir preventivos a este lugar esta semana">＋</button>`;
+    return `<td class="cell roomcell" data-cell data-week="${w}" data-col="${c.key}" data-loc="${c.locId}">${inner}</td>`;};
   const mo=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; let prevMo=-1;
-  const rows=weeks.map((w,i)=>{const dt=new Date(w+'T12:00:00Z');const m=dt.getUTCMonth();const showMo=m!==prevMo;prevMo=m;
+  const rows=weeks.map((w,i)=>{const d=new Date(w+'T12:00:00Z');const m=d.getUTCMonth();const showMo=m!==prevMo;prevMo=m;
     const wt=weekTot[w]||0; const ratio=wt/CAP_SEM_MIN; const wc=ratio>1?'var(--bad)':(ratio>=.85?'var(--warn)':'var(--ok)');
     return `<tr data-week="${w}"><td class="wk">${showMo?`<span class="mo">${mo[m]}</span>`:''}S${i+1} <span class="dt">${w.slice(8,10)}/${w.slice(5,7)}</span></td>${cols.map(c=>cellHtml(c,w)).join('')}<td class="wktot" style="color:${wc}">${fmtH(wt)}</td></tr>`;}).join('');
-  const poolCells=cols.map(c=>{const pd=poolByCol[c.key]; if(c.type==='room')return `<td class="cell roomcell" data-cell data-week="POOL" data-col="${c.key}" data-room="${c.roomId}">${pd?roomChip(pd.min,pd.ids):''}</td>`;
-    return `<td class="cell" data-cell data-week="POOL" data-col="${c.key}">${pd?trabChip(pd.min,c.per,pd.ids,pd.ids.length,c.catId):''}</td>`;}).join('');
+  const poolCells=cols.map(c=>{const pd=poolByCol[c.key]; return `<td class="cell roomcell" data-cell data-week="POOL" data-col="${c.key}" data-loc="${c.locId}">${pd?locChip(pd.min,pd.ids):''}</td>`;}).join('');
   const poolTotN=pool.length;
   const poolRow=`<tr class="poolrow" data-week="POOL"><td class="wk">◻ Por asignar</td>${poolCells}<td class="wktot" style="color:${poolTotN?'var(--warn)':'var(--muted)'}">${poolTotN||'—'}</td></tr>`;
-  const foot=cols.map(c=>{const t=colTot[c.key]||0; const falta=poolByCol[c.key]?` <span style="color:var(--warn)" title="faltan por asignar">⚠${poolByCol[c.key].ids.length}</span>`:''; return `<td>${fmtH(t)}${falta}</td>`;}).join('');
+  const foot=cols.map(c=>{const pr=colProg[c.key]||0,he=colHechas[c.key]||0,to=colTotal[c.key]||0,fa=poolByCol[c.key]?poolByCol[c.key].ids.length:0;
+    return `<td><div class="foot3"><span style="color:var(--accent)">${fmtH(pr)}</span> prog · <span style="color:var(--ok)">${fmtH(he)}</span> hechas<br><span class="muted">de ${fmtH(to)} al año</span>${fa?` · <span style="color:var(--warn)">⚠${fa}</span>`:''}</div></td>`;}).join('');
   const legend=Object.keys(PER_META).map(p=>`<span><i style="background:${PER_META[p][1]}"></i>${PER_META[p][0]}</span>`).join('');
   const cg=`<colgroup><col/>${cols.map(()=>'<col/>').join('')}<col/></colgroup>`;
   $("#view").innerHTML=`
@@ -429,36 +442,36 @@ async function renderCalendario(){
       <div class="calkpi"><b>${fmtH(totalMin)}</b> programadas · ${withWk.length} tareas</div>
       <div class="perleg" style="margin-left:auto">${legend}</div>
     </div>
-    <div class="muted" style="font-size:12px;margin:0 0 8px">Cada <b>habitación</b> es una columna (mto profundo): el cuadrito muestra <b>nº de tareas · minutos</b>; clic para ver/añadir subtareas o copiar a otro cuarto. Arrastra para mover de semana; suelta en <b>◻ Por asignar</b> para quitar. Tope <b>13 h/semana</b>.</div>
+    <div class="muted" style="font-size:12px;margin:0 0 8px">Cada <b>lugar</b> (habitación o área) es una columna. El cuadrito muestra <b>nº tareas · minutos</b>; usa <b>＋</b> o clic para abrir el listado del lugar, filtrar por oficio/periodicidad, añadir/quitar preventivos de la semana y editar minutos/recomendación. Arrastra para mover de semana. Tope <b>13 h/semana</b>.</div>
     <div class="calwrap"><table class="calx">
       ${cg}
       <thead>
         <tr><th class="corner" rowspan="2">Semana</th>${areaGroups.map(g=>`<th class="areah" colspan="${g.n}">${esc(g.area)}</th>`).join('')}<th class="corner r" rowspan="2">Sem.<br>/13h</th></tr>
-        <tr class="colrow">${cols.map(c=>c.type==='room'?`<th class="colh room" title="Habitación ${esc(c.label)}">🚪 ${esc(c.label)}</th>`:`<th class="colh" onclick="fichaTrabajo('${c.catId}')" title="${esc(c.label)}"><span class="oi">${ofIcon(c.oficio)}</span>${esc(c.label.length>26?c.label.slice(0,25)+'…':c.label)}</th>`).join('')}</tr>
+        <tr class="colrow">${cols.map(c=>`<th class="colh ${c.room?'room':''}" title="${esc(c.label)}">${c.room?'🚪 ':''}${esc(c.label.length>22?c.label.slice(0,21)+'…':c.label)}</th>`).join('')}</tr>
       </thead>
       <tbody>${poolRow}${rows}</tbody>
-      <tfoot><tr><th class="wk">Programado/año</th>${foot}<td></td></tr></tfoot>
+      <tfoot><tr><th class="wk">Año</th>${foot}<td></td></tr></tfoot>
     </table></div>`;
   calWireDrag(); calWireHover();
 }
 
-// Cruce fila/columna (crosshair)
 function calWireHover(){
   const wrap=document.querySelector('.calwrap'); if(!wrap)return; const tbl=wrap.querySelector('table'); const cg=tbl.querySelector('colgroup');
-  let curCol=null;
-  tbl.addEventListener('mouseover',e=>{const cell=e.target.closest('td.cell,td.wktot'); if(!cell)return;
-    const idx=[...cell.parentNode.children].indexOf(cell); if(cg.children[idx]){ if(curCol)curCol.classList.remove('colhi'); curCol=cg.children[idx]; curCol.classList.add('colhi'); }});
-  tbl.addEventListener('mouseleave',()=>{ if(curCol){curCol.classList.remove('colhi');curCol=null;} });
+  let curCol=null,curRow=null;
+  tbl.addEventListener('mouseover',e=>{const cell=e.target.closest('td.cell,td.wktot,td.wk'); if(!cell)return;
+    const idx=[...cell.parentNode.children].indexOf(cell);
+    if(cg.children[idx]){ if(curCol)curCol.classList.remove('colhi'); curCol=cg.children[idx]; curCol.classList.add('colhi'); }
+    const tr=cell.closest('tr'); if(curRow&&curRow!==tr)curRow.classList.remove('rowhi'); if(tr){curRow=tr;tr.classList.add('rowhi');} });
+  tbl.addEventListener('mouseleave',()=>{ if(curCol){curCol.classList.remove('colhi');curCol=null;} if(curRow){curRow.classList.remove('rowhi');curRow=null;} });
 }
 
-// ---- Arrastre (mouse + táctil) + clic-para-abrir ----
 function calWireDrag(){
   const wrap=document.querySelector('.calwrap'); if(!wrap)return;
   let drag=null,ghost=null,lastDrop=null,moved=false;
   wrap.querySelectorAll('[data-chip]').forEach(ch=>{
     ch.addEventListener('pointerdown',e=>{ e.preventDefault(); const cell=ch.closest('[data-cell]');
-      drag={ids:ch.dataset.ids.split(','),col:cell.dataset.col,fromWeek:cell.dataset.week,cat:ch.dataset.cat,room:cell.dataset.room}; moved=false;
-      ghost=ch.cloneNode(true); ghost.className='cchip calghost'; document.body.appendChild(ghost); ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+      drag={ids:ch.dataset.ids.split(','),col:cell.dataset.col,fromWeek:cell.dataset.week,loc:cell.dataset.loc}; moved=false;
+      ghost=ch.cloneNode(true); ghost.className='cchip rc calghost'; document.body.appendChild(ghost); ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
       ch.setPointerCapture(e.pointerId); });
     ch.addEventListener('pointermove',e=>{ if(!drag)return; moved=true; ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
       const el=document.elementFromPoint(e.clientX,e.clientY); const cell=el&&el.closest?el.closest('[data-cell]'):null;
@@ -468,7 +481,7 @@ function calWireDrag(){
       const el=document.elementFromPoint(e.clientX,e.clientY); const cell=el&&el.closest?el.closest('[data-cell]'):null;
       if(lastDrop)lastDrop.classList.remove('drop'); const d=drag; drag=null;
       const smallMove=!moved || (cell&&cell.dataset.col===d.col&&cell.dataset.week===d.fromWeek);
-      if(smallMove){ if(d.room)return roomWeekModal(d.room,d.fromWeek); if(d.cat)return fichaTrabajo(d.cat); return; }
+      if(smallMove){ return locWeekModal(d.loc,d.fromWeek); }
       if(cell&&cell.dataset.col===d.col&&cell.dataset.week!==d.fromWeek){
         const toWeek=cell.dataset.week==='POOL'?null:cell.dataset.week;
         const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWeek,estado:'pendiente',ticket_id:null}).in('id',d.ids);
@@ -477,97 +490,124 @@ function calWireDrag(){
   });
 }
 
-// Mto profundo de UNA habitación en UNA semana: subtareas + añadir/quitar + copiar
-async function roomWeekModal(roomId, week){
-  const rm=(CAL.rooms||[]).find(x=>x.id===roomId)||{nombre:roomId};
-  const {data}=await sb.from('mtto_preventivo_plan')
-    .select('id,semana_programada,minutos_estimados,oficio,periodicidad, cat:catalogo_id(tarea)')
-    .eq('property_id',PROP.id).eq('ubicacion_id',roomId).order('minutos_estimados',{ascending:false});
-  const insts=data||[];
-  const nom=x=>(x.cat&&x.cat.tarea)||'Tarea';
+// Lugar (habitación o área) en una semana: añadir/quitar preventivos + editar min/reco por instancia
+async function locWeekModal(locId, week){
+  const loc=(CAL.locs||{})[locId]||{nombre:locId,tipo:'area'};
+  let q=sb.from('mtto_preventivo_plan').select('id,semana_programada,minutos_estimados,oficio,periodicidad,estado,recomendacion, cat:catalogo_id(tarea)').eq('property_id',PROP.id);
+  q = locId==='GEN' ? q.is('ubicacion_id',null) : q.eq('ubicacion_id',locId);
+  const {data}=await q;
+  const insts=(data||[]);
+  window.LW={locId,week,insts};
+  const nombre=loc.tipo==='habitacion'?('Habitación '+roomLbl(loc.nombre)):loc.nombre;
+  const dl=new Date(week+'T12:00:00Z').toLocaleDateString('es-MX',{day:'2-digit',month:'short'});
   const asig=insts.filter(x=>x.semana_programada===week);
-  const disp=insts.filter(x=>x.semana_programada!==week);
-  const sum=asig.reduce((s,x)=>s+(x.minutos_estimados||0),0);
-  const lbl=roomLbl(rm.nombre); const d=new Date(week+'T12:00:00Z'); const wl=d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'});
-  const asigH=asig.map(x=>`<tr><td>${ofIcon(x.oficio)} ${esc(nom(x))}</td><td class="muted">${esc(ofNombre(x.oficio||'general'))}</td><td class="num">${x.minutos_estimados||'?'}m</td><td class="num"><button class="btn ghost sm" onclick="rwQuitar('${x.id}','${roomId}','${week}')">Quitar</button></td></tr>`).join('');
-  const dispOpts=disp.map(x=>`<option value="${x.id}">${nom(x)} · ${x.minutos_estimados||'?'}m${x.semana_programada?(' (sem '+x.semana_programada.slice(5)+')'):' (sin asignar)'}</option>`).join('');
-  modal(`<h3>🧽 Mto profundo · Habitación ${esc(lbl)} <span class="muted" style="font-weight:500;font-size:13px">· semana del ${wl}</span></h3><div class="pad">
-    <div class="kpis" style="margin:0 0 10px"><div class="kpi"><div class="n">${asig.length}</div><div class="l">subtareas</div></div><div class="kpi"><div class="n" style="color:var(--accent)">${sum}m</div><div class="l">= ${fmtH(sum)}</div></div></div>
-    <div class="scroll" style="max-height:230px"><table><thead><tr><th>Subtarea</th><th>Oficio</th><th class="num">min</th><th></th></tr></thead><tbody>${asigH||'<tr><td colspan="4" class="muted" style="padding:10px">Aún sin subtareas esta semana. Añade abajo.</td></tr>'}</tbody></table></div>
-    ${disp.length?`<div style="display:flex;gap:6px;align-items:flex-end;margin-top:10px"><div style="flex:1"><label>Añadir subtarea a esta semana</label><select id="rwAdd">${dispOpts}</select></div><button class="btn sm" onclick="rwAdd('${roomId}','${week}')">＋ Añadir</button></div>`:'<div class="muted" style="font-size:12px;margin-top:8px">Todas las subtareas de este cuarto ya están esta semana.</div>'}
-  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button>${asig.length?`<button class="btn ghost sm" onclick="rwCopiar('${roomId}','${week}')">📋 Copiar a otro cuarto/semana</button>`:''}</div>`);
+  const sumSem=asig.reduce((s,x)=>s+(x.minutos_estimados||0),0);
+  const totAnio=insts.reduce((s,x)=>s+(x.minutos_estimados||0),0);
+  const hechas=insts.filter(x=>x.estado==='hecho'); const hechasMin=hechas.reduce((s,x)=>s+(x.minutos_estimados||0),0);
+  const pendMin=insts.filter(x=>!x.semana_programada&&x.estado!=='hecho').reduce((s,x)=>s+(x.minutos_estimados||0),0);
+  const ofs=[...new Set(insts.map(x=>x.oficio||'general'))];
+  const pers=[...new Set(insts.map(x=>x.periodicidad).filter(Boolean))];
+  modal(`<h3>${esc(nombre)} <span class="muted" style="font-weight:500;font-size:13px">· semana del ${dl}</span></h3><div class="pad">
+    <div class="kpis" style="margin:0 0 10px">
+      <div class="kpi"><div class="n">${asig.length}<span style="font-size:13px;color:var(--muted)"> · ${sumSem}m</span></div><div class="l">esta semana</div></div>
+      <div class="kpi"><div class="n" style="color:var(--ok)">${hechas.length}</div><div class="l">hechas al año (${fmtH(hechasMin)})</div></div>
+      <div class="kpi"><div class="n" style="color:var(--warn)">${fmtH(pendMin)}</div><div class="l">pendiente por asignar</div></div>
+      <div class="kpi"><div class="n muted">${fmtH(totAnio)}</div><div class="l">total previsto al año</div></div>
+    </div>
+    <b style="font-size:13px">Esta semana</b>
+    <div id="lwAsig" style="margin:6px 0 12px">${asig.length?asig.map(lwLine).join(''):'<div class="muted" style="font-size:12px">Nada esta semana. Añade abajo.</div>'}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <b style="font-size:13px;flex:1">Pendientes de este lugar</b>
+      <select id="lwOf" style="width:auto;font-size:12px" onchange="lwList()"><option value="">Todo oficio</option>${ofs.map(o=>`<option value="${o}">${esc(ofNombre(o))}</option>`).join('')}</select>
+      <select id="lwPer" style="width:auto;font-size:12px" onchange="lwList()"><option value="">Toda periodicidad</option>${pers.map(p=>`<option value="${p}">${(PER_META[p]||[p])[0]}</option>`).join('')}</select>
+    </div>
+    <div id="lwDisp" class="scroll" style="max-height:230px"></div>
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button>${asig.length?`<button class="btn ghost sm" onclick="lwCopiar('${locId}','${week}')">📋 Copiar a otro lugar/semana</button>`:''}</div>`);
+  lwList();
 }
-async function rwAdd(roomId,week){const id=$("#rwAdd").value; if(!id)return; const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:week,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); roomWeekModal(roomId,week);}
-async function rwQuitar(id,roomId,week){const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); roomWeekModal(roomId,week);}
-async function rwCopiar(roomId,week){
-  const rooms=(CAL.rooms||[]).filter(x=>x.id!==roomId);
-  const weeks=CAL.weeks||[]; const idx=weeks.indexOf(week); const nextW=weeks[idx+1]||week;
-  const roomOpts=rooms.map(x=>`<option value="${x.id}">Habitación ${roomLbl(x.nombre)}</option>`).join('');
-  const wkOpts=weeks.map(w=>`<option value="${w}" ${w===nextW?'selected':''}>${w.slice(8,10)}/${w.slice(5,7)} (${w})</option>`).join('');
-  modal(`<h3>Copiar mto profundo</h3><div class="pad">
-    <p class="muted" style="font-size:13px;margin:0 0 10px">Se asignarán en el cuarto destino las mismas subtareas que hiciste aquí, en la semana que elijas.</p>
-    <label>A la habitación</label><select id="cpRoom">${roomOpts}</select>
-    <label>En la semana</label><select id="cpWk">${wkOpts}</select>
-  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button><button class="btn sm" onclick="rwCopiarDo('${roomId}','${week}')">Copiar</button></div>`);
+function lwLine(x){const nm=(x.cat&&x.cat.tarea)||'Tarea';const col=perColor(x.periodicidad);
+  return `<div class="lwrow" style="border-left:4px solid ${col}" onclick="fichaInst('${x.id}')">
+    <span class="oi">${ofIcon(x.oficio)}</span>
+    <div class="lwnm"><b>${esc(nm)}</b><div class="muted" style="font-size:11px">${(PER_META[x.periodicidad]||[x.periodicidad])[0]} · ${esc(ofNombre(x.oficio||'general'))}</div></div>
+    <span class="lwmin">${x.minutos_estimados||'?'}m</span>
+    <button class="btn ghost sm" onclick="event.stopPropagation();lwQuitar('${x.id}')">Quitar</button></div>`;
 }
-async function rwCopiarDo(roomId,week){
-  const toRoom=$("#cpRoom").value, toWk=$("#cpWk").value;
-  // qué catálogos hizo el cuarto origen esa semana
-  const {data:src}=await sb.from('mtto_preventivo_plan').select('catalogo_id,subtarea_id').eq('property_id',PROP.id).eq('ubicacion_id',roomId).eq('semana_programada',week);
-  const cats=[...new Set((src||[]).map(x=>x.catalogo_id))]; if(!cats.length)return toast('Nada que copiar');
-  // en el cuarto destino, tomo una instancia disponible de cada catálogo y la pongo en la semana destino
-  const {data:dst}=await sb.from('mtto_preventivo_plan').select('id,catalogo_id,semana_programada').eq('property_id',PROP.id).eq('ubicacion_id',toRoom).in('catalogo_id',cats);
-  const byCat={}; (dst||[]).forEach(x=>{(byCat[x.catalogo_id]=byCat[x.catalogo_id]||[]).push(x);});
-  const ids=[]; cats.forEach(c=>{const list=byCat[c]||[]; const free=list.find(x=>!x.semana_programada)||list.find(x=>x.semana_programada!==toWk); if(free)ids.push(free.id);});
-  if(!ids.length)return toast('El cuarto destino no tiene esas subtareas disponibles');
-  const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWk,estado:'pendiente',ticket_id:null}).in('id',ids);
-  if(error)return toast(error.message); closeModal(); toast(ids.length+' subtareas copiadas'); renderCalendario();
+function lwDispLine(x){const nm=(x.cat&&x.cat.tarea)||'Tarea';const col=perColor(x.periodicidad);
+  return `<div class="lwrow" style="border-left:4px solid ${col}" onclick="fichaInst('${x.id}')">
+    <span class="oi">${ofIcon(x.oficio)}</span>
+    <div class="lwnm"><b>${esc(nm)}</b><div class="muted" style="font-size:11px">${(PER_META[x.periodicidad]||[x.periodicidad])[0]} · ${esc(ofNombre(x.oficio||'general'))}${x.semana_programada?' · sem '+x.semana_programada.slice(5):''}</div></div>
+    <span class="lwmin">${x.minutos_estimados||'?'}m</span>
+    <button class="btn sm" onclick="event.stopPropagation();lwAdd('${x.id}')">＋</button></div>`;
+}
+function lwList(){ if(!window.LW)return; const {week,insts}=window.LW; const of=$("#lwOf")?$("#lwOf").value:''; const per=$("#lwPer")?$("#lwPer").value:'';
+  let disp=insts.filter(x=>x.semana_programada!==week && x.estado!=='hecho');
+  if(of)disp=disp.filter(x=>(x.oficio||'general')===of); if(per)disp=disp.filter(x=>x.periodicidad===per);
+  disp.sort((a,b)=>(a.semana_programada?1:0)-(b.semana_programada?1:0));
+  $("#lwDisp").innerHTML=disp.length?disp.map(lwDispLine).join(''):'<div class="muted" style="font-size:12px;padding:8px 0">Sin pendientes con ese filtro 👍</div>';
+}
+async function lwAdd(id){const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:window.LW.week,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); locWeekModal(window.LW.locId,window.LW.week);}
+async function lwQuitar(id){const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); locWeekModal(window.LW.locId,window.LW.week);}
+
+async function fichaInst(id){
+  const {data:x}=await sb.from('mtto_preventivo_plan').select('id,minutos_estimados,oficio,periodicidad,recomendacion,ubicacion_id, cat:catalogo_id(tarea,minutos_estimados)').eq('id',id).single();
+  if(!x)return toast('No encontrado');
+  const nm=(x.cat&&x.cat.tarea)||'Tarea'; const base=(x.cat&&x.cat.minutos_estimados)||x.minutos_estimados;
+  const reco=x.recomendacion||autoReco(x.oficio||'general',nm);
+  modal(`<h3>${esc(nm)} <span class="chip c-info">${esc(ofNombre(x.oficio||'general'))}</span></h3><div class="pad">
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${(PER_META[x.periodicidad]||[x.periodicidad])[0]} · estándar ${base||'?'}m. Cambiar aquí ajusta <b>solo esta ocurrencia</b> (el estándar sigue igual).</div>
+    <label>Minutos para esta ocurrencia</label><input id="fiMin" type="number" min="1" value="${x.minutos_estimados||base||''}">
+    <label>Recomendación (autogenerada · edítala si quieres)</label><textarea id="fiReco" rows="3">${esc(reco)}</textarea>
+  </div><div class="foot"><button class="btn ghost sm" onclick="lwBack()">← Volver</button><button class="btn sm" onclick="saveFichaInst('${id}')">Guardar</button></div>`);
+}
+function lwBack(){ if(window.LW)locWeekModal(window.LW.locId,window.LW.week); else closeModal(); }
+async function saveFichaInst(id){
+  const patch={minutos_estimados:parseInt($("#fiMin").value)||null,recomendacion:$("#fiReco").value.trim()||null};
+  const {error}=await sb.from('mtto_preventivo_plan').update(patch).eq('id',id);
+  if(error)return toast(error.message); toast('Guardado'); if(window.LW)locWeekModal(window.LW.locId,window.LW.week); else closeModal();
 }
 
-// Desglose de lo que falta por asignar
+async function lwCopiar(locId,week){
+  const locs=Object.values(CAL.locs||{}).filter(x=>x.id!==locId);
+  const weeks=CAL.weeks||[]; const idx=weeks.indexOf(week); const nextW=weeks[idx+1]||week;
+  const opts=locs.sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true})).map(x=>`<option value="${x.id}">${esc(x.tipo==='habitacion'?('Habitación '+roomLbl(x.nombre)):x.nombre)}</option>`).join('');
+  const wkOpts=weeks.map(w=>`<option value="${w}" ${w===nextW?'selected':''}>${w.slice(8,10)}/${w.slice(5,7)} (${w})</option>`).join('');
+  modal(`<h3>Copiar preventivos</h3><div class="pad">
+    <p class="muted" style="font-size:13px;margin:0 0 10px">Asigna en el lugar destino las mismas tareas que pusiste aquí, en la semana que elijas.</p>
+    <label>Al lugar</label><select id="cpLoc">${opts}</select>
+    <label>En la semana</label><select id="cpWk">${wkOpts}</select>
+  </div><div class="foot"><button class="btn ghost sm" onclick="lwBack()">Cancelar</button><button class="btn sm" onclick="lwCopiarDo('${locId}','${week}')">Copiar</button></div>`);
+}
+async function lwCopiarDo(locId,week){
+  const toLoc=$("#cpLoc").value, toWk=$("#cpWk").value;
+  const {data:src}=await sb.from('mtto_preventivo_plan').select('catalogo_id').eq('property_id',PROP.id).eq(locId==='GEN'?'x':'ubicacion_id', locId).eq('semana_programada',week);
+  // (locId GEN no soporta copia por ubicacion; usar ids directos)
+  let cats=[...new Set((src||[]).map(x=>x.catalogo_id))];
+  if(locId==='GEN'){ const {data:s2}=await sb.from('mtto_preventivo_plan').select('catalogo_id').eq('property_id',PROP.id).is('ubicacion_id',null).eq('semana_programada',week); cats=[...new Set((s2||[]).map(x=>x.catalogo_id))]; }
+  if(!cats.length)return toast('Nada que copiar');
+  let dq=sb.from('mtto_preventivo_plan').select('id,catalogo_id,semana_programada').eq('property_id',PROP.id).in('catalogo_id',cats);
+  dq = toLoc==='GEN' ? dq.is('ubicacion_id',null) : dq.eq('ubicacion_id',toLoc);
+  const {data:dst}=await dq;
+  const byCat={}; (dst||[]).forEach(x=>{(byCat[x.catalogo_id]=byCat[x.catalogo_id]||[]).push(x);});
+  const ids=[]; cats.forEach(c=>{const list=byCat[c]||[]; const free=list.find(x=>!x.semana_programada)||list.find(x=>x.semana_programada!==toWk); if(free)ids.push(free.id);});
+  if(!ids.length)return toast('El lugar destino no tiene esas tareas disponibles');
+  const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWk,estado:'pendiente',ticket_id:null}).in('id',ids);
+  if(error)return toast(error.message); closeModal(); toast(ids.length+' tareas copiadas'); renderCalendario();
+}
+
 async function porAsignarModal(){
   const pool=(CAL.plan||[]).filter(r=>!r.semana_programada);
   if(!pool.length){ modal(`<h3>Por asignar</h3><div class="pad"><div class="muted">Todo el plan está asignado en el calendario 👍</div></div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`); return; }
   const by=(fn)=>{const m={};pool.forEach(r=>{const k=fn(r)||'—';m[k]=(m[k]||0)+1;});return Object.entries(m).sort((a,b)=>b[1]-a[1]);};
   const fEje=r=>(r.cat&&r.cat.ejecucion==='externo')?'Externo':'Interno';
-  const tbl=(rows,fmt)=>`<div class="scroll"><table><tbody>${rows.map(([k,n])=>`<tr><td>${fmt?fmt(k):esc(k)}</td><td class="num"><b>${n}</b></td></tr>`).join('')}</tbody></table></div>`;
+  const tbl=(rows)=>`<div class="scroll"><table><tbody>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num"><b>${r[1]}</b></td></tr>`).join('')}</tbody></table></div>`;
   modal(`<h3>Por asignar · ${pool.length} preventivos</h3><div class="pad">
     <div class="chips" style="margin-bottom:8px"><span class="pill on" onclick="paTab(this,'of')">Por oficio</span><span class="pill" onclick="paTab(this,'ar')">Por área</span><span class="pill" onclick="paTab(this,'ej')">Interno/Externo</span></div>
     <div id="paBox" data-of='${esc(JSON.stringify(by(r=>ofNombre(r.oficio||'general'))))}' data-ar='${esc(JSON.stringify(by(r=>areaDe(r))))}' data-ej='${esc(JSON.stringify(by(fEje)))}'>${tbl(by(r=>ofNombre(r.oficio||'general')))}</div>
   </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);
 }
-function paTab(el,k){document.querySelectorAll('#paBox').length; document.querySelectorAll('.pill').forEach(p=>p.classList.remove('on')); el.classList.add('on');
+function paTab(el,k){document.querySelectorAll('.pill').forEach(p=>p.classList.remove('on')); el.classList.add('on');
   const box=$("#paBox"); const rows=JSON.parse(box.dataset[k]||'[]');
   box.innerHTML=`<div class="scroll"><table><tbody>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num"><b>${r[1]}</b></td></tr>`).join('')}</tbody></table></div>`;}
-
-async function fichaTrabajo(catId){
-  const [{data:cat},{data:insts}]=await Promise.all([
-    sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre)').eq('id',catId).single(),
-    sb.from('mtto_preventivo_plan').select('id,semana_programada,minutos_estimados, ubic:ubicacion_id(nombre)').eq('catalogo_id',catId).eq('property_id',PROP.id).order('semana_programada',{nullsFirst:true})
-  ]);
-  if(!cat)return toast('No encontrado');
-  const list=(insts||[]);
-  const rowsH=list.map(x=>`<tr><td>${esc(x.ubic?x.ubic.nombre:'—')}</td><td>${x.semana_programada?('sem '+x.semana_programada):'<span style="color:var(--warn)">por asignar</span>'}</td><td class="num">${x.minutos_estimados||'?'}m</td><td class="num">${x.semana_programada?`<button class="btn ghost sm" onclick="desasignarInst('${x.id}','${catId}')">Desasignar</button>`:''}</td></tr>`).join('');
-  modal(`<h3>${esc(cat.tarea||'Trabajo')} <span class="chip c-info">${esc(ofNombre(cat.oficio||'general'))}</span></h3><div class="pad">
-    <div class="form-grid">
-      <div class="full"><label>🎯 Objetivo — cómo nos gustaría que quede (estético / funcional / confort)</label><textarea id="fObj" rows="2" placeholder="Ej. que la regadera dé presión pareja y sin fugas; el mueble sin rayones, barnizado uniforme…">${esc(cat.objetivo||'')}</textarea></div>
-      <div class="full"><label>🛠️ Qué se debe hacer (procedimiento)</label><textarea id="fProc" rows="3" placeholder="Pasos concretos del trabajo…">${esc(cat.procedimiento||cat.ficha_texto||'')}</textarea></div>
-      <div class="full"><label>⛑️ Prevención de riesgos laborales</label><textarea id="fRie" rows="2" placeholder="EPP, corte de energía/agua/gas, señalización, trabajo en altura…">${esc(cat.prevencion_riesgos||'')}</textarea></div>
-      <div class="full"><label>💡 Recomendación para el técnico (opcional)</label><textarea id="fReco" rows="2">${esc(cat.recomendacion||'')}</textarea></div>
-    </div>
-    <div style="margin-top:12px"><b>Instancias en el plan · ${list.length}</b>
-      <div class="scroll" style="max-height:210px;margin-top:6px"><table><thead><tr><th>Dónde</th><th>Semana</th><th class="num">min</th><th></th></tr></thead><tbody>${rowsH||'<tr><td class="muted">Sin instancias</td></tr>'}</tbody></table></div></div>
-  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button><button class="btn sm" onclick="saveFicha('${catId}')">Guardar ficha</button></div>`);
-}
-async function saveFicha(catId){
-  const patch={objetivo:$("#fObj").value.trim()||null,procedimiento:$("#fProc").value.trim()||null,prevencion_riesgos:$("#fRie").value.trim()||null,recomendacion:$("#fReco").value.trim()||null};
-  const {error}=await sb.from('mtto_preventivos_catalogo').update(patch).eq('id',catId);
-  if(error)return toast(error.message); closeModal(); toast('Ficha guardada');
-}
-async function desasignarInst(id,catId){
-  const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id);
-  if(error)return toast(error.message); toast('Desasignado · va a «por asignar»'); fichaTrabajo(catId);
-}
 
 /* TABLERO */
 async function editCompra(id){
