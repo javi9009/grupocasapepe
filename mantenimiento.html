@@ -148,6 +148,7 @@
   .achip.dos{border-color:var(--accent)} .achip .x{margin-left:auto;color:var(--muted);cursor:pointer;font-weight:700;padding:0 2px}
   .sqrow{padding:0 14px 2px} .sq{font-size:11px;font-weight:600;padding:4px 8px;border-radius:6px;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--rule);white-space:nowrap}
   .sq.obl{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)} .sq.r{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)} .sq.c{background:var(--warn-bg);color:var(--warn)}
+  .sq.cal{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
   .sq.mv{cursor:grab} .sq.mv:hover{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)} .sq.mv:active{cursor:grabbing}
   .sq.mv.drag{opacity:.4}
   .pitem,.achip,.sq.mv{-webkit-user-select:none;user-select:none}
@@ -793,14 +794,9 @@ async function renderTickets(){
   if(TK_F.oficio)rows=rows.filter(r=>r.oficio===TK_F.oficio);
   if(TK_F.desde)rows=rows.filter(r=>(r.reportado_at||"").slice(0,10)>=TK_F.desde);
   if(TK_F.q){const q=TK_F.q.toLowerCase();rows=rows.filter(r=>[r.titulo,r.descripcion,r.ubic&&r.ubic.nombre,r.reportado_por_nombre,r.asignado_nombre,ofNombre(r.oficio||"")].some(x=>(x||"").toLowerCase().includes(q)));}
-  const atrasBox=(atras.length||tkAtras)?`<div class="card" style="border-color:var(--bad)"><div class="pad">
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:var(--bad)">⏰ Preventivos atrasados</b>
-      <span class="chip c-react">${atras.length} por lugar</span>${tkAtras?`<span class="chip c-react">${tkAtras} en tickets</span>`:''}
-      ${atras.length?`<button class="btn sm" style="margin-left:auto" onclick="reprogTodos()">Reprogramar a esta semana</button>`:''}</div>
-    ${atras.length?`<div class="scroll" style="margin-top:8px;max-height:34vh"><table><tbody>${atras.slice(0,60).map(p=>`<tr><td>${esc(planNom(p))} <span class="muted">· ${esc(p.ubic?p.ubic.nombre:'—')}</span></td><td class="muted num" style="font-size:12px">vencía ${p.semana_programada}</td><td class="num"><button class="btn ghost sm" onclick="reprogUno('${p.id}')">↻ esta semana</button></td></tr>`).join('')}</tbody></table></div>`:''}
-    <div class="muted" style="font-size:12px;margin-top:6px">Aparecen en <a onclick="go('prog')" style="color:var(--accent);cursor:pointer">Reparto de tareas</a> para asignarse.</div>
-  </div></div>`:'';
-  $("#view").innerHTML=atrasBox+`
+  // Los preventivos atrasados NO se muestran ni se reprograman desde Tickets:
+  // el único que programa preventivos es el Calendario, y los pendientes viven en Reparto de tareas.
+  $("#view").innerHTML=`
     <div class="filters" style="align-items:center;gap:8px;flex-wrap:wrap">
       <input type="search" placeholder="🔍 Buscar (área, nombre, quién solicitó, oficio…)" value="${esc(TK_F.q)}" style="min-width:240px;flex:1" onchange="TK_F.q=this.value;renderTickets()">
       <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600"><input type="checkbox" style="width:auto" ${TK_F.abiertos?'checked':''} onchange="TK_F.abiertos=this.checked;renderTickets()">Solo abiertos</label>
@@ -817,11 +813,6 @@ async function renderTickets(){
       <tbody>${rows.length?rows.map(ticketRow).join(""):'<tr><td colspan="6" class="center">Sin tickets con ese filtro</td></tr>'}</tbody>
     </table></div></div>`;
 }
-async function reprogUno(id){const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:mondayOf(hoyMX())}).eq("id",id);
-  if(error)return toast(error.message);toast("Reprogramado a esta semana");renderTickets();}
-async function reprogTodos(){const wk=mondayOf(hoyMX());
-  const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:wk}).eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wk);
-  if(error)return toast(error.message);toast("Atrasados reprogramados a esta semana");renderTickets();}
 async function editMinTk(id,cur){const v=prompt("Minutos estimados:",cur||"");if(v===null)return;const m=parseInt(v)||null;
   const {error}=await sb.from("mtto_tickets").update({minutos_estimados:m}).eq("id",id);if(error)return toast(error.message);toast("Tiempo actualizado");renderTickets();}
 function esDireccion(){ return ["javi@casapepe.mx","hola.puebla@casapepe.mx"].includes(((USER&&USER.email)||"").toLowerCase()); }
@@ -1296,25 +1287,27 @@ async function renderProg(){
   if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
-  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS};
   window.PROG_SQREG=[];
-  const cols=board.map(t=>cajonHtml(t,enSemana,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal)).join('');
-  // --- 4 grupos de "por asignar" ---
+  // Preventivos del CALENDARIO: los de ESTA semana entran al cajón; los vencidos (semanas pasadas, no realizados) a SIN ASIGNAR.
+  const isVenc=s=>new Date((s||'2999-01-01')+'T12:00:00Z')<new Date(PROG_WK+'T12:00:00Z');
+  const planWk=(prevPlan||[]).filter(p=>!isVenc(p.semana_programada));   // semana_programada == PROG_WK (lo agendado en calendario para esta semana)
+  const planVenc=(prevPlan||[]).filter(p=>isVenc(p.semana_programada));  // semana_programada < PROG_WK (atrasados)
+  const primario=board.find(t=>!t._flota)||board[0];                     // técnico de la sede (Puebla = Juan); recibe los preventivos del calendario de la semana
+  const planWkByTec={}; if(primario){planWkByTec[primario.id]=planWk;}
+  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS,planWk,planWkByTec};
+  const enSemanaVis=enSemana.filter(r=>r.origen!=='rutina');  // lecturas/briefing (rutina) son el bloque obligatorio, no se listan sueltos
+  const cols=board.map(t=>cajonHtml(t,enSemanaVis,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal,planWkByTec[t.id]||[])).join('');
+  // --- SIN ASIGNAR (derecha): reactivos, correctivos y preventivos vencidos (no realizados) ---
   const reactivos=pend.filter(r=>r.clasificacion==='reactivo');
   const correctivos=pend.filter(r=>r.clasificacion==='correctivo');
   const otrosPend=pend.filter(r=>r.clasificacion!=='reactivo'&&r.clasificacion!=='correctivo');
-  const isVenc=s=>new Date((s||'2999-01-01')+'T12:00:00Z')<new Date(PROG_WK+'T12:00:00Z');
-  const ppN=(prevPlan||[]).map(r=>normItem(r,'pp'));
   const profN=(prof||[]).map(r=>normItem(r,'prof'));
   const catN=(prevCat||[]).map(r=>normItem(r,'cat'));
   const otrosN=otrosPend.map(r=>normItem(r,'tk'));
-  const vencItems=[...ppN.filter(n=>isVenc(n.raw.semana_programada)),
+  const vencItems=[...planVenc.map(r=>normItem(r,'pp')),
                    ...profN.filter(n=>isVenc(n.raw.semana_programada)),
                    ...catN.filter(n=>n.raw._est.k==='venc'), ...otrosN];
-  const prevItems=[...ppN.filter(n=>!isVenc(n.raw.semana_programada)),
-                   ...profN.filter(n=>!isVenc(n.raw.semana_programada)),
-                   ...catN.filter(n=>n.raw._est.k!=='venc')];
-  const totPA=reactivos.length+correctivos.length+vencItems.length+prevItems.length;
+  const totPA=reactivos.length+correctivos.length+vencItems.length;
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
@@ -1325,11 +1318,10 @@ async function renderProg(){
     <div class="progwrap">
       <div class="cols">${cols}</div>
       <div class="pend">
-        <div class="hd">🗂️ Por asignar · ${totPA}</div>
+        <div class="hd">🗂️ Sin asignar (no realizados) · ${totPA}</div>
         ${grpFlat('react','🔔 Reactivos',reactivos,'tk')}
         ${grpFlat('correc','🔧 Correctivos',correctivos,'tk')}
         ${grpArea('venc','🛠️ Preventivos vencidos',vencItems)}
-        ${grpArea('prev','🗓️ Preventivos previstos',prevItems)}
       </div>
     </div>`;
   wireDrag();
@@ -1385,24 +1377,24 @@ function slugK(s){return String(s||'').replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
 function togGrp(k){PROG_GOPEN.has(k)?PROG_GOPEN.delete(k):PROG_GOPEN.add(k);renderProg();}
 function togArea(ak){PROG_AOPEN.has(ak)?PROG_AOPEN.delete(ak):PROG_AOPEN.add(ak);renderProg();}
 function setSort(k,s){PROG_SORT[k]=s;renderProg();}
-function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
-  const mine=enSemana.filter(r=>r.asignado_a===t.id);
-  const workMin=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
-  const travelMin=(t._flota&&mine.length)?(c.horas_dia/2)*60:0;
+function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal,planMine){
+  planMine=planMine||[];
+  const mineTk=enSemana.filter(r=>r.asignado_a===t.id);
+  const tkMin=mineTk.reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const planMin=planMine.reduce((s,p)=>s+(p.minutos_estimados||0),0);   // preventivos del calendario de esta semana
+  const workMin=tkMin+planMin;
+  const nTrab=mineTk.length+planMine.length;
+  const travelMin=(t._flota&&nTrab)?(c.horas_dia/2)*60:0;
   const oblMin=Math.round(((+cap.lect||0)+(+cap.admin||0))*60);   // OBLIGATORIO fijo: lecturas + briefing
   const objetivo=cap.sem;   // horas del turno (48h), lo define ⚙️ Turnos
   const total=oblMin+workMin+travelMin, capMin=objetivo*60||1;
-  const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const prevMin=mineTk.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0)+planMin;
   const minPrevH=cap.minPrev, minPrev=minPrevH*60, prevOk=prevMin>=minPrev;
   const pct=Math.min(100,Math.round(total/capMin*100));
   const nv=pct>=95?'bad':(pct>=75?'warn':'');
   const w=x=>Math.max(0,Math.min(100,x/capMin*100));
-  const vacio='<div class="muted" style="font-size:12px;padding:4px 2px">Arrastra o toca un pendiente para asignarlo aquí</div>';
-  const chips=mine.length?mine.map(achipHtml).join(''):vacio;
-  // Resumen agrupado por tipo (lista colapsable)
-  const grp={}; mine.forEach(r=>{const k=r.clasificacion||'otro';grp[k]=(grp[k]||0)+1;});
-  const CN={preventivo:['🛠️','prev','c-prev'],correctivo:['🔧','corr','c-correc'],reactivo:['🔔','react','c-react'],otro:['•','otro','c-info']};
-  const resumen=Object.keys(grp).map(k=>`<span class="chip ${CN[k]?CN[k][2]:'c-info'}">${CN[k]?CN[k][0]:'•'} ${grp[k]} ${CN[k]?CN[k][1]:k}</span>`).join(' ');
+  const vacio='<div class="muted" style="font-size:12px;padding:4px 2px">Los preventivos entran desde el 🗓️ Calendario. Arrastra aquí un reactivo/correctivo para asignarlo.</div>';
+  const chips=(nTrab)?(mineTk.map(achipHtml).join('')+planMine.map(planChipHtml).join('')):vacio;
   const open=window.PROG_OPEN&&window.PROG_OPEN.has(t.id);
   const col=pct>=95?'var(--bad)':pct>=75?'var(--warn)':'var(--accent)';
   return `<div class="acol" data-tec="${t.id}">
@@ -1412,18 +1404,25 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
     <div class="apila ${nv}">${oblMin?`<i class="obl" style="width:${w(oblMin)}%" title="Obligatorio fijo: lecturas ${(+cap.lect||0).toFixed(1)}h + briefing ${(+cap.admin||0).toFixed(1)}h"></i>`:''}<i class="lim" style="width:${w(workMin)}%"></i>${travelMin?`<i class="tra" style="width:${w(travelMin)}%" title="Traslado ${c.horas_dia/2}h"></i>`:''}
       <span class="marca" style="left:75%"></span><span class="marca" style="left:95%"></span></div>
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
-      <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
+      <span class="muted">${nTrab} trabajos${planMine.length?` · ${planMine.length} del calendario`:''}${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${oblMin?`<div class="afila" style="margin-top:-2px"><span style="font-size:11px;color:var(--ink-2)">🔒 Obligatorio: lecturas + briefing · ${(oblMin/60).toFixed(1)}h</span></div>`:''}
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
     <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">turno ${objetivo.toFixed(0)}h</span></div>
-    <div class="afila sqrow" style="margin-top:6px;flex-wrap:wrap;gap:5px">${cajonSquares(mine,cap,t.id)}</div>
-    ${mine.length?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn ghost sm" style="flex:1" onclick="toggleCajon('${t.id}')">${open?'▴ ocultar lista':'▾ ver los '+mine.length+' trabajos'}</button>${open?`<button class="btn ghost sm" title="Quitar solo los seleccionados (✓)" onclick="quitarSeleccionados('${t.id}')">☑️ Quitar selección</button>`:''}<button class="btn ghost sm" title="Quitar todos de la semana" onclick="quitarGrupoSemana('${t.id}')">🗑️ Vaciar</button></div>`:''}
-    <div class="achips" data-drop="${t.id}">${(!mine.length)?vacio:(open?chips:'<div class="muted" style="font-size:11px;padding:3px 2px">Lista oculta · arrastra aquí para asignar</div>')}</div></div>`;
+    <div class="afila sqrow" style="margin-top:6px;flex-wrap:wrap;gap:5px">${cajonSquares(mineTk,cap,t.id,planMine)}</div>
+    ${nTrab?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn ghost sm" style="flex:1" onclick="toggleCajon('${t.id}')">${open?'▴ ocultar lista':'▾ ver los '+nTrab+' trabajos'}</button>${(open&&mineTk.length)?`<button class="btn ghost sm" title="Quitar solo los reactivos/correctivos seleccionados (✓)" onclick="quitarSeleccionados('${t.id}')">☑️ Quitar selección</button>`:''}${mineTk.length?`<button class="btn ghost sm" title="Quitar los reactivos/correctivos de la semana (los preventivos se manejan en Calendario)" onclick="quitarGrupoSemana('${t.id}')">🗑️ Vaciar</button>`:''}</div>`:''}
+    <div class="achips" data-drop="${t.id}">${(!nTrab)?vacio:(open?chips:'<div class="muted" style="font-size:11px;padding:3px 2px">Lista oculta · arrastra aquí un reactivo/correctivo</div>')}</div></div>`;
 }
-function cajonSquares(mine,cap,tecId){
+function planChipHtml(p){return `<div class="achip" title="Preventivo del Calendario · esta semana (se reprograma desde 🗓️ Calendario)">
+  <span style="width:8px;height:8px;border-radius:50%;flex:none;background:var(--accent)"></span>
+  <span style="flex:1">📅 ${esc(planNom(p))}${p.ubic&&p.ubic.nombre?` <span class="muted">· ${esc(p.ubic.nombre)}</span>`:''} <span class="muted">· ${p.minutos_estimados||'?'}m</span></span></div>`;}
+function cajonSquares(mine,cap,tecId,planMine){
+  planMine=planMine||[];
   const sq=[]; const nd=cap.lectDias||0;
   if(nd) sq.push(`<span class="sq obl" title="Lecturas obligatorias (no se mueven)">🔒 ${nd} lecturas</span>`);
   if((+cap.admin||0)>0) sq.push(`<span class="sq obl" title="Briefing obligatorio (no se mueve)">🔒 briefing</span>`);
+  // Preventivos del calendario de esta semana (por lugar) — se reprograman en 🗓️ Calendario
+  const byP={}; planMine.forEach(p=>{const k=(p.ubic&&p.ubic.nombre)||'General';(byP[k]=byP[k]||[]).push(p);});
+  Object.keys(byP).sort((a,b)=>byP[b].length-byP[a].length).forEach(u=>sq.push(`<span class="sq cal" title="Preventivos del calendario en ${esc(u)} · esta semana">📅 ${byP[u].length} en ${esc(u)}</span>`));
   const byU={}; mine.forEach(r=>{const k=(r.ubic&&r.ubic.nombre)||'sin área';(byU[k]=byU[k]||[]).push(r);});
   Object.keys(byU).sort((a,b)=>byU[b].length-byU[a].length).forEach(u=>{const arr=byU[u];const ids=arr.map(r=>r.id);
     window.PROG_SQREG=window.PROG_SQREG||[]; const idx=window.PROG_SQREG.length; window.PROG_SQREG.push({ids,tec:tecId,lugar:u});
@@ -1486,9 +1485,9 @@ async function asignar(id,tec){const r=PROG_STATE.pend.concat(PROG_STATE.enSeman
 async function quitarSemana(id){const {error}=await sb.from('mtto_tickets').update({semana_programada:null,estado:'validado'}).eq('id',id);
   if(error)return toast(error.message);closeModal();renderProg();}
 async function quitarGrupoSemana(tecId){
-  if(!PROG_STATE)return; const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===tecId);
-  if(!mine.length)return toast('Nada asignado esta semana');
-  if(!confirm('Quitar de la semana los '+mine.length+' trabajos de este técnico? Regresan a «por asignar».'))return;
+  if(!PROG_STATE)return; const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===tecId&&r.origen!=='rutina');
+  if(!mine.length)return toast('Nada que quitar (las rutinas y preventivos del calendario no se tocan aquí)');
+  if(!confirm('Quitar de la semana los '+mine.length+' reactivos/correctivos de este técnico? Regresan a «sin asignar». (Las rutinas y los preventivos del calendario no se tocan.)'))return;
   const ids=mine.map(r=>r.id);
   const {error}=await sb.from('mtto_tickets').update({semana_programada:null,estado:'validado'}).in('id',ids);
   if(error)return toast(error.message); toast(ids.length+' quitados de la semana'); renderProg();
@@ -1580,11 +1579,15 @@ function wireDrag(){
 }
 function sqMenu(idx){const s=(window.PROG_SQREG||[])[idx];if(!s)return;
   const otros=PROG_STATE.board.filter(t=>t.id!==s.tec);
+  const tks=s.ids.map(id=>(PROG_STATE.enSemana||[]).find(r=>r.id===id)).filter(Boolean);
+  const lista=tks.map(r=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--rule)">
+    ${clsDot(r.clasificacion)}<span style="flex:1;font-size:13px">${esc(r.titulo||'—')} <span class="muted">· ${r.minutos_estimados||'?'}m</span></span>
+    <button class="btn ghost sm" title="Abrir la ficha completa (igual que en el listado)" onclick="closeModal();tkMenu('${r.id}')">📋 Ficha</button></div>`).join('');
   const opts=otros.map(t=>`<button class="btn sm" style="margin:3px" onclick="moverGrupo(${idx},'${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
   modal(`<h3>${s.ids.length} en ${esc(s.lugar)}</h3><div class="pad">
-    <div class="muted" style="font-size:13px;margin-bottom:10px">Mueve estos ${s.ids.length} trabajo(s) a otro colaborador, o regrésalos a «por asignar».</div>
+    ${lista?`<div style="margin-bottom:12px">${lista}</div>`:''}
     <label>Pasar a otro colaborador</label><div>${opts||'<span class="muted">No hay otro colaborador</span>'}</div>
-    <div style="margin-top:12px"><button class="btn ghost sm" onclick="desasignarGrupo(${idx})">↩️ Regresar a «por asignar» (desasignar)</button></div>
+    <div style="margin-top:12px"><button class="btn ghost sm" onclick="desasignarGrupo(${idx})">↩️ Regresar a «sin asignar» (desasignar)</button></div>
     </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
 async function moverGrupo(idx,tec){const s=(window.PROG_SQREG||[])[idx];if(!s||!tec)return;
   const {error}=await sb.from('mtto_tickets').update({asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado'}).in('id',s.ids);
