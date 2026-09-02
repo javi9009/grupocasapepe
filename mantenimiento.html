@@ -396,11 +396,10 @@ function ticketRow(t){
     <td><div class="row-actions">${ticketActions(t)}</div></td></tr>`;
 }
 function ticketActions(t){
+  // Este dashboard es LISTADO/gestión — no se inicia trabajo aquí (eso lo hace el
+  // técnico en su app). Solo validar/estimar, asignar, editar tiempo y compras.
   const a=[];
-  if(t.estado==="nuevo")a.push(`<button class="btn sm" onclick="validar('${t.id}')">Validar</button>`);
-  if(["validado","programado"].includes(t.estado))a.push(`<button class="btn sm" onclick="iniciar('${t.id}')">Iniciar</button>`);
-  if(t.estado==="en_proceso")a.push(`<button class="btn sm" onclick="resolver('${t.id}')">Resolver</button>`);
-  if(t.estado==="resuelto")a.push(`<button class="btn ghost sm" onclick="cerrar('${t.id}')">Cerrar</button>`);
+  if(t.estado==="nuevo")a.push(`<button class="btn sm" onclick="validar('${t.id}')">Validar y asignar</button>`);
   if(!["cerrado","cancelado","resuelto"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="editMinTk('${t.id}',${t.minutos_estimados||0})" title="Editar tiempo estimado">✎ min</button>`);
   if(!["cerrado","cancelado"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="compraMenu('${t.id}')" title="Compras / requiere compra">🛒</button>`);
   return a.join("")||`<span class="muted">—</span>`;
@@ -427,7 +426,7 @@ async function iniciar(id){
   if(t0&&t0.requiere_compra){
     const {data:sum}=await sb.from("mtto_suministros").select("estatus,entregado_at").eq("ticket_id",id);
     const ok=(sum||[]).some(x=>x.entregado_at||["comprado","recibido","entregado"].includes(x.estatus));
-    if(!ok)return toast("No se puede iniciar: falta que Roberto entregue la compra");
+    if(!ok)return toast("No se puede iniciar: falta que se entregue la compra");
   }
   const {error}=await sb.from("mtto_tickets").update({estado:"en_proceso",iniciado_at:new Date().toISOString()}).eq("id",id);
   if(error)return toast(error.message);await ev(id,"iniciado");toast("Iniciado");render();}
@@ -458,14 +457,14 @@ async function compraMenu(ticketId){
       ${ent?'':`<button class="btn sm" style="margin-top:6px" onclick="marcarEntregada('${x.id}','${ticketId}')">✓ Marcar entregada</button>`}
     </div>`;}).join("")||'<div class="muted" style="font-size:13px;margin-top:8px">Sin solicitudes de compra.</div>';
   modal(`<h3>Compras · ${esc(t?t.titulo:"")}</h3><div class="pad">
-    <label style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="checkbox" id="cReq" style="width:auto" ${t&&t.requiere_compra?"checked":""} onchange="toggleReqCompra('${ticketId}',this.checked)"> Este trabajo <b>requiere compra</b> (no se puede iniciar hasta que Roberto entregue)</label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="checkbox" id="cReq" style="width:auto" ${t&&t.requiere_compra?"checked":""} onchange="toggleReqCompra('${ticketId}',this.checked)"> Este trabajo <b>requiere compra</b> (no se puede iniciar hasta que se entregue)</label>
     ${list}
-    <div style="margin-top:12px"><button class="btn sm" onclick="solicitarCompra('${ticketId}')">＋ Solicitar compra a Roberto</button></div>
+    <div style="margin-top:12px"><button class="btn sm" onclick="solicitarCompra('${ticketId}')">＋ Solicitar compra</button></div>
   </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);
 }
 async function toggleReqCompra(id,val){await sb.from("mtto_tickets").update({requiere_compra:val}).eq("id",id);toast(val?"Marcado: requiere compra":"Quitado");}
 function solicitarCompra(ticketId){
-  modal(`<h3>Solicitar compra a Roberto</h3><div class="pad"><div class="form-grid">
+  modal(`<h3>Solicitar compra</h3><div class="pad"><div class="form-grid">
     <div class="full"><label>¿Qué se necesita comprar?</label><textarea id="scDesc" rows="2" placeholder="Material / refacción / cantidad"></textarea></div>
     <div class="full"><label>Link (cotización, carrito o producto)</label><input id="scLink" placeholder="https://…"></div>
     <div><label>Costo estimado</label><input id="scCosto" type="number" min="0" placeholder="MXN"></div>
@@ -489,7 +488,7 @@ async function saveSolicitarCompra(ticketId){
       cuerpo:(tk&&tk.titulo?tk.titulo+": ":"")+desc+(link?"  · "+link:"")+(costo?"  · ~"+money(costo):""),
       icono:"🛒",accion:{url:"/mantenimiento.html",tipo:"mtto_compra",ticket:ticketId},leido:false});
   }
-  closeModal();toast("Solicitud enviada a Roberto");render();
+  closeModal();toast("Solicitud de compra enviada");render();
 }
 async function marcarEntregada(sumId,ticketId){
   const {error}=await sb.from("mtto_suministros").update({estatus:"recibido",entregado_at:new Date().toISOString()}).eq("id",sumId);
@@ -518,10 +517,13 @@ async function renderPrev(){
   const hExt=externo.reduce((s,r)=>s+prevHorasAnio(r),0);
   const instInt=interno.reduce((s,r)=>s+alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad),0);
   const presu=externo.reduce((s,r)=>s+(+r.presupuesto||0),0);
-  // Capacidad: una persona dedicada ≈ prog(h/sem) × 48 semanas útiles
-  const progs=(pu||[]).map(p=>puestoCap(p).prog).filter(x=>x>0);
-  const progAvg=progs.length?progs.reduce((a,b)=>a+b,0)/progs.length:33;
-  const capPersona=progAvg*48; const personas=capPersona?hInt/capPersona:0;
+  // Capacidad: una persona ≈ jornada del turno (h/sem) × 48 semanas útiles
+  const sems=(pu||[]).map(p=>+p.horas_semana||48).filter(x=>x>0);
+  const semAvg=sems.length?sems.reduce((a,b)=>a+b,0)/sems.length:48;
+  const capPersona=semAvg*48; const personas=capPersona?hInt/capPersona:0;
+  // Desglose por OFICIO (solo interno)
+  const OFI={}; interno.forEach(r=>{const o=r.oficio||'general';OFI[o]=(OFI[o]||0)+prevHorasAnio(r);});
+  const ofiRows=Object.keys(OFI).sort((a,b)=>OFI[b]-OFI[a]).map(o=>`<tr><td>${esc(ofNombre(o))}</td><td class="num">${Math.round(OFI[o])} h</td><td class="num"><b>${(OFI[o]/capPersona).toFixed(1)}</b></td></tr>`).join('');
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
   const ofChips=[['','Todos'],['interno','Internos'],['externo','Externos']].concat(OFICIOS);
@@ -533,9 +535,10 @@ async function renderPrev(){
       <div class="kpi"><div class="n" style="color:var(--accent)">${personas.toFixed(1)}</div><div class="l">personas solo para preventivos</div></div>
     </div>
     <div class="card"><div class="pad" style="font-size:12.5px;color:var(--muted)">
-      Estimación de personas = ${Math.round(hInt)} h/año ÷ (${progAvg.toFixed(1)} h útiles/sem × 48 sem = ${Math.round(capPersona)} h/año por persona).
+      Estimación de personas = ${Math.round(hInt)} h/año ÷ (${semAvg.toFixed(0)} h/sem × 48 sem = ${Math.round(capPersona)} h/año por persona).
       ${hExt?`· Externo: <b>${Math.round(hExt)} h/año</b> subcontratadas, presupuesto <b>${money(presu)}</b>.`:''}
     </div></div>
+    ${ofiRows?`<div class="card"><h3 style="margin:0">Preventivos por oficio (interno · al año)</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th class="num">h/año</th><th class="num">personas</th></tr></thead><tbody>${ofiRows}</tbody></table></div></div>`:''}
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="flex:1;min-width:200px"><b>Cobertura anual ${anio}</b> — las tareas por habitación/área repartidas en el año.
         <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
@@ -704,7 +707,7 @@ async function renderProg(){
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
-      <div class="muted" style="font-size:13px;flex:1">Base 48 h/semana por técnico; se descuentan admin, lectura y la reserva de reactivos. La barra se pone en rojo si se come las 8 h de reactivos. Ajústalo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Puestos</a>.</div>
+      <div class="muted" style="font-size:13px;flex:1">La barra de cada técnico es su jornada (horas del turno, defínelo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Turnos</a>). Se llena con lo asignado.</div>
       <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar mínimo de preventivos</button>
       <button class="btn sm" onclick="autoAsignarSemana()">🧠 Asignar semana (propuesta)</button>
       <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
@@ -725,7 +728,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
   const mine=enSemana.filter(r=>r.asignado_a===t.id);
   const workMin=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const travelMin=(t._flota&&mine.length)?(c.horas_dia/2)*60:0;
-  const objetivo=cap.prog;
+  const objetivo=cap.sem;   // horas del turno (48h), lo define ⚙️ Turnos
   const total=workMin+travelMin, capMin=objetivo*60||1;
   const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const minPrevH=cap.minPrev, minPrev=minPrevH*60, prevOk=prevMin>=minPrev;
@@ -743,7 +746,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
       <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
-    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">de 48h · ${cap.react}h react · ${cap.admin}h admin · ${cap.lect}h lectura</span></div>
+    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">turno ${objetivo.toFixed(0)}h</span></div>
     <div class="achips" data-drop="${t.id}">${chips}</div></div>`;
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
@@ -875,7 +878,7 @@ function wireDrag(){
 function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
-  const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).prog*60;
+  const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).sem*60;
   const needOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
   const half=(PROG_STATE.c.horas_dia||8)/2*60;
   const load={},prevLoad={},travel={};
