@@ -323,18 +323,19 @@ async function renderTablero(){
     sb.from("mtto_consumo_config").select("*").eq("property_id",PROP.id).maybeSingle(),
     sb.from("mtto_gas_recargas").select("fecha,litros").eq("property_id",PROP.id).gte("fecha",win30)
   ]);
-  const CC=cc||{agua_factor_litros:1000,luz_factor_kwh:1,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
-  // Consumo por huésped-noche vs objetivo del mes (agua y luz del último par de lecturas; gas L/h-n de 30 días)
+  const CC=cc||{agua_factor_litros:1000,luz_factor_kwh:1,gas_tanque_litros:1600,obj_agua:[170,170,220,220,220,190,190,190,190,175,170,170],obj_luz:[6,6,6.5,7,7,7,6.5,6.5,6.5,6,6,6],obj_gas:[3.5,3.5,2.8,2.5,2.5,2.6,2.8,2.8,2.8,3,3.5,3.7]};
+  const tanque=Number(CC.gas_tanque_litros||1600);
+  // Promedio de los últimos 30 días, por huésped-noche. Agua/luz por delta del medidor; gas por las BAJADAS del % (las subidas son recargas).
   const asc=[...(lec||[])].sort((a,b)=>a.fecha<b.fecha?-1:1);
-  const gnBetween=(fromExcl,toIncl)=>{let s=0,any=false;asc.forEach(r=>{if(r.fecha>fromExcl&&r.fecha<=toIncl&&r.huespedes!=null){s+=Number(r.huespedes);any=true;}});return any?s:null;};
-  let aguaH=null,luzH=null,consFecha=null;
-  for(let i=asc.length-1;i>=1;i--){const c=asc[i],p=asc[i-1];const gn=gnBetween(p.fecha,c.fecha);if(!gn)continue;
-    if(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura)aguaH=(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros)/gn;
-    if(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura)luzH=(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh)/gn;
-    if(aguaH!=null||luzH!=null){consFecha=c.fecha;break;}}
-  const hn30=asc.filter(r=>r.fecha>=win30).reduce((s,r)=>s+(Number(r.huespedes)||0),0);
-  const gLit30=(recs||[]).reduce((s,r)=>s+(Number(r.litros)||0),0);
-  const gasH=(hn30>0&&gLit30>0)?gLit30/hn30:null;
+  let aguaL=0,aguaGN=0, luzK=0,luzGN=0, gasL=0,gasGN=0, ndias=0;
+  for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i]; if(c.fecha<win30)continue;
+    const gn=(c.huespedes!=null)?Number(c.huespedes):null; if(gn)ndias++;
+    if(gn&&c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>p.agua_lectura){aguaL+=(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros);aguaGN+=gn;}
+    if(gn&&c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>p.luz_lectura){luzK+=(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh);luzGN+=gn;}
+    if(gn&&c.gas_pct!=null&&p.gas_pct!=null&&Number(p.gas_pct)>Number(c.gas_pct)){gasL+=(Number(p.gas_pct)-Number(c.gas_pct))/100*tanque;gasGN+=gn;}
+  }
+  const aguaH=aguaGN?aguaL/aguaGN:null, luzH=luzGN?luzK/luzGN:null, gasH=gasGN?gasL/gasGN:null;
+  const gasUlt=asc.length?asc[asc.length-1]:null;
   const mIdx=new Date().getMonth();
   const oAgua=CC.obj_agua[mIdx],oLuz=CC.obj_luz[mIdx],oGas=CC.obj_gas[mIdx];
   const T=tk||[];
@@ -380,14 +381,14 @@ async function renderTablero(){
         ${done.length?'':'<div class="muted" style="font-size:12px">Aún no hay trabajos terminados con tiempo real.</div>'}
       </div></div>
 
-      <div class="card"><h3 style="margin:0">Consumos por huésped/noche <span class="muted" style="font-weight:500;font-size:12px">· vs objetivo de ${['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][mIdx]}</span>
+      <div class="card"><h3 style="margin:0">Consumos por huésped/noche <span class="muted" style="font-weight:500;font-size:12px">· promedio 30 días vs objetivo de ${['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][mIdx]}</span>
         <button class="btn ghost sm" style="float:right;margin-top:-2px" onclick="go('lect')">Ver detalle ›</button></h3><div class="pad">
         <div class="kpis" style="margin:0">
           ${consumoKpi('💧 Agua',aguaH,oAgua,'L',0)}
           ${consumoKpi('⚡ Luz',luzH,oLuz,'kWh',1)}
           ${consumoKpi('🔥 Gas',gasH,oGas,'L',1)}
         </div>
-        <p class="muted" style="font-size:11.5px;margin:8px 0 0">Verde ≤ objetivo · ámbar hasta +25% · rojo arriba.${consFecha?` Agua/luz: última lectura (${consFecha}).`:''} Gas: litros de recarga ÷ huésped-noches (30 días).</p>
+        <p class="muted" style="font-size:11.5px;margin:8px 0 0">Promedio de los últimos 30 días por huésped-noche. Verde ≤ objetivo · ámbar hasta +25% · rojo arriba. Gas: se cuentan las <b>bajadas</b> del % del tanque (${tanque} L); las subidas son recargas.${gasUlt&&gasUlt.gas_pct!=null?` Tanque hoy: ${gasUlt.gas_pct}%.`:''}</p>
       </div></div>
     </div>
 
