@@ -109,8 +109,14 @@
   /* Para ti — circulitos */
   .section-h{font-size:13px;font-weight:800;color:var(--txt2);margin:18px 2px 10px;text-transform:uppercase;letter-spacing:.6px}
   .circles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-  .circle{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:7px;cursor:pointer;padding:4px 0}
+  .circle{position:relative;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:7px;cursor:pointer;padding:4px 0}
   .circle .b{width:58px;height:58px;border-radius:50%;background:#fff;border:1px solid var(--bd);box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;font-size:25px}
+  /* Contador de pendientes encima de la bolita */
+  .circle .cb{position:absolute;top:-3px;right:6px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;
+    background:#C0392B;color:#fff;font-size:11.5px;font-weight:800;line-height:20px;text-align:center;
+    box-shadow:0 1px 4px rgba(0,0,0,.28);border:2px solid var(--bg,#fff);pointer-events:none}
+  .circle .cb[hidden]{display:none}
+  .circle .cb.ok{background:#1E8E5A}
   .circle .t{font-size:11px;color:var(--txt2);text-align:center;font-weight:600;line-height:1.2}
   .circle:active .b{transform:scale(.94)}
 
@@ -1328,13 +1334,91 @@ async function refrescarBotonAudit(){
     const hechas=new Set((aud||[]).map(a=>a.area_id));
     const faltan=(est||[]).filter(e=>e.check_in && ['privada','dorm'].includes(e.hk_areas?.tipo) && !hechas.has(e.area_id)).length;
     const t=b.querySelector('.t');
-    if(t) t.innerHTML = faltan ? 'Room audit <b style="color:var(--gold)">'+faltan+'</b>' : 'Room audit ✓';
+    if(t) t.textContent='Room audit';
+    badgeBolita(b, faltan);
   }catch(e){ /* módulo aún no disponible para este usuario */ }
+}
+
+/* ===== CONTADORES EN LAS BOLITAS =====
+   Pinta un numerito rojo encima del icono cuando hay algo pendiente.
+   Cada fuente consulta tablas verificadas del proyecto; si una consulta
+   falla (permisos, módulo no habilitado) esa bolita simplemente se queda
+   sin número: nunca rompe la pantalla ni bloquea a las demás. */
+
+function badgeBolita(btn, n, verde){
+  if(!btn) return;
+  var el=btn.querySelector('.cb');
+  if(!el){ el=document.createElement('span'); el.className='cb'; btn.appendChild(el); }
+  el.classList.toggle('ok', !!verde);
+  if(n>0){ el.textContent = n>99 ? '99+' : String(n); el.hidden=false; }
+  else { el.hidden=true; }
+}
+function bolitaPorHref(href){
+  return document.querySelector('.circle[data-href="'+href+'"]');
+}
+
+/* Tickets de mantenimiento sin cerrar. Los que me tocan a mí pesan como
+   pendiente propio; si superviso, cuento los nuevos de la propiedad. */
+async function contarMantenimiento(){
+  var btn=bolitaPorHref('/m/eloy.html'); if(!btn||btn.hidden) return;
+  try{
+    var correo=((await sb.auth.getUser()).data?.user?.email||'').toLowerCase();
+    var prop=await resolverProp(); if(!prop) return;
+    var r=await sb.from('mtto_tickets')
+      .select('id,estado,asignado_a')
+      .eq('property_id',prop)
+      .in('estado',['nuevo','pendiente','en_proceso']);
+    var t=r.data||[];
+    var mios=t.filter(function(x){ return (x.asignado_a||'').toLowerCase()===correo; }).length;
+    badgeBolita(btn, mios || t.filter(function(x){ return x.estado==='nuevo'; }).length);
+  }catch(e){}
+}
+
+/* Lecturas de hoy: si no se capturaron agua/luz/gas, queda pendiente. */
+async function contarLecturas(){
+  var btn=bolitaPorHref('/m/lecturas.html'); if(!btn||btn.hidden) return;
+  try{
+    var prop=await resolverProp(); if(!prop) return;
+    var hoy=hkHoyMX();
+    var r=await sb.from('mtto_lecturas')
+      .select('agua_lectura,luz_lectura,gas_lectura')
+      .eq('property_id',prop).eq('fecha',hoy).maybeSingle();
+    var d=r.data;
+    var faltan=0;
+    if(!d) faltan=3;
+    else{
+      if(d.agua_lectura==null) faltan++;
+      if(d.luz_lectura==null)  faltan++;
+      if(d.gas_lectura==null)  faltan++;
+    }
+    badgeBolita(btn, faltan);
+  }catch(e){}
+}
+
+/* Cuartos que me faltan por limpiar hoy. */
+async function contarLimpieza(){
+  var btn=$('cirLimpieza'); if(!btn||btn.hidden) return;
+  try{
+    if(!EMP) return;
+    var r=await sb.from('hk_asignaciones')
+      .select('id,hk_tareas(id,estado)').eq('fecha',hkHoyMX()).eq('employee_id',EMP).limit(1);
+    var a=(r.data||[])[0]; if(!a) return;
+    var tareas=a.hk_tareas||[];
+    badgeBolita(btn, tareas.filter(function(t){ return t.estado!=='hecha' && t.estado!=='ok'; }).length);
+  }catch(e){}
+}
+
+async function refrescarBolitas(){
+  if(document.visibilityState==='hidden') return;
+  try{ await Promise.all([contarMantenimiento(), contarLecturas(), contarLimpieza()]); }catch(e){}
 }
 
 function setupLimpieza(){
   refrescarBotonLimpieza();
   refrescarBotonAudit();
+  refrescarBolitas();
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBolitas(); });
+  setInterval(refrescarBolitas, 300000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonAudit(); });
   setInterval(refrescarBotonAudit, 300000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonLimpieza(); });
