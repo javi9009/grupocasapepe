@@ -42,6 +42,11 @@
   .secnav-in{max-width:1180px;margin:0 auto;padding:0 12px;display:flex;gap:2px;overflow-x:auto}
   .secnav button{border:0;background:none;font:inherit;padding:12px 13px;color:var(--muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
   .secnav button[aria-selected="true"]{color:var(--ink);font-weight:600;border-bottom-color:var(--accent)}
+  .cfgcard{max-width:580px;margin:0 auto 14px}
+  .cfggrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+  .dias{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
+  .dchk{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;background:var(--surface-2);border:1px solid var(--rule);border-radius:8px;padding:6px 10px;cursor:pointer}
+  .dchk input{width:auto;margin:0}
   main{max-width:1180px;margin:0 auto;padding:18px 16px 60px}
   h2.vt{font-size:20px;margin-bottom:14px}
   /* kpis / cards */
@@ -210,7 +215,16 @@ const hoyMX=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_
 const VIEWS=[
   {k:"tablero",t:"Tablero"},{k:"tickets",t:"Tickets"},{k:"prev",t:"Preventivos"},
   {k:"prog",t:"Programación"},{k:"anual",t:"Anual externo"},{k:"lect",t:"Lecturas"},{k:"rep",t:"Reporte"},
+  {k:"config",t:"⚙️ Puestos"},
 ];
+const DIAS_SEM=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+// Capacidad programable de un puesto: 48h menos admin + lectura + reserva reactivos
+function puestoCap(pu){
+  const p=pu||{horas_semana:48,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]};
+  const lect=(+p.lectura_horas||0)*((p.lectura_dias||[]).length||0);
+  const admin=+p.admin_horas||0, react=+p.reactivo_horas||0, sem=+p.horas_semana||48;
+  return { sem, admin, react, lect, reservado:admin+react+lect, prog:Math.max(0,sem-admin-react-lect) };
+}
 let CUR="tablero";
 
 /* auth */
@@ -273,6 +287,7 @@ async function render(){
     if(CUR==="anual")return renderAnual();
     if(CUR==="lect")return renderLect();
     if(CUR==="rep")return renderRep();
+    if(CUR==="config")return renderConfig();
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc(e.message)+'</div>';}
 }
 
@@ -570,7 +585,9 @@ async function renderProg(){
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
-  const disp=c.horas_dia*c.dias_semana, objetivo=disp-c.reserva_reactivo_h-c.admin_h-c.consumos_h;
+  // Config por puesto (48h base) para cada técnico
+  const {data:puR}=await sb.from('mtto_puesto').select('*');
+  const PUESTOS={}; (puR||[]).forEach(p=>PUESTOS[p.employee_id]=p);
   const tks=tkR.data||[]; const urg={}; (urgR.data||[]).forEach(u=>urg[u.id]=u);
   const enSemana=tks.filter(r=>r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK);
   const pend=tks.filter(r=>!(r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK))
@@ -587,13 +604,13 @@ async function renderProg(){
   if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
-  PROG_STATE={enSemana,pend,prof,prevCat,board,objetivo,c,jefe};
-  const cols=board.map(t=>cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal)).join('');
+  PROG_STATE={enSemana,pend,prof,prevCat,board,c,jefe,PUESTOS};
+  const cols=board.map(t=>cajonHtml(t,enSemana,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal)).join('');
   const pitems=pend.length?pend.map(pitemHtml).join(''):'<div class="center">Nada por asignar</div>';
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
-      <div class="muted" style="font-size:13px;flex:1">Capacidad programable por técnico: <b>${objetivo.toFixed(1)} h</b> · reservado ${c.reserva_reactivo_h}h reactivo + ${c.admin_h}h admin + ${c.consumos_h}h consumos</div>
+      <div class="muted" style="font-size:13px;flex:1">Base 48 h/semana por técnico; se descuentan admin, lectura y la reserva de reactivos. La barra se pone en rojo si se come las 8 h de reactivos. Ajústalo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Puestos</a>.</div>
       <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar ${c.min_preventivo_h||8}h de preventivos</button>
       <button class="btn sm" onclick="autoAsignarSemana()">🧠 Asignar semana (propuesta)</button>
       <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
@@ -609,10 +626,11 @@ async function renderProg(){
     </div>`;
   wireDrag();
 }
-function cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal){
+function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
   const mine=enSemana.filter(r=>r.asignado_a===t.id);
   const workMin=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const travelMin=(t._flota&&mine.length)?(c.horas_dia/2)*60:0;
+  const objetivo=cap.prog;
   const total=workMin+travelMin, capMin=objetivo*60||1;
   const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const minPrev=(c.min_preventivo_h||8)*60, prevOk=prevMin>=minPrev;
@@ -630,7 +648,7 @@ function cajonHtml(t,enSemana,objetivo,c,jefe,jefeTotal){
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
       <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
-    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${(c.min_preventivo_h||8)}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">reserva ${c.reserva_reactivo_h}h react · ${c.admin_h}h admin · ${c.consumos_h}h consumos</span></div>
+    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${(c.min_preventivo_h||8)}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">de 48h · ${cap.react}h react · ${cap.admin}h admin · ${cap.lect}h lectura</span></div>
     <div class="achips" data-drop="${t.id}">${chips}</div></div>`;
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
@@ -741,7 +759,8 @@ function wireDrag(){
 function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
-  const objMin=PROG_STATE.objetivo*60, need=(PROG_STATE.c.min_preventivo_h||8)*60, half=(PROG_STATE.c.horas_dia||8)/2*60;
+  const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).prog*60;
+  const need=(PROG_STATE.c.min_preventivo_h||8)*60, half=(PROG_STATE.c.horas_dia||8)/2*60;
   const load={},prevLoad={},travel={};
   board.forEach(t=>{const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id);
     travel[t.id]=!!(t._flota&&mine.length);
@@ -755,7 +774,7 @@ async function autoAsignarSemana(){
   const pend=PROG_STATE.pend.slice().sort((a,b)=>(b._u||0)-(a._u||0));
   for(const r of pend){ const min=r.minutos_estimados||estimMin(r).min;
     let best=null,bestFree=-1;
-    for(const t of board){ const free=objMin-load[t.id]-needTravel(t); if(free>bestFree){bestFree=free;best=t;} }
+    for(const t of board){ const free=capMinOf(t)-load[t.id]-needTravel(t); if(free>bestFree){bestFree=free;best=t;} }
     if(best&&bestFree>=min){ if(needTravel(best)){load[best.id]+=half;travel[best.id]=true;}
       updates.push({id:r.id,tec:best.id,min:r.minutos_estimados?null:min,of:r.oficio?null:guessOficio(r)}); load[best.id]+=min; } }
   if(!inserts.length&&!updates.length)return toast('Nada por asignar o sin capacidad libre');
@@ -789,6 +808,57 @@ async function autoPrevAssign(){
   const {error}=await sb.from('mtto_tickets').insert(inserts);
   if(error)return toast(error.message); toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
 }
+/* CONFIGURACIÓN DE PUESTOS */
+async function renderConfig(){
+  const [{data:emps},{data:pus}]=await Promise.all([
+    sb.from('employees').select('id,nombre,nombre_display,property_id').ilike('puesto','%mantenimiento%').eq('estatus','activo'),
+    sb.from('mtto_puesto').select('*')
+  ]);
+  const puMap={}; (pus||[]).forEach(p=>puMap[p.employee_id]=p);
+  const propName=id=>{const p=PROP_ALL.find(x=>x.id===id);return p?p.n:'—';};
+  const dchk=(name,arr)=>DIAS_SEM.map((d,i)=>`<label class="dchk"><input type="checkbox" data-g="${name}" value="${i}" ${(arr||[]).map(Number).includes(i)?'checked':''}> ${d}</label>`).join('');
+  const cards=(emps||[]).map(e=>{
+    const pu=puMap[e.id]||{employee_id:e.id,property_id:e.property_id,horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]};
+    const cap=puestoCap(pu);
+    return `<div class="card cfgcard" data-emp="${e.id}"><div class="pad">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:15px">${esc(e.nombre_display||e.nombre)}</b><span class="chip c-info">${esc(propName(e.property_id))}</span></div>
+      <div class="cfggrid">
+        <div><label>Horas / semana</label><input type="number" step="0.5" data-f="horas_semana" value="${cap.sem}"></div>
+        <div><label>Reserva reactivos (h) <span class="muted">— pinta rojo</span></label><input type="number" step="0.5" data-f="reactivo_horas" value="${+pu.reactivo_horas}"></div>
+      </div>
+      <label style="margin-top:10px">Días que trabaja</label><div class="dias">${dchk('dias_trabajo',pu.dias_trabajo)}</div>
+      <div class="cfggrid" style="margin-top:10px">
+        <div><label>Admin / briefing — día</label><select data-f="admin_dia">${DIAS_SEM.map((d,i)=>`<option value="${i}" ${(+pu.admin_dia===i)?'selected':''}>${d}</option>`).join('')}</select></div>
+        <div><label>Admin — horas</label><input type="number" step="0.5" data-f="admin_horas" value="${+pu.admin_horas}"></div>
+      </div>
+      <div class="cfggrid" style="margin-top:10px">
+        <div><label>Lectura — horas por día</label><input type="number" step="0.25" data-f="lectura_horas" value="${+pu.lectura_horas}"></div>
+        <div><label>Balance</label><div class="muted" style="font-size:12.5px;padding-top:8px">Reservado <b>${cap.reservado.toFixed(1)}h</b> → Programable <b style="color:var(--accent)">${cap.prog.toFixed(1)}h</b></div></div>
+      </div>
+      <label style="margin-top:10px">Lectura — días</label><div class="dias">${dchk('lectura_dias',pu.lectura_dias)}</div>
+      <div class="foot" style="margin-top:12px"><button class="btn sm" onclick="saveConfig('${e.id}')">Guardar</button></div>
+    </div></div>`;
+  }).join('');
+  $('#view').innerHTML=`<div class="muted" style="margin:0 0 12px;font-size:13px;max-width:580px">Configura el puesto de cada técnico. Estas horas (admin/briefing, lectura y reserva de reactivos) se asignan solas y se descuentan de las 48 h: definen la <b>capacidad programable</b> y el <b>rojo</b> de la pila. La preasignación reparte los preventivos/tareas en la semana dejando libres las horas de reactivos.</div>${cards||'<div class="center">No hay técnicos de mantenimiento activos.</div>'}`;
+}
+window.saveConfig=async id=>{
+  const card=document.querySelector('.cfgcard[data-emp="'+id+'"]'); if(!card)return;
+  const g=f=>card.querySelector('[data-f="'+f+'"]');
+  const days=name=>[...card.querySelectorAll('[data-g="'+name+'"]:checked')].map(x=>+x.value);
+  const emp=TECS.find(t=>t.id===id)||{};
+  const row={employee_id:id,property_id:emp.property_id||null,
+    horas_semana:+g('horas_semana').value||48,
+    reactivo_horas:+g('reactivo_horas').value||0,
+    admin_dia:+g('admin_dia').value,
+    admin_horas:+g('admin_horas').value||0,
+    lectura_horas:+g('lectura_horas').value||0,
+    dias_trabajo:days('dias_trabajo'),
+    lectura_dias:days('lectura_dias'),
+    updated_at:new Date().toISOString()};
+  const {error}=await sb.from('mtto_puesto').upsert(row,{onConflict:'employee_id'});
+  if(error)return toast(error.message);
+  toast('Puesto guardado ✓'); renderConfig();
+};
 async function genPrev(){
   const {data:cat}=await sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).eq("activo",true).order("periodicidad");
   const rows=cat||[];

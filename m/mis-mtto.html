@@ -50,6 +50,14 @@
   .dpila .res{background:#3a4650} .dpila .fil{background:var(--brand)}
   .dpila.warn .fil{background:var(--warn)} .dpila.bad .fil{background:var(--bad)} .dpila.bad{border-color:var(--bad)}
   .dplbl{font-size:11px;color:var(--ink2);margin-top:4px}
+  .more{margin-top:9px}
+  .more>summary{cursor:pointer;color:var(--ink2);font-size:12.5px;font-weight:700;list-style:none;-webkit-tap-highlight-color:transparent}
+  .more>summary::-webkit-details-marker{display:none}
+  .more[open]>summary{color:var(--brand)}
+  .more .desc,.more .note,.more .foto,.more .ficha{margin-top:8px}
+  .more .of{font-size:12px;color:var(--ink2);margin-top:8px}
+  .task .h .nm{font-size:14px}
+  .acts .btn.sm{padding:9px 12px}
   .sechd{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:14px 2px 8px}
   .task{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px;margin-bottom:11px}
   .task.act{border-color:var(--brand)} .task.pau{border-color:var(--warn)}
@@ -167,7 +175,8 @@ function guessRiesgo(t){ if(t.riesgo_nota!=null)return t.riesgo_nota; const of=t
   if(/quimic|cloro|acido|solvente/.test(tx))return 'Usa guantes y ventila; nunca mezcles químicos.';
   return ''; }
 
-let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set(), CFG=null;
+let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set(), CFG=null, PU=null;
+function puDef(){ return PU||{horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]}; }
 
 function toast(t,ok=true){const m=$('msg');m.textContent=t;m.className='msg show'+(ok?'':' bad');setTimeout(()=>m.classList.remove('show'),3200);}
 function modal(h){$('modal').innerHTML=h;$('modalBg').classList.add('on');}
@@ -224,7 +233,8 @@ async function render(){
   WORKSET=new Set();
   try{ const {data:hor}=await sb.from('horarios').select('fecha').eq('employee_id',who).gte('fecha',WK).lte('fecha',addDays(WK,6));
     (hor||[]).forEach(h=>{ if(h.fecha) WORKSET.add(h.fecha.slice(0,10)); }); }catch(_){}
-  // Rutinas fijas (medidores diario / briefing lunes) — solo en tu propio plan y en la semana en curso
+  try{ const {data:pu}=await sb.from('mtto_puesto').select('*').eq('employee_id',who).maybeSingle(); PU=pu||null; }catch(_){ PU=null; }
+  // Rutinas fijas (lectura / briefing) — solo en tu propio plan y en la semana en curso
   if(!ro && who===EMP && WK===mondayOf(new Date())){ try{ await ensureRutinas(); }catch(_){} }
   const {data,error}=await sb.from('mtto_tickets')
     .select('*, ubic:ubicacion_id(nombre,ficha_texto,recomendacion)')
@@ -244,34 +254,36 @@ async function render(){
   scheduleTimer();
 }
 
-// Rutinas fijas: medidores (a diario) y briefing (lunes). Se autogeneran sin
-// cron: la primera vez que abres tu plan en el día, se crea el ticket si falta.
+// Rutinas fijas según el puesto: LECTURA (en sus días) y BRIEFING (su día de
+// admin). Se autogeneran sin cron: al abrir tu plan en el día, si falta se crea.
 async function ensureRutinas(){
-  if(!CFG||!PROPID) return;
-  const today=hoyMX();
-  const worksToday = WORKSET.size? WORKSET.has(today) : true;
+  if(!PROPID) return;
+  const p=puDef();
+  const today=hoyMX(), dw=dowIdx(today);
+  const worksToday = WORKSET.size? WORKSET.has(today) : (p.dias_trabajo||[]).map(Number).includes(dw);
+  if(!worksToday) return;
   const existe=async clave=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
       .eq('asignado_a',EMP).eq('semana_programada',WK).eq('origen','rutina')
       .eq('dia_programado',today).eq('metadata->>rutina',clave).limit(1);
     return (data&&data[0])||null; };
-  // --- MEDIDORES (diario) ---
-  if(CFG.medidores_emp_id===EMP && worksToday){
+  // --- LECTURA (días marcados en el puesto) ---
+  if((p.lectura_dias||[]).map(Number).includes(dw)){
+    const lm=Math.round((+p.lectura_horas||0.5)*60)||30;
     let m=await existe('medidores');
     if(!m){ const {data:ins}=await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
-        titulo:'Revisar medidores (agua, luz, gas)',descripcion:'Lectura diaria de medidores. Captúrala en 📷 Lecturas.',
-        minutos_estimados:15,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
+        titulo:'Revisar medidores (agua, luz, gas)',descripcion:'Lectura de medidores. Captúrala en 📷 Lecturas.',
+        minutos_estimados:lm,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
         oficio:'general',recomendacion:'Abre 📷 Lecturas (arriba), toma foto de cada medidor y captura agua/luz/gas.',prioridad:1,
         metadata:{rutina:'medidores'}}).select('id,estado').maybeSingle(); m=ins||m; }
-    // Autocerrar si ya hay lectura de hoy
     if(m && !['resuelto','cerrado'].includes(m.estado)){
       const {data:lec}=await sb.from('mtto_lecturas').select('id').eq('property_id',PROPID).eq('fecha',today).limit(1);
       if(lec&&lec[0]){ await sb.from('mtto_tickets').update({estado:'cerrado',resuelto_at:new Date().toISOString(),
-        cerrado_at:new Date().toISOString(),cerrado_por:ME.id,cerrado_por_nombre:EMPNAME,minutos_reales:15,
+        cerrado_at:new Date().toISOString(),cerrado_por:ME.id,cerrado_por_nombre:EMPNAME,minutos_reales:lm,
         comentario_cierre:'Lectura capturada en Lecturas'}).eq('id',m.id); }
     }
   }
-  // --- BRIEFING (lunes) ---
-  if(CFG.briefing_emp_id===EMP && dowIdx(today)===0 && worksToday){
+  // --- BRIEFING (día de admin del puesto) ---
+  if(+p.admin_dia===dw){
     const b=await existe('briefing');
     if(!b){ await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
         titulo:'Briefing semanal del equipo',descripcion:'Reunión de arranque de semana: repasa pendientes, urgencias y prioridades.',
@@ -283,22 +295,23 @@ async function ensureRutinas(){
 
 const DONE=t=>['resuelto','cerrado'].includes(t.estado);
 const doneDate=t=>((t.resuelto_at||t.cerrado_at||'')+'').slice(0,10);
-// Capacidad por día: 8h menos reservas. Reserva diaria = LECTURA de medidores
-// (30 min, todos los días). Las horas de ADMIN van SOLO el lunes (briefing).
-const LECT_MIN=30;
-function capDiaFor(d){ const c=CFG||{};
-  const horas=+c.horas_dia||8;
-  const capMin=Math.round(horas*60);
-  let reservaMin=LECT_MIN;                              // lectura, todos los días
-  if(d===0) reservaMin+=Math.round((+c.admin_h||0)*60); // admin/briefing solo lunes
+// Capacidad por día según el puesto: horas del día menos LECTURA (días marcados)
+// y ADMIN/briefing (su día). La reserva de reactivos se controla por semana.
+function capDiaFor(d){ const p=puDef();
+  const ndias=(p.dias_trabajo&&p.dias_trabajo.length)||6;
+  const capMin=Math.round((+p.horas_semana||48)/ndias*60);
+  let reservaMin=0, hayLect=(p.lectura_dias||[]).map(Number).includes(d), hayAdmin=(+p.admin_dia===d);
+  if(hayLect) reservaMin+=Math.round((+p.lectura_horas||0)*60);
+  if(hayAdmin) reservaMin+=Math.round((+p.admin_horas||0)*60);
   reservaMin=Math.min(reservaMin,capMin);
-  return { capMin, reservaMin, dispMin:Math.max(0,capMin-reservaMin), esLunes:d===0 };
+  return { capMin, reservaMin, dispMin:Math.max(0,capMin-reservaMin), hayLect, hayAdmin };
 }
-function pilaDia(planMin, cap){ const {capMin,reservaMin,dispMin,esLunes}=cap;
+function pilaDia(planMin, cap){ const {capMin,reservaMin,dispMin,hayLect,hayAdmin}=cap;
   const over=Math.max(0,planMin-dispMin), fill=Math.min(planMin,dispMin);
   const pR=reservaMin/capMin*100, pF=fill/capMin*100;
   const cls=over>0?'bad':(planMin>0&&planMin>=dispMin*0.9?'warn':'');
-  const resTxt=`${fmtDur(reservaMin)} reservadas (${esLunes?'lectura + briefing':'lectura'})`;
+  const partes=[]; if(hayLect)partes.push('lectura'); if(hayAdmin)partes.push('briefing');
+  const resTxt= reservaMin>0 ? `${fmtDur(reservaMin)} reservadas (${partes.join(' + ')})` : 'sin reserva';
   const lbl= over>0 ? `⚠️ ${fmtDur(planMin)} planeado · te pasas ${fmtDur(over)} (libre ${fmtDur(dispMin)}/día)`
                     : `⏱️ ${fmtDur(planMin)} / ${fmtDur(dispMin)} libres · ${resTxt}`;
   return `<div class="dpwrap"><div class="dpila ${cls}"><i class="res" style="width:${pR}%"></i><i class="fil" style="width:${pF}%"></i></div><div class="dplbl">${lbl}</div></div>`;
@@ -316,23 +329,17 @@ function paint(){
   const esHoy=t=> DONE(t) ? doneDate(t)===today : ((t.dia_programado===today)||(!t.dia_programado)||['en_proceso','pausado'].includes(t.estado));
   const diaTot=rows.filter(esHoy), diaHecho=diaTot.filter(DONE);
   const semTot=rows, semHecho=rows.filter(DONE);
-  const trabajadoMin=rows.reduce((s,t)=>s+workedMin(t),0);
   const bar=(hecho,tot)=>{const p=tot?Math.round(hecho/tot*100):0;const cls=p>=100?'full':(p>=50?'':'low');return `<div class="pbar ${cls}"><i style="width:${p}%"></i></div>`;};
-  // Avance en HORAS (no por número de tareas)
-  const estMin=t=>(t.minutos_estimados||0);
-  const diaPlanMin=diaTot.reduce((s,t)=>s+estMin(t),0), diaDoneMin=diaHecho.reduce((s,t)=>s+estMin(t),0);
-  const semPlanMin=semTot.reduce((s,t)=>s+estMin(t),0), semDoneMin=semHecho.reduce((s,t)=>s+estMin(t),0);
-  // Pila de la SEMANA: horas cargadas vs horas disponibles (suma de días que trabaja)
-  let capWeek=0; for(let d=0;d<7;d++){ const ds=addDays(WK,d); const w=WORKSET.size?WORKSET.has(ds):d<6; if(w)capWeek+=capDiaFor(d).dispMin; }
-  const loadWeek=semTot.filter(t=>!(t.metadata&&t.metadata.rutina)).reduce((s,t)=>s+estMin(t),0);
-  const overW=Math.max(0,loadWeek-capWeek);
-  const pctW=capWeek?Math.round(Math.min(loadWeek,capWeek)/capWeek*100):0;
-  const clsW=overW>0?'bad':(capWeek&&loadWeek>=capWeek*0.9?'warn':'');
+  // Horas HECHAS: en terminadas cuenta lo real/estimado; en curso, lo trabajado
+  const hechoMin=t=> DONE(t) ? (t.minutos_reales||t.minutos_estimados||0) : (['en_proceso','pausado'].includes(t.estado)?workedMin(t):0);
+  const diaHechasMin=diaTot.reduce((s,t)=>s+hechoMin(t),0);
+  const semHechasMin=semTot.reduce((s,t)=>s+hechoMin(t),0);
+  const capHoyMin=capDiaFor(dowIdx(today)).capMin;               // jornada del día (8h)
+  const totMin=Math.round((+puDef().horas_semana||48)*60);        // 48h de la semana
   $('cap').innerHTML=`${ro?`<div style="margin-bottom:8px">👁️ Plan de <b>${esc(VIEWNAME)}</b></div>`:''}
-    <div class="prow"><span class="pk">📅 Hoy</span>${bar(diaDoneMin,diaPlanMin)}<span class="pv"><b>${fmtDur(diaDoneMin)}</b>/${fmtDur(diaPlanMin)}</span></div>
-    <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semDoneMin,semPlanMin)}<span class="pv"><b>${fmtDur(semDoneMin)}</b>/${fmtDur(semPlanMin)}</span></div>
-    <div class="prow crgrow" onclick="setView('semana')" style="cursor:pointer"><span class="pk">⚙️ Carga sem.</span><div class="pbar ${clsW}"><i style="width:${pctW}%"></i></div><span class="pv"><b>${fmtDur(loadWeek)}</b>/${fmtDur(capWeek)} ›</span></div>
-    <div class="psub">${overW>0?`⚠️ te pasas ${fmtDur(overW)} en la semana · `:''}${diaTot.length-diaHecho.length} tareas por hacer hoy · trabajado <b>${fmtDur(trabajadoMin)}</b> · <a onclick="setView('semana')" style="color:var(--brand);cursor:pointer;font-weight:700">ver pila por día ›</a></div>`;
+    <div class="prow"><span class="pk">📅 Hoy</span>${bar(diaHechasMin,capHoyMin)}<span class="pv"><b>${fmtDur(diaHechasMin)}</b>/${fmtDur(capHoyMin)}</span></div>
+    <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semHechasMin,totMin)}<span class="pv"><b>${fmtDur(semHechasMin)}</b>/${fmtDur(totMin)}</span></div>
+    <div class="psub">${diaTot.length-diaHecho.length} tareas por hacer hoy · <a onclick="setView('semana')" style="color:var(--brand);cursor:pointer;font-weight:700">ver pila por día ›</a></div>`;
 
   // ENTRANTES (reactivos del día para tomar)
   if(!ro && enr.length){ html+=`<div class="sechd">🔔 Te cayeron hoy (${enr.length}) · mándalos a hoy, a un día o a la próxima semana</div>`+enr.map(t=>entrCard(t)).join(''); }
@@ -383,32 +390,36 @@ function entrCard(t){
 function card(t,ro){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||''];
   const reco=guessReco(t), riesgo=guessRiesgo(t);
-  const foto=t.foto_url?`<details class="ficha fotod"><summary>📷 Ver foto del reporte</summary><img class="foto" loading="lazy" src="${esc(t.foto_url)}" alt="foto"></details>`:'';
   const rut=(t.metadata&&t.metadata.rutina)||'';
-  const ficha=t.ubic&&(t.ubic.recomendacion||t.ubic.ficha_texto)?`<details class="ficha"><summary>Ficha del lugar</summary><div class="txt">${esc(t.ubic.recomendacion||t.ubic.ficha_texto)}</div></details>`:'';
+  const fotoIn=t.foto_url?`<img class="foto" loading="lazy" src="${esc(t.foto_url)}" alt="foto">`:'';
+  const fichaIn=t.ubic&&(t.ubic.recomendacion||t.ubic.ficha_texto)?`<div class="ficha"><div class="txt">📌 ${esc(t.ubic.recomendacion||t.ubic.ficha_texto)}</div></div>`:'';
   let timer='';
   if(t.estado==='en_proceso'&&t.iniciado_at){ timer=`<div class="timer run">▶ Trabajando · ${fmtDur(workedMin(t))} (de ${t.minutos_estimados||'?'} min)</div>`; }
   else if(t.estado==='pausado'){ const pd=t.pausado_at?(Date.now()-new Date(t.pausado_at).getTime())/60000:0; timer=`<div class="timer pau">⏸ En pausa · ${fmtDur(pd)} detenida${t.pausa_motivo?` · ${esc(t.pausa_motivo)}`:''}<br>trabajado hasta ahora: ${fmtDur(workedMin(t))}</div>`; }
   let acts='',extra='';
   if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado${t.reportado_por?' · espera cierre':''}</span>`; }
-  else if(t.estado==='en_proceso'){ acts=`<button class="btn" style="flex:1" onclick="terminar('${t.id}')">📸 Terminar</button><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>`; }
-  else if(t.estado==='pausado'){ acts=`<button class="btn" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button><button class="btn ghost sm" onclick="terminar('${t.id}')">📸 Terminar</button>`; }
+  else if(t.estado==='en_proceso'){ acts=`<button class="btn sm" onclick="terminar('${t.id}')">📸 Terminar</button><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>`; }
+  else if(t.estado==='pausado'){ acts=`<button class="btn sm" onclick="reanudar('${t.id}')">▶️ Reanudar</button><button class="btn ghost sm" onclick="terminar('${t.id}')">📸 Terminar</button>`; }
   else { // validado/programado
     if(t.requiere_compra){ extra=`<div class="note risk">🛒 Espera la compra para poder iniciar</div>`; }
     const dbtn=t.dia_programado?`📅 ${DIAS[dowIdx(t.dia_programado)]}`:'＋ Día';
-    acts=`<button class="btn" style="flex:1" onclick="iniciar('${t.id}')">▶️ Iniciar</button><button class="btn ghost sm" onclick="agendar('${t.id}')">${dbtn}</button>`;
+    acts=`<button class="btn sm" onclick="iniciar('${t.id}')">▶️ Iniciar</button><button class="btn ghost sm" onclick="agendar('${t.id}')">${dbtn}</button>`;
   }
   const cls=t.estado==='en_proceso'?'task act':(t.estado==='pausado'?'task pau':'task');
   const ic=rut==='medidores'?'🔢':(rut==='briefing'?'🗒️':(t.origen==='mto_profundo'?'🧽':(t.clasificacion==='preventivo'?'🛠️':'🔧')));
-  return `<div class="${cls}"><div class="h"><span class="ic">${ic}</span>
-    <div style="flex:1"><div class="nm">${esc(t.titulo||'Trabajo')}</div>
-      <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span><span>⏱️ ${t.minutos_estimados||'?'} min</span>${t.oficio?`<span class="chip c-info">${esc(OFN[t.oficio]||t.oficio)}</span>`:''}${t.es_para_dos?'<span class="chip c-info">👥 2</span>':''}${t.dia_programado?`<span class="chip c-info">📅 ${DIAS[dowIdx(t.dia_programado)]}</span>`:''}</div></div>
-    <span class="state">${esc(t.estado)}</span></div>
+  const diaChip=t.dia_programado?` <span class="chip c-info">📅 ${DIAS[dowIdx(t.dia_programado)]}</span>`:'';
+  // Detalle plegado: descripción, recomendación, riesgo, oficio, foto y ficha
+  const more=`<details class="more"><summary>＋ info y recomendaciones</summary>
     ${t.descripcion?`<div class="desc">${esc(t.descripcion)}</div>`:''}
     ${reco?`<div class="note reco">💡 ${esc(reco)}</div>`:''}
     ${riesgo?`<div class="note risk">⚠️ Prevención de riesgo: ${esc(riesgo)}</div>`:''}
-    ${foto}${ficha}${timer}
-    <div class="acts">${acts}${extra&&!acts?'':''}</div>${(extra&&!acts)?`<div style="margin-top:10px">${extra}</div>`:''}
+    ${t.oficio?`<div class="of">🧰 ${esc(OFN[t.oficio]||t.oficio)}${t.es_para_dos?' · 👥 entre 2':''}</div>`:''}
+    ${fotoIn}${fichaIn}</details>`;
+  return `<div class="${cls}"><div class="h"><span class="ic">${ic}</span>
+    <div style="flex:1;min-width:0"><div class="nm">${esc(t.titulo||'Trabajo')}</div>
+      <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span><span>⏱️ ${t.minutos_estimados||'?'}m</span>${diaChip}</div></div></div>
+    ${timer}${more}
+    <div class="acts">${acts}</div>${(extra&&!acts)?`<div style="margin-top:8px">${extra}</div>`:''}
   </div>`;
 }
 
@@ -541,8 +552,7 @@ window.agendar=id=>{ curId=id; const today=hoyMX(); const btns=[];
     btns.push(`<button class="btn ghost sm" onclick="setDia('${id}','${ds}')">${DIAS[d]} ${ds.slice(8,10)}${ds===today?' · hoy':''}</button>`);
   }
   modal(`<h3>Agendar a un día</h3>
-   <button class="btn" style="width:100%;margin-bottom:10px" onclick="setDia('${id}','${today}')">⭐ Traer a hoy</button>
-   <p style="color:var(--ink2);font-size:13px;margin:0 0 8px">O muévelo a otro día que trabajas (sin tu descanso).</p>
+   <p style="color:var(--ink2);font-size:13px;margin:0 0 8px">Muévelo al día que trabajas (sin tu descanso).</p>
    <div class="row2">${btns.join('')||'<div class="empty" style="padding:8px">No quedan días esta semana</div>'}</div>
    <button class="btn ghost sm" style="margin-top:8px;width:100%" onclick="setDia('${id}','')">Quitar día (a «por hacer»)</button>`);
 };
