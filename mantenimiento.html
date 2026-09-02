@@ -283,6 +283,7 @@ function renderPropWrap(){
 }
 function go(k){CUR=k;const v=VIEWS.find(x=>x.k===k);$("#vt").textContent=v.t;
   document.querySelectorAll("#secnav button").forEach(b=>b.setAttribute("aria-selected", b.dataset.k===k));render();}
+window.verTickets=(clas)=>{ TK_F={estado:'',clas:clas||'',tec:'',oficio:'',q:'',desde:'',abiertos:true}; go('tickets'); };
 
 function loading(){$("#view").innerHTML='<div class="center">Cargando…</div>';}
 function modal(h){$("#modal").innerHTML=h;$("#modalBg").classList.add("on");}
@@ -306,40 +307,75 @@ async function render(){
 
 /* TABLERO */
 async function renderTablero(){
-  const [{data:tk},{data:cfg},{data:pv},{data:an}]=await Promise.all([
-    sb.from("mtto_tickets").select("estado,clasificacion").eq("property_id",PROP.id),
-    sb.from("mtto_config").select("*").eq("property_id",PROP.id).single(),
-    sb.from("mtto_preventivos_catalogo").select("id").eq("property_id",PROP.id).eq("activo",true),
-    sb.from("mtto_anual_externo").select("estado,critico").eq("property_id",PROP.id),
+  const anio=new Date().getFullYear();
+  const [{data:tk},{data:sum},{data:lec},{data:plan},{data:ext}]=await Promise.all([
+    sb.from("mtto_tickets").select("estado,clasificacion,minutos_estimados,minutos_reales,asignado_nombre").eq("property_id",PROP.id),
+    sb.from("mtto_suministros").select("estatus,costo,material,descripcion,semana").eq("property_id",PROP.id),
+    sb.from("mtto_lecturas").select("huespedes,fecha").eq("property_id",PROP.id),
+    sb.from("mtto_preventivo_plan").select("estado,oficio").eq("property_id",PROP.id).eq("anio",anio),
+    sb.from("mtto_preventivos_catalogo").select("tarea,periodicidad,presupuesto,critico,empresa,ultimo_realizado, eq:equipo_id(nombre)").eq("property_id",PROP.id).eq("ejecucion","externo").eq("activo",true)
   ]);
-  const ab=(tk||[]).filter(t=>!["cerrado","cancelado"].includes(t.estado));
-  const react=ab.filter(t=>t.clasificacion==="reactivo").length;
-  const anPend=(an||[]).filter(a=>a.estado!=="realizado").length;
-  const anCrit=(an||[]).filter(a=>a.critico&&a.estado!=="realizado").length;
-  const c=cfg||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
-  const disp=c.horas_dia*c.dias_semana, libres=disp-c.reserva_reactivo_h-c.admin_h-c.consumos_h;
-  const hc=libres*c.pct_correctivo/100, hp=libres*c.pct_preventivo/100;
+  const T=tk||[];
+  const open=T.filter(t=>!["cerrado","cancelado","resuelto"].includes(t.estado));
+  const react=open.filter(t=>t.clasificacion==="reactivo").length;
+  const corr =open.filter(t=>t.clasificacion==="correctivo").length;
+  // Eficiencia = estimado ÷ real (100 = a tiempo, >100 = más rápido)
+  const done=T.filter(t=>["resuelto","cerrado"].includes(t.estado)&&t.minutos_reales>0&&t.minutos_estimados>0);
+  const efic=rows=>{const e=rows.reduce((s,r)=>s+r.minutos_estimados,0),r=rows.reduce((s,x)=>s+x.minutos_reales,0);return r?Math.round(e/r*100):null;};
+  const eGlobal=efic(done);
+  const byTec={}; done.forEach(t=>{const k=t.asignado_nombre||'—';(byTec[k]=byTec[k]||[]).push(t);});
+  const eficCol=v=>v==null?'var(--muted)':(v>=95?'var(--ok)':(v>=80?'var(--warn)':'var(--bad)'));
+  // Suministros: coste por huésped + compras pendientes
+  const costoTot=(sum||[]).reduce((s,x)=>s+(+x.costo||0),0);
+  const huesp=(lec||[]).reduce((s,x)=>s+(+x.huespedes||0),0);
+  const costoHuesped=huesp?costoTot/huesp:null;
+  const comprasPend=(sum||[]).filter(x=>!['entregado','recibido','comprado','cancelado'].includes((x.estatus||'').toLowerCase()));
+  const comprasCosto=comprasPend.reduce((s,x)=>s+(+x.costo||0),0);
+  // Preventivos logrados por categoría (plan interno del año)
+  const CAT={}; (plan||[]).forEach(p=>{const o=p.oficio||'general';const c=CAT[o]=CAT[o]||{tot:0,hechas:0};c.tot++;if(p.estado==='hecho')c.hechas++;});
+  const catRows=Object.keys(CAT).sort((a,b)=>CAT[b].tot-CAT[a].tot).map(o=>{const c=CAT[o];const pct=c.tot?Math.round(c.hechas/c.tot*100):0;
+    return `<tr><td>${esc(ofNombre(o))}</td><td style="width:45%"><div class="pbar" style="background:var(--surface-2);border-radius:5px;height:8px;overflow:hidden"><i style="display:block;height:100%;width:${pct}%;background:var(--ok)"></i></div></td><td class="num">${c.hechas}/${c.tot}</td></tr>`;}).join('');
+  // Maquinaria / preventivos externos (especial interés)
+  const extRows=(ext||[]).slice().sort((a,b)=>(b.critico?1:0)-(a.critico?1:0)).map(e=>{const hecho=!!e.ultimo_realizado;
+    return `<tr><td>${esc(e.eq?e.eq.nombre:e.tarea)}${e.critico?' <span class="chip c-react">crítico</span>':''}</td><td class="muted">${esc(e.empresa||'—')}</td><td>${esc(e.periodicidad||'—')}</td><td class="num">${e.presupuesto?money(e.presupuesto):'—'}</td><td>${hecho?`<span class="chip c-prev">✓ ${e.ultimo_realizado}</span>`:'<span class="chip c-react">pendiente</span>'}</td></tr>`;}).join('');
+  const extPend=(ext||[]).filter(e=>!e.ultimo_realizado).length, extCrit=(ext||[]).filter(e=>!e.ultimo_realizado&&e.critico).length;
+  // Preventivos internos del año
+  const plHechas=(plan||[]).filter(p=>p.estado==='hecho').length, plTot=(plan||[]).length;
   $("#view").innerHTML=`
     <div class="kpis">
-      <div class="kpi"><div class="n">${ab.length}</div><div class="l">tickets abiertos</div></div>
-      <div class="kpi"><div class="n" style="color:var(--bad)">${react}</div><div class="l">reactivos pendientes</div></div>
-      <div class="kpi"><div class="n">${(pv||[]).length}</div><div class="l">preventivos en catálogo</div></div>
-      <div class="kpi"><div class="n" style="color:${anCrit?'var(--bad)':'inherit'}">${anPend}</div><div class="l">anual externo pendiente${anCrit?` · ${anCrit} crítico`:''}</div></div>
+      <div class="kpi"><div class="n" style="color:${eficCol(eGlobal)}">${eGlobal==null?'—':eGlobal+'%'}</div><div class="l">eficiencia acumulada</div></div>
+      <div class="kpi"><div class="n">${costoHuesped==null?'—':money(costoHuesped)}</div><div class="l">suministros por huésped</div></div>
+      <div class="kpi" style="cursor:pointer" onclick="verTickets('reactivo')"><div class="n" style="color:${react?'var(--bad)':'inherit'}">${react}</div><div class="l">reactivos abiertos</div></div>
+      <div class="kpi" style="cursor:pointer" onclick="verTickets('correctivo')"><div class="n" style="color:${corr?'var(--warn)':'inherit'}">${corr}</div><div class="l">correctivos por resolver</div></div>
+      <div class="kpi"><div class="n" style="color:${comprasPend.length?'var(--warn)':'inherit'}">${comprasPend.length}</div><div class="l">compras pendientes${comprasCosto?` · ${money(comprasCosto)}`:''}</div></div>
+      <div class="kpi"><div class="n">${plHechas}/${plTot}</div><div class="l">preventivos hechos ${anio}</div></div>
     </div>
-    <div class="card"><h3>Reparto de horas semanal · por técnico (${disp} h)</h3><div class="pad">
-      <div class="bar">
-        <span style="width:${c.reserva_reactivo_h/disp*100}%;background:var(--bad)"></span>
-        <span style="width:${hc/disp*100}%;background:var(--warn)"></span>
-        <span style="width:${hp/disp*100}%;background:var(--ok)"></span>
-        <span style="width:${(c.admin_h+c.consumos_h)/disp*100}%;background:var(--none)"></span>
-      </div>
-      <table style="min-width:auto;margin-top:12px"><tbody>
-        <tr><td><span class="chip c-react">Reactivos (reserva)</span></td><td class="num">${c.reserva_reactivo_h} h</td></tr>
-        <tr><td><span class="chip c-correc">Correctivo (${c.pct_correctivo}%)</span></td><td class="num">${hc.toFixed(1)} h</td></tr>
-        <tr><td><span class="chip c-prev">Preventivo (${c.pct_preventivo}%)</span></td><td class="num">${hp.toFixed(1)} h</td></tr>
-        <tr><td><span class="chip c-info">Admin + consumos</span></td><td class="num">${(c.admin_h+c.consumos_h)} h</td></tr>
-      </tbody></table>
-    </div></div>`;
+
+    <div class="progwrap" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+      <div class="card"><h3 style="margin:0">Eficiencia por técnico</h3><div class="pad">
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Estimado ÷ real en lo terminado. 100% = a tiempo · más de 100% = más rápido.</div>
+        ${['Manu','Juan'].map(nm=>{const rows=byTec[nm]||[];const v=efic(rows);return `<div style="display:flex;align-items:center;gap:10px;margin:8px 0"><b style="width:52px">${nm}</b><div style="flex:1;height:9px;background:var(--surface-2);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100,v||0)}%;background:${eficCol(v)}"></i></div><b style="color:${eficCol(v)};width:52px;text-align:right">${v==null?'—':v+'%'}</b><span class="muted" style="font-size:11px;width:70px">${rows.length} trab.</span></div>`;}).join('')}
+        ${Object.keys(byTec).filter(k=>!['Manu','Juan'].includes(k)).map(nm=>{const v=efic(byTec[nm]);return `<div style="display:flex;align-items:center;gap:10px;margin:8px 0"><b style="width:52px">${esc(nm)}</b><div style="flex:1;height:9px;background:var(--surface-2);border-radius:5px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100,v||0)}%;background:${eficCol(v)}"></i></div><b style="color:${eficCol(v)};width:52px;text-align:right">${v==null?'—':v+'%'}</b><span class="muted" style="font-size:11px;width:70px">${byTec[nm].length} trab.</span></div>`;}).join('')}
+        ${done.length?'':'<div class="muted" style="font-size:12px">Aún no hay trabajos terminados con tiempo real.</div>'}
+      </div></div>
+
+      <div class="card"><h3 style="margin:0">Suministros</h3><div class="pad">
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          <div><div class="muted" style="font-size:12px">Coste por huésped</div><div style="font-size:1.5rem;font-weight:700">${costoHuesped==null?'—':money(costoHuesped)}</div></div>
+          <div><div class="muted" style="font-size:12px">Gasto total</div><div style="font-size:1.5rem;font-weight:700">${money(costoTot)}</div></div>
+          <div><div class="muted" style="font-size:12px">Huéspedes (lecturas)</div><div style="font-size:1.5rem;font-weight:700">${huesp||'—'}</div></div>
+        </div>
+        <div style="margin-top:12px"><b>Compras pendientes de hacer · ${comprasPend.length}</b>
+          ${comprasPend.length?`<div class="scroll" style="max-height:180px;margin-top:6px"><table><tbody>${comprasPend.slice(0,20).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px;margin-top:4px">Nada por comprar 👍</div>'}
+        </div>
+      </div></div>
+    </div>
+
+    <div class="card"><h3 style="margin:0">Preventivos logrados por categoría (${anio})</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th>Avance</th><th class="num">hechos/plan</th></tr></thead><tbody>${catRows||'<tr><td class="muted" style="padding:12px">Sin plan generado</td></tr>'}</tbody></table></div></div>
+
+    <div class="card"><h3 style="margin:0">Maquinaria · preventivos externos ${extCrit?`<span class="chip c-react">${extCrit} crítico pendiente</span>`:''}</h3>
+      <div class="pad" style="font-size:12.5px;color:var(--muted)">Contratos con proveedor. ${extPend} pendientes de ${(ext||[]).length}.</div>
+      <div class="scroll"><table><thead><tr><th>Equipo / servicio</th><th>Proveedor</th><th>Periodicidad</th><th class="num">Presupuesto</th><th>Estado</th></tr></thead><tbody>${extRows||'<tr><td class="muted" style="padding:12px">Sin externos</td></tr>'}</tbody></table></div></div>`;
 }
 
 /* TICKETS */
