@@ -683,7 +683,7 @@ async function renderTablero(){
     sb.from("mtto_tickets").select("estado,clasificacion,minutos_estimados,minutos_reales,asignado_nombre").eq("property_id",PROP.id),
     sb.from("mtto_suministros").select("id,estatus,costo,material,descripcion,link,semana").eq("property_id",PROP.id),
     sb.from("mtto_lecturas").select("huespedes,fecha,agua_lectura,luz_lectura,gas_pct").eq("property_id",PROP.id),
-    sb.from("mtto_preventivo_plan").select("estado,oficio").eq("property_id",PROP.id).eq("anio",anio),
+    sb.from("mtto_preventivo_plan").select("estado,oficio,equipo_id,eq:equipo_id(nombre, ubic:ubicacion_id(nombre))").eq("property_id",PROP.id).eq("anio",anio),
     sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,presupuesto,critico,empresa,ultimo_realizado, eq:equipo_id(nombre)").eq("property_id",PROP.id).eq("ejecucion","externo").eq("activo",true),
     sb.from("mtto_consumo_config").select("*").eq("property_id",PROP.id).maybeSingle(),
     sb.from("mtto_gas_recargas").select("fecha,litros").eq("property_id",PROP.id).gte("fecha",win30)
@@ -729,6 +729,38 @@ async function renderTablero(){
   const extPend=(ext||[]).filter(e=>!e.ultimo_realizado).length, extCrit=(ext||[]).filter(e=>!e.ultimo_realizado&&e.critico).length;
   // Preventivos internos del año
   const plHechas=(plan||[]).filter(p=>p.estado==='hecho').length, plTot=(plan||[]).length;
+  // Preventivos POR MÁQUINA — vino de la tabla que estaba en Preventivos.
+  // Aquí se ve como dona (global) + barras por equipo, ordenadas por lo que
+  // falta: lo primero que se lee es qué máquina va más atrasada.
+  const MAQ={};
+  (plan||[]).filter(p=>p.equipo_id&&p.eq).forEach(p=>{
+    const m=MAQ[p.equipo_id]=MAQ[p.equipo_id]||{nom:p.eq.nombre,area:(p.eq.ubic&&p.eq.ubic.nombre)||'—',hechas:0,pend:0,tot:0};
+    m.tot++; if(p.estado==='hecho') m.hechas++; else m.pend++;
+  });
+  const maqArr=Object.values(MAQ).sort((a,b)=>b.pend-a.pend||b.tot-a.tot);
+  const maqN=maqArr.length;
+  const maqTot=maqArr.reduce((s,m)=>s+m.tot,0);
+  const maqH=maqArr.reduce((s,m)=>s+m.hechas,0);
+  const maqP=maqTot-maqH;
+  const maqPctH=maqTot?Math.round(maqH*100/maqTot):0;
+  const MAQ_TOPE=8;   // más de esto se vuelve ilegible; el resto se resume abajo
+  const maqTop=maqArr.slice(0,MAQ_TOPE);
+  const maqMas=maqArr.length>MAQ_TOPE
+    ? ('+'+(maqArr.length-MAQ_TOPE)+' equipo'+(maqArr.length-MAQ_TOPE!==1?'s':'')+' más · '
+       +maqArr.slice(MAQ_TOPE).reduce((s,m)=>s+m.pend,0)+' pendientes')
+    : '';
+  const maqBars=maqTop.map(m=>{
+    const pct=m.tot?Math.round(m.hechas*100/m.tot):0;
+    return `<div style="margin-bottom:9px">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:3px">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(m.nom)}</b> <span class="muted">${esc(m.area)}</span></span>
+        <span class="muted" style="flex:none">${m.hechas}/${m.tot}</span>
+      </div>
+      <div style="height:9px;border-radius:5px;background:var(--warn-bg);overflow:hidden" title="${pct}% hecho · ${m.pend} pendiente${m.pend!==1?'s':''}">
+        <div style="height:100%;width:${pct}%;background:${m.pend?'var(--ok)':'var(--accent)'}"></div>
+      </div>
+    </div>`;
+  }).join('');
   $("#view").innerHTML=`
     <div class="kpis">
       <div class="kpi"><div class="n" style="color:${eficCol(eGlobal)}">${eGlobal==null?'—':eGlobal+'%'}</div><div class="l">eficiencia acumulada</div></div>
@@ -760,6 +792,24 @@ async function renderTablero(){
     <div class="card"><h3 style="margin:0">Compras pendientes de hacer · ${comprasPend.length}${comprasCosto?` <span class="muted" style="font-weight:500;font-size:13px">· ${money(comprasCosto)}</span>`:''}</h3>
       ${comprasPend.length?`<div class="scroll"><table><tbody>${comprasPend.slice(0,30).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}${x.link?` <a class="lnk" href="${esc(x.link)}" target="_blank">🔗</a>`:''}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td><td class="num" style="white-space:nowrap"><button class="btn ghost sm" title="Editar" onclick="editCompra('${x.id}')">✎</button> <button class="btn ghost sm" title="Marcar entregada" onclick="entregarCompra('${x.id}')">✓</button> <button class="btn ghost sm" title="Borrar" onclick="borrarCompra('${x.id}')">✕</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="pad muted" style="font-size:12px">Nada por comprar 👍</div>'}</div>
 
+    ${maqTot?`<div class="card"><h3 style="margin:0">Preventivos por máquina (${anio})</h3>
+      <div class="pad" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="width:104px;height:104px;border-radius:50%;flex:none;background:conic-gradient(var(--ok) 0 ${maqPctH}%, var(--warn) ${maqPctH}% 100%);display:grid;place-items:center">
+            <div style="width:70px;height:70px;border-radius:50%;background:var(--card,#fff);display:grid;place-items:center;line-height:1.1;text-align:center">
+              <div><div style="font-size:20px;font-weight:800">${maqPctH}%</div><div class="muted" style="font-size:10px">hechos</div></div>
+            </div>
+          </div>
+          <div style="font-size:12.5px;line-height:1.7">
+            <div><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--ok);margin-right:6px"></span>${maqH} hechos</div>
+            <div><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--warn);margin-right:6px"></span>${maqP} pendientes</div>
+            <div class="muted" style="margin-top:2px">${maqTot} tareas · ${maqN} equipo${maqN!==1?'s':''}</div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:260px">${maqBars}</div>
+      </div>
+      ${maqMas?`<div class="pad" style="padding-top:0"><span class="muted" style="font-size:11.5px">${maqMas}</span></div>`:''}
+    </div>`:''}
     <div class="card"><h3 style="margin:0">Preventivos logrados por categoría (${anio})</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th>Avance</th><th class="num">hechos/plan</th></tr></thead><tbody>${catRows||'<tr><td class="muted" style="padding:12px">Sin plan generado</td></tr>'}</tbody></table></div></div>
 
     <div class="card"><h3 style="margin:0">Maquinaria · preventivos externos ${extCrit?`<span class="chip c-react">${extCrit} crítico pendiente</span>`:''}</h3>
@@ -1013,9 +1063,7 @@ async function renderPrev(){
   // Desglose por OFICIO (por subtarea × área, solo interno; sin rutina diaria/semanal)
   const OFI={}; interno.forEach(r=>{const n=alcanceN(r.alcance||'especifico');subsProg(r).forEach(st=>{const o=st.oficio||r.oficio||'general';OFI[o]=(OFI[o]||0)+n*vecesAnio(st.periodicidad)*(st.minutos_estimados||0)/60;});});
   const ofiRows=Object.keys(OFI).sort((a,b)=>OFI[b]-OFI[a]).map(o=>`<tr><td>${esc(ofNombre(o))}</td><td class="num">${Math.round(OFI[o])} h</td><td class="num"><b>${(OFI[o]/capPersona).toFixed(1)}</b></td></tr>`).join('');
-  // Agrupación POR MÁQUINA (¿la caldera recibió todos sus mtto?)
-  const MAQ={};(plan||[]).filter(p=>p.equipo_id&&p.eq).forEach(p=>{const k=p.equipo_id;const m=MAQ[k]=MAQ[k]||{nom:p.eq.nombre,area:p.eq.ubic?.nombre||'—',hechas:0,pend:0,tot:0};m.tot++;if(p.estado==='hecho')m.hechas++;else m.pend++;});
-  const maqRows=Object.values(MAQ).sort((a,b)=>b.pend-a.pend).map(m=>`<tr><td>${esc(m.nom)}</td><td class="muted">${esc(m.area)}</td><td class="num">${m.hechas}</td><td class="num"><b style="color:${m.pend?'var(--warn)':'var(--ok)'}">${m.pend}</b></td><td class="num">${m.tot}</td></tr>`).join('');
+  // El desglose por máquina se movió a Resumen, con dona y barras (Javi, 2-sep).
   // El calendario en barras se quitó de esta pestaña (Javi, 2-sep). Se conserva
   // PREV_PLAN porque planSemana() sigue existiendo; hoy ya no tiene botón que
   // la llame, así que si no se va a reenganchar se puede borrar.
@@ -1030,7 +1078,6 @@ async function renderPrev(){
       <div class="kpi"><div class="n" style="color:var(--accent)">${Math.round(hInt)} h</div><div class="l">horas de preventivo/año (interno)</div></div>
       <div class="kpi"><div class="n" style="color:var(--accent)">${personas.toFixed(1)}</div><div class="l">personas solo para preventivos</div></div>
     </div>
-    ${maqRows?`<div class="card"><h3 style="margin:0">Por máquina (revisa que cada equipo tenga sus mtto)</h3><div class="scroll"><table><thead><tr><th>Máquina</th><th>Área</th><th class="num">hechas</th><th class="num">pend.</th><th class="num">plan/año</th></tr></thead><tbody>${maqRows}</tbody></table></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
       <button class="btn ghost sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
