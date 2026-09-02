@@ -111,7 +111,6 @@
   <div id="app" style="display:none">
     <div class="topbar">
       <button class="btn warn sm bell" id="bell" onclick="bellModal()" style="display:none">🔔 Hoy<span class="bellN" id="bellN">0</span></button>
-      <a class="btn blue sm" href="/m/lecturas.html">📷 Lecturas</a>
       <button class="btn ghost sm" id="btnAdd" onclick="addTrabajo()">＋ Añadir</button>
       <span class="verWrap" id="verWrap"></span>
       <div class="wk"><button class="arrow" onclick="shiftWk(-1)">‹</button><b id="wkLbl"></b><button class="arrow" onclick="shiftWk(1)">›</button></div>
@@ -282,38 +281,34 @@ async function render(){
 async function ensureRutinas(){
   if(!PROPID) return;
   const p=puDef();
-  const today=hoyMX(), dw=dowIdx(today);
-  const worksToday = WORKSET.size? WORKSET.has(today) : (p.dias_trabajo||[]).map(Number).includes(dw);
-  if(!worksToday) return;
-  const existe=async clave=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
-      .eq('asignado_a',EMP).eq('semana_programada',WK).eq('origen','rutina')
-      .eq('dia_programado',today).eq('metadata->>rutina',clave).limit(1);
+  const lectDias=(p.lectura_dias||[]).map(Number);
+  const lm=Math.round((+p.lectura_horas||0.5)*60)||30;
+  const worksOn=ds=>{ const dw=dowIdx(ds); return WORKSET.size? WORKSET.has(ds) : (p.dias_trabajo||[]).map(Number).includes(dw); };
+  const existe=async(clave,ds)=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
+      .eq('asignado_a',EMP).eq('semana_programada',WK).eq('origen','rutina').eq('dia_programado',ds).eq('metadata->>rutina',clave).limit(1);
     return (data&&data[0])||null; };
-  // --- LECTURA (días marcados en el puesto) ---
-  if((p.lectura_dias||[]).map(Number).includes(dw)){
-    const lm=Math.round((+p.lectura_horas||0.5)*60)||30;
-    let m=await existe('medidores');
+  // --- LECTURA: se asigna a la semana y se DESDOBLA por cada día que toca ---
+  for(let d=0;d<7;d++){ const ds=addDays(WK,d);
+    if(!lectDias.includes(dowIdx(ds))||!worksOn(ds)) continue;
+    let m=await existe('medidores',ds);
     if(!m){ const {data:ins}=await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
-        titulo:'Revisar medidores (agua, luz, gas)',descripcion:'Lectura de medidores. Captúrala en 📷 Lecturas.',
-        minutos_estimados:lm,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
-        oficio:'general',recomendacion:'Abre 📷 Lecturas (arriba), toma foto de cada medidor y captura agua/luz/gas.',prioridad:1,
-        metadata:{rutina:'medidores'}}).select('id,estado').maybeSingle(); m=ins||m; }
+        titulo:'Revisar medidores (agua, luz, gas)',descripcion:'Toma las lecturas del día (agua, luz, gas) — una foto por medidor.',
+        minutos_estimados:lm,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:ds,
+        oficio:'general',prioridad:0,metadata:{rutina:'medidores'}}).select('id,estado').maybeSingle(); m=ins||m; }
     if(m && !['resuelto','cerrado'].includes(m.estado)){
-      const {data:lec}=await sb.from('mtto_lecturas').select('id').eq('property_id',PROPID).eq('fecha',today).limit(1);
-      if(lec&&lec[0]){ await sb.from('mtto_tickets').update({estado:'cerrado',resuelto_at:new Date().toISOString(),
+      const {data:lec}=await sb.from('mtto_lecturas').select('id').eq('property_id',PROPID).eq('fecha',ds).limit(1);
+      if(lec&&lec[0]) await sb.from('mtto_tickets').update({estado:'cerrado',resuelto_at:new Date().toISOString(),
         cerrado_at:new Date().toISOString(),cerrado_por:ME.id,cerrado_por_nombre:EMPNAME,minutos_reales:lm,
-        comentario_cierre:'Lectura capturada en Lecturas'}).eq('id',m.id); }
+        comentario_cierre:'Lecturas capturadas'}).eq('id',m.id);
     }
   }
   // --- BRIEFING (día de admin del puesto) ---
-  if(+p.admin_dia===dw){
-    const b=await existe('briefing');
-    if(!b){ await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
-        titulo:'Briefing semanal del equipo',descripcion:'Reunión de arranque de semana: repasa pendientes, urgencias y prioridades.',
-        minutos_estimados:30,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:today,
-        oficio:'general',recomendacion:'Revisa lo que quedó de la semana pasada y acuerda las prioridades de esta.',prioridad:1,
-        metadata:{rutina:'briefing'}}); }
-  }
+  const bds=addDays(WK,+p.admin_dia||0);
+  if(worksOn(bds)){ const b=await existe('briefing',bds);
+    if(!b) await sb.from('mtto_tickets').insert({property_id:PROPID,origen:'rutina',clasificacion:'preventivo',
+        titulo:'Briefing semanal del equipo',descripcion:'Reunión de arranque de semana: pendientes, urgencias y prioridades. Dale Iniciar y Terminar (dura lo que dure).',
+        minutos_estimados:30,estado:'programado',asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:bds,
+        oficio:'general',prioridad:0,metadata:{rutina:'briefing'}}); }
 }
 
 const DONE=t=>['resuelto','cerrado'].includes(t.estado);
@@ -371,8 +366,9 @@ function paint(){
   // Tareas activas siempre arriba
   if(activas.length){ html+=`<div class="sechd">⏱️ En curso</div>`+activas.map(t=>card(t,ro)).join(''); }
 
+  const rutFirst=(a,b)=>{const ra=(a.metadata&&a.metadata.rutina)?0:1,rb=(b.metadata&&b.metadata.rutina)?0:1;return ra-rb;};
   if(VIEW==='hoy'){
-    const hoyRows=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado) && !DONE(t) && (t.dia_programado===today || !t.dia_programado));
+    const hoyRows=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado) && !DONE(t) && (t.dia_programado===today || !t.dia_programado)).sort(rutFirst);
     html+=`<div class="sechd">📋 Para hacer hoy</div>`;
     html+=hoyRows.length?hoyRows.map(t=>card(t,ro)).join(''):'<div class="empty">Nada por hacer hoy. Revisa «Esta semana» o toma un reactivo.</div>';
     const term=rows.filter(t=>DONE(t)&&doneDate(t)===today);
@@ -385,7 +381,7 @@ function paint(){
     for(let d=0;d<7;d++){ const ds=addDays(WK,d);
       const esWork = WORKSET.size? WORKSET.has(ds) : d<6;
       if(!esWork) continue;
-      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t));
+      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)).sort(rutFirst);
       const act=rows.filter(t=>t.dia_programado===ds&&['en_proceso','pausado'].includes(t.estado));
       // el tiempo de lectura/briefing ya va en la reserva; no lo contamos otra vez
       const planMin=[...dr,...act].filter(t=>!(t.metadata&&t.metadata.rutina)).reduce((s,t)=>s+(t.minutos_estimados||0),0);
@@ -453,6 +449,10 @@ function card(t,ro){
   if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado${t.reportado_por?' · espera cierre':''}</span>`; acts=info; }
   else if(t.estado==='en_proceso'){ acts=`<button class="btn sm" style="flex:1" onclick="terminar('${t.id}')">📸 Terminar</button><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>${info}`; }
   else if(t.estado==='pausado'){ acts=`<button class="btn sm" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button><button class="btn ghost sm" onclick="terminar('${t.id}')">📸 Terminar</button>${info}`; }
+  else if(rut==='medidores'){ // rutina diaria: se cierra sola al subir la lectura del día
+    acts=`<a class="btn sm" style="flex:1;text-align:center;text-decoration:none" href="/m/lecturas.html">📷 Tomar lecturas</a>${info}`;
+    extra=`<div class="note">Sube una foto por medidor (agua, luz, gas). Al registrar la lectura del día, esta tarea se marca sola.</div>`;
+  }
   else { // validado/programado
     if(t.requiere_compra){ extra=`<div class="note risk">🛒 Espera la compra para poder iniciar</div>`; }
     const dbtn=t.dia_programado?`📅 ${DIAS[dowIdx(t.dia_programado)]}`:'＋ Día';
