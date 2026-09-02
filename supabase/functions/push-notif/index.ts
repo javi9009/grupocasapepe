@@ -53,6 +53,26 @@ Deno.serve(async (req) => {
       const r = await sb.from('push_subscriptions').select('*').eq('user_id', userId).eq('activo', true)
       for (const s of r.data || []) subs[s.endpoint] = s
     }
+    // Red de seguridad: si se dio de alta antes de que cargara la sesión, su
+    // fila puede no traer employee_id ni user_id. La buscamos por correo.
+    if (!Object.keys(subs).length) {
+      let correo: string | null = null
+      if (employeeId) {
+        const r = await sb.from('empleado_login').select('user_id').eq('employee_id', employeeId).limit(1)
+        const uid = r.data && r.data[0] && r.data[0].user_id
+        if (uid) {
+          const u = await sb.auth.admin.getUserById(uid)
+          correo = (u.data && u.data.user && u.data.user.email) || null
+        }
+      } else if (userId) {
+        const u = await sb.auth.admin.getUserById(userId)
+        correo = (u.data && u.data.user && u.data.user.email) || null
+      }
+      if (correo) {
+        const r = await sb.from('push_subscriptions').select('*').eq('email', correo.toLowerCase()).eq('activo', true)
+        for (const s of r.data || []) subs[s.endpoint] = s
+      }
+    }
     const lista = Object.values(subs)
     if (!lista.length) return json({ sent: 0, reason: 'sin telefonos dados de alta' })
 
