@@ -549,21 +549,41 @@ async function lwAdd(id){const {error}=await sb.from('mtto_preventivo_plan').upd
 async function lwQuitar(id){const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); locWeekModal(window.LW.locId,window.LW.week);}
 
 async function fichaInst(id){
-  const {data:x}=await sb.from('mtto_preventivo_plan').select('id,minutos_estimados,oficio,periodicidad,recomendacion,ubicacion_id, cat:catalogo_id(tarea,minutos_estimados)').eq('id',id).single();
+  const {data:x}=await sb.from('mtto_preventivo_plan').select('id,minutos_estimados,oficio,periodicidad,recomendacion,ubicacion_id,catalogo_id, cat:catalogo_id(tarea,minutos_estimados,ejecucion)').eq('id',id).single();
   if(!x)return toast('No encontrado');
   const nm=(x.cat&&x.cat.tarea)||'Tarea'; const base=(x.cat&&x.cat.minutos_estimados)||x.minutos_estimados;
+  const ejec=(x.cat&&x.cat.ejecucion)||'interno';
+  window.FI={id,catId:x.catalogo_id,ejec,tarea:nm};
   const reco=x.recomendacion||autoReco(x.oficio||'general',nm);
   modal(`<h3>${esc(nm)} <span class="chip c-info">${esc(ofNombre(x.oficio||'general'))}</span></h3><div class="pad">
-    <div class="muted" style="font-size:12px;margin-bottom:8px">${(PER_META[x.periodicidad]||[x.periodicidad])[0]} · estándar ${base||'?'}m. Cambiar aquí ajusta <b>solo esta ocurrencia</b> (el estándar sigue igual).</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${(PER_META[x.periodicidad]||[x.periodicidad])[0]} · estándar ${base||'?'}m. Los minutos cambian <b>solo esta ocurrencia</b>; externo/compra aplican al trabajo.</div>
     <label>Minutos para esta ocurrencia</label><input id="fiMin" type="number" min="1" value="${x.minutos_estimados||base||''}">
     <label>Recomendación (autogenerada · edítala si quieres)</label><textarea id="fiReco" rows="3">${esc(reco)}</textarea>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-weight:400">
+      <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="fiExt" style="width:auto" ${ejec==='externo'?'checked':''}> 🏢 Lo hace un externo (proveedor)</label>
+      <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="fiCompra" style="width:auto" onchange="document.getElementById('fiCompraWrap').style.display=this.checked?'block':'none'"> 🛒 Solicitar compra</label>
+    </div>
+    <div id="fiCompraWrap" style="display:none;margin-top:8px">
+      <div class="form-grid"><div class="full"><label>Material a comprar</label><input id="fiMat" placeholder="Ej. juego de empaques, foco LED…"></div>
+      <div><label>Costo estimado (opcional)</label><input id="fiCosto" type="number" step="0.01"></div></div>
+    </div>
   </div><div class="foot"><button class="btn ghost sm" onclick="lwBack()">← Volver</button><button class="btn sm" onclick="saveFichaInst('${id}')">Guardar</button></div>`);
 }
 function lwBack(){ if(window.LW)locWeekModal(window.LW.locId,window.LW.week); else closeModal(); }
 async function saveFichaInst(id){
+  const fi=window.FI||{};
   const patch={minutos_estimados:parseInt($("#fiMin").value)||null,recomendacion:$("#fiReco").value.trim()||null};
   const {error}=await sb.from('mtto_preventivo_plan').update(patch).eq('id',id);
-  if(error)return toast(error.message); toast('Guardado'); if(window.LW)locWeekModal(window.LW.locId,window.LW.week); else closeModal();
+  if(error)return toast(error.message);
+  // Trabajo de externos -> marca el catálogo
+  const wantExt=$("#fiExt")&&$("#fiExt").checked;
+  if(fi.catId && wantExt!==(fi.ejec==='externo')){ await sb.from('mtto_preventivos_catalogo').update({ejecucion:wantExt?'externo':'interno'}).eq('id',fi.catId); }
+  // Solicitar compra -> cae en el módulo Compras
+  if($("#fiCompra")&&$("#fiCompra").checked){
+    const mat=($("#fiMat")&&$("#fiMat").value.trim())||fi.tarea||'Compra';
+    await sb.from('mtto_suministros').insert({property_id:PROP.id,material:mat,descripcion:mat,costo:parseFloat($("#fiCosto")&&$("#fiCosto").value)||null,estatus:'solicitado',semana:mondayOf(hoyMX()),solicitado_por:USER.id,solicitado_por_nombre:USER.email,subido_por:USER.id,subido_por_nombre:USER.email});
+  }
+  toast('Guardado'); if(window.LW)locWeekModal(window.LW.locId,window.LW.week); else closeModal();
 }
 
 async function lwCopiar(locId,week){
