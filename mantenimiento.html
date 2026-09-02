@@ -430,7 +430,7 @@ function ticketRow(t){
   const quien=[t.reportado_por_nombre?("por "+t.reportado_por_nombre):"", fecha].filter(Boolean).join(" · ");
   const stCls=t.estado==="pausado"?"c-correc":(["resuelto","cerrado"].includes(t.estado)?"c-prev":(t.estado==="cancelado"?"c-info":""));
   return `<tr>
-    <td><b>${esc(t.titulo||"(sin título)")}</b>${foto}${t.requiere_compra?' <span class="chip c-info">🛒 compra</span>':''}${t.oficio?` <span class="chip c-info">${esc(ofNombre(t.oficio))}</span>`:''}<div class="muted" style="font-size:12px">${esc((t.descripcion||"").slice(0,70))}${quien?` · <i>${esc(quien)}</i>`:''}</div></td>
+    <td><b>${esc(t.titulo||"(sin título)")}</b>${foto}${t.folio?` <span class="chip c-prev" style="font-family:ui-monospace,monospace">${esc(t.folio)}</span>`:''}${t.requiere_compra?' <span class="chip c-info">🛒 compra</span>':''}${t.oficio?` <span class="chip c-info">${esc(ofNombre(t.oficio))}</span>`:''}<div class="muted" style="font-size:12px">${esc((t.descripcion||"").slice(0,70))}${quien?` · <i>${esc(quien)}</i>`:''}</div></td>
     <td>${esc(t.ubic?.nombre||"—")}</td><td>${clsChip(t.clasificacion)}</td>
     <td>${stCls?`<span class="chip ${stCls}">${esc(t.estado)}</span>`:`<span class="st">${esc(t.estado)}</span>`}</td><td class="num">${t.minutos_estimados??"—"}</td>
     <td><div class="row-actions">${ticketActions(t)}</div></td></tr>`;
@@ -551,7 +551,7 @@ async function renderPrev(){
     sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre,orden)").eq("property_id",PROP.id).eq("activo",true),
     sb.from("mtto_ubicaciones").select("tipo").eq("property_id",PROP.id),
     sb.from("mtto_puesto").select("*"),
-    sb.from("mtto_preventivo_plan").select("estado").eq("property_id",PROP.id).eq("anio",anio)
+    sb.from("mtto_preventivo_plan").select("estado,equipo_id,eq:equipo_id(nombre, ubic:ubicacion_id(nombre))").eq("property_id",PROP.id).eq("anio",anio)
   ]);
   if(error)throw error; const rows=data||[];
   PREV_UBIS={nHab:(ub||[]).filter(u=>u.tipo==='habitacion').length, nArea:(ub||[]).filter(u=>u.tipo==='area').length};
@@ -572,6 +572,9 @@ async function renderPrev(){
   // Desglose por OFICIO (por subtarea × área, solo interno; sin rutina diaria/semanal)
   const OFI={}; interno.forEach(r=>{const n=alcanceN(r.alcance||'especifico');subsProg(r).forEach(st=>{const o=st.oficio||r.oficio||'general';OFI[o]=(OFI[o]||0)+n*vecesAnio(st.periodicidad)*(st.minutos_estimados||0)/60;});});
   const ofiRows=Object.keys(OFI).sort((a,b)=>OFI[b]-OFI[a]).map(o=>`<tr><td>${esc(ofNombre(o))}</td><td class="num">${Math.round(OFI[o])} h</td><td class="num"><b>${(OFI[o]/capPersona).toFixed(1)}</b></td></tr>`).join('');
+  // Agrupación POR MÁQUINA (¿la caldera recibió todos sus mtto?)
+  const MAQ={};(plan||[]).filter(p=>p.equipo_id&&p.eq).forEach(p=>{const k=p.equipo_id;const m=MAQ[k]=MAQ[k]||{nom:p.eq.nombre,area:p.eq.ubic?.nombre||'—',hechas:0,pend:0,tot:0};m.tot++;if(p.estado==='hecho')m.hechas++;else m.pend++;});
+  const maqRows=Object.values(MAQ).sort((a,b)=>b.pend-a.pend).map(m=>`<tr><td>${esc(m.nom)}</td><td class="muted">${esc(m.area)}</td><td class="num">${m.hechas}</td><td class="num"><b style="color:${m.pend?'var(--warn)':'var(--ok)'}">${m.pend}</b></td><td class="num">${m.tot}</td></tr>`).join('');
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
   const ofChips=[['','Todos'],['interno','Internos'],['externo','Externos']].concat(OFICIOS);
@@ -590,8 +593,12 @@ async function renderPrev(){
       <div style="flex:1;min-width:200px"><b>Cobertura anual ${anio}</b> — las tareas por habitación/área repartidas en el año.
         <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
       </div>
-      <button class="btn sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
+        <button class="btn sm" onclick="soltarPreventivos()">🎯 Soltar los que tocan → Tickets</button>
+      </div>
     </div></div>
+    ${maqRows?`<div class="card"><h3 style="margin:0">Por máquina (revisa que cada equipo tenga sus mtto)</h3><div class="scroll"><table><thead><tr><th>Máquina</th><th>Área</th><th class="num">hechas</th><th class="num">pend.</th><th class="num">plan/año</th></tr></thead><tbody>${maqRows}</tbody></table></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
       <span class="muted" style="font-size:12px">Filtrar:</span>
@@ -667,6 +674,13 @@ async function generarPlanPrev(anio){
   const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
   if(error)return toast(error.message);
   toast("Plan "+anio+" listo · "+(data||0)+" instancias");renderPrev();}
+async function soltarPreventivos(){
+  const wk=mondayOf(hoyMX());
+  if(!confirm("Soltar a Tickets todos los preventivos que vencen hasta esta semana ("+wk+")? Quedan sin asignar para repartir por prioridad."))return;
+  toast("Soltando…");
+  const {data,error}=await sb.rpc("mtto_soltar_preventivos",{p_prop:PROP.id,p_wk:wk});
+  if(error)return toast(error.message);
+  toast((data||0)+" preventivos soltados a Tickets");renderPrev();}
 const PER_OPTS=['diaria','semanal','quincenal','mensual','bimestral','trimestral','cuatrimestral','semestral','anual'];
 function subRowHtml(s){s=s||{};return `<tr data-sub="${s.id||''}" data-new="${s.id?'0':'1'}">
   <td><input class="sD" value="${esc(s.descripcion||'')}" placeholder="qué se hace"></td>
