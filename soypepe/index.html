@@ -127,8 +127,13 @@
 
   /* Barra inferior */
   .nav{position:fixed;left:0;right:0;bottom:0;z-index:30;background:#fff;border-top:1px solid var(--bd);display:grid;grid-template-columns:repeat(4,1fr);padding-bottom:var(--safe-b);box-shadow:0 -1px 8px rgba(0,0,0,.04)}
-  .nav button{appearance:none;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 8px;cursor:pointer;color:var(--txt3);font-size:10.5px;font-weight:600}
+  .nav button{position:relative;appearance:none;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 8px;cursor:pointer;color:var(--txt3);font-size:10.5px;font-weight:600}
   .nav button .ic{font-size:21px;line-height:1}
+  /* Contador de pendientes en la barra inferior */
+  .nav button .cb{position:absolute;top:4px;left:50%;margin-left:5px;min-width:18px;height:18px;padding:0 5px;
+    border-radius:9px;background:#C0392B;color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;
+    box-shadow:0 1px 4px rgba(0,0,0,.28);border:2px solid #fff;pointer-events:none}
+  .nav button .cb[hidden]{display:none}
   .nav button.active{color:var(--accent)}
   .nav button.active .ic{transform:translateY(-1px)}
 
@@ -965,6 +970,7 @@ window.addEventListener('message', function(ev){
   if(ev.origin!==location.origin) return;
   if(ev.data && ev.data.type==='cp-badge-refresh'){
     try{ if(window.cpBadge) window.cpBadge.refrescar(); }catch(e){}
+    try{ contarChatSinLeer(); }catch(e){}   // el numerito de Pepe Chat baja al leer
   }
   // Una página hija intentó volver a /soypepe/ dentro del iframe: en vez de
   // anidar la app, cerramos el embed y mostramos Inicio.
@@ -1328,13 +1334,131 @@ async function refrescarBotonAudit(){
     const hechas=new Set((aud||[]).map(a=>a.area_id));
     const faltan=(est||[]).filter(e=>e.check_in && ['privada','dorm'].includes(e.hk_areas?.tipo) && !hechas.has(e.area_id)).length;
     const t=b.querySelector('.t');
-    if(t) t.innerHTML = faltan ? 'Room audit <b style="color:var(--gold)">'+faltan+'</b>' : 'Room audit ✓';
+    if(t) t.textContent='Room audit';
+    badgeBolita(b, faltan);
   }catch(e){ /* módulo aún no disponible para este usuario */ }
+}
+
+/* ===== CONTADORES EN LAS BOLITAS =====
+   Pinta un numerito rojo encima del icono cuando hay algo pendiente.
+   Cada fuente consulta tablas verificadas del proyecto; si una consulta
+   falla (permisos, módulo no habilitado) esa bolita simplemente se queda
+   sin número: nunca rompe la pantalla ni bloquea a las demás. */
+
+function badgeBolita(btn, n, verde){
+  if(!btn) return;
+  var el=btn.querySelector('.cb');
+  if(!el){ el=document.createElement('span'); el.className='cb'; btn.appendChild(el); }
+  el.classList.toggle('ok', !!verde);
+  if(n>0){ el.textContent = n>99 ? '99+' : String(n); el.hidden=false; }
+  else { el.hidden=true; }
+}
+function bolitaPorHref(href){
+  return document.querySelector('.circle[data-href="'+href+'"]');
+}
+
+/* Tickets de mantenimiento sin cerrar. Los que me tocan a mí pesan como
+   pendiente propio; si superviso, cuento los nuevos de la propiedad. */
+async function contarMantenimiento(){
+  var btn=bolitaPorHref('/m/eloy.html'); if(!btn||btn.hidden) return;
+  try{
+    var correo=((await sb.auth.getUser()).data?.user?.email||'').toLowerCase();
+    var prop=await resolverProp(); if(!prop) return;
+    var r=await sb.from('mtto_tickets')
+      .select('id,estado,asignado_a')
+      .eq('property_id',prop)
+      .in('estado',['nuevo','pendiente','en_proceso']);
+    var t=r.data||[];
+    var mios=t.filter(function(x){ return (x.asignado_a||'').toLowerCase()===correo; }).length;
+    badgeBolita(btn, mios || t.filter(function(x){ return x.estado==='nuevo'; }).length);
+  }catch(e){}
+}
+
+/* Lecturas de hoy: si no se capturaron agua/luz/gas, queda pendiente. */
+async function contarLecturas(){
+  var btn=bolitaPorHref('/m/lecturas.html'); if(!btn||btn.hidden) return;
+  try{
+    var prop=await resolverProp(); if(!prop) return;
+    var hoy=hkHoyMX();
+    var r=await sb.from('mtto_lecturas')
+      .select('agua_lectura,luz_lectura,gas_lectura')
+      .eq('property_id',prop).eq('fecha',hoy).maybeSingle();
+    var d=r.data;
+    var faltan=0;
+    if(!d) faltan=3;
+    else{
+      if(d.agua_lectura==null) faltan++;
+      if(d.luz_lectura==null)  faltan++;
+      if(d.gas_lectura==null)  faltan++;
+    }
+    badgeBolita(btn, faltan);
+  }catch(e){}
+}
+
+/* Cuartos que me faltan por limpiar hoy. */
+async function contarLimpieza(){
+  var btn=$('cirLimpieza'); if(!btn||btn.hidden) return;
+  try{
+    if(!EMP) return;
+    var r=await sb.from('hk_asignaciones')
+      .select('id,hk_tareas(id,estado)').eq('fecha',hkHoyMX()).eq('employee_id',EMP).limit(1);
+    var a=(r.data||[])[0]; if(!a) return;
+    var tareas=a.hk_tareas||[];
+    badgeBolita(btn, tareas.filter(function(t){ return t.estado!=='hecha' && t.estado!=='ok'; }).length);
+  }catch(e){}
+}
+
+/* Conversaciones con mensajes que no he leído. Misma regla que usa la
+   lista del chat: hay mensaje posterior a mi last_read_at y no lo escribí yo.
+   El botón de Pepe Chat es configurable (navpin), así que lo buscamos por
+   su texto en vez de por posición fija. */
+function botonChat(){
+  var bs=document.querySelectorAll('#bottomNav button');
+  for(var i=0;i<bs.length;i++){
+    if(/pepe chat/i.test(bs[i].textContent||'')) return bs[i];
+  }
+  return null;
+}
+async function contarChatSinLeer(){
+  var btn=botonChat(); if(!btn) return;
+  try{
+    var correo=((await sb.auth.getUser()).data?.user?.email||'').toLowerCase();
+    if(!correo) return;
+    var p=await sb.from('chat_participantes')
+      .select('conversacion_id,last_read_at').eq('email',correo);
+    var partes=p.data||[];
+    if(!partes.length){ badgeBolita(btn,0); return; }
+    var ids=partes.map(function(x){ return x.conversacion_id; });
+    var leidoPor={};
+    partes.forEach(function(x){ leidoPor[x.conversacion_id]=x.last_read_at; });
+    var m=await sb.from('chat_mensajes')
+      .select('conversacion_id,autor_email,created_at')
+      .in('conversacion_id',ids)
+      .order('created_at',{ascending:false}).limit(400);
+    var msgs=m.data||[], visto={}, n=0;
+    for(var i=0;i<msgs.length;i++){
+      var msg=msgs[i];
+      if(visto[msg.conversacion_id]) continue;      // sólo el último de cada una
+      visto[msg.conversacion_id]=1;
+      if((msg.autor_email||'').toLowerCase()===correo) continue;  // lo escribí yo
+      var leido=leidoPor[msg.conversacion_id];
+      if(!leido || new Date(msg.created_at)>new Date(leido)) n++;
+    }
+    badgeBolita(btn,n);
+  }catch(e){}
+}
+
+async function refrescarBolitas(){
+  if(document.visibilityState==='hidden') return;
+  try{ await Promise.all([contarMantenimiento(), contarLecturas(), contarLimpieza(), contarChatSinLeer()]); }catch(e){}
 }
 
 function setupLimpieza(){
   refrescarBotonLimpieza();
   refrescarBotonAudit();
+  refrescarBolitas();
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBolitas(); });
+  setInterval(refrescarBolitas, 300000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonAudit(); });
   setInterval(refrescarBotonAudit, 300000);
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refrescarBotonLimpieza(); });
