@@ -148,9 +148,14 @@
   .pend details.pgrp>summary::-webkit-details-marker{display:none}
   .pend details.pgrp>summary::before{content:'▸ ';color:var(--muted)}
   .pend details.pgrp[open]>summary::before{content:'▾ ';color:var(--muted)}
+  /* Embebido en el panel: el panel ya trae su barra; ocultamos el header propio para no duplicarlo */
+  html.embed header.top .brand, html.embed #who, html.embed #btnSalir{display:none}
+  html.embed header.top{padding:4px 0;box-shadow:none;border-bottom:1px solid var(--rule);background:var(--ground)}
+  html.embed header.top .top-in:empty, html.embed header.top:has(.top-in > #propWrap:empty){display:none}
 </style>
 </head>
 <body>
+<script>try{if(window.self!==window.top)document.documentElement.classList.add('embed');}catch(e){document.documentElement.classList.add('embed');}</script>
 
 <div id="login" style="display:none">
   <form class="login-card" onsubmit="return doLogin(event)">
@@ -171,7 +176,7 @@
       <div class="top-sp"></div>
       <div id="propWrap"></div>
       <span class="who" id="who"></span>
-      <button class="btn ghost sm" onclick="logout()">Salir</button>
+      <button class="btn ghost sm" id="btnSalir" onclick="logout()">Salir</button>
     </div>
   </header>
   <nav class="secnav"><div class="secnav-in" id="secnav"></div></nav>
@@ -308,6 +313,32 @@ async function render(){
 }
 
 /* TABLERO */
+async function editCompra(id){
+  const {data:c}=await sb.from("mtto_suministros").select("*").eq("id",id).single(); if(!c)return toast("No encontrada");
+  const ESTA=['solicitado','autorizado','comprado','entregado','cancelado'];
+  modal(`<h3>Editar compra</h3><div class="pad"><div class="form-grid">
+    <div class="full"><label>Descripción / material</label><input id="scM" value="${esc(c.material||c.descripcion||'')}"></div>
+    <div><label>Costo</label><input id="scC" type="number" step="0.01" value="${c.costo||''}"></div>
+    <div><label>Estatus</label><select id="scE">${ESTA.map(e=>`<option ${((c.estatus||'solicitado')===e)?'selected':''}>${e}</option>`).join('')}</select></div>
+    <div class="full"><label>Link (opcional)</label><input id="scL" value="${esc(c.link||'')}"></div>
+  </div></div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button><button class="btn sm" onclick="saveCompra('${id}')">Guardar</button></div>`);
+}
+async function saveCompra(id){
+  const est=$("#scE").value;
+  const patch={material:$("#scM").value.trim()||null,descripcion:$("#scM").value.trim()||null,costo:parseFloat($("#scC").value)||null,estatus:est,link:$("#scL").value.trim()||null};
+  if(est==='entregado')patch.entregado_at=new Date().toISOString();
+  const {error}=await sb.from("mtto_suministros").update(patch).eq("id",id);
+  if(error)return toast(error.message);closeModal();toast("Compra actualizada");renderTablero();
+}
+async function entregarCompra(id){
+  const {error}=await sb.from("mtto_suministros").update({estatus:'entregado',entregado_at:new Date().toISOString()}).eq("id",id);
+  if(error)return toast(error.message);toast("Marcada como entregada ✓");renderTablero();
+}
+async function borrarCompra(id){
+  if(!confirm("¿Borrar esta compra? No se puede deshacer."))return;
+  const {error}=await sb.from("mtto_suministros").delete().eq("id",id);
+  if(error)return toast(error.message);toast("Compra borrada");renderTablero();
+}
 function consumoKpi(lbl,v,obj,unit,dec){const val=v==null?'—':v.toFixed(dec);const r=v==null?null:v/obj;
   const col=r==null?'var(--muted)':(r<=1?'var(--ok)':(r<=1.25?'var(--warn)':'var(--bad)'));
   return `<div class="kpi"><div class="n" style="color:${col}">${val}<span style="font-size:13px;color:var(--muted)"> ${unit}</span></div><div class="l">${lbl} · obj ${obj} ${unit}</div></div>`;}
@@ -316,7 +347,7 @@ async function renderTablero(){
   const win30=(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);})();
   const [{data:tk},{data:sum},{data:lec},{data:plan},{data:ext},{data:cc},{data:recs}]=await Promise.all([
     sb.from("mtto_tickets").select("estado,clasificacion,minutos_estimados,minutos_reales,asignado_nombre").eq("property_id",PROP.id),
-    sb.from("mtto_suministros").select("estatus,costo,material,descripcion,semana").eq("property_id",PROP.id),
+    sb.from("mtto_suministros").select("id,estatus,costo,material,descripcion,link,semana").eq("property_id",PROP.id),
     sb.from("mtto_lecturas").select("huespedes,fecha,agua_lectura,luz_lectura,gas_pct").eq("property_id",PROP.id),
     sb.from("mtto_preventivo_plan").select("estado,oficio").eq("property_id",PROP.id).eq("anio",anio),
     sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,presupuesto,critico,empresa,ultimo_realizado, eq:equipo_id(nombre)").eq("property_id",PROP.id).eq("ejecucion","externo").eq("activo",true),
@@ -393,7 +424,7 @@ async function renderTablero(){
     </div>
 
     <div class="card"><h3 style="margin:0">Compras pendientes de hacer · ${comprasPend.length}${comprasCosto?` <span class="muted" style="font-weight:500;font-size:13px">· ${money(comprasCosto)}</span>`:''}</h3>
-      ${comprasPend.length?`<div class="scroll"><table><tbody>${comprasPend.slice(0,20).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="pad muted" style="font-size:12px">Nada por comprar 👍</div>'}</div>
+      ${comprasPend.length?`<div class="scroll"><table><tbody>${comprasPend.slice(0,30).map(x=>`<tr><td>${esc(x.material||x.descripcion||'Compra')}${x.link?` <a class="lnk" href="${esc(x.link)}" target="_blank">🔗</a>`:''}</td><td class="muted">${esc(x.estatus||'')}</td><td class="num">${x.costo?money(x.costo):'—'}</td><td class="num" style="white-space:nowrap"><button class="btn ghost sm" title="Editar" onclick="editCompra('${x.id}')">✎</button> <button class="btn ghost sm" title="Marcar entregada" onclick="entregarCompra('${x.id}')">✓</button> <button class="btn ghost sm" title="Borrar" onclick="borrarCompra('${x.id}')">✕</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="pad muted" style="font-size:12px">Nada por comprar 👍</div>'}</div>
 
     <div class="card"><h3 style="margin:0">Preventivos logrados por categoría (${anio})</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th>Avance</th><th class="num">hechos/plan</th></tr></thead><tbody>${catRows||'<tr><td class="muted" style="padding:12px">Sin plan generado</td></tr>'}</tbody></table></div></div>
 
