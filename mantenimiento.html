@@ -373,11 +373,13 @@ async function renderCalendario(){
   const areaOrder=['Habitaciones','Áreas comunes'];
   const cols=Object.values(colMap).sort((a,b)=>{const aa=areaOrder.indexOf(a.area),bb=areaOrder.indexOf(b.area);const ax=aa<0?9:aa,bx=bb<0?9:bb; if(a.area!==b.area)return ax-bx||a.area.localeCompare(b.area); return a.label.localeCompare(b.label);});
   CAL.cols=cols;
-  // Semanas continuas de min a max
+  // Semanas: siempre jul→dic (2º semestre), ampliando si hay algo fuera de ese rango
   const withWk=plan.filter(r=>r.semana_programada), pool=plan.filter(r=>!r.semana_programada);
-  let weeks=[];
-  if(withWk.length){const ws=withWk.map(r=>r.semana_programada).sort(); let d=new Date(ws[0]+'T12:00:00Z'); const end=new Date(ws[ws.length-1]+'T12:00:00Z');
-    while(d<=end){weeks.push(d.toISOString().slice(0,10)); d=new Date(d.getTime()+6048e5);} }
+  const mondayISO=(dt)=>{const d=new Date(dt);const w=(d.getUTCDay()+6)%7;d.setUTCDate(d.getUTCDate()-w);return d.toISOString().slice(0,10);};
+  let ini=mondayISO(anio+'-07-01T12:00:00Z'), fin=mondayISO(anio+'-12-31T12:00:00Z');
+  if(withWk.length){const ws=withWk.map(r=>r.semana_programada).sort(); if(ws[0]<ini)ini=ws[0]; if(ws[ws.length-1]>fin)fin=ws[ws.length-1];}
+  let weeks=[]; let d=new Date(ini+'T12:00:00Z'); const end=new Date(fin+'T12:00:00Z');
+  while(d<=end){weeks.push(d.toISOString().slice(0,10)); d=new Date(d.getTime()+6048e5);}
   CAL.weeks=weeks;
   // Índices
   const cellIds={}, colTot={}, weekTot={}, poolByCol={};
@@ -891,9 +893,11 @@ async function renderPrev(){
         <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
-        <button class="btn sm" onclick="soltarPreventivos()">🎯 Soltar los que tocan → Tickets</button>
+        <button class="btn sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
       </div>
+    </div></div>
+    <div class="card"><div class="pad" style="font-size:12.5px;color:var(--muted)">
+      <b>Internos vs externos.</b> Los <b>internos</b> los programan Juan o Manuel en el <a onclick="go('cal')" style="color:var(--accent);cursor:pointer;font-weight:600">🗓️ Calendario</a> (no los asigna solo el sistema). Los <b>externos</b> son obligados (los llama Administración con Mantenimiento) y se preasignan como pedido desde <a onclick="go('prog')" style="color:var(--accent);cursor:pointer;font-weight:600">Reparto</a> → «Preasignar externos».
     </div></div>
     ${calStrip?`<div class="card"><div class="pad"><b>Calendario del plan ${anio}</b> <span class="muted" style="font-size:12px">— cada barra es una semana; altura = nº de tareas. Clic para ver esa semana. <span style="color:var(--bad)">rojo</span>=vencida sin hacer · <span style="color:var(--accent)">verde-azul</span>=próxima · <span style="color:var(--ok)">verde</span>=hecha.</span>
       <div style="display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:8px;overflow-x:auto">${calStrip}</div></div></div>`:''}
@@ -969,10 +973,12 @@ async function cancelPrev(id){if(!confirm("¿Quitar este preventivo del catálog
   const {error}=await sb.from("mtto_preventivos_catalogo").update({activo:false}).eq("id",id);
   if(error)return toast(error.message);toast("Quitado");renderPrev();}
 async function generarPlanPrev(anio){
+  if(!confirm("Regenerar el plan "+anio+" de preventivos INTERNOS. Se rehará la lista de trabajos del año y quedarán TODOS en «por asignar» en el Calendario (Juan/Manuel los colocan). ¿Continuar?"))return;
   toast("Generando plan…");
+  await sb.from("mtto_preventivo_plan").delete().eq("property_id",PROP.id).eq("anio",anio);
   const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
   if(error)return toast(error.message);
-  toast("Plan "+anio+" listo · "+(data||0)+" instancias");renderPrev();}
+  toast("Plan "+anio+" listo · "+(data||0)+" trabajos en «por asignar»");renderPrev();}
 async function soltarPreventivos(){
   const wk=mondayOf(hoyMX());
   if(!confirm("Soltar a Tickets todos los preventivos que vencen hasta esta semana ("+wk+")? Quedan sin asignar para repartir por prioridad."))return;
@@ -980,6 +986,31 @@ async function soltarPreventivos(){
   const {data,error}=await sb.rpc("mtto_soltar_preventivos",{p_prop:PROP.id,p_wk:wk});
   if(error)return toast(error.message);
   toast((data||0)+" preventivos soltados a Tickets");renderPrev();}
+// Preasignar EXTERNOS: crea un "pedido" por cada preventivo externo vencido (no duplica los ya abiertos)
+async function preasignarExternos(){
+  const wk=PROG_WK||mondayOf(hoyMX());
+  const [{data:ext},{data:abiertos}]=await Promise.all([
+    sb.from('mtto_preventivos_catalogo').select('id,tarea,periodicidad,oficio,empresa,presupuesto,critico,ubicacion_id,equipo_id,ultimo_realizado, proveedor_contacto').eq('property_id',PROP.id).eq('ejecucion','externo').eq('activo',true),
+    sb.from('mtto_tickets').select('preventivo_catalogo_id').eq('property_id',PROP.id).eq('origen','externo').not('estado','in','("cerrado","cancelado")')
+  ]);
+  const yaAbierto=new Set((abiertos||[]).map(t=>t.preventivo_catalogo_id));
+  const DIAS_PER={semanal:7,quincenal:15,mensual:30,bimestral:60,trimestral:90,cuatrimestral:120,semestral:180,anual:365};
+  const hoy=hoyMX();
+  const vence=e=>{ if(!e.ultimo_realizado)return true; const d=new Date(e.ultimo_realizado); d.setDate(d.getDate()+(DIAS_PER[e.periodicidad]||365)); return d.toISOString().slice(0,10)<=hoy; };
+  const nuevos=(ext||[]).filter(e=>!yaAbierto.has(e.id)&&vence(e)).map(e=>({
+    property_id:PROP.id,origen:'externo',clasificacion:'preventivo',preventivo_catalogo_id:e.id,
+    ubicacion_id:e.ubicacion_id,equipo_id:e.equipo_id,oficio:e.oficio||'general',
+    titulo:('🏢 '+e.tarea+(e.empresa?' · '+e.empresa:'')).slice(0,90),
+    descripcion:'Pedido a proveedor externo'+(e.empresa?(' ('+e.empresa+')'):'')+'. Periodicidad '+(e.periodicidad||'anual')+'.',
+    minutos_estimados:null,estado:'validado',semana_programada:wk,requiere_compra:true,prioridad_direccion:!!e.critico,
+    recomendacion:e.proveedor_contacto?('Contacto: '+e.proveedor_contacto):null,
+    metadata:{externo:true,empresa:e.empresa||null,presupuesto:e.presupuesto||null},eloy_completo:true
+  }));
+  if(!nuevos.length)return toast('No hay externos vencidos por preasignar 👍');
+  const {error}=await sb.from('mtto_tickets').insert(nuevos);
+  if(error)return toast(error.message);
+  toast(nuevos.length+' externos preasignados como pedido'); renderProg();
+}
 function planSemana(wk){
   const rows=(window.PREV_PLAN||[]).filter(p=>p.semana_programada===wk);
   const d=new Date(wk+'T12:00:00Z'); const lbl=d.toLocaleDateString('es-MX',{day:'2-digit',month:'long'});
@@ -1116,8 +1147,7 @@ async function renderProg(){
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
       <div class="muted" style="font-size:13px;flex:1">La barra de cada técnico es su jornada (horas del turno, defínelo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Turnos</a>). Se llena con lo asignado.</div>
-      <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar mínimo de preventivos</button>
-      <button class="btn sm" onclick="autoAsignarSemana()">🧠 Asignar semana (propuesta)</button>
+      <button class="btn sm ghost" onclick="preasignarExternos()">🏢 Preasignar externos (pedidos)</button>
       <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
     </div></div>
     <div class="progwrap">
@@ -1448,7 +1478,13 @@ async function renderProductividad(){
       <div class="kpi"><div class="n" style="color:${efCol}">${ef==null?'—':ef+'%'}</div><div class="l">eficiencia vs estimado</div></div>
     </div>
     <h3 style="margin:18px 2px 8px">Cumplimiento por técnico · semana</h3>
-    <div class="prodgrid">${cards||'<div class="muted">Sin técnicos en esta sede.</div>'}</div>`;
+    <div class="prodgrid">${cards||'<div class="muted">Sin técnicos en esta sede.</div>'}</div>
+    ${(()=>{const term=tks.filter(t=>DONEP(t)&&doneWk(t)===wk).sort((a,b)=>(b.resuelto_at||b.cerrado_at||'').localeCompare(a.resuelto_at||a.cerrado_at||''));
+      const cl={reactivo:'c-react',correctivo:'c-correc',preventivo:'c-prev'};
+      return `<div class="card" style="margin-top:16px"><h3 style="margin:0">✅ Trabajos terminados esta semana · ${term.length}</h3>
+      <div class="scroll"><table><thead><tr><th>Trabajo</th><th>Área</th><th>Quién</th><th class="num">Real</th><th class="num">Est.</th><th>Día</th></tr></thead>
+      <tbody>${term.length?term.map(t=>{const dd=(t.resuelto_at||t.cerrado_at||'').slice(0,10);
+        return `<tr><td><span class="chip ${cl[t.clasificacion]||'c-info'}">${esc(t.clasificacion||'')}</span> ${esc(t.titulo||'—')}</td><td class="muted">${esc(t.ubic?.nombre||'—')}</td><td>${esc(t.asignado_nombre||'—')}</td><td class="num">${t.minutos_reales?t.minutos_reales+'m':'—'}</td><td class="num muted">${t.minutos_estimados?t.minutos_estimados+'m':'—'}</td><td class="muted">${dd?dd.slice(8,10)+'/'+dd.slice(5,7):''}</td></tr>`;}).join(''):'<tr><td colspan="6" class="muted" style="padding:12px">Nada terminado esta semana todavía.</td></tr>'}</tbody></table></div></div>`;})()}`;
 }
 function techProdCard(t,tks,pu,wk){
   const cap=puestoCap(pu); const capMin=cap.prog*60||1;
