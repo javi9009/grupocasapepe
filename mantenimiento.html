@@ -220,10 +220,11 @@ const VIEWS=[
 const DIAS_SEM=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 // Capacidad programable de un puesto: 48h menos admin + lectura + reserva reactivos
 function puestoCap(pu){
-  const p=pu||{horas_semana:48,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]};
+  const p=pu||{horas_semana:48,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5],min_preventivo_h:8};
   const lect=(+p.lectura_horas||0)*((p.lectura_dias||[]).length||0);
   const admin=+p.admin_horas||0, react=+p.reactivo_horas||0, sem=+p.horas_semana||48;
-  return { sem, admin, react, lect, reservado:admin+react+lect, prog:Math.max(0,sem-admin-react-lect) };
+  const minPrev=(p.min_preventivo_h==null?8:+p.min_preventivo_h);
+  return { sem, admin, react, lect, minPrev, reservado:admin+react+lect, prog:Math.max(0,sem-admin-react-lect) };
 }
 let CUR="tablero";
 
@@ -611,7 +612,7 @@ async function renderProg(){
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
       <div class="muted" style="font-size:13px;flex:1">Base 48 h/semana por técnico; se descuentan admin, lectura y la reserva de reactivos. La barra se pone en rojo si se come las 8 h de reactivos. Ajústalo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Puestos</a>.</div>
-      <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar ${c.min_preventivo_h||8}h de preventivos</button>
+      <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar mínimo de preventivos</button>
       <button class="btn sm" onclick="autoAsignarSemana()">🧠 Asignar semana (propuesta)</button>
       <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
     </div></div>
@@ -633,7 +634,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
   const objetivo=cap.prog;
   const total=workMin+travelMin, capMin=objetivo*60||1;
   const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
-  const minPrev=(c.min_preventivo_h||8)*60, prevOk=prevMin>=minPrev;
+  const minPrevH=cap.minPrev, minPrev=minPrevH*60, prevOk=prevMin>=minPrev;
   const pct=Math.min(100,Math.round(total/capMin*100));
   const nv=pct>=95?'bad':(pct>=75?'warn':'');
   const w=x=>Math.max(0,Math.min(100,x/capMin*100));
@@ -648,7 +649,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
       <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
-    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${(c.min_preventivo_h||8)}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">de 48h · ${cap.react}h react · ${cap.admin}h admin · ${cap.lect}h lectura</span></div>
+    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">de 48h · ${cap.react}h react · ${cap.admin}h admin · ${cap.lect}h lectura</span></div>
     <div class="achips" data-drop="${t.id}">${chips}</div></div>`;
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
@@ -760,7 +761,8 @@ function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
   const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).prog*60;
-  const need=(PROG_STATE.c.min_preventivo_h||8)*60, half=(PROG_STATE.c.horas_dia||8)/2*60;
+  const needOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
+  const half=(PROG_STATE.c.horas_dia||8)/2*60;
   const load={},prevLoad={},travel={};
   board.forEach(t=>{const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id);
     travel[t.id]=!!(t._flota&&mine.length);
@@ -769,7 +771,7 @@ async function autoAsignarSemana(){
   const needTravel=t=>(t._flota&&!travel[t.id])?half:0;
   const inserts=[],updates=[];
   const due=PROG_STATE.prevCat.slice(); let di=0;
-  for(const t of board){ while(prevLoad[t.id]<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
+  for(const t of board){ const need=needOf(t); while(prevLoad[t.id]<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
     if(needTravel(t)){load[t.id]+=half;travel[t.id]=true;} inserts.push(prevInsert(r,t.id,min)); load[t.id]+=min; prevLoad[t.id]+=min; } }
   const pend=PROG_STATE.pend.slice().sort((a,b)=>(b._u||0)-(a._u||0));
   for(const r of pend){ const min=r.minutos_estimados||estimMin(r).min;
@@ -796,9 +798,9 @@ async function lanzarAsignacion(){
   toast('Asignación lanzada a '+notifs.length+' técnico(s)');
 }
 async function autoPrevAssign(){
-  if(!PROG_STATE)return; const need=(PROG_STATE.c.min_preventivo_h||8)*60;
+  if(!PROG_STATE)return;
   const due=PROG_STATE.prevCat.slice(); let di=0; const inserts=[];
-  for(const t of PROG_STATE.board){
+  for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
     let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
     while(cur<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
       inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
@@ -818,7 +820,7 @@ async function renderConfig(){
   const propName=id=>{const p=PROP_ALL.find(x=>x.id===id);return p?p.n:'—';};
   const dchk=(name,arr)=>DIAS_SEM.map((d,i)=>`<label class="dchk"><input type="checkbox" data-g="${name}" value="${i}" ${(arr||[]).map(Number).includes(i)?'checked':''}> ${d}</label>`).join('');
   const cards=(emps||[]).map(e=>{
-    const pu=puMap[e.id]||{employee_id:e.id,property_id:e.property_id,horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]};
+    const pu=puMap[e.id]||{employee_id:e.id,property_id:e.property_id,horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5],min_preventivo_h:8};
     const cap=puestoCap(pu);
     return `<div class="card cfgcard" data-emp="${e.id}"><div class="pad">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:15px">${esc(e.nombre_display||e.nombre)}</b><span class="chip c-info">${esc(propName(e.property_id))}</span></div>
@@ -833,9 +835,10 @@ async function renderConfig(){
       </div>
       <div class="cfggrid" style="margin-top:10px">
         <div><label>Lectura — horas por día</label><input type="number" step="0.25" data-f="lectura_horas" value="${+pu.lectura_horas}"></div>
-        <div><label>Balance</label><div class="muted" style="font-size:12.5px;padding-top:8px">Reservado <b>${cap.reservado.toFixed(1)}h</b> → Programable <b style="color:var(--accent)">${cap.prog.toFixed(1)}h</b></div></div>
+        <div><label>Mínimo preventivos (h/sem)</label><input type="number" step="0.5" data-f="min_preventivo_h" value="${cap.minPrev}"></div>
       </div>
       <label style="margin-top:10px">Lectura — días</label><div class="dias">${dchk('lectura_dias',pu.lectura_dias)}</div>
+      <div class="muted" style="font-size:12.5px;margin-top:10px">Reservado <b>${cap.reservado.toFixed(1)}h</b> → Programable <b style="color:var(--accent)">${cap.prog.toFixed(1)}h</b> · mínimo preventivos <b>${cap.minPrev}h</b></div>
       <div class="foot" style="margin-top:12px"><button class="btn sm" onclick="saveConfig('${e.id}')">Guardar</button></div>
     </div></div>`;
   }).join('');
@@ -852,6 +855,7 @@ window.saveConfig=async id=>{
     admin_dia:+g('admin_dia').value,
     admin_horas:+g('admin_horas').value||0,
     lectura_horas:+g('lectura_horas').value||0,
+    min_preventivo_h:+g('min_preventivo_h').value||0,
     dias_trabajo:days('dias_trabajo'),
     lectura_dias:days('lectura_dias'),
     updated_at:new Date().toISOString()};
