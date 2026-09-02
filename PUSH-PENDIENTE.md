@@ -32,6 +32,20 @@ por `/m/mensajes.html`: sin ese filtro cada mensaje llegaba al teléfono dos
 veces. Efecto lateral asumido: "te añadieron a un grupo" no manda push, se ve
 sólo en la campana.
 
+## Avisos del ciclo de un ticket de mantenimiento
+
+Trigger `mtto_tickets_avisos_trg` (`AFTER UPDATE on mtto_tickets`). Escribe en
+`notificaciones`, así que sale por la campana **y** por el teléfono:
+
+| Cuándo | A quién | Aviso |
+|---|---|---|
+| cambia `asignado_a` | al técnico nuevo (`employee_id`) | 🔧 Te asignaron un ticket |
+| `estado` → `resuelto` | a quien lo reportó (`reportado_por`, que es un `user_id`) | ✅ Resolvieron tu reporte · revísalo y ciérralo |
+| `estado` → `cerrado` | al técnico | 🔒 Cerraron tu ticket |
+
+Ojo con los dos tipos de id: `asignado_a` es `employees.id` y `reportado_por`
+es el `auth.users.id`. El trigger traduce el segundo vía `empleado_login`.
+
 ## Claves y secretos
 
 - VAPID pública (va en el cliente): `BE1A8YAVdUnW0_y7zFiURL0As5fTFkbYy2Z0A30KnOOYQI5w4MF-LLUGk5saVuscA0991BGXKiM57BHshQQdKFQ`
