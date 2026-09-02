@@ -64,8 +64,8 @@ textarea{min-height:54px;resize:vertical}
 <div><label>Ubicación</label><select id="f_ubic"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
 <div><label>Salario bruto mensual (MXN) *</label><input id="f_sal" type="number" step="0.01"></div>
 <div><label>Edad</label><input id="f_edad" type="number" min="16" max="90"></div>
-<div><label>Bono de puntualidad 10%</label><select id="f_bono"><option value="no">No</option><option value="si">Sí</option></select></div>
-<div class="full"><label>Bonos / complementos adicionales</label><input id="f_bonos" placeholder="Ej. comisión de ventas tours 5%, propinas…"></div>
+<div class="full"><label>Bonos del catálogo (según rol y área — marca uno o varios)</label><div id="bonosList" style="display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto;border:1px solid var(--rule,#ddd);border-radius:8px;padding:8px;font-size:13px">Cargando catálogo…</div></div>
+<div class="full"><label>Otros bonos / complementos (texto libre)</label><input id="f_bonos" placeholder="Ej. comisión de ventas tours 5%, propinas…"></div>
 <div class="full"><label>Horario</label><input id="f_horario" placeholder="Ej. Lun–Sáb 07:00–15:00, descansa domingo"></div>
 <div><label>Incluye hospedaje</label><select id="f_hospedaje"><option value="no">No</option><option value="si">Sí ($3,500/mes)</option></select></div>
 <div class="full"><label>Otros puntos a considerar</label><textarea id="f_otros" placeholder="Cláusulas o condiciones especiales"></textarea></div>
@@ -96,6 +96,52 @@ function fmtd(d){if(!d)return '—';return new Date((''+d).slice(0,10)+'T00:00:0
 function money(v){return v==null?'—':'$'+Number(v).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function cap(s){return s?(''+s).charAt(0).toUpperCase()+(''+s).slice(1):'';}
 function esc(s){return (''+(s==null?'':s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+let BONOSCAT=[];
+async function loadBonosCat(){try{const {data}=await sb.from('bonos_config').select('id,area,nombre,tipo,monto_mensual,monto_trimestral,monto_anual,tramos,sedes,activo').eq('activo',true).order('area').order('orden');BONOSCAT=data||[];}catch(e){BONOSCAT=[];}}
+function bonoAreaDe(e){
+ const p=(((e&&e.puesto)||'')+' '+((e&&e.area)||'')).toLowerCase();
+ if(/ama de llaves/.test(p))return 'Ama de Llaves';
+ if(/recamarista|camarista|areas comunes|áreas comunes|areas publicas|áreas públicas|limpieza|housekeeping/.test(p))return 'Recamaristas y Áreas Comunes';
+ if(/chef|cocin/.test(p))return 'Chef';
+ if(/compras/.test(p))return 'Jefe de Compras';
+ if(/recursos humanos|rrhh/.test(p))return 'Recursos Humanos';
+ if(/revenue|pricing/.test(p))return 'Revenue Management';
+ if(/front desk|recepci/.test(p))return 'Equipo Front Desk';
+ if(/manteni/.test(p))return 'Mantenimiento';
+ if(/gerente operativ|sub ?gerente/.test(p))return 'Sub Gerente Operativo';
+ if(/guest|experien|tour|sincr/.test(p))return 'Equipo Guest Experience';
+ if(/contab|finanz|tesorer/.test(p))return 'Contabilidad';
+ if(/dirección general|director general/.test(p))return 'Dirección General';
+ if(/gerente administrativo|dirección|admin/.test(p))return 'Dirección Admin';
+ if(/azotea|a&b|barra|mesero|bartender|animaci/.test(p))return 'Gerente Administrativo Azotea';
+ if(/gerente|gerencia|sub gerente|subgerente/.test(p))return 'Gerencia Hotel';
+ return '';
+}
+function bonoElegible(x,e){
+ if(x.activo===false)return false;
+ const csv=s=>String(s||'').toLowerCase().split(/[,;/]+/).map(v=>v.trim()).filter(Boolean);
+ const tr=csv(x.tramos); if(tr.length){const mio=((e&&e.tramo)||'').toLowerCase(); if(!mio||!tr.some(v=>mio.includes(v)||v.includes(mio)))return false;}
+ const sd=csv(x.sedes); if(sd.length){const mia=((e&&e.sede)||'').toLowerCase(); if(!mia||!sd.some(v=>mia.includes(v)||v.includes(mia)))return false;}
+ return true;
+}
+function bonosTexto(b){
+ if(!b)return '';
+ const parts=[];
+ if(b.puntualidad)parts.push('Bono de puntualidad del 10% sobre el salario, que se pierde al acumular un retardo o falta injustificada en la quincena');
+ if(Array.isArray(b.lista)&&b.lista.length)parts.push('Bonos por objetivos conforme al esquema vigente de la empresa: '+b.lista.map(x=>x.nombre+' ('+x.monto+')').join('; ')+' — sujetos al cumplimiento de metas verificado en el informe mensual y pagaderos a mes vencido');
+ if(b.otros)parts.push(b.otros);
+ return parts.join('. ');
+}
+function bonoMontoTxt(x){if(x.monto_mensual)return money(x.monto_mensual)+'/mes';if(x.monto_trimestral)return money(x.monto_trimestral)+'/trim';if(x.monto_anual)return money(x.monto_anual)+'/año';return 'monto por definir';}
+function renderBonosList(e){
+ const box=$('bonosList'); if(!box)return;
+ const areaDef=bonoAreaDe(e);
+ const cat=BONOSCAT.filter(x=>x.area===areaDef&&bonoElegible(x,e));
+ let h='<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bono_punt"> <span><b>Bono de puntualidad (10% del salario)</b> — se pierde con 1 retardo o falta en la quincena</span></label>';
+ h+=cat.map(x=>'<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="bonoCat" value="'+x.id+'" data-nombre="'+esc(x.nombre)+'" data-monto="'+esc(bonoMontoTxt(x))+'"> <span>'+esc(x.nombre)+' <span style="color:#888">('+esc(x.tipo||'objetivo')+' · '+esc(bonoMontoTxt(x))+')</span></span></label>').join('');
+ if(!cat.length)h+='<div style="color:#888">Sin bonos de catálogo para el área «'+esc(areaDef||'—')+'» — puedes usar el campo de texto libre.</div>';
+ box.innerHTML=h;
+}
 function chainOf(cat){if(cat==='practicante')return {n:1,meses:4,label:'1 carta compromiso de prácticas (programa de 480 h ≈ 16 semanas, sin salario ni relación laboral)'};return cat==='confianza'?{n:2,meses:3,label:'2 contratos de 3 meses (180 días de prueba)'}:{n:3,meses:1,label:'3 contratos de 1 mes (90 días de prueba)'};}
 let MACHOTE='',MACHOTE_PRACT='',FIRMA_PATRON='';
 async function loadFirma(){try{const {data}=await sb.from('firma_titular').select('data_uri').eq('clave','patron').maybeSingle();FIRMA_PATRON=(data&&data.data_uri)||'';}catch(e){FIRMA_PATRON='';}}
@@ -107,7 +153,7 @@ function fillMachote(e,c){
   const esPract=c.categoria==='practicante';
   const TPL=esPract?MACHOTE_PRACT:MACHOTE;
   if(!TPL) return buildContrato(e,c);
-  const bonosTxt=((c.bonos&&((c.bonos.puntualidad?'Bono de puntualidad del 10%':'')+(c.bonos.otros?((c.bonos.puntualidad?'; ':'')+c.bonos.otros):'')))||'N/A');
+  const bonosTxt=bonosTexto(c.bonos)||'N/A';
   const map={
     trabajador_nombre:e.nombre||'', trabajador_apellido:e.apellido||'',
     trabajador_nacionalidad:e.nacionalidad||'mexicana', trabajador_edad:(c.edad||edadDe(e.fecha_nacimiento)),
@@ -215,7 +261,7 @@ $('f_rol').value=SEL.puesto||'';
 $('f_cat').value=/practicante/i.test(SEL.puesto||'')?'practicante':((SEL.categoria_laboral==='confianza')?'confianza':'operativo');
 $('f_sal').value=SEL.salario_bruto||SEL.sueldo_base||'';
 $('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';$('f_edad').value=edadDe(SEL.fecha_nacimiento)||'';
-$('f_bono').value='no';$('f_bonos').value='';$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
+renderBonosList(SEL);$('f_bonos').value='';$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
 calcVig();
 $('formCard').scrollIntoView({behavior:'smooth'});
 }
@@ -223,9 +269,8 @@ function closeForm(){$('formCard').classList.add('hide');SEL=null;}
 
 function buildContrato(e,c){
 const ben=(e.beneficiarios||[]).map(b=>`<tr><td>${esc(b.nombre||'')}</td><td>${esc(b.parentesco||'')}</td><td>${b.porcentaje!=null?b.porcentaje+'%':''}</td></tr>`).join('')||'<tr><td colspan="3" style="color:#888">Sin beneficiarios designados</td></tr>';
-const bonos=[];if(c.bonos&&c.bonos.puntualidad)bonos.push('Bono de puntualidad del 10% sobre el salario, sujeto a no acumular retardos ni faltas injustificadas en el periodo');
-if(c.bonos&&c.bonos.otros)bonos.push(c.bonos.otros);
-const bonosTxt=bonos.length?('<p><b>Percepciones adicionales:</b> '+esc(bonos.join('; '))+'.</p>'):'';
+const _bt=bonosTexto(c.bonos);
+const bonosTxt=_bt?('<p><b>Percepciones adicionales:</b> '+esc(_bt)+'.</p>'):'';
 return `
 <h1>CONTRATO INDIVIDUAL DE TRABAJO</h1>
 <div style="text-align:center;font-size:12px;color:#555">Por tiempo determinado · Periodo de prueba · Contrato ${c.numero} de ${c.total_contratos}</div>
@@ -282,7 +327,9 @@ if(_faltan.length){m.className='msg err';m.textContent='Faltan datos del trabaja
 const ch=chainOf(cat); const fin=addMonths(inicio,ch.meses);
 const dias=Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1;
 const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,
-bonos:esPract?null:{puntualidad:$('f_bono').value==='si',otros:$('f_bonos').value.trim()||null},
+bonos:esPract?null:{puntualidad:!!($('bono_punt')&&$('bono_punt').checked),
+ lista:[...document.querySelectorAll('.bonoCat:checked')].map(b=>({id:b.value,nombre:b.dataset.nombre,monto:b.dataset.monto})),
+ otros:$('f_bonos').value.trim()||null},
 jornada:'48 horas semanales, de lunes a sábado',dia_descanso:'Domingo',horario:$('f_horario').value.trim()||null,
 fecha_inicio:inicio,vigencia_fin:fin.toISOString().slice(0,10),dias,numero:1,total_contratos:ch.n,tipo:esPract?'carta_practicas':'prueba',
 ubicacion:($('f_ubic')?$('f_ubic').value:null)||SEL.sede||null,edad:($('f_edad')?$('f_edad').value:null),hospedaje:($('f_hospedaje')&&$('f_hospedaje').value==='si'),otros:$('f_otros').value.trim()||null};
@@ -316,7 +363,7 @@ jornada:c.jornada,dia_descanso:c.dia_descanso,horario:c.horario,fecha_inicio:c.f
 numero:1,total_contratos:ch.n,tipo:c.tipo||'prueba',otros:c.otros,estatus:'enviado_pendiente_firma',contrato_html:html,created_by:SESSEMAIL};
 const r=await sb.from('contratos').insert(row);if(r.error)throw new Error(r.error.message);
 const empUpd={fecha_inicio_labores:c.fecha_inicio,contrato_categoria:c.categoria,tipo_contrato:c.tipo||'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'};
-if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;}
+if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;empUpd.bono_puntualidad=!!(c.bonos&&c.bonos.puntualidad);}
 await sb.from('employees').update(empUpd).eq('id',emp.id);
 try{const _ord=['solicitada','info_recibida','aceptada','activa','notificada','expediente','integrada'];const _ci=_ord.indexOf(emp.alta_etapa||'solicitada');const _h=Array.isArray(emp.alta_historial)?emp.alta_historial:[];const _u={alta_historial:[..._h,{etapa:'contrato_enviado',fecha:new Date().toISOString(),por:SESSEMAIL}]};if(_ci>-1&&_ci<_ord.indexOf('activa'))_u.alta_etapa='activa';await sb.from('employees').update(_u).eq('id',emp.id);}catch(e){}
 try{await sb.from('notificaciones').insert({employee_id:emp.id,titulo:esPract?'📄 Tienes tu carta de prácticas por firmar':'📄 Tienes un contrato por firmar',cuerpo:esPract?'Tu carta compromiso de prácticas está lista. Revísala y fírmala desde SoyPepe.':'Tu contrato está listo. Revísalo y fírmalo desde SoyPepe.',icono:'📄'});}catch(e){}
@@ -324,6 +371,6 @@ $('doc').setAttribute('contenteditable','false');PENDING=null;$('ov').classList.
 m.className='msg ok';m.textContent='✓ Contrato enviado al trabajador para firma (1 de '+ch.n+').';load();
 }catch(e){m.className='msg err';m.textContent='⚠ '+e.message;$('ovSend').disabled=false;}
 }
-loadMachote();loadFirma();load();
+loadMachote();loadFirma();loadBonosCat();load();
 </script><script src="/m/tablekit.js" defer></script>
 </body></html>
