@@ -50,6 +50,31 @@
   .send:disabled{opacity:.5}
   #login{margin:auto;text-align:center;color:var(--ink2);padding:24px}
   #login a{color:var(--brand);font-weight:700}
+  /* Botón "por confirmar" en el header */
+  .pendbtn{position:relative;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:7px 11px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;display:none;align-items:center;gap:6px}
+  .pendbtn.has{border-color:var(--brand);color:#bff0d4}
+  .pendbtn .bdg{background:var(--brand);color:#04120c;border-radius:999px;font-size:11px;font-weight:900;min-width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
+  /* Aviso de reportes por confirmar */
+  .confhd{align-self:stretch;color:var(--ink2);font-size:12px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;margin:4px 2px 0}
+  /* Fila compacta; se abre para ver foto y detalle */
+  .confirm{align-self:stretch;border:1px solid var(--brand);background:#14251c;border-radius:14px;overflow:hidden}
+  .confirm>summary{list-style:none;cursor:pointer;padding:11px 13px;display:flex;align-items:center;gap:9px}
+  .confirm>summary::-webkit-details-marker{display:none}
+  .confirm>summary::after{content:'⌄';margin-left:auto;color:var(--ink2);font-size:16px;flex:none}
+  .confirm[open]>summary::after{content:'⌃'}
+  .confirm .ci{font-size:18px;flex:none}
+  .confirm .ct{font-weight:800;font-size:14px;color:#dff7ea;line-height:1.2}
+  .confirm .cm{font-size:11.5px;color:var(--ink2);margin-top:2px;display:block}
+  .confirm .cbody{padding:0 13px 13px}
+  .confirm .cnote{font-size:12.5px;color:var(--ink2);margin:2px 0 8px;background:var(--bg);border-radius:9px;padding:7px 9px}
+  .confirm .cbody img{max-width:100%;border-radius:10px;display:block}
+  .cbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .cbtns button{border:none;border-radius:11px;padding:11px 13px;font:inherit;font-weight:800;font-size:13.5px;cursor:pointer;min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:6px;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+  .cbtns button>*{pointer-events:none}
+  .cbtns .ok{flex:1;background:var(--brand);color:#04120c}
+  .cbtns .no{background:var(--bg);color:var(--ink);border:1px solid var(--line)}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:76px;background:#e9f5ee;color:#0f1512;padding:10px 16px;border-radius:10px;font-size:13.5px;font-weight:700;z-index:80;opacity:0;transition:.2s;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .toast.show{opacity:1} .toast.bad{background:#f4d9d4}
 </style>
 <script src="/embed-child.js"></script>
 </head>
@@ -58,7 +83,8 @@
   <a class="back" href="/soypepe/index.html">‹</a>
   <div class="ava">🔧</div>
   <div><h1>Eloy Queda</h1><div class="sub">Mantenimiento</div></div>
-  <select id="prop" title="Propiedad">
+  <button class="pendbtn" id="pendBtn" title="Reportes por confirmar" style="margin-left:auto">✅ Por confirmar<span class="bdg" id="pendBdg">0</span></button>
+  <select id="prop" title="Propiedad" style="margin-left:8px">
     <option value="45e69775-d877-4507-a9e1-a45bd3400dc5">CDMX</option>
     <option value="3e10a9ea-4913-4f7c-86ef-0c829caa851d">Virreyes</option>
     <option value="febfbef6-7fd1-4b45-84d9-13533e8dcb72">Puebla</option>
@@ -74,6 +100,7 @@
   <textarea id="txt" rows="1" placeholder="Escribe qué se descompuso…"></textarea>
   <button class="send" id="send" type="submit">➤</button>
 </form>
+<div class="toast" id="toast"></div>
 
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
@@ -82,7 +109,9 @@ const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
 const $=id=>document.getElementById(id);
 const ELOY='eloy.queda@casapepe.mx';
-let ME=null, prop=$('prop').value, pendingFoto=null;
+let ME=null, prop=$('prop').value, pendingFoto=null, PEND=[];
+function mondayOf(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);return x.toISOString().slice(0,10);}
+function toast(m,ok=true){const el=$('toast');el.textContent=m;el.className='toast show'+(ok?'':' bad');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),3000);}
 
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function bubble(m){
@@ -97,8 +126,54 @@ function render(msgs, ticket, resumen){
   if(resumen && !ticket) html += resumenCard(resumen);
   $('feed').innerHTML = html;
   if(resumen && !ticket) wireResumen(resumen);
+  appendPend();
   $('feed').scrollTop = $('feed').scrollHeight;
 }
+
+// ---- Reportes por confirmar (los que TÚ abriste y ya fueron atendidos) ----
+function confirmCard(t){
+  const area=t.ubic&&t.ubic.nombre?t.ubic.nombre:'—';
+  const rep=t.reportado_por_nombre?(' · por '+t.reportado_por_nombre):'';
+  const foto=t.foto_resuelto_url?`<img loading="lazy" src="${esc(t.foto_resuelto_url)}" alt="terminado">`:'<div class="cnote">El técnico no adjuntó foto.</div>';
+  return `<details class="confirm" data-tk="${esc(t.id)}">
+    <summary><span class="ci">✅</span><span style="min-width:0"><span class="ct">${esc(t.titulo||'Reporte')}</span><span class="cm">📍 ${esc(area)}${esc(rep)}</span></span></summary>
+    <div class="cbody">
+      ${t.comentario_cierre?`<div class="cnote">🛠️ ${esc(t.comentario_cierre)}</div>`:''}
+      ${foto}
+      <div class="cbtns"><button class="ok" onclick="cpConfirmar('${esc(t.id)}')">✅ Sí, quedó — finalizar</button><button class="no" onclick="cpReabrir('${esc(t.id)}')">↩︎ No quedó</button></div>
+    </div>
+  </details>`;
+}
+function appendPend(){ if(!PEND.length) return; const feed=$('feed');
+  feed.insertAdjacentHTML('beforeend', `<div class="confhd">✅ Por confirmar — tú los abriste y ya fueron atendidos</div>`+PEND.map(confirmCard).join('')); }
+function renderPend(){ const feed=$('feed'); feed.querySelectorAll('.confirm,.confhd').forEach(n=>n.remove()); appendPend(); feed.scrollTop=feed.scrollHeight; }
+function updatePendBadge(){ const b=$('pendBtn'); if(!b)return; b.style.display='inline-flex'; $('pendBdg').textContent=PEND.length; b.classList.toggle('has',PEND.length>0); }
+async function loadPend(){ if(!ME)return; try{
+  const {data}=await sb.from('mtto_tickets')
+    .select('id,titulo,foto_resuelto_url,comentario_cierre,reportado_por_nombre,asignado_a,asignado_nombre,resuelto_at,ubic:ubicacion_id(nombre)')
+    .eq('reportado_por',ME.id).eq('estado','resuelto').order('resuelto_at',{ascending:false});
+  PEND=data||[]; }catch(_){ PEND=[]; } updatePendBadge(); }
+function quitarPend(id){ PEND=PEND.filter(x=>x.id!==id); updatePendBadge();
+  const n=document.querySelector('.confirm[data-tk="'+id+'"]'); if(n)n.remove();
+  if(!PEND.length){ const h=document.querySelector('.confhd'); if(h)h.remove(); } }
+async function notifTec(empId,titulo,cuerpo){ if(!empId)return; try{
+  const {data:el}=await sb.from('empleado_login').select('user_id').eq('employee_id',empId).maybeSingle();
+  if(el&&el.user_id){ await sb.from('notificaciones').insert({employee_id:empId,user_id:el.user_id,titulo,cuerpo,icono:'🔧',accion:{url:'/m/mis-mtto.html',tipo:'mtto_cierre'},leido:false}); }
+}catch(_){} }
+window.cpConfirmar=async id=>{
+  const t=PEND.find(x=>x.id===id)||{};
+  const {error}=await sb.from('mtto_tickets').update({estado:'cerrado',cerrado_at:new Date().toISOString(),cerrado_por:ME.id,cerrado_por_nombre:(ME.email||'')}).eq('id',id);
+  if(error){ toast('No se pudo: '+error.message,false); return; }
+  notifTec(t.asignado_a,'✅ Reporte confirmado',(t.titulo||'Trabajo')+' — el reportante lo dio por bueno.');
+  quitarPend(id); toast('¡Listo! Reporte finalizado ✅');
+};
+window.cpReabrir=async id=>{
+  const t=PEND.find(x=>x.id===id)||{};
+  const {error}=await sb.from('mtto_tickets').update({estado:'programado',resuelto_at:null,foto_resuelto_url:null,semana_programada:mondayOf(new Date()),dia_programado:null,comentario_cierre:'El reportante indicó que no quedó bien; se reabre.'}).eq('id',id);
+  if(error){ toast('No se pudo: '+error.message,false); return; }
+  notifTec(t.asignado_a,'↩️ Reporte reabierto',(t.titulo||'Trabajo')+' — el reportante dice que no quedó bien.');
+  quitarPend(id); toast('Se reabrió y volverá al plan del técnico.');
+};
 function resumenCard(r){
   const fila=(k,v,cap)=> v?`<dt>${k}</dt><dd class="${cap?'cap':''}">${esc(v)}</dd>`:'';
   const foto=r.foto?`<dt>Foto</dt><dd><img src="${esc(r.foto)}" alt="foto"></dd>`:'';
@@ -145,7 +220,9 @@ async function boot(){
   ME=session.user; $('form').style.display='flex';
   try{ const d=await call('open'); render(d.messages||[]); }
   catch(e){ $('feed').innerHTML='<div id="login">Error: '+esc(e.message)+'</div>'; }
+  try{ await loadPend(); renderPend(); }catch(_){}
 }
+$('pendBtn').onclick=async()=>{ await loadPend(); renderPend(); if(!PEND.length) toast('No tienes reportes por confirmar 👍'); };
 $('prop').onchange=()=>{ prop=$('prop').value; };
 $('txt').addEventListener('input',()=>{ $('txt').style.height='auto'; $('txt').style.height=Math.min(120,$('txt').scrollHeight)+'px'; });
 
