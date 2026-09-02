@@ -184,6 +184,14 @@
   table.calx td.cell.drop{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--accent-soft)}
   .perleg{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);align-items:center}
   .perleg i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:3px;vertical-align:-1px}
+  .cchip.rc{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink,#0C5C40)}
+  table.calx td.roomcell{text-align:center}
+  table.calx .addcell{border:1px dashed var(--rule-2);background:none;color:var(--faint);border-radius:6px;width:22px;height:22px;line-height:1;cursor:pointer;font-size:14px;padding:0}
+  table.calx .addcell:hover{border-color:var(--accent);color:var(--accent)}
+  table.calx .colh.room{min-width:52px;max-width:52px;width:52px;cursor:default;font-weight:700}
+  table.calx col.colhi{background:rgba(19,122,86,.09)}
+  table.calx tbody tr:hover td.cell{background:rgba(19,122,86,.05)}
+  table.calx tbody tr:hover td.wk{background:var(--surface-2)}
 </style>
 </head>
 <body>
@@ -346,7 +354,7 @@ async function render(){
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc((e&&e.message)||e)+'</div>';}
 }
 
-/* ============ CALENDARIO VISUAL DE PREVENTIVOS ============ */
+/* ============ CALENDARIO VISUAL DE PREVENTIVOS (v2) ============ */
 const CAP_SEM_MIN=13*60; // tope 13 h/semana de preventivos
 const PER_META={semanal:['Semanal','#6B7280'],quincenal:['Quincenal','#3B82C4'],mensual:['Mensual','#137A56'],
   bimestral:['Bimestral','#0E9BA6'],trimestral:['Trimestral','#B4791F'],cuatrimestral:['Cuatrim.','#C6771A'],
@@ -355,25 +363,33 @@ function perColor(p){return (PER_META[p]||[])[1]||'#6B7280';}
 function ofIcon(c){const o=OFICIOS.find(x=>x[0]===c);return o?o[1].split(' ')[0]:'🔧';}
 function fmtH(min){min=Math.round(min||0);return (min/60).toFixed(1).replace(/\.0$/,'')+'h';}
 function colKeyOf(r){return r.catalogo_id+'|'+(r.subtarea_id||'');}
+function esHab(r){return r.cat&&r.cat.alcance==='habitaciones';}
 function areaDe(r){const a=r.cat&&r.cat.alcance; if(a==='habitaciones')return 'Habitaciones';
   if(a==='areas'||a==='todo')return 'Áreas comunes'; return (r.ubic&&r.ubic.nombre)||'Otros';}
-let CAL={plan:[],cols:[],weeks:[],cellIds:{}};
+function roomLbl(n){return String(n||'').replace(/habitaci[oó]n/i,'').trim();}
+let CAL={plan:[],cols:[],weeks:[],rooms:[]};
 
 async function renderCalendario(){
   const anio=new Date().getFullYear();
   const {data,error}=await sb.from('mtto_preventivo_plan')
-    .select('id,semana_programada,minutos_estimados,oficio,periodicidad,catalogo_id,subtarea_id,ubicacion_id, cat:catalogo_id(tarea,alcance,oficio), sub:subtarea_id(descripcion), ubic:ubicacion_id(nombre,tipo)')
+    .select('id,semana_programada,minutos_estimados,oficio,periodicidad,catalogo_id,subtarea_id,ubicacion_id, cat:catalogo_id(tarea,alcance,oficio,ejecucion), sub:subtarea_id(descripcion), ubic:ubicacion_id(nombre,tipo)')
     .eq('property_id',PROP.id).eq('anio',anio);
   if(error)throw error;
   const plan=data||[]; CAL.plan=plan;
   if(!plan.length){ $("#view").innerHTML='<div class="card"><div class="pad">No hay plan generado para '+anio+'. Genéralo en <b>Preventivos</b> → «Generar plan».</div></div>'; return; }
-  // Columnas: área -> trabajo
-  const colMap={};
-  plan.forEach(r=>{const k=colKeyOf(r); if(!colMap[k])colMap[k]={key:k,area:areaDe(r),label:(r.sub&&r.sub.descripcion)||(r.cat&&r.cat.tarea)||'Trabajo',oficio:r.oficio||(r.cat&&r.cat.oficio)||'general',per:r.periodicidad,catId:r.catalogo_id};});
-  const areaOrder=['Habitaciones','Áreas comunes'];
-  const cols=Object.values(colMap).sort((a,b)=>{const aa=areaOrder.indexOf(a.area),bb=areaOrder.indexOf(b.area);const ax=aa<0?9:aa,bx=bb<0?9:bb; if(a.area!==b.area)return ax-bx||a.area.localeCompare(b.area); return a.label.localeCompare(b.label);});
-  CAL.cols=cols;
-  // Semanas: siempre jul→dic (2º semestre), ampliando si hay algo fuera de ese rango
+  const colKey=r=>esHab(r)&&r.ubicacion_id ? ('R'+r.ubicacion_id) : colKeyOf(r);
+  // Columnas de HABITACIÓN (1 por cuarto) y de TRABAJO (áreas/equipos)
+  const roomMap={}, trabMap={};
+  plan.forEach(r=>{
+    if(esHab(r)&&r.ubicacion_id){ if(!roomMap[r.ubicacion_id])roomMap[r.ubicacion_id]={id:r.ubicacion_id,nombre:(r.ubic&&r.ubic.nombre)||r.ubicacion_id}; }
+    else { const k=colKeyOf(r); if(!trabMap[k])trabMap[k]={key:k,area:areaDe(r),label:(r.sub&&r.sub.descripcion)||(r.cat&&r.cat.tarea)||'Trabajo',oficio:r.oficio||(r.cat&&r.cat.oficio)||'general',per:r.periodicidad,catId:r.catalogo_id}; }
+  });
+  const rooms=Object.values(roomMap).sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre),'es',{numeric:true}));
+  const trabCols=Object.values(trabMap).sort((a,b)=>a.area!==b.area?a.area.localeCompare(b.area):a.label.localeCompare(b.label));
+  const cols=[]; rooms.forEach(rm=>cols.push({type:'room',key:'R'+rm.id,area:'Habitaciones',roomId:rm.id,label:roomLbl(rm.nombre)}));
+  trabCols.forEach(c=>cols.push(Object.assign({type:'trab'},c)));
+  CAL.cols=cols; CAL.rooms=rooms;
+  // Semanas jul→dic (ampliando si hay algo fuera)
   const withWk=plan.filter(r=>r.semana_programada), pool=plan.filter(r=>!r.semana_programada);
   const mondayISO=(dt)=>{const d=new Date(dt);const w=(d.getUTCDay()+6)%7;d.setUTCDate(d.getUTCDate()-w);return d.toISOString().slice(0,10);};
   let ini=mondayISO(anio+'-07-01T12:00:00Z'), fin=mondayISO(anio+'-12-31T12:00:00Z');
@@ -383,82 +399,146 @@ async function renderCalendario(){
   CAL.weeks=weeks;
   // Índices
   const cellIds={}, colTot={}, weekTot={}, poolByCol={};
-  withWk.forEach(r=>{const ck=colKeyOf(r),k=r.semana_programada+'@@'+ck;(cellIds[k]=cellIds[k]||{ids:[],min:0,per:r.periodicidad});cellIds[k].ids.push(r.id);cellIds[k].min+=(r.minutos_estimados||0);
+  withWk.forEach(r=>{const ck=colKey(r),k=r.semana_programada+'@@'+ck;(cellIds[k]=cellIds[k]||{ids:[],min:0,per:r.periodicidad});cellIds[k].ids.push(r.id);cellIds[k].min+=(r.minutos_estimados||0);
     colTot[ck]=(colTot[ck]||0)+(r.minutos_estimados||0); weekTot[r.semana_programada]=(weekTot[r.semana_programada]||0)+(r.minutos_estimados||0);});
-  pool.forEach(r=>{const ck=colKeyOf(r);(poolByCol[ck]=poolByCol[ck]||{ids:[],min:0,per:r.periodicidad});poolByCol[ck].ids.push(r.id);poolByCol[ck].min+=(r.minutos_estimados||0);});
-  CAL.cellIds=cellIds; CAL.poolByCol=poolByCol;
+  pool.forEach(r=>{const ck=colKey(r);(poolByCol[ck]=poolByCol[ck]||{ids:[],min:0,per:r.periodicidad});poolByCol[ck].ids.push(r.id);poolByCol[ck].min+=(r.minutos_estimados||0);});
   const overWeeks=weeks.filter(w=>(weekTot[w]||0)>CAP_SEM_MIN).length;
   const totalMin=withWk.reduce((s,r)=>s+(r.minutos_estimados||0),0);
-  // Cabeceras de área (colspan)
   const areaGroups=[]; cols.forEach(c=>{const g=areaGroups[areaGroups.length-1]; if(g&&g.area===c.area)g.n++; else areaGroups.push({area:c.area,n:1});});
-  const chip=(min,per,ids,n)=>`<span class="cchip" data-chip data-ids="${ids.join(',')}" style="background:${perColor(per)}22;border-color:${perColor(per)};color:${perColor(per)}">${Math.round(min)}<small>m</small>${n>1?` ×${n}`:''}</span>`;
-  const mo=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-  let prevMo=-1;
-  const rows=weeks.map((w,i)=>{const d=new Date(w+'T12:00:00Z');const m=d.getUTCMonth();const showMo=m!==prevMo;prevMo=m;
+  const roomChip=(min,ids)=>`<span class="cchip rc" data-chip data-ids="${ids.join(',')}" title="${ids.length} tareas · ${Math.round(min)}m — clic para ver/editar">🧽 ${ids.length}·${Math.round(min)}m</span>`;
+  const trabChip=(min,per,ids,n,catId)=>`<span class="cchip" data-chip data-cat="${catId}" data-ids="${ids.join(',')}" style="background:${perColor(per)}22;border-color:${perColor(per)};color:${perColor(per)}">${Math.round(min)}<small>m</small>${n>1?` ×${n}`:''}</span>`;
+  const cellHtml=(c,w)=>{const cd=cellIds[w+'@@'+c.key];
+    if(c.type==='room'){const inner=cd?roomChip(cd.min,cd.ids):`<button class="addcell" onclick="roomWeekModal('${c.roomId}','${w}')" title="Agregar mto profundo a este cuarto">＋</button>`;
+      return `<td class="cell roomcell" data-cell data-week="${w}" data-col="${c.key}" data-room="${c.roomId}">${inner}</td>`;}
+    return `<td class="cell" data-cell data-week="${w}" data-col="${c.key}">${cd?trabChip(cd.min,c.per,cd.ids,cd.ids.length,c.catId):''}</td>`;};
+  const mo=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; let prevMo=-1;
+  const rows=weeks.map((w,i)=>{const dt=new Date(w+'T12:00:00Z');const m=dt.getUTCMonth();const showMo=m!==prevMo;prevMo=m;
     const wt=weekTot[w]||0; const ratio=wt/CAP_SEM_MIN; const wc=ratio>1?'var(--bad)':(ratio>=.85?'var(--warn)':'var(--ok)');
-    const cells=cols.map(c=>{const cd=cellIds[w+'@@'+c.key]; return `<td class="cell" data-cell data-week="${w}" data-col="${c.key}">${cd?chip(cd.min,cd.per,cd.ids,cd.ids.length):''}</td>`;}).join('');
-    return `<tr data-week="${w}"><td class="wk">${showMo?`<span class="mo">${mo[m]}</span>`:''}S${i+1} <span class="dt">${w.slice(8,10)}/${w.slice(5,7)}</span></td>${cells}<td class="wktot" style="color:${wc}">${fmtH(wt)}</td></tr>`;}).join('');
-  // Fila POOL (por asignar) arriba
-  const poolCells=cols.map(c=>{const pd=poolByCol[c.key]; return `<td class="cell" data-cell data-week="POOL" data-col="${c.key}">${pd?chip(pd.min,pd.per,pd.ids,pd.ids.length):''}</td>`;}).join('');
+    return `<tr data-week="${w}"><td class="wk">${showMo?`<span class="mo">${mo[m]}</span>`:''}S${i+1} <span class="dt">${w.slice(8,10)}/${w.slice(5,7)}</span></td>${cols.map(c=>cellHtml(c,w)).join('')}<td class="wktot" style="color:${wc}">${fmtH(wt)}</td></tr>`;}).join('');
+  const poolCells=cols.map(c=>{const pd=poolByCol[c.key]; if(c.type==='room')return `<td class="cell roomcell" data-cell data-week="POOL" data-col="${c.key}" data-room="${c.roomId}">${pd?roomChip(pd.min,pd.ids):''}</td>`;
+    return `<td class="cell" data-cell data-week="POOL" data-col="${c.key}">${pd?trabChip(pd.min,c.per,pd.ids,pd.ids.length,c.catId):''}</td>`;}).join('');
   const poolTotN=pool.length;
   const poolRow=`<tr class="poolrow" data-week="POOL"><td class="wk">◻ Por asignar</td>${poolCells}<td class="wktot" style="color:${poolTotN?'var(--warn)':'var(--muted)'}">${poolTotN||'—'}</td></tr>`;
-  // Fila total abajo
-  const foot=cols.map(c=>{const t=colTot[c.key]||0; const falta=CAL.poolByCol[c.key]?` <span style="color:var(--warn)" title="faltan por asignar">⚠${CAL.poolByCol[c.key].ids.length}</span>`:''; return `<td>${fmtH(t)}${falta}</td>`;}).join('');
+  const foot=cols.map(c=>{const t=colTot[c.key]||0; const falta=poolByCol[c.key]?` <span style="color:var(--warn)" title="faltan por asignar">⚠${poolByCol[c.key].ids.length}</span>`:''; return `<td>${fmtH(t)}${falta}</td>`;}).join('');
   const legend=Object.keys(PER_META).map(p=>`<span><i style="background:${PER_META[p][1]}"></i>${PER_META[p][0]}</span>`).join('');
+  const cg=`<colgroup><col/>${cols.map(()=>'<col/>').join('')}<col/></colgroup>`;
   $("#view").innerHTML=`
     <div class="calbar">
-      <div class="calkpi"><b style="color:${poolTotN?'var(--bad)':'var(--ok)'}">${poolTotN}</b> por asignar</div>
+      <button class="calkpi" style="cursor:pointer;border-color:${poolTotN?'var(--warn)':'var(--rule)'}" onclick="porAsignarModal()"><b style="color:${poolTotN?'var(--bad)':'var(--ok)'}">${poolTotN}</b> preventivos por asignar <span style="color:var(--accent);font-weight:700">＋</span></button>
       <div class="calkpi"><b style="color:${overWeeks?'var(--bad)':'var(--ok)'}">${overWeeks}</b> semanas sobre 13h</div>
       <div class="calkpi"><b>${fmtH(totalMin)}</b> programadas · ${withWk.length} tareas</div>
       <div class="perleg" style="margin-left:auto">${legend}</div>
     </div>
-    <div class="muted" style="font-size:12px;margin:0 0 8px">Arrastra una celda a otra semana (mouse o táctil). Suéltala en <b>◻ Por asignar</b> para quitarla. Clic en el nombre del trabajo abre su ficha. Tope: <b>13 h/semana</b>.</div>
+    <div class="muted" style="font-size:12px;margin:0 0 8px">Cada <b>habitación</b> es una columna (mto profundo): el cuadrito muestra <b>nº de tareas · minutos</b>; clic para ver/añadir subtareas o copiar a otro cuarto. Arrastra para mover de semana; suelta en <b>◻ Por asignar</b> para quitar. Tope <b>13 h/semana</b>.</div>
     <div class="calwrap"><table class="calx">
+      ${cg}
       <thead>
         <tr><th class="corner" rowspan="2">Semana</th>${areaGroups.map(g=>`<th class="areah" colspan="${g.n}">${esc(g.area)}</th>`).join('')}<th class="corner r" rowspan="2">Sem.<br>/13h</th></tr>
-        <tr class="colrow">${cols.map(c=>`<th class="colh" onclick="fichaTrabajo('${c.catId}')" title="${esc(c.label)}"><span class="oi">${ofIcon(c.oficio)}</span>${esc(c.label.length>26?c.label.slice(0,25)+'…':c.label)}</th>`).join('')}</tr>
+        <tr class="colrow">${cols.map(c=>c.type==='room'?`<th class="colh room" title="Habitación ${esc(c.label)}">🚪 ${esc(c.label)}</th>`:`<th class="colh" onclick="fichaTrabajo('${c.catId}')" title="${esc(c.label)}"><span class="oi">${ofIcon(c.oficio)}</span>${esc(c.label.length>26?c.label.slice(0,25)+'…':c.label)}</th>`).join('')}</tr>
       </thead>
       <tbody>${poolRow}${rows}</tbody>
       <tfoot><tr><th class="wk">Programado/año</th>${foot}<td></td></tr></tfoot>
     </table></div>`;
-  calWireDrag();
+  calWireDrag(); calWireHover();
 }
 
-// ---- Arrastre (mouse + táctil) por puntero ----
+// Cruce fila/columna (crosshair)
+function calWireHover(){
+  const wrap=document.querySelector('.calwrap'); if(!wrap)return; const tbl=wrap.querySelector('table'); const cg=tbl.querySelector('colgroup');
+  let curCol=null;
+  tbl.addEventListener('mouseover',e=>{const cell=e.target.closest('td.cell,td.wktot'); if(!cell)return;
+    const idx=[...cell.parentNode.children].indexOf(cell); if(cg.children[idx]){ if(curCol)curCol.classList.remove('colhi'); curCol=cg.children[idx]; curCol.classList.add('colhi'); }});
+  tbl.addEventListener('mouseleave',()=>{ if(curCol){curCol.classList.remove('colhi');curCol=null;} });
+}
+
+// ---- Arrastre (mouse + táctil) + clic-para-abrir ----
 function calWireDrag(){
   const wrap=document.querySelector('.calwrap'); if(!wrap)return;
-  let drag=null,ghost=null,lastDrop=null;
+  let drag=null,ghost=null,lastDrop=null,moved=false;
   wrap.querySelectorAll('[data-chip]').forEach(ch=>{
-    ch.addEventListener('pointerdown',e=>{
-      e.preventDefault();
-      const cell=ch.closest('[data-cell]');
-      drag={ids:ch.dataset.ids.split(','),col:cell.dataset.col,fromWeek:cell.dataset.week,chip:ch};
-      ghost=ch.cloneNode(true); ghost.className='cchip calghost'; document.body.appendChild(ghost);
-      ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
-      ch.setPointerCapture(e.pointerId);
-    });
-    ch.addEventListener('pointermove',e=>{
-      if(!drag)return; ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
-      const el=document.elementFromPoint(e.clientX,e.clientY);
-      const cell=el&&el.closest?el.closest('[data-cell]'):null;
+    ch.addEventListener('pointerdown',e=>{ e.preventDefault(); const cell=ch.closest('[data-cell]');
+      drag={ids:ch.dataset.ids.split(','),col:cell.dataset.col,fromWeek:cell.dataset.week,cat:ch.dataset.cat,room:cell.dataset.room}; moved=false;
+      ghost=ch.cloneNode(true); ghost.className='cchip calghost'; document.body.appendChild(ghost); ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+      ch.setPointerCapture(e.pointerId); });
+    ch.addEventListener('pointermove',e=>{ if(!drag)return; moved=true; ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+      const el=document.elementFromPoint(e.clientX,e.clientY); const cell=el&&el.closest?el.closest('[data-cell]'):null;
       if(lastDrop&&lastDrop!==cell)lastDrop.classList.remove('drop');
-      if(cell&&cell.dataset.col===drag.col){cell.classList.add('drop');lastDrop=cell;} else lastDrop=null;
-    });
-    ch.addEventListener('pointerup',async e=>{
-      if(!drag)return; if(ghost)ghost.remove();
-      const el=document.elementFromPoint(e.clientX,e.clientY);
-      const cell=el&&el.closest?el.closest('[data-cell]'):null;
-      if(lastDrop)lastDrop.classList.remove('drop');
-      const d=drag; drag=null;
+      if(cell&&cell.dataset.col===drag.col){cell.classList.add('drop');lastDrop=cell;} else lastDrop=null; });
+    ch.addEventListener('pointerup',async e=>{ if(!drag)return; if(ghost)ghost.remove();
+      const el=document.elementFromPoint(e.clientX,e.clientY); const cell=el&&el.closest?el.closest('[data-cell]'):null;
+      if(lastDrop)lastDrop.classList.remove('drop'); const d=drag; drag=null;
+      const smallMove=!moved || (cell&&cell.dataset.col===d.col&&cell.dataset.week===d.fromWeek);
+      if(smallMove){ if(d.room)return roomWeekModal(d.room,d.fromWeek); if(d.cat)return fichaTrabajo(d.cat); return; }
       if(cell&&cell.dataset.col===d.col&&cell.dataset.week!==d.fromWeek){
         const toWeek=cell.dataset.week==='POOL'?null:cell.dataset.week;
         const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWeek,estado:'pendiente',ticket_id:null}).in('id',d.ids);
-        if(error)return toast(error.message);
-        toast(toWeek?('Movido a '+toWeek):'Quitado de la semana'); renderCalendario();
-      }
-    });
+        if(error)return toast(error.message); toast(toWeek?('Movido a '+toWeek):'Quitado de la semana'); renderCalendario();
+      }});
   });
 }
+
+// Mto profundo de UNA habitación en UNA semana: subtareas + añadir/quitar + copiar
+async function roomWeekModal(roomId, week){
+  const rm=(CAL.rooms||[]).find(x=>x.id===roomId)||{nombre:roomId};
+  const {data}=await sb.from('mtto_preventivo_plan')
+    .select('id,semana_programada,minutos_estimados,oficio,periodicidad, cat:catalogo_id(tarea)')
+    .eq('property_id',PROP.id).eq('ubicacion_id',roomId).order('minutos_estimados',{ascending:false});
+  const insts=data||[];
+  const nom=x=>(x.cat&&x.cat.tarea)||'Tarea';
+  const asig=insts.filter(x=>x.semana_programada===week);
+  const disp=insts.filter(x=>x.semana_programada!==week);
+  const sum=asig.reduce((s,x)=>s+(x.minutos_estimados||0),0);
+  const lbl=roomLbl(rm.nombre); const d=new Date(week+'T12:00:00Z'); const wl=d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'});
+  const asigH=asig.map(x=>`<tr><td>${ofIcon(x.oficio)} ${esc(nom(x))}</td><td class="muted">${esc(ofNombre(x.oficio||'general'))}</td><td class="num">${x.minutos_estimados||'?'}m</td><td class="num"><button class="btn ghost sm" onclick="rwQuitar('${x.id}','${roomId}','${week}')">Quitar</button></td></tr>`).join('');
+  const dispOpts=disp.map(x=>`<option value="${x.id}">${nom(x)} · ${x.minutos_estimados||'?'}m${x.semana_programada?(' (sem '+x.semana_programada.slice(5)+')'):' (sin asignar)'}</option>`).join('');
+  modal(`<h3>🧽 Mto profundo · Habitación ${esc(lbl)} <span class="muted" style="font-weight:500;font-size:13px">· semana del ${wl}</span></h3><div class="pad">
+    <div class="kpis" style="margin:0 0 10px"><div class="kpi"><div class="n">${asig.length}</div><div class="l">subtareas</div></div><div class="kpi"><div class="n" style="color:var(--accent)">${sum}m</div><div class="l">= ${fmtH(sum)}</div></div></div>
+    <div class="scroll" style="max-height:230px"><table><thead><tr><th>Subtarea</th><th>Oficio</th><th class="num">min</th><th></th></tr></thead><tbody>${asigH||'<tr><td colspan="4" class="muted" style="padding:10px">Aún sin subtareas esta semana. Añade abajo.</td></tr>'}</tbody></table></div>
+    ${disp.length?`<div style="display:flex;gap:6px;align-items:flex-end;margin-top:10px"><div style="flex:1"><label>Añadir subtarea a esta semana</label><select id="rwAdd">${dispOpts}</select></div><button class="btn sm" onclick="rwAdd('${roomId}','${week}')">＋ Añadir</button></div>`:'<div class="muted" style="font-size:12px;margin-top:8px">Todas las subtareas de este cuarto ya están esta semana.</div>'}
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button>${asig.length?`<button class="btn ghost sm" onclick="rwCopiar('${roomId}','${week}')">📋 Copiar a otro cuarto/semana</button>`:''}</div>`);
+}
+async function rwAdd(roomId,week){const id=$("#rwAdd").value; if(!id)return; const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:week,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); roomWeekModal(roomId,week);}
+async function rwQuitar(id,roomId,week){const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:null,estado:'pendiente',ticket_id:null}).eq('id',id); if(error)return toast(error.message); roomWeekModal(roomId,week);}
+async function rwCopiar(roomId,week){
+  const rooms=(CAL.rooms||[]).filter(x=>x.id!==roomId);
+  const weeks=CAL.weeks||[]; const idx=weeks.indexOf(week); const nextW=weeks[idx+1]||week;
+  const roomOpts=rooms.map(x=>`<option value="${x.id}">Habitación ${roomLbl(x.nombre)}</option>`).join('');
+  const wkOpts=weeks.map(w=>`<option value="${w}" ${w===nextW?'selected':''}>${w.slice(8,10)}/${w.slice(5,7)} (${w})</option>`).join('');
+  modal(`<h3>Copiar mto profundo</h3><div class="pad">
+    <p class="muted" style="font-size:13px;margin:0 0 10px">Se asignarán en el cuarto destino las mismas subtareas que hiciste aquí, en la semana que elijas.</p>
+    <label>A la habitación</label><select id="cpRoom">${roomOpts}</select>
+    <label>En la semana</label><select id="cpWk">${wkOpts}</select>
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cancelar</button><button class="btn sm" onclick="rwCopiarDo('${roomId}','${week}')">Copiar</button></div>`);
+}
+async function rwCopiarDo(roomId,week){
+  const toRoom=$("#cpRoom").value, toWk=$("#cpWk").value;
+  // qué catálogos hizo el cuarto origen esa semana
+  const {data:src}=await sb.from('mtto_preventivo_plan').select('catalogo_id,subtarea_id').eq('property_id',PROP.id).eq('ubicacion_id',roomId).eq('semana_programada',week);
+  const cats=[...new Set((src||[]).map(x=>x.catalogo_id))]; if(!cats.length)return toast('Nada que copiar');
+  // en el cuarto destino, tomo una instancia disponible de cada catálogo y la pongo en la semana destino
+  const {data:dst}=await sb.from('mtto_preventivo_plan').select('id,catalogo_id,semana_programada').eq('property_id',PROP.id).eq('ubicacion_id',toRoom).in('catalogo_id',cats);
+  const byCat={}; (dst||[]).forEach(x=>{(byCat[x.catalogo_id]=byCat[x.catalogo_id]||[]).push(x);});
+  const ids=[]; cats.forEach(c=>{const list=byCat[c]||[]; const free=list.find(x=>!x.semana_programada)||list.find(x=>x.semana_programada!==toWk); if(free)ids.push(free.id);});
+  if(!ids.length)return toast('El cuarto destino no tiene esas subtareas disponibles');
+  const {error}=await sb.from('mtto_preventivo_plan').update({semana_programada:toWk,estado:'pendiente',ticket_id:null}).in('id',ids);
+  if(error)return toast(error.message); closeModal(); toast(ids.length+' subtareas copiadas'); renderCalendario();
+}
+
+// Desglose de lo que falta por asignar
+async function porAsignarModal(){
+  const pool=(CAL.plan||[]).filter(r=>!r.semana_programada);
+  if(!pool.length){ modal(`<h3>Por asignar</h3><div class="pad"><div class="muted">Todo el plan está asignado en el calendario 👍</div></div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`); return; }
+  const by=(fn)=>{const m={};pool.forEach(r=>{const k=fn(r)||'—';m[k]=(m[k]||0)+1;});return Object.entries(m).sort((a,b)=>b[1]-a[1]);};
+  const fEje=r=>(r.cat&&r.cat.ejecucion==='externo')?'Externo':'Interno';
+  const tbl=(rows,fmt)=>`<div class="scroll"><table><tbody>${rows.map(([k,n])=>`<tr><td>${fmt?fmt(k):esc(k)}</td><td class="num"><b>${n}</b></td></tr>`).join('')}</tbody></table></div>`;
+  modal(`<h3>Por asignar · ${pool.length} preventivos</h3><div class="pad">
+    <div class="chips" style="margin-bottom:8px"><span class="pill on" onclick="paTab(this,'of')">Por oficio</span><span class="pill" onclick="paTab(this,'ar')">Por área</span><span class="pill" onclick="paTab(this,'ej')">Interno/Externo</span></div>
+    <div id="paBox" data-of='${esc(JSON.stringify(by(r=>ofNombre(r.oficio||'general'))))}' data-ar='${esc(JSON.stringify(by(r=>areaDe(r))))}' data-ej='${esc(JSON.stringify(by(fEje)))}'>${tbl(by(r=>ofNombre(r.oficio||'general')))}</div>
+  </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);
+}
+function paTab(el,k){document.querySelectorAll('#paBox').length; document.querySelectorAll('.pill').forEach(p=>p.classList.remove('on')); el.classList.add('on');
+  const box=$("#paBox"); const rows=JSON.parse(box.dataset[k]||'[]');
+  box.innerHTML=`<div class="scroll"><table><tbody>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num"><b>${r[1]}</b></td></tr>`).join('')}</tbody></table></div>`;}
 
 async function fichaTrabajo(catId){
   const [{data:cat},{data:insts}]=await Promise.all([
