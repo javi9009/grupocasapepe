@@ -149,7 +149,7 @@ function guessRiesgo(t){ if(t.riesgo_nota!=null)return t.riesgo_nota; const of=t
   if(/quimic|cloro|acido|solvente/.test(tx))return 'Usa guantes y ventila; nunca mezcles químicos.';
   return ''; }
 
-let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null;
+let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set();
 
 function toast(t,ok=true){const m=$('msg');m.textContent=t;m.className='msg show'+(ok?'':' bad');setTimeout(()=>m.classList.remove('show'),3200);}
 function modal(h){$('modal').innerHTML=h;$('modalBg').classList.add('on');}
@@ -208,6 +208,9 @@ async function render(){
     .in('estado',['validado','programado','en_proceso','pausado','resuelto']).order('prioridad');
   if(error){$('list').innerHTML='<div class="empty">Error: '+esc(error.message)+'</div>';return;}
   TICKS=data||[];
+  WORKSET=new Set();
+  try{ const {data:hor}=await sb.from('horarios').select('fecha').eq('employee_id',who).gte('fecha',WK).lte('fecha',addDays(WK,6));
+    (hor||[]).forEach(h=>{ if(h.fecha) WORKSET.add(h.fecha.slice(0,10)); }); }catch(_){}
   // entrantes: reactivos sin dueño de mi propiedad (solo en mi propio plan)
   ENTR=[];
   if(!ro && PROPID){
@@ -285,7 +288,7 @@ function card(t,ro){
   else if(t.estado==='pausado'){ acts=`<button class="btn sm" onclick="reanudar('${t.id}')">▶️ Reanudar</button><button class="btn sm" onclick="terminar('${t.id}')">📸 Terminar</button>`; }
   else { // validado/programado
     if(t.requiere_compra){ extra=`<div class="note risk">🛒 Espera la compra para poder iniciar</div>`; }
-    acts=`<button class="btn sm" onclick="iniciar('${t.id}')">▶️ Iniciar</button><button class="btn ghost sm" onclick="agendar('${t.id}')">📅 Día</button>`;
+    acts=`<button class="btn sm" onclick="iniciar('${t.id}')">▶️ Iniciar</button><button class="btn ghost sm" onclick="agendar('${t.id}')">＋ Día</button>`;
   }
   const cls=t.estado==='en_proceso'?'task act':(t.estado==='pausado'?'task pau':'task');
   return `<div class="${cls}"><div class="h"><span class="ic">${t.origen==='mto_profundo'?'🧽':(t.clasificacion==='preventivo'?'🛠️':'🔧')}</span>
@@ -408,12 +411,15 @@ window.doTerminar=async(id,foto)=>{
   closeModal(); toast('Terminado ✅'+(mins?' · '+fmtDur(mins):'')); render();
 };
 
-window.agendar=id=>{ curId=id;
-  const btns=[];
-  for(let d=0;d<6;d++){ const ds=addDays(WK,d); btns.push(`<button class="btn ghost sm" onclick="setDia('${id}','${ds}')">${DIAS[d]} ${ds.slice(8,10)}</button>`); }
-  modal(`<h3>Agendar a un día</h3><p style="color:var(--ink2);font-size:13px;margin:0 0 8px">Sale del listado general y queda en ese día.</p>
-   <div class="row2">${btns.join('')}</div>
-   <button class="btn ghost sm" style="margin-top:8px;width:100%" onclick="setDia('${id}','')">Quitar día (volver a por hacer)</button>`);
+window.agendar=id=>{ curId=id; const today=hoyMX(); const btns=[];
+  for(let d=0;d<7;d++){ const ds=addDays(WK,d);
+    const esWork = WORKSET.size? WORKSET.has(ds) : d<6;   // sin horario cargado: Lun-Sáb
+    if(!esWork || ds<today) continue;
+    btns.push(`<button class="btn ghost sm" onclick="setDia('${id}','${ds}')">${DIAS[d]} ${ds.slice(8,10)}${ds===today?' · hoy':''}</button>`);
+  }
+  modal(`<h3>Agendar a un día</h3><p style="color:var(--ink2);font-size:13px;margin:0 0 8px">Solo los días que trabajas (sin tu descanso). Sale del listado general.</p>
+   <div class="row2">${btns.join('')||'<div class="empty" style="padding:8px">No quedan días esta semana</div>'}</div>
+   <button class="btn ghost sm" style="margin-top:8px;width:100%" onclick="setDia('${id}','')">Quitar día</button>`);
 };
 window.setDia=async(id,ds)=>{ const {error}=await sb.from('mtto_tickets').update({dia_programado:ds||null}).eq('id',id);
   if(error)return toast(error.message,false); closeModal(); toast(ds?('Agendado '+DIAS[dowIdx(ds)]):'Día quitado'); render(); };
