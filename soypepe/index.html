@@ -2400,7 +2400,22 @@ async function cmLoadWeek(){
   body.querySelectorAll('.cm-addext').forEach(b=>b.onclick=()=>{ if(b._open)return; b._open=1; var w=document.createElement('span'); w.className='cm-extform'; w.innerHTML='<input class="cm-extin" placeholder="Nombre del externo"><button class="cm-extok">OK</button>'; b.parentNode.insertBefore(w,b); b.style.display='none'; var inp=w.querySelector('.cm-extin'); inp.focus(); async function save(){ var nom=inp.value.trim(); if(!nom){return;} try{ await sb.rpc('agregar_externo_comida',{p_prop:CM.propId,p_fecha:b.dataset.fecha,p_nombre:nom}); await cmLoadWeek(); var el=document.getElementById('who-'+b.dataset.fecha); if(el)el.style.display='flex'; }catch(e){ alert('No se pudo añadir el externo.'); } } w.querySelector('.cm-extok').onclick=save; inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); save(); } }; });
   body.querySelectorAll('.cm-rmext').forEach(b=>b.onclick=async(e)=>{ e.stopPropagation(); if(!confirm('¿Quitar a este externo?'))return; try{ await sb.rpc('quitar_externo_comida',{p_id:b.dataset.id}); await cmLoadWeek(); var el=document.getElementById('who-'+(b.closest('.cm-who-list')?b.closest('.cm-who-list').id.replace('who-',''):''));}catch(err){ alert('No se pudo.'); } });
   const cn=$('cm-chefnote');
-  if(CM.chef){ cn.style.display='block'; cn.innerHTML='<button id="cm-savemenu" class="ch-btn go" style="font-size:15px;padding:13px">Guardar menú de la semana</button>'; $('cm-savemenu').onclick=cmSaveMenu; }
+  if(CM.chef){
+    cn.style.display='block';
+    cn.innerHTML='<button id="cm-savemenu" class="ch-btn go" style="font-size:15px;padding:13px">Guardar menú de la semana</button>';
+    $('cm-savemenu').onclick=cmSaveMenu;
+    // Aviso de "ya está la comida" a quienes se apuntaron HOY. Sólo tiene
+    // sentido el mismo día y si hay alguien apuntado.
+    const _hoy=hzFmt(mxToday());
+    if((counts[_hoy]||0)>0){
+      const b=document.createElement('button');
+      b.id='cm-acomer'; b.className='ch-btn go';
+      b.style.cssText='font-size:16px;padding:14px;margin-top:8px;background:#C0392B';
+      b.textContent='🔔 ¡A comeeeeer!  ('+(counts[_hoy]||0)+')';
+      b.onclick=()=>cmAvisarComida(_hoy);
+      cn.appendChild(b);
+    }
+  }
   else cn.style.display='none';
 }
 
@@ -2415,6 +2430,41 @@ async function cmToggle(btn){
     btn.dataset.on=ahora?'1':'0'; btn.classList.toggle('on',ahora); btn.textContent=ahora?'Apuntado ✓':'Me apunto';
   }catch(e){}
   finally{ btn.disabled=false; }
+}
+
+/* Avisa a quienes se apuntaron a comer hoy que la comida ya está servida.
+   Hoy llega como notificación dentro de SoyPepe (campana + numerito). Cuando
+   Web Push esté montado, el mismo insert puede disparar el aviso al celular
+   con la app cerrada: ver PUSH-PENDIENTE.md. */
+async function cmAvisarComida(fecha){
+  const btn=$('cm-acomer'); if(!btn) return;
+  const t=btn.textContent;
+  btn.disabled=true; btn.textContent='Avisando…';
+  try{
+    const {data:ins}=await sb.from('comida_inscripciones')
+      .select('employee_id').eq('property_id',CM.propId).eq('fecha',fecha).eq('apuntado',true);
+    // Los apuntados sin employee_id son invitados externos: no tienen SoyPepe.
+    const ids=[...new Set((ins||[]).map(r=>r.employee_id).filter(Boolean))];
+    if(!ids.length){ btn.textContent='Nadie apuntado'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},1800); return; }
+
+    const {data:links}=await sb.from('empleado_login').select('employee_id,user_id').in('employee_id',ids);
+    const uid={}; (links||[]).forEach(l=>{ uid[l.employee_id]=l.user_id; });
+
+    const filas=ids.map(id=>({
+      employee_id:id, user_id:uid[id]||null,
+      titulo:'🍽️ ¡A comeeeeer!',
+      cuerpo:'La comida ya está servida. Pásale al comedor.',
+      icono:'🍽️', accion:{tipo:'comida_lista',fecha:fecha}, leido:false
+    }));
+    const {error}=await sb.from('notificaciones').insert(filas);
+    if(error) throw error;
+
+    btn.textContent='✓ Avisados ('+ids.length+')';
+    setTimeout(()=>{btn.textContent=t;btn.disabled=false;},2500);
+  }catch(e){
+    btn.textContent='No se pudo avisar';
+    setTimeout(()=>{btn.textContent=t;btn.disabled=false;},2200);
+  }
 }
 
 async function cmSaveMenu(){
