@@ -178,7 +178,7 @@ function guessRiesgo(t){ if(t.riesgo_nota!=null)return t.riesgo_nota; const of=t
   if(/quimic|cloro|acido|solvente/.test(tx))return 'Usa guantes y ventila; nunca mezcles químicos.';
   return ''; }
 
-let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], TIMER=null, WORKSET=new Set(), CFG=null, PU=null;
+let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], HOY=[], VPROP=null, TIMER=null, WORKSET=new Set(), CFG=null, PU=null;
 function puDef(){ return PU||{horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]}; }
 
 function toast(t,ok=true){const m=$('msg');m.textContent=t;m.className='msg show'+(ok?'':' bad');setTimeout(()=>m.classList.remove('show'),3200);}
@@ -247,13 +247,27 @@ async function render(){
     .in('estado',['validado','programado','en_proceso','pausado','resuelto','cerrado']).order('prioridad');
   if(error){$('list').innerHTML='<div class="empty">Error: '+esc(error.message)+'</div>';return;}
   TICKS=data||[];
-  // entrantes: reactivos sin dueño de mi propiedad (solo en mi propio plan)
+  // Propiedad del plan que se está viendo (para las solicitudes de la sede)
+  VPROP=PROPID;
+  if(ro){ try{ const {data:ve}=await sb.from('employees').select('property_id').eq('id',who).maybeSingle(); if(ve&&ve.property_id)VPROP=ve.property_id; }catch(_){} }
+  // 🔔 Solicitudes de HOY (reactivo/correctivo de la sede, con o sin asignar) —
+  // para que no se escape nada urgente. Se ve también al supervisar a alguien.
+  HOY=[]; const today=hoyMX();
+  if(VPROP){
+    const since=new Date(Date.now()-48*3600*1000).toISOString();
+    const {data:hy}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)')
+      .eq('property_id',VPROP).in('clasificacion',['reactivo','correctivo'])
+      .gte('reportado_at',since)
+      .in('estado',['nuevo','validado','programado','en_proceso','pausado','resuelto']).order('reportado_at',{ascending:false});
+    HOY=(hy||[]).filter(t=>t.reportado_at&&new Date(t.reportado_at).toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'})===today);
+  }
+  // entrantes: reactivos sin dueño de mi propiedad (para tomar) — solo mi plan
   ENTR=[];
   if(!ro && PROPID){
     const {data:en}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)')
       .eq('property_id',PROPID).is('asignado_a',null).eq('clasificacion','reactivo')
       .in('estado',['nuevo','validado','programado']).order('reportado_at',{ascending:false});
-    ENTR=en||[];
+    ENTR=(en||[]).filter(t=>!HOY.some(h=>h.id===t.id)); // los de hoy ya salen en la campanita
   }
   paint();
   scheduleTimer();
@@ -346,8 +360,12 @@ function paint(){
     <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semHechasMin,totMin)}<span class="pv"><b>${fmtDur(semHechasMin)}</b>/${fmtDur(totMin)}</span></div>
     <div class="psub">${diaTot.length-diaHecho.length} tareas por hacer hoy · <button type="button" class="lnk" onclick="setView('semana')">ver pila por día ›</button></div>`;
 
-  // ENTRANTES (reactivos del día para tomar)
-  if(!ro && enr.length){ html+=`<div class="sechd">🔔 Te cayeron hoy (${enr.length}) · mándalos a hoy, a un día o a la próxima semana</div>`+enr.map(t=>entrCard(t)).join(''); }
+  // 🔔 SOLICITUDES DE HOY (con o sin asignar) — para no perder nada urgente
+  const hoyReq=FILT?HOY.filter(t=>t.clasificacion===FILT):HOY;
+  if(hoyReq.length){ html+=`<div class="sechd">🔔 Solicitudes de hoy (${hoyReq.length}) · que no se escape nada urgente</div>`+hoyReq.map(t=>hoyCard(t,ro)).join(''); }
+
+  // ENTRANTES sin asignar de días previos (para tomar)
+  if(!ro && enr.length){ html+=`<div class="sechd">🗂️ Sin asignar de días previos (${enr.length})</div>`+enr.map(t=>entrCard(t)).join(''); }
 
   // Tareas activas siempre arriba
   if(activas.length){ html+=`<div class="sechd">⏱️ En curso</div>`+activas.map(t=>card(t,ro)).join(''); }
@@ -376,12 +394,25 @@ function paint(){
     const semTerm=rows.filter(DONE);
     if(semTerm.length) html+=`<div class="sechd">✅ Terminados esta semana (${semTerm.length})</div>`+semTerm.map(t=>card(t,ro)).join('');
   }
-  if(!TICKS.length && !enr.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Cuando el coordinador lance la asignación, aparecerán aquí.</div>';
+  if(!TICKS.length && !enr.length && !hoyReq.length && !activas.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Cuando el coordinador lance la asignación, aparecerán aquí.</div>';
   $('list').innerHTML=html;
 }
 
 function workedMin(t){ let m=t.minutos_acumulados||0; if(t.estado==='en_proceso'&&t.iniciado_at){ m+=(Date.now()-new Date(t.iniciado_at).getTime())/60000; } return m; }
 
+function hoyCard(t,ro){
+  const cl=CLS[t.clasificacion]||['c-info',t.clasificacion];
+  const hora=t.reportado_at?new Date(t.reportado_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):'';
+  let act;
+  if(!t.asignado_a && !ro){ act=`<button class="btn sm" style="flex:1" onclick="tomarEntr('${t.id}','${hoyMX()}',false)">⭐ Hoy</button><button class="btn ghost sm" onclick="entrPlan('${t.id}')">📅 Programar</button>`; }
+  else if(t.asignado_a){ act=`<span class="state">${DONE(t)?'✅ hecho':(t.asignado_nombre?('→ '+esc(t.asignado_nombre)):'asignado')}${t.dia_programado?' · '+DIAS[dowIdx(t.dia_programado)]:''}</span>`; }
+  else { act=`<span class="state">sin asignar</span>`; }
+  return `<div class="task" style="border-color:var(--warn)"><div class="h"><span class="ic">🔔</span>
+    <div style="flex:1;min-width:0"><div class="nm">${esc(t.titulo||'Solicitud')}</div>
+      <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span>${hora?`<span>🕐 ${hora}</span>`:''}${t.reportado_por_nombre?`<span>por ${esc(t.reportado_por_nombre)}</span>`:''}</div></div>
+    <button class="btn ghost sm" onclick="verInfo('${t.id}')">＋</button></div>
+    <div class="acts">${act}</div></div>`;
+}
 function entrCard(t){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion];
   const foto=t.foto_url?`<details class="ficha fotod"><summary>📷 Ver foto</summary><img class="foto" loading="lazy" src="${esc(t.foto_url)}" alt="foto"></details>`:'';
@@ -420,7 +451,7 @@ function card(t,ro){
 }
 // Popup con TODA la info del trabajo (detalle, recomendación, riesgo, foto, ficha)
 window.verInfo=id=>{
-  const t=(TICKS.find(x=>x.id===id))||(ENTR.find(x=>x.id===id))||{};
+  const t=(TICKS.find(x=>x.id===id))||(ENTR.find(x=>x.id===id))||(HOY.find(x=>x.id===id))||{};
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||'—'];
   const rc=guessReco(t), reco=(rc&&rc!==RECO.general)?rc:''; const riesgo=guessRiesgo(t);
   const foto=t.foto_url?`<img class="foto" src="${esc(t.foto_url)}" alt="foto" style="margin-top:10px">`:'';
@@ -441,7 +472,7 @@ function scheduleTimer(){ if(TIMER)clearInterval(TIMER); const hasActive=TICKS.s
 // ---- acciones ----
 // Tomar un entrante: a hoy, a un día de la semana, o dejarlo a la próxima
 window.tomarEntr=async (id,ds,nextWk)=>{
-  const t=ENTR.find(x=>x.id===id)||{};
+  const t=ENTR.find(x=>x.id===id)||HOY.find(x=>x.id===id)||{};
   const wk = nextWk? addDays(WK,7) : WK;
   const of = t.oficio||guessOficio(t);
   const patch={asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:wk,dia_programado:(ds||null),estado:'programado',oficio:of};
