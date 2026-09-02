@@ -41,6 +41,15 @@
   .pv{font-size:12px;color:var(--ink2);min-width:42px;text-align:right} .pv b{color:var(--ink)}
   .psub{font-size:11.5px;color:var(--ink2);margin-top:6px}
   .fotod .foto{margin-top:8px} .fotod summary{color:var(--brand)}
+  .daySec{margin:16px 2px 8px}
+  .dhd{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .dhd b{color:var(--ink);font-size:13px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+  .hoychip{background:var(--brand);color:#04120c;font-size:10px;font-weight:900;border-radius:999px;padding:1px 8px}
+  .dpila{height:11px;border-radius:6px;background:var(--bg);border:1px solid var(--line);overflow:hidden;display:flex}
+  .dpila i{display:block;height:100%}
+  .dpila .res{background:#3a4650} .dpila .fil{background:var(--brand)}
+  .dpila.warn .fil{background:var(--warn)} .dpila.bad .fil{background:var(--bad)} .dpila.bad{border-color:var(--bad)}
+  .dplbl{font-size:11px;color:var(--ink2);margin-top:4px}
   .sechd{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:14px 2px 8px}
   .task{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px;margin-bottom:11px}
   .task.act{border-color:var(--brand)} .task.pau{border-color:var(--warn)}
@@ -176,7 +185,7 @@ async function boot(){
   const {data:emp}=await sb.from('employees').select('nombre,nombre_display,property_id,rol').eq('id',EMP).maybeSingle();
   PROPID=emp?emp.property_id:null; EMPNAME=emp?(emp.nombre_display||emp.nombre):(el.nombre_display||'');
   $('sub').textContent=EMPNAME+' · plan';
-  try{ const {data:cfg}=await sb.from('mtto_config').select('medidores_emp_id,briefing_emp_id').eq('property_id',PROPID).maybeSingle(); CFG=cfg||null; }catch(_){ CFG=null; }
+  try{ const {data:cfg}=await sb.from('mtto_config').select('medidores_emp_id,briefing_emp_id,horas_dia,dias_semana,reserva_reactivo_h,admin_h,consumos_h').eq('property_id',PROPID).maybeSingle(); CFG=cfg||null; }catch(_){ CFG=null; }
   const CORP=['javi@casapepe.mx','hola.puebla@casapepe.mx'];
   const RS=['Director','Gerente Operativo','Gerente Administrativo','Gerencia','Dueño','Owner'];
   SUP=(emp&&RS.includes(emp.rol))||CORP.includes((ME.email||'').toLowerCase());
@@ -274,6 +283,22 @@ async function ensureRutinas(){
 
 const DONE=t=>['resuelto','cerrado'].includes(t.estado);
 const doneDate=t=>((t.resuelto_at||t.cerrado_at||'')+'').slice(0,10);
+// Capacidad por día: 8h menos la parte diaria de reservas (reactivos+admin+consumos)
+function capDia(){ const c=CFG||{};
+  const horas=+c.horas_dia||8, dias=+c.dias_semana||6;
+  const reservaSem=(+c.reserva_reactivo_h||0)+(+c.admin_h||0)+(+c.consumos_h||0);
+  const capMin=Math.round(horas*60);
+  const reservaMin=Math.round(reservaSem/(dias||6)*60);
+  return { capMin, reservaMin, dispMin:Math.max(0,capMin-reservaMin) };
+}
+function pilaDia(planMin, cap){ const {capMin,reservaMin,dispMin}=cap;
+  const over=Math.max(0,planMin-dispMin), fill=Math.min(planMin,dispMin);
+  const pR=reservaMin/capMin*100, pF=fill/capMin*100;
+  const cls=over>0?'bad':(planMin>0&&planMin>=dispMin*0.9?'warn':'');
+  const lbl= over>0 ? `⚠️ ${fmtDur(planMin)} planeado · te pasas ${fmtDur(over)} (libre ${fmtDur(dispMin)}/día)`
+                    : `⏱️ ${fmtDur(planMin)} / ${fmtDur(dispMin)} libres · ${fmtDur(reservaMin)} reservadas`;
+  return `<div class="dpwrap"><div class="dpila ${cls}"><i class="res" style="width:${pR}%"></i><i class="fil" style="width:${pF}%"></i></div><div class="dplbl">${lbl}</div></div>`;
+}
 function paint(){
   const ro=SUP&&VIEWEMP&&VIEWEMP!==EMP;
   const today=hoyMX();
@@ -295,7 +320,7 @@ function paint(){
     <div class="psub">${diaTot.length-diaHecho.length} por hacer hoy · trabajado <b>${fmtDur(trabajadoMin)}</b></div>`;
 
   // ENTRANTES (reactivos del día para tomar)
-  if(!ro && enr.length){ html+=`<div class="sechd">🔔 Reactivos del día · tómalos para tu plan</div>`+enr.map(t=>entrCard(t)).join(''); }
+  if(!ro && enr.length){ html+=`<div class="sechd">🔔 Te cayeron hoy (${enr.length}) · mándalos a hoy, a un día o a la próxima semana</div>`+enr.map(t=>entrCard(t)).join(''); }
 
   // Tareas activas siempre arriba
   if(activas.length){ html+=`<div class="sechd">⏱️ En curso</div>`+activas.map(t=>card(t,ro)).join(''); }
@@ -307,13 +332,19 @@ function paint(){
     const term=rows.filter(t=>DONE(t)&&doneDate(t)===today);
     if(term.length) html+=`<div class="sechd">✅ Terminados hoy</div>`+term.map(t=>card(t,ro)).join('');
   } else {
-    // Semana: sin día + por día + terminados
+    // Semana: sin día + un DÍA con su PILA de horas (8h menos reservas) + terminados
     const sinDia=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!t.dia_programado);
-    html+=`<div class="sechd">🗂️ Por hacer (sin día)</div>`;
+    html+=`<div class="sechd">🗂️ Por hacer (sin día) · arrástralos a un día</div>`;
     html+=sinDia.length?sinDia.map(t=>card(t,ro)).join(''):'<div class="empty" style="padding:16px">Todo agendado 👍</div>';
+    const cap=capDia();
     for(let d=0;d<7;d++){ const ds=addDays(WK,d);
+      const esWork = WORKSET.size? WORKSET.has(ds) : d<6;
+      if(!esWork) continue;
       const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t));
-      if(dr.length) html+=`<div class="sechd">${DIAS[d]} ${ds.slice(8,10)}</div>`+dr.map(t=>card(t,ro)).join('');
+      const act=rows.filter(t=>t.dia_programado===ds&&['en_proceso','pausado'].includes(t.estado));
+      const planMin=[...dr,...act].reduce((s,t)=>s+(t.minutos_estimados||0),0);
+      html+=`<div class="daySec"><div class="dhd"><b>${DIAS[d]} ${ds.slice(8,10)}</b>${ds===today?'<span class="hoychip">hoy</span>':''}</div>${pilaDia(planMin,cap)}</div>`;
+      html+= dr.length? dr.map(t=>card(t,ro)).join('') : `<div class="empty" style="padding:12px">Sin trabajos este día</div>`;
     }
     const semTerm=rows.filter(DONE);
     if(semTerm.length) html+=`<div class="sechd">✅ Terminados esta semana (${semTerm.length})</div>`+semTerm.map(t=>card(t,ro)).join('');
@@ -326,11 +357,12 @@ function workedMin(t){ let m=t.minutos_acumulados||0; if(t.estado==='en_proceso'
 
 function entrCard(t){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion];
-  return `<div class="task"><div class="h"><span class="ic">🔧</span>
+  const foto=t.foto_url?`<details class="ficha fotod"><summary>📷 Ver foto</summary><img class="foto" loading="lazy" src="${esc(t.foto_url)}" alt="foto"></details>`:'';
+  return `<div class="task" style="border-color:var(--warn)"><div class="h"><span class="ic">🔔</span>
     <div style="flex:1"><div class="nm">${esc(t.titulo||'Reactivo')}</div>
       <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span>${t.reportado_por_nombre?`<span>por ${esc(t.reportado_por_nombre)}</span>`:''}</div></div></div>
-    ${t.descripcion?`<div class="desc">${esc(t.descripcion)}</div>`:''}
-    <div class="acts"><button class="btn sm" onclick="tomar('${t.id}')">✋ Tomar para hoy</button></div></div>`;
+    ${t.descripcion?`<div class="desc">${esc(t.descripcion)}</div>`:''}${foto}
+    <div class="acts"><button class="btn sm" style="flex:1" onclick="tomarEntr('${t.id}','${hoyMX()}',false)">⭐ Hoy</button><button class="btn ghost sm" onclick="entrPlan('${t.id}')">📅 Programar</button></div></div>`;
 }
 
 function card(t,ro){
@@ -369,16 +401,30 @@ function card(t,ro){
 function scheduleTimer(){ if(TIMER)clearInterval(TIMER); const hasActive=TICKS.some(t=>['en_proceso','pausado'].includes(t.estado)); if(hasActive) TIMER=setInterval(paint,30000); }
 
 // ---- acciones ----
-window.tomar=async id=>{
+// Tomar un entrante: a hoy, a un día de la semana, o dejarlo a la próxima
+window.tomarEntr=async (id,ds,nextWk)=>{
   const t=ENTR.find(x=>x.id===id)||{};
-  const patch={asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,dia_programado:hoyMX(),estado:'programado'};
-  if(!t.oficio)patch.oficio=guessOficio(t);
-  patch.recomendacion=t.recomendacion||RECO[patch.oficio||t.oficio]||RECO.general;
-  patch.riesgo_nota=t.riesgo_nota!=null?t.riesgo_nota:guessRiesgo(Object.assign({},t,{oficio:patch.oficio}));
+  const wk = nextWk? addDays(WK,7) : WK;
+  const of = t.oficio||guessOficio(t);
+  const patch={asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:wk,dia_programado:(ds||null),estado:'programado',oficio:of};
+  patch.recomendacion=t.recomendacion||RECO[of]||RECO.general;
+  patch.riesgo_nota=t.riesgo_nota!=null?t.riesgo_nota:guessRiesgo(Object.assign({},t,{oficio:of}));
   const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id);
   if(error)return toast(error.message,false);
-  await ev(id,'programado',{tomado:true,tecnico:EMPNAME}); toast('Tomado para hoy ✋'); render();
+  closeModal();
+  await ev(id,'programado',{tomado:true,tecnico:EMPNAME,dia:ds||null,semana:wk});
+  toast(nextWk?'Guardado para la próxima semana ⏭️':(ds===hoyMX()?'En tu plan de hoy ⭐':('Agendado '+DIAS[dowIdx(ds)]))); render();
 };
+window.entrPlan=id=>{ const today=hoyMX(); const btns=[];
+  for(let d=0;d<7;d++){ const ds=addDays(WK,d); const esWork=WORKSET.size?WORKSET.has(ds):d<6; if(!esWork||ds<today)continue;
+    btns.push(`<button class="btn ghost sm" onclick="tomarEntr('${id}','${ds}',false)">${DIAS[d]} ${ds.slice(8,10)}${ds===today?' · hoy':''}</button>`); }
+  modal(`<h3>¿Cuándo lo haces?</h3>
+   <button class="btn" style="width:100%;margin-bottom:10px" onclick="tomarEntr('${id}','${today}',false)">⭐ Traerlo a hoy</button>
+   <p style="color:var(--ink2);font-size:13px;margin:0 0 8px">O agéndalo a un día que trabajas esta semana:</p>
+   <div class="row2">${btns.join('')||'<div class="empty" style="padding:8px">No quedan días esta semana</div>'}</div>
+   <button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="tomarEntr('${id}','',true)">⏭️ Dejar para la próxima semana</button>`);
+};
+window.tomar=window.tomarEntr;
 window.iniciar=async id=>{
   const {data:t}=await sb.from('mtto_tickets').select('requiere_compra,minutos_acumulados').eq('id',id).single();
   if(t&&t.requiere_compra){
@@ -469,7 +515,7 @@ window.doTerminar=async(id,foto)=>{
     await sb.from('mtto_preventivo_log').insert({catalogo_id:t.preventivo_catalogo_id,property_id:t.property_id,fecha:hoyMX(),por_id:ME.id,por_nombre:ME.email,minutos_reales:mins,evidencia_url:foto,nota:com||null}); }
   if(t.origen==='mto_profundo'){ await sb.from('mtto_profundo_plan').update({estado:'hecho',fecha_realizada:hoyMX(),ultimo_realizado:hoyMX()}).eq('ticket_id',id); }
   await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins,comentario:com});
-  if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Tu reporte fue atendido',cuerpo:(t.titulo||'Trabajo')+' — revísalo y ciérralo de conforme.',icono:'✅',accion:{url:'/soypepe/index.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
+  if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Tu reporte fue atendido',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda, mira la foto y confírmalo.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
   closeModal(); toast('Terminado ✅'+(mins?' · '+fmtDur(mins):'')); render();
 };
 
