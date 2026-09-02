@@ -279,7 +279,7 @@ const VIEWS=[
   {k:"prev",t:"Preventivos"},
   {k:"cal",t:"🗓️ Calendario"},
   {k:"tickets",t:"Tickets"},
-  {k:"config",t:"⚙️ Turnos"},
+  {k:"config",t:"⚙️ Configuración"},
   {k:"lect",t:"Lecturas"},
 ];
 const DIAS_SEM=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
@@ -1514,7 +1514,58 @@ async function autoPrevAssign(){
   toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
 }
 /* CONFIGURACIÓN DE PUESTOS */
+let CFG_SUB='areas';
 async function renderConfig(){
+  const subs=[['areas','📍 Áreas y lugares'],['turnos','👷 Turnos'],['oficios','🧰 Oficios']];
+  const nav=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${subs.map(s=>`<button class="btn ghost sm" style="${CFG_SUB===s[0]?'border-color:var(--accent);color:var(--accent);font-weight:700':''}" onclick="CFG_SUB='${s[0]}';renderConfig()">${s[1]}</button>`).join('')}</div>`;
+  $('#view').innerHTML=nav+'<div id="cfgBody"><div class="center">Cargando…</div></div>';
+  if(CFG_SUB==='turnos')return cfgTurnos();
+  if(CFG_SUB==='oficios')return cfgOficios();
+  return cfgAreas();
+}
+function cfgOficios(){
+  $('#cfgBody').innerHTML=`<div class="muted" style="font-size:13px;margin:0 0 12px;max-width:560px">Oficios (competencias) del equipo de mantenimiento. Cada preventivo, ticket y técnico se etiqueta con uno de estos; el reparto y el calendario los usan para filtrar y estimar.</div>
+    <div class="card"><div class="scroll"><table><thead><tr><th>Oficio</th><th class="num">min base</th></tr></thead><tbody>${OFICIOS.map(o=>`<tr><td style="font-size:16px">${o[1]}</td><td class="num muted">${OF_MIN[o[0]]||'—'} min</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+async function cfgAreas(){
+  const [{data:ubis},{data:cats}]=await Promise.all([
+    sb.from('mtto_ubicaciones').select('id,nombre,tipo,activo,orden').eq('property_id',PROP.id).order('orden'),
+    sb.from('mtto_preventivos_catalogo').select('id,tarea,ubicacion_id,alcance,oficio').eq('property_id',PROP.id).eq('activo',true)
+  ]);
+  const areas=(ubis||[]).filter(u=>u.tipo!=='habitacion');
+  const espec=(cats||[]).filter(c=>(c.alcance||'especifico')==='especifico');
+  const byU={}; espec.forEach(c=>{const k=c.ubicacion_id||'GEN';(byU[k]=byU[k]||[]).push(c);});
+  const moveSel=(c,fromId)=>`<select style="width:auto;font-size:12px" onchange="if(this.value)moverPrevArea('${c.id}',this.value)"><option value="">mover a…</option>${areas.filter(x=>x.id!==fromId).map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('')}</select>`;
+  const listH=(list,fromId)=>list.length?`<div class="scroll" style="margin-top:8px"><table><tbody>${list.map(c=>`<tr><td>${ofIcon(c.oficio)} ${esc(c.tarea)}</td><td class="num">${moveSel(c,fromId)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px;margin-top:6px">Sin preventivos propios de esta área.</div>';
+  const cardFor=a=>`<div class="card"><div class="pad">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>${esc(a.nombre)}</b><span class="chip c-info">${(byU[a.id]||[]).length} preventivos</span>
+      <button class="btn ghost sm" style="margin-left:auto" onclick="renombrarArea('${a.id}',${JSON.stringify(a.nombre).replace(/"/g,'&quot;')})">✎ Renombrar</button></div>
+    ${listH(byU[a.id]||[],a.id)}</div></div>`;
+  const gen=byU['GEN']||[];
+  $('#cfgBody').innerHTML=`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><button class="btn sm" onclick="nuevaArea()">＋ Nueva área</button>
+      <span class="muted" style="font-size:12.5px">Crea áreas del edificio (p. ej. separa <b>Bodega de blancos</b> de <b>Bodega de mantenimiento</b>) y mueve preventivos de una a otra.</span></div>
+    ${areas.length?areas.map(cardFor).join(''):'<div class="muted">Sin áreas aún. Crea la primera.</div>'}
+    ${gen.length?`<div class="card"><div class="pad"><div style="display:flex;align-items:center;gap:8px"><b>Sin área (general)</b><span class="chip c-react">${gen.length}</span></div>${listH(gen,'GEN')}</div></div>`:''}`;
+}
+async function nuevaArea(){
+  const n=prompt('Nombre de la nueva área (p. ej. Bodega de blancos):'); if(!n||!n.trim())return;
+  const {error}=await sb.from('mtto_ubicaciones').insert({property_id:PROP.id,tipo:'area',nombre:n.trim(),activo:true});
+  if(error)return toast(error.message); toast('Área creada'); cfgAreas();
+}
+async function renombrarArea(id,actual){
+  const n=prompt('Nuevo nombre del área:',actual); if(n===null)return; if(!n.trim())return;
+  const {error}=await sb.from('mtto_ubicaciones').update({nombre:n.trim()}).eq('id',id);
+  if(error)return toast(error.message); toast('Renombrada'); cfgAreas();
+}
+async function moverPrevArea(catId,toUbic){
+  // el preventivo (específico) y sus instancias del plan se mueven a la nueva área
+  const e1=await sb.from('mtto_preventivos_catalogo').update({ubicacion_id:toUbic}).eq('id',catId);
+  if(e1.error)return toast(e1.error.message);
+  await sb.from('mtto_preventivo_plan').update({ubicacion_id:toUbic}).eq('catalogo_id',catId);
+  toast('Preventivo movido de área'); cfgAreas();
+}
+async function cfgTurnos(){
   const [{data:emps},{data:pus}]=await Promise.all([
     sb.from('employees').select('id,nombre,nombre_display,property_id').ilike('puesto','%mantenimiento%').eq('estatus','activo'),
     sb.from('mtto_puesto').select('*')
@@ -1545,7 +1596,7 @@ async function renderConfig(){
       <div class="foot" style="margin-top:12px"><button class="btn sm" onclick="saveConfig('${e.id}')">Guardar</button></div>
     </div></div>`;
   }).join('');
-  $('#view').innerHTML=`<div class="muted" style="margin:0 0 12px;font-size:13px;max-width:580px">Configura el puesto de cada técnico. Estas horas (admin/briefing, lectura y reserva de reactivos) se asignan solas y se descuentan de las 48 h: definen la <b>capacidad programable</b> y el <b>rojo</b> de la pila. La preasignación reparte los preventivos/tareas en la semana dejando libres las horas de reactivos.</div>${cards||'<div class="center">No hay técnicos de mantenimiento activos.</div>'}`;
+  $('#cfgBody').innerHTML=`<div class="muted" style="margin:0 0 12px;font-size:13px;max-width:580px">Configura el puesto de cada técnico. Estas horas (admin/briefing, lectura y reserva de reactivos) se descuentan de las 48 h: definen la <b>capacidad programable</b> y el <b>rojo</b> de la pila.</div>${cards||'<div class="center">No hay técnicos de mantenimiento activos.</div>'}`;
 }
 window.saveConfig=async id=>{
   const card=document.querySelector('.cfgcard[data-emp="'+id+'"]'); if(!card)return;
