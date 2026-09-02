@@ -299,9 +299,7 @@ async function render(){
     if(CUR==="prev")return renderPrev();
     if(CUR==="prog")return renderProg();
     if(CUR==="prod")return renderProductividad();
-    if(CUR==="anual")return renderAnual();
     if(CUR==="lect")return renderLect();
-    if(CUR==="rep")return renderRep();
     if(CUR==="config")return renderConfig();
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc(e.message)+'</div>';}
 }
@@ -479,10 +477,12 @@ function alcanceN(a){ const {nHab,nArea}=PREV_UBIS; return a==='habitaciones'?nH
 function vecesAnio(per){ return 365/(PER_DAYS[per]||30); }
 function prevHorasAnio(r){ return alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad)*(r.minutos_estimados||0)/60; }
 async function renderPrev(){
-  const [{data,error},{data:ub},{data:pu}]=await Promise.all([
+  const anio=new Date().getFullYear();
+  const [{data,error},{data:ub},{data:pu},{data:plan}]=await Promise.all([
     sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre,orden)").eq("property_id",PROP.id).eq("activo",true),
     sb.from("mtto_ubicaciones").select("tipo").eq("property_id",PROP.id),
-    sb.from("mtto_puesto").select("*")
+    sb.from("mtto_puesto").select("*"),
+    sb.from("mtto_preventivo_plan").select("estado").eq("property_id",PROP.id).eq("anio",anio)
   ]);
   if(error)throw error; const rows=data||[];
   PREV_UBIS={nHab:(ub||[]).filter(u=>u.tipo==='habitacion').length, nArea:(ub||[]).filter(u=>u.tipo==='area').length};
@@ -509,6 +509,12 @@ async function renderPrev(){
     <div class="card"><div class="pad" style="font-size:12.5px;color:var(--muted)">
       Estimación de personas = ${Math.round(hInt)} h/año ÷ (${progAvg.toFixed(1)} h útiles/sem × 48 sem = ${Math.round(capPersona)} h/año por persona).
       ${hExt?`· Externo: <b>${Math.round(hExt)} h/año</b> subcontratadas, presupuesto <b>${money(presu)}</b>.`:''}
+    </div></div>
+    <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><b>Cobertura anual ${anio}</b> — las tareas por habitación/área repartidas en el año.
+        <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
+      </div>
+      <button class="btn sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
     </div></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
@@ -581,6 +587,11 @@ async function saveEditPrev(id){
 async function cancelPrev(id){if(!confirm("¿Quitar este preventivo del catálogo?"))return;
   const {error}=await sb.from("mtto_preventivos_catalogo").update({activo:false}).eq("id",id);
   if(error)return toast(error.message);toast("Quitado");renderPrev();}
+async function generarPlanPrev(anio){
+  toast("Generando plan…");
+  const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
+  if(error)return toast(error.message);
+  toast("Plan "+anio+" listo · "+(data||0)+" instancias");renderPrev();}
 
 /* PROGRAMACIÓN — reparto semanal estilo Ama de Llaves */
 let PROG_WK=mondayOf(new Date());
@@ -639,6 +650,7 @@ async function renderProg(){
     sb.rpc('mtto_urgencias',{p_property:PROP.id}),
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
+  const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
   // Config por puesto (48h base) para cada técnico
   const {data:puR}=await sb.from('mtto_puesto').select('*');
@@ -653,13 +665,14 @@ async function renderProg(){
   const RANK={venc:0,pend:1,ok:2};
   const yaTk=new Set(tks.filter(r=>r.preventivo_catalogo_id&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK).map(r=>r.preventivo_catalogo_id));
   const prevCat=(catR.data||[]).filter(r=>!yaTk.has(r.id)).map(r=>Object.assign({},r,{_est:prevEstado(r)})).sort((a,b)=>RANK[a._est.k]-RANK[b._est.k]);
+  const prevPlan=(planR||[]);
   const local=TECS.filter(t=>t.property_id===PROP.id);
   const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||''));
   const board=local.slice();
   if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
-  PROG_STATE={enSemana,pend,prof,prevCat,board,c,jefe,PUESTOS};
+  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS};
   const cols=board.map(t=>cajonHtml(t,enSemana,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal)).join('');
   const pitems=pend.length?pend.map(pitemHtml).join(''):'<div class="center">Nada por asignar</div>';
   $('#view').innerHTML=`
@@ -675,7 +688,8 @@ async function renderProg(){
         <div class="hd">🗂️ Pendientes por urgencia · ${pend.length}</div>
         ${pitems}
         ${prof.length?`<div class="hd" style="border-top:1px solid var(--rule)">🧽 Mto profundo por cuarto (vence) · ${prof.length}</div>${prof.map(profHtml).join('')}`:''}
-        ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos del catálogo · ${prevCat.length}</div>${prevGroups(prevCat)}`:''}
+        ${prevPlan.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos por lugar (vence) · ${prevPlan.length}</div>${prevPlan.map(prevPlanHtml).join('')}`:''}
+        ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🗂️ Catálogo de preventivos (área única) · ${prevCat.length}</div>${prevGroups(prevCat)}`:''}
       </div>
       <div class="cols">${cols}</div>
     </div>`;
@@ -768,6 +782,27 @@ async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===pl
   await sb.from('mtto_profundo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',planId);
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),profundo:true});
   closeModal();toast('Profundo programado · '+nom);renderProg();}
+// --- Preventivos por lugar (plan anual) ---
+function prevPlanHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);const nom=(p.cat&&p.cat.tarea)||'Preventivo';
+  return `<div class="pitem" data-prevplan="${p.id}" draggable="true" onclick="prevPlanMenu('${p.id}')">
+    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(nom)}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''}</div>
+    <div class="m"><span class="ur ${late?'hi':'md'}">${late?'vencido':'vence'} ${p.semana_programada}</span><span>📍 ${esc(p.ubic?p.ubic.nombre:'—')}</span><span>${p.minutos_estimados||'?'} min</span></div></div>`;}
+function prevPlanMenu(id){const p=PROG_STATE.prevPlan.find(x=>x.id===id);if(!p)return;
+  const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genPrevPlan('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
+  modal(`<h3>${esc((p.cat&&p.cat.tarea)||'Preventivo')} · ${esc(p.ubic?p.ubic.nombre:'')}</h3><div class="pad">
+    <div class="muted" style="font-size:13px;margin-bottom:10px">📍 ${esc(p.ubic?p.ubic.nombre:'—')} · ${p.minutos_estimados||'?'} min · ${esc(ofNombre(p.oficio||'general'))} · plan ${p.semana_programada}</div>
+    <label>Programar esta semana y asignar</label><div>${opts||'<span class="muted">Sin técnicos</span>'}</div></div>
+    <div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
+async function genPrevPlan(planId,tec){const p=PROG_STATE.prevPlan.find(x=>x.id===planId);if(!p)return;
+  const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lugar=p.ubic?p.ubic.nombre:'';
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
+    preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
+    oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
+    metadata:{prev_plan_id:p.id}}).select('id').single();
+  if(error)return toast(error.message);
+  await sb.from('mtto_preventivo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',planId);
+  await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),prev_plan:p.id});
+  closeModal();toast('Preventivo programado · '+lugar);renderProg();}
 function prevGroups(list){
   const g={}; list.forEach(r=>{const a=(r.ubic&&r.ubic.nombre)||'Varias áreas';(g[a]=g[a]||[]).push(r);});
   return Object.keys(g).sort().map(a=>{const gi=g[a],venc=gi.filter(x=>x._est.k==='venc').length;
@@ -796,16 +831,16 @@ async function genPrevUno(catId,tec){const r=PROG_STATE.prevCat.find(x=>x.id===c
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),preventivo:true});
   closeModal();toast('Preventivo programado');renderProg();}
 function wireDrag(){
-  let dragTk=null,dragProf=null,dragPrev=null;
+  let dragTk=null,dragProf=null,dragPrev=null,dragPP=null;
   document.querySelectorAll('.pitem,.achip').forEach(el=>{
-    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||'');}catch(_){}});
+    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');dragPP=el.getAttribute('data-prevplan');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||dragPP||'');}catch(_){}});
     el.addEventListener('dragend',()=>el.classList.remove('drag'));
   });
   document.querySelectorAll('.achips').forEach(z=>{
     z.addEventListener('dragover',e=>{e.preventDefault();z.parentElement.classList.add('over');});
     z.addEventListener('dragleave',()=>z.parentElement.classList.remove('over'));
     z.addEventListener('drop',e=>{e.preventDefault();z.parentElement.classList.remove('over');const tec=z.getAttribute('data-drop');
-      if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;});
+      if(dragPP)genPrevPlan(dragPP,tec);else if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;dragPP=null;});
   });
   const pl=document.querySelector('.pend');
   if(pl){pl.addEventListener('dragover',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk))e.preventDefault();});
@@ -853,16 +888,24 @@ async function lanzarAsignacion(){
 }
 async function autoPrevAssign(){
   if(!PROG_STATE)return;
-  const due=PROG_STATE.prevCat.slice(); let di=0; const inserts=[];
+  // Primero las instancias por lugar que vencen (plan anual), luego el catálogo suelto
+  const duePlan=(PROG_STATE.prevPlan||[]).slice(); const dueCat=PROG_STATE.prevCat.slice();
+  let pi=0,ci=0; const inserts=[]; const planUsed=[];
   for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
     let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
-    while(cur<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
+    while(cur<need && pi<duePlan.length){ const p=duePlan[pi++]; const min=p.minutos_estimados||30; const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lug=p.ubic?p.ubic.nombre:'';
+      inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:p.catalogo_id,clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,oficio:p.oficio||null,titulo:(nom+' · '+lug).slice(0,80),descripcion:nom+' en '+lug,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,metadata:{prev_plan_id:p.id}});
+      planUsed.push(p.id); cur+=min; }
+    while(cur<need && ci<dueCat.length){ const r=dueCat[ci++]; const min=r.minutos_estimados||estimMin(r).min;
       inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
       cur+=min; }
   }
   if(!inserts.length)return toast('No hay preventivos pendientes por preasignar');
-  const {error}=await sb.from('mtto_tickets').insert(inserts);
-  if(error)return toast(error.message); toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
+  const {data:ins,error}=await sb.from('mtto_tickets').insert(inserts).select('id,metadata');
+  if(error)return toast(error.message);
+  // marca las instancias del plan como programadas con su ticket
+  for(const row of (ins||[])){ const pid=row.metadata&&row.metadata.prev_plan_id; if(pid) await sb.from('mtto_preventivo_plan').update({estado:'programado',ticket_id:row.id}).eq('id',pid); }
+  toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
 }
 /* CONFIGURACIÓN DE PUESTOS */
 async function renderConfig(){
