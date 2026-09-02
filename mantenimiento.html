@@ -299,9 +299,7 @@ async function render(){
     if(CUR==="prev")return renderPrev();
     if(CUR==="prog")return renderProg();
     if(CUR==="prod")return renderProductividad();
-    if(CUR==="anual")return renderAnual();
     if(CUR==="lect")return renderLect();
-    if(CUR==="rep")return renderRep();
     if(CUR==="config")return renderConfig();
   }catch(e){$("#view").innerHTML='<div class="center">Error: '+esc(e.message)+'</div>';}
 }
@@ -344,25 +342,50 @@ async function renderTablero(){
     </div></div>`;
 }
 
-/* TICKETS */
-let TK_F={estado:"",clas:""};
+/* CORRECTIVOS Y PENDIENTES */
+let TK_F={estado:"",clas:"",tec:"",abiertos:true};
 async function renderTickets(){
-  const {data,error}=await sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false});
+  const wkMon=mondayOf(hoyMX());
+  const [{data,error},{data:planAtras}]=await Promise.all([
+    sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false}),
+    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada")
+  ]);
   if(error)throw error; let rows=data||[];
+  // Preventivos como ticket que ya debían estar hechos
+  const tkAtras=rows.filter(r=>r.clasificacion==="preventivo"&&!["resuelto","cerrado","cancelado"].includes(r.estado)&&r.semana_programada&&mondayOf(r.semana_programada)<wkMon).length;
+  const atras=(planAtras||[]);
+  if(TK_F.abiertos)rows=rows.filter(r=>!["cerrado","cancelado","resuelto"].includes(r.estado));
   if(TK_F.estado)rows=rows.filter(r=>r.estado===TK_F.estado);
   if(TK_F.clas)rows=rows.filter(r=>r.clasificacion===TK_F.clas);
-  $("#view").innerHTML=`
-    <div class="filters">
+  if(TK_F.tec)rows=rows.filter(r=>r.asignado_a===TK_F.tec);
+  const atrasBox=(atras.length||tkAtras)?`<div class="card" style="border-color:var(--bad)"><div class="pad">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:var(--bad)">⏰ Preventivos atrasados</b>
+      <span class="chip c-react">${atras.length} por lugar</span>${tkAtras?`<span class="chip c-react">${tkAtras} en tickets</span>`:''}
+      ${atras.length?`<button class="btn sm" style="margin-left:auto" onclick="reprogTodos()">Reprogramar a esta semana</button>`:''}</div>
+    ${atras.length?`<div class="scroll" style="margin-top:8px;max-height:34vh"><table><tbody>${atras.slice(0,60).map(p=>`<tr><td>${esc((p.cat&&p.cat.tarea)||'Preventivo')} <span class="muted">· ${esc(p.ubic?p.ubic.nombre:'—')}</span></td><td class="muted num" style="font-size:12px">vencía ${p.semana_programada}</td><td class="num"><button class="btn ghost sm" onclick="reprogUno('${p.id}')">↻ esta semana</button></td></tr>`).join('')}</tbody></table></div>`:''}
+    <div class="muted" style="font-size:12px;margin-top:6px">Aparecen en <a onclick="go('prog')" style="color:var(--accent);cursor:pointer">Reparto de tareas</a> para asignarse.</div>
+  </div></div>`:'';
+  $("#view").innerHTML=atrasBox+`
+    <div class="filters" style="align-items:center;gap:8px">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600"><input type="checkbox" style="width:auto" ${TK_F.abiertos?'checked':''} onchange="TK_F.abiertos=this.checked;renderTickets()">Solo abiertos</label>
       <select onchange="TK_F.estado=this.value;renderTickets()"><option value="">Todos los estados</option>
-        ${["nuevo","validado","programado","en_proceso","resuelto","cerrado","cancelado"].map(s=>`<option ${TK_F.estado===s?"selected":""}>${s}</option>`).join("")}</select>
+        ${["nuevo","validado","programado","en_proceso","pausado","resuelto","cerrado","cancelado"].map(s=>`<option ${TK_F.estado===s?"selected":""}>${s}</option>`).join("")}</select>
       <select onchange="TK_F.clas=this.value;renderTickets()"><option value="">Toda clasificación</option>
         ${["reactivo","correctivo","preventivo"].map(s=>`<option ${TK_F.clas===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select onchange="TK_F.tec=this.value;renderTickets()"><option value="">Todo técnico</option>${tecOptions(TK_F.tec)}</select>
     </div>
     <div class="card"><div class="scroll"><table>
       <thead><tr><th>Reporte</th><th>Ubicación</th><th>Clasif.</th><th>Estado</th><th class="num">Min est.</th><th>Técnico</th><th></th></tr></thead>
-      <tbody>${rows.length?rows.map(ticketRow).join(""):'<tr><td colspan="7" class="center">Sin tickets</td></tr>'}</tbody>
+      <tbody>${rows.length?rows.map(ticketRow).join(""):'<tr><td colspan="7" class="center">Sin tickets con ese filtro</td></tr>'}</tbody>
     </table></div></div>`;
 }
+async function reprogUno(id){const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:mondayOf(hoyMX())}).eq("id",id);
+  if(error)return toast(error.message);toast("Reprogramado a esta semana");renderTickets();}
+async function reprogTodos(){const wk=mondayOf(hoyMX());
+  const {error}=await sb.from("mtto_preventivo_plan").update({semana_programada:wk}).eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wk);
+  if(error)return toast(error.message);toast("Atrasados reprogramados a esta semana");renderTickets();}
+async function editMinTk(id,cur){const v=prompt("Minutos estimados:",cur||"");if(v===null)return;const m=parseInt(v)||null;
+  const {error}=await sb.from("mtto_tickets").update({minutos_estimados:m}).eq("id",id);if(error)return toast(error.message);toast("Tiempo actualizado");renderTickets();}
 function ticketRow(t){
   const foto=t.foto_url?` <a class="lnk" href="${esc(t.foto_url)}" target="_blank">📷</a>`:"";
   return `<tr>
@@ -373,11 +396,11 @@ function ticketRow(t){
     <td><div class="row-actions">${ticketActions(t)}</div></td></tr>`;
 }
 function ticketActions(t){
+  // Este dashboard es LISTADO/gestión — no se inicia trabajo aquí (eso lo hace el
+  // técnico en su app). Solo validar/estimar, asignar, editar tiempo y compras.
   const a=[];
-  if(t.estado==="nuevo")a.push(`<button class="btn sm" onclick="validar('${t.id}')">Validar</button>`);
-  if(["validado","programado"].includes(t.estado))a.push(`<button class="btn sm" onclick="iniciar('${t.id}')">Iniciar</button>`);
-  if(t.estado==="en_proceso")a.push(`<button class="btn sm" onclick="resolver('${t.id}')">Resolver</button>`);
-  if(t.estado==="resuelto")a.push(`<button class="btn ghost sm" onclick="cerrar('${t.id}')">Cerrar</button>`);
+  if(t.estado==="nuevo")a.push(`<button class="btn sm" onclick="validar('${t.id}')">Validar y asignar</button>`);
+  if(!["cerrado","cancelado","resuelto"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="editMinTk('${t.id}',${t.minutos_estimados||0})" title="Editar tiempo estimado">✎ min</button>`);
   if(!["cerrado","cancelado"].includes(t.estado))a.push(`<button class="btn ghost sm" onclick="compraMenu('${t.id}')" title="Compras / requiere compra">🛒</button>`);
   return a.join("")||`<span class="muted">—</span>`;
 }
@@ -403,7 +426,7 @@ async function iniciar(id){
   if(t0&&t0.requiere_compra){
     const {data:sum}=await sb.from("mtto_suministros").select("estatus,entregado_at").eq("ticket_id",id);
     const ok=(sum||[]).some(x=>x.entregado_at||["comprado","recibido","entregado"].includes(x.estatus));
-    if(!ok)return toast("No se puede iniciar: falta que Roberto entregue la compra");
+    if(!ok)return toast("No se puede iniciar: falta que se entregue la compra");
   }
   const {error}=await sb.from("mtto_tickets").update({estado:"en_proceso",iniciado_at:new Date().toISOString()}).eq("id",id);
   if(error)return toast(error.message);await ev(id,"iniciado");toast("Iniciado");render();}
@@ -434,14 +457,14 @@ async function compraMenu(ticketId){
       ${ent?'':`<button class="btn sm" style="margin-top:6px" onclick="marcarEntregada('${x.id}','${ticketId}')">✓ Marcar entregada</button>`}
     </div>`;}).join("")||'<div class="muted" style="font-size:13px;margin-top:8px">Sin solicitudes de compra.</div>';
   modal(`<h3>Compras · ${esc(t?t.titulo:"")}</h3><div class="pad">
-    <label style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="checkbox" id="cReq" style="width:auto" ${t&&t.requiere_compra?"checked":""} onchange="toggleReqCompra('${ticketId}',this.checked)"> Este trabajo <b>requiere compra</b> (no se puede iniciar hasta que Roberto entregue)</label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="checkbox" id="cReq" style="width:auto" ${t&&t.requiere_compra?"checked":""} onchange="toggleReqCompra('${ticketId}',this.checked)"> Este trabajo <b>requiere compra</b> (no se puede iniciar hasta que se entregue)</label>
     ${list}
-    <div style="margin-top:12px"><button class="btn sm" onclick="solicitarCompra('${ticketId}')">＋ Solicitar compra a Roberto</button></div>
+    <div style="margin-top:12px"><button class="btn sm" onclick="solicitarCompra('${ticketId}')">＋ Solicitar compra</button></div>
   </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);
 }
 async function toggleReqCompra(id,val){await sb.from("mtto_tickets").update({requiere_compra:val}).eq("id",id);toast(val?"Marcado: requiere compra":"Quitado");}
 function solicitarCompra(ticketId){
-  modal(`<h3>Solicitar compra a Roberto</h3><div class="pad"><div class="form-grid">
+  modal(`<h3>Solicitar compra</h3><div class="pad"><div class="form-grid">
     <div class="full"><label>¿Qué se necesita comprar?</label><textarea id="scDesc" rows="2" placeholder="Material / refacción / cantidad"></textarea></div>
     <div class="full"><label>Link (cotización, carrito o producto)</label><input id="scLink" placeholder="https://…"></div>
     <div><label>Costo estimado</label><input id="scCosto" type="number" min="0" placeholder="MXN"></div>
@@ -465,7 +488,7 @@ async function saveSolicitarCompra(ticketId){
       cuerpo:(tk&&tk.titulo?tk.titulo+": ":"")+desc+(link?"  · "+link:"")+(costo?"  · ~"+money(costo):""),
       icono:"🛒",accion:{url:"/mantenimiento.html",tipo:"mtto_compra",ticket:ticketId},leido:false});
   }
-  closeModal();toast("Solicitud enviada a Roberto");render();
+  closeModal();toast("Solicitud de compra enviada");render();
 }
 async function marcarEntregada(sumId,ticketId){
   const {error}=await sb.from("mtto_suministros").update({estatus:"recibido",entregado_at:new Date().toISOString()}).eq("id",sumId);
@@ -479,10 +502,12 @@ function alcanceN(a){ const {nHab,nArea}=PREV_UBIS; return a==='habitaciones'?nH
 function vecesAnio(per){ return 365/(PER_DAYS[per]||30); }
 function prevHorasAnio(r){ return alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad)*(r.minutos_estimados||0)/60; }
 async function renderPrev(){
-  const [{data,error},{data:ub},{data:pu}]=await Promise.all([
+  const anio=new Date().getFullYear();
+  const [{data,error},{data:ub},{data:pu},{data:plan}]=await Promise.all([
     sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre,orden)").eq("property_id",PROP.id).eq("activo",true),
     sb.from("mtto_ubicaciones").select("tipo").eq("property_id",PROP.id),
-    sb.from("mtto_puesto").select("*")
+    sb.from("mtto_puesto").select("*"),
+    sb.from("mtto_preventivo_plan").select("estado").eq("property_id",PROP.id).eq("anio",anio)
   ]);
   if(error)throw error; const rows=data||[];
   PREV_UBIS={nHab:(ub||[]).filter(u=>u.tipo==='habitacion').length, nArea:(ub||[]).filter(u=>u.tipo==='area').length};
@@ -492,10 +517,13 @@ async function renderPrev(){
   const hExt=externo.reduce((s,r)=>s+prevHorasAnio(r),0);
   const instInt=interno.reduce((s,r)=>s+alcanceN(r.alcance||'especifico')*vecesAnio(r.periodicidad),0);
   const presu=externo.reduce((s,r)=>s+(+r.presupuesto||0),0);
-  // Capacidad: una persona dedicada ≈ prog(h/sem) × 48 semanas útiles
-  const progs=(pu||[]).map(p=>puestoCap(p).prog).filter(x=>x>0);
-  const progAvg=progs.length?progs.reduce((a,b)=>a+b,0)/progs.length:33;
-  const capPersona=progAvg*48; const personas=capPersona?hInt/capPersona:0;
+  // Capacidad: una persona ≈ jornada del turno (h/sem) × 48 semanas útiles
+  const sems=(pu||[]).map(p=>+p.horas_semana||48).filter(x=>x>0);
+  const semAvg=sems.length?sems.reduce((a,b)=>a+b,0)/sems.length:48;
+  const capPersona=semAvg*48; const personas=capPersona?hInt/capPersona:0;
+  // Desglose por OFICIO (solo interno)
+  const OFI={}; interno.forEach(r=>{const o=r.oficio||'general';OFI[o]=(OFI[o]||0)+prevHorasAnio(r);});
+  const ofiRows=Object.keys(OFI).sort((a,b)=>OFI[b]-OFI[a]).map(o=>`<tr><td>${esc(ofNombre(o))}</td><td class="num">${Math.round(OFI[o])} h</td><td class="num"><b>${(OFI[o]/capPersona).toFixed(1)}</b></td></tr>`).join('');
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
   const ofChips=[['','Todos'],['interno','Internos'],['externo','Externos']].concat(OFICIOS);
@@ -507,8 +535,15 @@ async function renderPrev(){
       <div class="kpi"><div class="n" style="color:var(--accent)">${personas.toFixed(1)}</div><div class="l">personas solo para preventivos</div></div>
     </div>
     <div class="card"><div class="pad" style="font-size:12.5px;color:var(--muted)">
-      Estimación de personas = ${Math.round(hInt)} h/año ÷ (${progAvg.toFixed(1)} h útiles/sem × 48 sem = ${Math.round(capPersona)} h/año por persona).
+      Estimación de personas = ${Math.round(hInt)} h/año ÷ (${semAvg.toFixed(0)} h/sem × 48 sem = ${Math.round(capPersona)} h/año por persona).
       ${hExt?`· Externo: <b>${Math.round(hExt)} h/año</b> subcontratadas, presupuesto <b>${money(presu)}</b>.`:''}
+    </div></div>
+    ${ofiRows?`<div class="card"><h3 style="margin:0">Preventivos por oficio (interno · al año)</h3><div class="scroll"><table><thead><tr><th>Oficio</th><th class="num">h/año</th><th class="num">personas</th></tr></thead><tbody>${ofiRows}</tbody></table></div></div>`:''}
+    <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><b>Cobertura anual ${anio}</b> — las tareas por habitación/área repartidas en el año.
+        <div class="muted" style="font-size:12.5px;margin-top:3px">${(plan||[]).length?`${(plan||[]).filter(p=>p.estado==='hecho').length} hechas · ${(plan||[]).filter(p=>p.estado==='programado').length} programadas · ${(plan||[]).filter(p=>p.estado==='pendiente').length} pendientes de ${(plan||[]).length}`:'Aún no generas el plan (configura el alcance de tus preventivos y genéralo).'}</div>
+      </div>
+      <button class="btn sm" onclick="generarPlanPrev(${anio})">🗓️ Generar / actualizar plan ${anio}</button>
     </div></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
@@ -581,6 +616,11 @@ async function saveEditPrev(id){
 async function cancelPrev(id){if(!confirm("¿Quitar este preventivo del catálogo?"))return;
   const {error}=await sb.from("mtto_preventivos_catalogo").update({activo:false}).eq("id",id);
   if(error)return toast(error.message);toast("Quitado");renderPrev();}
+async function generarPlanPrev(anio){
+  toast("Generando plan…");
+  const {data,error}=await sb.rpc("mtto_generar_plan_preventivo",{p_prop:PROP.id,p_anio:anio});
+  if(error)return toast(error.message);
+  toast("Plan "+anio+" listo · "+(data||0)+" instancias");renderPrev();}
 
 /* PROGRAMACIÓN — reparto semanal estilo Ama de Llaves */
 let PROG_WK=mondayOf(new Date());
@@ -639,6 +679,7 @@ async function renderProg(){
     sb.rpc('mtto_urgencias',{p_property:PROP.id}),
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
+  const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
   // Config por puesto (48h base) para cada técnico
   const {data:puR}=await sb.from('mtto_puesto').select('*');
@@ -653,19 +694,20 @@ async function renderProg(){
   const RANK={venc:0,pend:1,ok:2};
   const yaTk=new Set(tks.filter(r=>r.preventivo_catalogo_id&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK).map(r=>r.preventivo_catalogo_id));
   const prevCat=(catR.data||[]).filter(r=>!yaTk.has(r.id)).map(r=>Object.assign({},r,{_est:prevEstado(r)})).sort((a,b)=>RANK[a._est.k]-RANK[b._est.k]);
+  const prevPlan=(planR||[]);
   const local=TECS.filter(t=>t.property_id===PROP.id);
   const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||''));
   const board=local.slice();
   if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
   let jefeTotal=0;
   if(jefe){const {data:jt}=await sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['programado','en_proceso']); jefeTotal=(jt||[]).reduce((s,r)=>s+(r.minutos_estimados||0),0);}
-  PROG_STATE={enSemana,pend,prof,prevCat,board,c,jefe,PUESTOS};
+  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS};
   const cols=board.map(t=>cajonHtml(t,enSemana,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal)).join('');
   const pitems=pend.length?pend.map(pitemHtml).join(''):'<div class="center">Nada por asignar</div>';
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
-      <div class="muted" style="font-size:13px;flex:1">Base 48 h/semana por técnico; se descuentan admin, lectura y la reserva de reactivos. La barra se pone en rojo si se come las 8 h de reactivos. Ajústalo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Puestos</a>.</div>
+      <div class="muted" style="font-size:13px;flex:1">La barra de cada técnico es su jornada (horas del turno, defínelo en <a onclick="go('config')" style="color:var(--accent);cursor:pointer;font-weight:600">⚙️ Turnos</a>). Se llena con lo asignado.</div>
       <button class="btn sm" onclick="autoPrevAssign()">✨ Preasignar mínimo de preventivos</button>
       <button class="btn sm" onclick="autoAsignarSemana()">🧠 Asignar semana (propuesta)</button>
       <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
@@ -675,7 +717,8 @@ async function renderProg(){
         <div class="hd">🗂️ Pendientes por urgencia · ${pend.length}</div>
         ${pitems}
         ${prof.length?`<div class="hd" style="border-top:1px solid var(--rule)">🧽 Mto profundo por cuarto (vence) · ${prof.length}</div>${prof.map(profHtml).join('')}`:''}
-        ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos del catálogo · ${prevCat.length}</div>${prevGroups(prevCat)}`:''}
+        ${prevPlan.length?`<div class="hd" style="border-top:1px solid var(--rule)">🛠️ Preventivos por lugar (vence) · ${prevPlan.length}</div>${prevPlan.map(prevPlanHtml).join('')}`:''}
+        ${prevCat.length?`<div class="hd" style="border-top:1px solid var(--rule)">🗂️ Catálogo de preventivos (área única) · ${prevCat.length}</div>${prevGroups(prevCat)}`:''}
       </div>
       <div class="cols">${cols}</div>
     </div>`;
@@ -685,7 +728,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
   const mine=enSemana.filter(r=>r.asignado_a===t.id);
   const workMin=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const travelMin=(t._flota&&mine.length)?(c.horas_dia/2)*60:0;
-  const objetivo=cap.prog;
+  const objetivo=cap.sem;   // horas del turno (48h), lo define ⚙️ Turnos
   const total=workMin+travelMin, capMin=objetivo*60||1;
   const prevMin=mine.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const minPrevH=cap.minPrev, minPrev=minPrevH*60, prevOk=prevMin>=minPrev;
@@ -703,7 +746,7 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal){
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
       <span class="muted">${mine.length} trabajos${travelMin?` · +${c.horas_dia/2}h traslado`:''}</span></div>
     ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
-    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">de 48h · ${cap.react}h react · ${cap.admin}h admin · ${cap.lect}h lectura</span></div>
+    <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">turno ${objetivo.toFixed(0)}h</span></div>
     <div class="achips" data-drop="${t.id}">${chips}</div></div>`;
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
@@ -768,6 +811,27 @@ async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===pl
   await sb.from('mtto_profundo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',planId);
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),profundo:true});
   closeModal();toast('Profundo programado · '+nom);renderProg();}
+// --- Preventivos por lugar (plan anual) ---
+function prevPlanHtml(p){const late=new Date(p.semana_programada)<new Date(PROG_WK);const nom=(p.cat&&p.cat.tarea)||'Preventivo';
+  return `<div class="pitem" data-prevplan="${p.id}" draggable="true" onclick="prevPlanMenu('${p.id}')">
+    <div class="t"><span class="chip c-prev">Preventivo</span> <span>${esc(nom)}</span>${p.cat&&p.cat.critico?' <span class="chip c-react">crítico</span>':''}</div>
+    <div class="m"><span class="ur ${late?'hi':'md'}">${late?'vencido':'vence'} ${p.semana_programada}</span><span>📍 ${esc(p.ubic?p.ubic.nombre:'—')}</span><span>${p.minutos_estimados||'?'} min</span></div></div>`;}
+function prevPlanMenu(id){const p=PROG_STATE.prevPlan.find(x=>x.id===id);if(!p)return;
+  const opts=PROG_STATE.board.map(t=>`<button class="btn sm" style="margin:3px" onclick="genPrevPlan('${id}','${t.id}')">→ ${esc(t.nombre_display||t.nombre)}</button>`).join('');
+  modal(`<h3>${esc((p.cat&&p.cat.tarea)||'Preventivo')} · ${esc(p.ubic?p.ubic.nombre:'')}</h3><div class="pad">
+    <div class="muted" style="font-size:13px;margin-bottom:10px">📍 ${esc(p.ubic?p.ubic.nombre:'—')} · ${p.minutos_estimados||'?'} min · ${esc(ofNombre(p.oficio||'general'))} · plan ${p.semana_programada}</div>
+    <label>Programar esta semana y asignar</label><div>${opts||'<span class="muted">Sin técnicos</span>'}</div></div>
+    <div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
+async function genPrevPlan(planId,tec){const p=PROG_STATE.prevPlan.find(x=>x.id===planId);if(!p)return;
+  const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lugar=p.ubic?p.ubic.nombre:'';
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
+    preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
+    oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
+    metadata:{prev_plan_id:p.id}}).select('id').single();
+  if(error)return toast(error.message);
+  await sb.from('mtto_preventivo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',planId);
+  await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),prev_plan:p.id});
+  closeModal();toast('Preventivo programado · '+lugar);renderProg();}
 function prevGroups(list){
   const g={}; list.forEach(r=>{const a=(r.ubic&&r.ubic.nombre)||'Varias áreas';(g[a]=g[a]||[]).push(r);});
   return Object.keys(g).sort().map(a=>{const gi=g[a],venc=gi.filter(x=>x._est.k==='venc').length;
@@ -796,16 +860,16 @@ async function genPrevUno(catId,tec){const r=PROG_STATE.prevCat.find(x=>x.id===c
   await ev(ins.id,'programado',{semana:PROG_WK,tecnico:tecName(tec),preventivo:true});
   closeModal();toast('Preventivo programado');renderProg();}
 function wireDrag(){
-  let dragTk=null,dragProf=null,dragPrev=null;
+  let dragTk=null,dragProf=null,dragPrev=null,dragPP=null;
   document.querySelectorAll('.pitem,.achip').forEach(el=>{
-    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||'');}catch(_){}});
+    el.addEventListener('dragstart',e=>{dragTk=el.getAttribute('data-tk');dragProf=el.getAttribute('data-prof');dragPrev=el.getAttribute('data-prev');dragPP=el.getAttribute('data-prevplan');el.classList.add('drag');try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragTk||dragProf||dragPP||'');}catch(_){}});
     el.addEventListener('dragend',()=>el.classList.remove('drag'));
   });
   document.querySelectorAll('.achips').forEach(z=>{
     z.addEventListener('dragover',e=>{e.preventDefault();z.parentElement.classList.add('over');});
     z.addEventListener('dragleave',()=>z.parentElement.classList.remove('over'));
     z.addEventListener('drop',e=>{e.preventDefault();z.parentElement.classList.remove('over');const tec=z.getAttribute('data-drop');
-      if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;});
+      if(dragPP)genPrevPlan(dragPP,tec);else if(dragPrev)genPrevUno(dragPrev,tec);else if(dragProf)genProfundo(dragProf,tec);else if(dragTk)asignar(dragTk,tec);dragTk=null;dragProf=null;dragPrev=null;dragPP=null;});
   });
   const pl=document.querySelector('.pend');
   if(pl){pl.addEventListener('dragover',e=>{if(dragTk&&PROG_STATE.enSemana.some(r=>r.id===dragTk))e.preventDefault();});
@@ -814,7 +878,7 @@ function wireDrag(){
 function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
-  const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).prog*60;
+  const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).sem*60;
   const needOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
   const half=(PROG_STATE.c.horas_dia||8)/2*60;
   const load={},prevLoad={},travel={};
@@ -853,16 +917,24 @@ async function lanzarAsignacion(){
 }
 async function autoPrevAssign(){
   if(!PROG_STATE)return;
-  const due=PROG_STATE.prevCat.slice(); let di=0; const inserts=[];
+  // Primero las instancias por lugar que vencen (plan anual), luego el catálogo suelto
+  const duePlan=(PROG_STATE.prevPlan||[]).slice(); const dueCat=PROG_STATE.prevCat.slice();
+  let pi=0,ci=0; const inserts=[]; const planUsed=[];
   for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
     let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
-    while(cur<need && di<due.length){ const r=due[di++]; const min=r.minutos_estimados||estimMin(r).min;
+    while(cur<need && pi<duePlan.length){ const p=duePlan[pi++]; const min=p.minutos_estimados||30; const nom=(p.cat&&p.cat.tarea)||'Preventivo'; const lug=p.ubic?p.ubic.nombre:'';
+      inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:p.catalogo_id,clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,oficio:p.oficio||null,titulo:(nom+' · '+lug).slice(0,80),descripcion:nom+' en '+lug,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,metadata:{prev_plan_id:p.id}});
+      planUsed.push(p.id); cur+=min; }
+    while(cur<need && ci<dueCat.length){ const r=dueCat[ci++]; const min=r.minutos_estimados||estimMin(r).min;
       inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
       cur+=min; }
   }
   if(!inserts.length)return toast('No hay preventivos pendientes por preasignar');
-  const {error}=await sb.from('mtto_tickets').insert(inserts);
-  if(error)return toast(error.message); toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
+  const {data:ins,error}=await sb.from('mtto_tickets').insert(inserts).select('id,metadata');
+  if(error)return toast(error.message);
+  // marca las instancias del plan como programadas con su ticket
+  for(const row of (ins||[])){ const pid=row.metadata&&row.metadata.prev_plan_id; if(pid) await sb.from('mtto_preventivo_plan').update({estado:'programado',ticket_id:row.id}).eq('id',pid); }
+  toast(inserts.length+' preventivos preasignados · ajústalos a gusto'); renderProg();
 }
 /* CONFIGURACIÓN DE PUESTOS */
 async function renderConfig(){
