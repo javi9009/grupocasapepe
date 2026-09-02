@@ -314,6 +314,11 @@ footer{border-top:1px solid var(--rule);margin-top:8px;padding-top:16px;color:va
 [hidden]{display:none !important}
 @media (max-width:640px){.secnav{position:static} .exc-item{grid-template-columns:1fr} .exc-m{grid-row:auto;grid-column:1;text-align:left}}
 
+.avrev{margin-top:14px;padding-top:12px;border-top:1px dashed var(--rule-2);font-size:.85rem;
+  color:var(--muted);line-height:1.6}
+.avrev b{display:block;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+.avrev>div{margin-top:4px}
+.avrev i{font-style:normal;display:block;font-size:.8rem;opacity:.75}
 /* Alertas: el catálogo de qué se vigila */
 .alt{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:15px 17px;margin-top:11px}
 .alt.debaja{opacity:.5}
@@ -1760,6 +1765,16 @@ function guiaHTML(e){
     +'<b>'+esc(x.accion||'')+' en '+esc((x.sistema||'').toUpperCase())+'</b>'
     +'<ol>'+(x.pasos||[]).map(p=>'<li>'+esc(p)+'</li>').join('')+'</ol></div>').join('');
 }
+// Dar por revisado un aviso: ya se miró y esta vez estaba bien. Cierra ese aviso de
+// ese día y la corrida nocturna no lo vuelve a levantar. Si mañana vuelve a pasar, se
+// levanta otra vez: apagarlo del todo es dar de baja la alerta en su catálogo.
+async function validarAviso(id){
+  try{
+    const r = await rpc('aud_aviso_validar',{p_excepcion:id, p_nota:null});
+    CONC[id]=r||{};
+    if(r && r.ok){ await cargaDia(fecha); } else pinta();
+  }catch(err){ CONC[id]={ok:false,mensaje:String(err.message||err)}; pinta(); }
+}
 async function conciliar(id, forzar, motivo){
   try{
     const r = await rpc('aud_excepcion_conciliar',{p_excepcion:id, p_nota:motivo||null, p_forzar:!!forzar});
@@ -1862,13 +1877,23 @@ function vistaExc(){
           +(env?'<span class="chip ok">Preguntado</span>'
                :'<button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'
                 +esc(quienDe(e).split(' (')[0])+'" data-ctx="'+esc(e[3])+'">Preguntar por SoyPepe</button>')
-          +'<button class="mini" type="button" data-exp="'+esc(e[0])+'">Explicar aquí</button></div>'
+          +'<button class="mini" type="button" data-exp="'+esc(e[0])+'">Explicar aquí</button>'
+          +'<button class="mini go" type="button" data-val="'+esc(e[0])+'">Ya lo vi, está bien</button></div>'
+          +(CONC[e[0]]?'<div class="res '+(CONC[e[0]].ok?'ok':'bad')+'">'+esc(CONC[e[0]].mensaje||'')+'</div>':'')
           +(env?'<div class="res ok">'+esc(env)+'</div>':'')
           +(redactando===id?panelMensaje(id,quienDe(e).split(' \u2014')[0],e[3],CTXD[id]):'')
           +(redactando==='exp:'+e[0]?panelExplicar(e[0]):'')
           +'</div>';}).join('')
       +'</section>').join('')
     : '<div class="empty">Ningún aviso este día.</div>';
+  // Lo que alguien ya miró y dio por bueno deja de dar la lata, pero no se borra:
+  // queda al pie para saber qué se revisó y quién lo hizo.
+  const revisados = exc.filter(e=>!(Number(e[2])>0) && e[6]!=='abierta');
+  const bRevisados = revisados.length
+    ? '<div class="avrev"><b>Ya revisados · '+revisados.length+'</b>'
+      +revisados.map(e=>'<div><span class="chip ok">'+esc((CAT[e[1]]||[e[1]])[0])+'</span> '
+        +esc(e[3])+(e[7]?'<i>'+esc(e[8]||'Respondió')+': '+esc(e[7])+'</i>':'')+'</div>').join('')+'</div>'
+    : '';
 
   return '<section class="sec"><div class="sechead"><h2>Faltantes</h2>'
     +'<p class="lede">Lo único que impide cerrar el día. Cada uno tiene dueño y reloj: a los 3 días hábiles sin '
@@ -1879,7 +1904,7 @@ function vistaExc(){
     +'<p class="lede">No mueven la caja ni pintan el día de rojo. Van agrupados por tipo de alerta y por '
     +'orden de inquietud: primero las rojas, luego las naranjas y al final las azules. El color de cada '
     +'tipo, y el criterio con que se levanta, se deciden en la pestaña de Alertas.</p></div>'
-    +'<div class="sec">'+bAvisos+'</div></section>'
+    +'<div class="sec">'+bAvisos+bRevisados+'</div></section>'
     +bloqueMovimientos()
     +bloqueCortesias()
     +turnos;
@@ -2798,6 +2823,8 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
     }catch(err){ if(box){box.hidden=false;box.className='res bad';box.textContent=String(err.message||err);}
                  ag.disabled=false; ag.textContent='Guardar'; }
     return; }
+  const va=e.target.closest('[data-val]');
+  if(va){ va.disabled=true; va.textContent='Guardando…'; validarAviso(va.dataset.val); return; }
   const ex=e.target.closest('[data-exp]'); if(ex){redactando='exp:'+ex.dataset.exp;pinta();return;}
   const gu=e.target.closest('[data-guardar]');
   if(gu){const id=gu.dataset.guardar, ta=document.querySelector('[data-msg="exp:'+id+'"]');
