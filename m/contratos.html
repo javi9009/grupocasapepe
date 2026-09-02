@@ -60,10 +60,11 @@ textarea{min-height:54px;resize:vertical}
 <div class="grid">
 <div><label>Colaborador</label><input id="f_nom" readonly></div>
 <div><label>Fecha de inicio de labores *</label><input id="f_inicio" type="date"></div>
-<div><label>Rol / Puesto *</label><select id="f_rol" onchange="renderBonosList()"><option value="">— elige del tabulador —</option></select></div>
+<div><label>Rol / Puesto *</label><select id="f_rol" onchange="renderBonosList();aplicaRango(true)"><option value="">— elige del tabulador —</option></select></div>
 <div><label>Categoría *</label><select id="f_cat" onchange="calcVig()"><option value="operativo">Operativo (prueba 3×1 mes)</option><option value="confianza">Confianza (prueba 2×3 meses)</option><option value="practicante">Practicante (carta compromiso, sin salario)</option></select></div>
-<div><label>Ubicación</label><select id="f_ubic" onchange="renderBonosList()"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
-<div><label>Salario bruto mensual (MXN) *</label><input id="f_sal" type="number" step="0.01"></div>
+<div><label>Ubicación</label><select id="f_ubic" onchange="renderBonosList();aplicaRango(false)"><option>CDMX</option><option>Puebla</option><option>Virreyes</option><option>Corp</option></select></div>
+<div><label>Tramo (tabulador)</label><select id="f_tramo" onchange="aplicaRango(true)"><option value="practicas">Prácticas</option><option value="junior">Nivel 1 (junior)</option><option value="junior2">Nivel 2</option><option value="senior">Nivel 3 (senior)</option></select></div>
+<div><label>Salario bruto mensual (MXN) *</label><input id="f_sal" type="number" step="0.01"><div id="rangoInfo" style="font-size:11px;color:var(--soft);margin-top:3px"></div></div>
 <div><label>Edad</label><input id="f_edad" type="number" min="16" max="90"></div>
 <div class="full"><label>Bonos (añade uno o varios — se van acumulando)</label>
   <div id="bonosAdded" style="display:flex;flex-direction:column;gap:4px;font-size:13px"></div>
@@ -178,7 +179,22 @@ async function loadMachote(){try{MACHOTE=await fetch('/m/contrato-machote.html?c
 try{MACHOTE_PRACT=await fetch('/m/carta-practicas-machote.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_PRACT='';}
 try{MACHOTE_INDET=await fetch('/m/contrato-machote-indeterminado.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_INDET='';}}
 /* ---- Etapa contractual: dónde va cada quien en su cadena de prueba ---- */
-let CSALL=[];
+let CSALL=[],RANGOS=[];
+const SM_MENS=9577.22; // salario minimo mensual 2026 ($315.04/dia x 30.4)
+function rangoDe(rol,sede){
+ if(!rol)return null;const rl=rol.trim().toLowerCase();
+ const cand=RANGOS.filter(r=>((r.puesto||'').trim().toLowerCase()===rl)||((r.rol||'').trim().toLowerCase()===rl));
+ if(!cand.length)return null;
+ return cand.find(r=>r.sede===sede)||cand[0];
+}
+function aplicaRango(prefill){
+ const info=$('rangoInfo');if(!info)return;
+ const rg=rangoDe($('f_rol')&&$('f_rol').value,$('f_ubic')&&$('f_ubic').value);
+ if(!rg){info.innerHTML=($('f_rol')&&$('f_rol').value)?'<span style="color:#b03434">Este puesto no está en el tabulador de Rangos salariales.</span>':'';return;}
+ const tr=($('f_tramo')&&$('f_tramo').value)||'practicas';
+ info.innerHTML='Tabulador '+esc(rg.puesto)+(rg.sede?(' · '+esc(rg.sede)):'')+': Prácticas '+money(rg.practicas)+' · N1 '+money(rg.junior)+' · N2 '+money(rg.junior2)+' · N3 '+money(rg.senior);
+ if(prefill&&rg[tr]!=null){$('f_sal').value=rg[tr];}
+}
 function estadoContrato(empId){
  const cs=(CSALL||[]).filter(c=>c.employee_id===empId&&c.estatus!=='cancelado');
  if(!cs.length) return {estado:'sin_contrato'};
@@ -263,7 +279,7 @@ NAME={};(allE||[]).forEach(e=>{NAME[e.id]=e.nombre;});
 const {data,error}=await sb.from('employees').select(EMPCOLS).eq('estatus','activo').order('nombre');
 if(error){$('pend').innerHTML='⚠ '+error.message;return;}
 EMPS=data||[];
-try{const {data:rs}=await sb.from('rangos_salariales').select('puesto');const ROLES=[...new Set((rs||[]).map(r=>r.puesto).filter(Boolean))].sort();$('f_rol').innerHTML='<option value="">— elige del tabulador —</option>'+ROLES.map(p=>'<option>'+esc(p)+'</option>').join('');}catch(e){}
+try{const {data:rs}=await sb.from('rangos_salariales').select('puesto,rol,sede,tipo,practicas,junior,junior2,senior,activo').eq('activo',true);RANGOS=rs||[];const ROLES=[...new Set(RANGOS.map(r=>r.puesto).filter(Boolean))].sort();$('f_rol').innerHTML='<option value="">— elige del tabulador —</option>'+ROLES.map(p=>'<option>'+esc(p)+'</option>').join('');}catch(e){}
 try{const {data:props}=await sb.from('properties').select('id,direccion');window.PROPDIR={};(props||[]).forEach(p=>{PROPDIR[p.id]=p.direccion||'';});}catch(e){}
 // contratos (una sola lectura, reutilizada)
 const {data:csAll}=await sb.from('contratos').select('*').order('created_at',{ascending:false});
@@ -334,7 +350,7 @@ $('f_rol').value=SEL.puesto||'';
 $('f_cat').value=/practicante/i.test(SEL.puesto||'')?'practicante':((SEL.categoria_laboral==='confianza')?'confianza':'operativo');
 $('f_sal').value=SEL.salario_bruto||SEL.sueldo_base||'';
 $('f_horario').value=SEL.horario_inicial||'';$('f_ubic').value=SEL.sede||'CDMX';$('f_edad').value=edadDe(SEL.fecha_nacimiento)||'';
-BONOS_ADD=[];renderBonosList();$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
+BONOS_ADD=[];renderBonosList();if($('f_tramo'))$('f_tramo').value=(SEL.tramo&&['practicas','junior','junior2','senior'].includes(SEL.tramo))?SEL.tramo:'practicas';aplicaRango(!($('f_sal').value));$('f_otros').value='';if($('f_hospedaje'))$('f_hospedaje').value='no';$('msg').textContent='';
 calcVig();
 try{
  const st=estadoContrato(SEL.id);
@@ -400,6 +416,11 @@ if(!SEL)return;const m=$('msg');m.className='msg';m.textContent='';
 const inicio=$('f_inicio').value, rol=$('f_rol').value.trim(), cat=$('f_cat').value, sal=parseFloat($('f_sal').value);
 const esPract=cat==='practicante';
 if(!inicio||!rol||(!sal&&!esPract)){m.className='msg err';m.textContent=esPract?'Faltan fecha o rol.':'Faltan fecha, rol o salario.';return;}
+if(!esPract&&sal&&sal<SM_MENS){m.className='msg err';m.textContent='El salario ('+money(sal)+') está por debajo del salario mínimo 2026 ('+money(SM_MENS)+'/mes). Corrígelo.';return;}
+const _rg=esPract?null:rangoDe(rol,$('f_ubic')?$('f_ubic').value:null);
+if(_rg&&sal&&(sal<Number(_rg.practicas||0)*0.97||sal>Number(_rg.senior||1e12)*1.03)){
+ if(!confirm('⚠ El salario '+money(sal)+' queda FUERA del tabulador de '+rol+' ('+money(_rg.practicas)+' – '+money(_rg.senior)+').\n\n¿Continuar de todas formas? (quedará registrado así)'))return;
+}
 const _req=esPract
  ?[['curp','CURP'],['direccion','Domicilio']]
  :[['rfc','RFC'],['curp','CURP'],['nss','NSS'],['direccion','Domicilio']];
@@ -417,7 +438,7 @@ else if(!esPract&&st.estado==='renovacion_pendiente'){
  if(st.finPrueba){fin=st.finPrueba;dias=Math.max(1,Math.round((fin-new Date(inicio+'T00:00:00'))/86400000)+1);} // solo los días restantes de prueba
 }
 else if(!esPract&&st.estado==='en_prueba'){numeroDoc=st.numero;totalDoc=st.total;}
-const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,
+const c={patron:'HOSTAL BOUTIQUE REPUBLICA DE URUGUAY S.A. DE C.V.',rol,categoria:cat,salario_bruto:esPract?null:sal,tramo:esPract?null:($('f_tramo')?$('f_tramo').value:null),
 bonos:esPract?null:{puntualidad:BONOS_ADD.some(b=>b.punt),
  lista:BONOS_ADD.filter(b=>!b.punt).map(b=>({id:b.id,nombre:b.nombre,monto:b.monto}))},
 jornada:'48 horas semanales, de lunes a sábado',dia_descanso:'Domingo',horario:$('f_horario').value.trim()||null,
@@ -456,7 +477,7 @@ const esIndet=c.tipo==='indeterminado';
 const empUpd={contrato_categoria:c.categoria,tipo_contrato:c.tipo||'prueba',contrato_vigencia:c.vigencia_fin,contrato_estatus:'enviado_pendiente_firma'};
 if(!esIndet&&(c.numero||1)===1)empUpd.fecha_inicio_labores=c.fecha_inicio; // solo el PRIMER contrato fija la fecha de inicio; renovaciones y planta conservan la antigüedad
 if(esIndet)empUpd.prueba_planta='planta';
-if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;empUpd.bono_puntualidad=!!(c.bonos&&c.bonos.puntualidad);}
+if(!esPract){empUpd.salario_bruto=c.salario_bruto;empUpd.categoria_laboral=c.categoria;empUpd.bono_puntualidad=!!(c.bonos&&c.bonos.puntualidad);if(c.tramo)empUpd.tramo=c.tramo;}
 await sb.from('employees').update(empUpd).eq('id',emp.id);
 try{const _ord=['solicitada','info_recibida','aceptada','activa','notificada','expediente','integrada'];const _ci=_ord.indexOf(emp.alta_etapa||'solicitada');const _h=Array.isArray(emp.alta_historial)?emp.alta_historial:[];const _u={alta_historial:[..._h,{etapa:'contrato_enviado',fecha:new Date().toISOString(),por:SESSEMAIL}]};if(_ci>-1&&_ci<_ord.indexOf('activa'))_u.alta_etapa='activa';await sb.from('employees').update(_u).eq('id',emp.id);}catch(e){}
 try{await sb.from('notificaciones').insert({employee_id:emp.id,titulo:esPract?'📄 Tienes tu carta de prácticas por firmar':'📄 Tienes un contrato por firmar',cuerpo:esPract?'Tu carta compromiso de prácticas está lista. Revísala y fírmala desde SoyPepe.':'Tu contrato está listo. Revísalo y fírmalo desde SoyPepe.',icono:'📄'});}catch(e){}
