@@ -551,7 +551,7 @@ async function renderPrev(){
     sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre,orden)").eq("property_id",PROP.id).eq("activo",true),
     sb.from("mtto_ubicaciones").select("tipo").eq("property_id",PROP.id),
     sb.from("mtto_puesto").select("*"),
-    sb.from("mtto_preventivo_plan").select("estado,equipo_id,eq:equipo_id(nombre, ubic:ubicacion_id(nombre))").eq("property_id",PROP.id).eq("anio",anio)
+    sb.from("mtto_preventivo_plan").select("estado,semana_programada,minutos_estimados,equipo_id,eq:equipo_id(nombre, ubic:ubicacion_id(nombre)),cat:catalogo_id(tarea),pubic:ubicacion_id(nombre)").eq("property_id",PROP.id).eq("anio",anio)
   ]);
   if(error)throw error; const rows=data||[];
   PREV_UBIS={nHab:(ub||[]).filter(u=>u.tipo==='habitacion').length, nArea:(ub||[]).filter(u=>u.tipo==='area').length};
@@ -575,6 +575,15 @@ async function renderPrev(){
   // Agrupación POR MÁQUINA (¿la caldera recibió todos sus mtto?)
   const MAQ={};(plan||[]).filter(p=>p.equipo_id&&p.eq).forEach(p=>{const k=p.equipo_id;const m=MAQ[k]=MAQ[k]||{nom:p.eq.nombre,area:p.eq.ubic?.nombre||'—',hechas:0,pend:0,tot:0};m.tot++;if(p.estado==='hecho')m.hechas++;else m.pend++;});
   const maqRows=Object.values(MAQ).sort((a,b)=>b.pend-a.pend).map(m=>`<tr><td>${esc(m.nom)}</td><td class="muted">${esc(m.area)}</td><td class="num">${m.hechas}</td><td class="num"><b style="color:${m.pend?'var(--warn)':'var(--ok)'}">${m.pend}</b></td><td class="num">${m.tot}</td></tr>`).join('');
+  // Calendario del plan: carga por semana (52) — qué semana toca qué
+  window.PREV_PLAN=plan||[]; const hoyWk=mondayOf(hoyMX());
+  const WK={};(plan||[]).forEach(p=>{const k=p.semana_programada;if(!k)return;const w=WK[k]=WK[k]||{n:0,min:0,hechas:0};w.n++;w.min+=(p.minutos_estimados||0);if(p.estado==='hecho')w.hechas++;});
+  const wkKeys=Object.keys(WK).sort();
+  const maxN=Math.max(1,...wkKeys.map(k=>WK[k].n));
+  const calStrip=wkKeys.map(k=>{const w=WK[k];const h=Math.round(8+22*w.n/maxN);const past=k<hoyWk;const isHoy=k===hoyWk;
+    const col=w.hechas>=w.n?'var(--ok)':(past?'var(--bad)':'var(--accent)');
+    const d=new Date(k+'T12:00:00Z');const lbl=(d.getUTCMonth()+1)+'/'+d.getUTCDate();
+    return `<button title="${lbl} · ${w.n} tareas · ${Math.round(w.min/60)}h" onclick="planSemana('${k}')" style="flex:0 0 auto;min-width:8px;width:8px;border:0;border-radius:2px;padding:0;cursor:pointer;height:${h}px;background:${col};opacity:${past&&w.hechas<w.n?0.95:0.7};outline:${isHoy?'2px solid var(--ink)':'none'}"></button>`;}).join('');
   const FILT=window.PREV_FILT||'';
   const list=FILT?rows.filter(r=>FILT==='externo'?r.ejecucion==='externo':(FILT==='interno'?r.ejecucion!=='externo':r.oficio===FILT)):rows;
   const ofChips=[['','Todos'],['interno','Internos'],['externo','Externos']].concat(OFICIOS);
@@ -598,6 +607,8 @@ async function renderPrev(){
         <button class="btn sm" onclick="soltarPreventivos()">🎯 Soltar los que tocan → Tickets</button>
       </div>
     </div></div>
+    ${calStrip?`<div class="card"><div class="pad"><b>Calendario del plan ${anio}</b> <span class="muted" style="font-size:12px">— cada barra es una semana; altura = nº de tareas. Clic para ver esa semana. <span style="color:var(--bad)">rojo</span>=vencida sin hacer · <span style="color:var(--accent)">verde-azul</span>=próxima · <span style="color:var(--ok)">verde</span>=hecha.</span>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:8px;overflow-x:auto">${calStrip}</div></div></div>`:''}
     ${maqRows?`<div class="card"><h3 style="margin:0">Por máquina (revisa que cada equipo tenga sus mtto)</h3><div class="scroll"><table><thead><tr><th>Máquina</th><th>Área</th><th class="num">hechas</th><th class="num">pend.</th><th class="num">plan/año</th></tr></thead><tbody>${maqRows}</tbody></table></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 2px">
       <button class="btn sm" onclick="addPrev()">＋ Nuevo preventivo</button>
@@ -681,6 +692,16 @@ async function soltarPreventivos(){
   const {data,error}=await sb.rpc("mtto_soltar_preventivos",{p_prop:PROP.id,p_wk:wk});
   if(error)return toast(error.message);
   toast((data||0)+" preventivos soltados a Tickets");renderPrev();}
+function planSemana(wk){
+  const rows=(window.PREV_PLAN||[]).filter(p=>p.semana_programada===wk);
+  const d=new Date(wk+'T12:00:00Z'); const lbl=d.toLocaleDateString('es-MX',{day:'2-digit',month:'long'});
+  const tot=Math.round(rows.reduce((s,p)=>s+(p.minutos_estimados||0),0)/60);
+  const li=rows.sort((a,b)=>(a.oficio||'').localeCompare(b.oficio||'')).map(p=>{
+    const nom=(p.cat?p.cat.tarea:'Preventivo'); const lug=p.pubic?p.pubic.nombre:(p.eq?p.eq.nombre:'—');
+    const st=p.estado==='hecho'?'<span class="chip c-prev">hecho</span>':(p.estado==='programado'?'<span class="chip c-info">en ticket</span>':'<span class="chip c-react">pendiente</span>');
+    return `<tr><td>${esc(nom)}</td><td class="muted">${esc(lug)}</td><td class="num">${p.minutos_estimados||'?'}m</td><td>${st}</td></tr>`;}).join('');
+  modal(`<h3>Semana del ${lbl} · ${rows.length} tareas (${tot} h)</h3><div class="pad"><div class="scroll"><table><thead><tr><th>Preventivo</th><th>Dónde</th><th class="num">min</th><th>Estado</th></tr></thead><tbody>${li||'<tr><td class="muted">Sin tareas</td></tr>'}</tbody></table></div></div>`);
+}
 const PER_OPTS=['diaria','semanal','quincenal','mensual','bimestral','trimestral','cuatrimestral','semestral','anual'];
 function subRowHtml(s){s=s||{};return `<tr data-sub="${s.id||''}" data-new="${s.id?'0':'1'}">
   <td><input class="sD" value="${esc(s.descripcion||'')}" placeholder="qué se hace"></td>
