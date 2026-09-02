@@ -47,6 +47,14 @@
   .dias{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
   .dchk{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;background:var(--surface-2);border:1px solid var(--rule);border-radius:8px;padding:6px 10px;cursor:pointer}
   .dchk input{width:auto;margin:0}
+  .kpi.click{cursor:pointer} .kpi.click:hover{border-color:var(--accent)}
+  .prodgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .hpila{height:12px;border-radius:6px;background:var(--surface-2);overflow:hidden;display:flex;position:relative}
+  .hpila i{display:block;height:100%;background:var(--accent)}
+  .hpila.warn i{background:var(--warn)} .hpila.bad i{background:var(--bad)} .hpila.full i{background:var(--ok)}
+  .hpila .mk{position:absolute;top:0;bottom:0;width:1px;background:rgba(31,27,22,.35)}
+  .prodrow{display:flex;justify-content:space-between;font-size:12.5px;margin-top:5px}
+  .ef{font-weight:800}
   main{max-width:1180px;margin:0 auto;padding:18px 16px 60px}
   h2.vt{font-size:20px;margin-bottom:14px}
   /* kpis / cards */
@@ -215,7 +223,7 @@ const hoyMX=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_
 
 const VIEWS=[
   {k:"tablero",t:"Tablero"},{k:"tickets",t:"Tickets"},{k:"prev",t:"Preventivos"},
-  {k:"prog",t:"Programación"},{k:"anual",t:"Anual externo"},{k:"lect",t:"Lecturas"},{k:"rep",t:"Reporte"},
+  {k:"prog",t:"Programación"},{k:"prod",t:"📊 Productividad"},{k:"anual",t:"Anual externo"},{k:"lect",t:"Lecturas"},{k:"rep",t:"Reporte"},
   {k:"config",t:"⚙️ Puestos"},
 ];
 const DIAS_SEM=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
@@ -286,6 +294,7 @@ async function render(){
     if(CUR==="tickets")return renderTickets();
     if(CUR==="prev")return renderPrev();
     if(CUR==="prog")return renderProg();
+    if(CUR==="prod")return renderProductividad();
     if(CUR==="anual")return renderAnual();
     if(CUR==="lect")return renderLect();
     if(CUR==="rep")return renderRep();
@@ -863,6 +872,84 @@ window.saveConfig=async id=>{
   const {error}=await sb.from('mtto_puesto').upsert(row,{onConflict:'employee_id'});
   if(error)return toast(error.message);
   toast('Puesto guardado ✓'); renderConfig();
+};
+/* PRODUCTIVIDAD */
+let PROD=null;
+const DONEP=t=>["resuelto","cerrado"].includes(t.estado);
+const doneWk=t=>{const d=(t.resuelto_at||t.cerrado_at||"").slice(0,10);return d?mondayOf(d):null;};
+async function renderProductividad(){
+  const [tkR,puR,catR]=await Promise.all([
+    sb.from("mtto_tickets").select("id,titulo,clasificacion,estado,asignado_a,asignado_nombre,minutos_estimados,minutos_reales,semana_programada,resuelto_at,cerrado_at,dia_programado, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id),
+    sb.from("mtto_puesto").select("*"),
+    sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,ultimo_realizado,critico").eq("property_id",PROP.id).eq("activo",true)
+  ]);
+  const tks=tkR.data||[]; const PUESTOS={}; (puR.data||[]).forEach(p=>PUESTOS[p.employee_id]=p);
+  const wk=PROG_WK;
+  const activos=tks.filter(t=>!["cerrado","cancelado"].includes(t.estado)||doneWk(t)===wk);
+  // KPIs globales
+  const reactPend=tks.filter(t=>t.clasificacion==="reactivo"&&!DONEP(t)&&t.estado!=="cancelado");
+  const corrPend=tks.filter(t=>t.clasificacion==="correctivo"&&!DONEP(t)&&t.estado!=="cancelado");
+  const prevVenc=(catR.data||[]).filter(r=>prevEstado(r).k==="venc");
+  // Eficiencia global de la semana (reales vs estimado en lo terminado)
+  const doneWkAll=tks.filter(t=>DONEP(t)&&doneWk(t)===wk&&t.minutos_reales);
+  const sumR=doneWkAll.reduce((s,t)=>s+(t.minutos_reales||0),0), sumE=doneWkAll.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const ef=sumE?Math.round(sumR/sumE*100):null;
+  const efCol=ef==null?"var(--muted)":(ef<=100?"var(--ok)":(ef<=120?"var(--warn)":"var(--bad)"));
+  PROD={tks,wk,reactPend,corrPend,prevVenc};
+  // Por técnico
+  const board=TECS.filter(t=>t.property_id===PROP.id);
+  const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||""));
+  if(jefe&&!board.some(t=>t.id===jefe.id))board.push(jefe);
+  const cards=board.map(t=>techProdCard(t,tks,PUESTOS[t.id],wk)).join("");
+  $("#view").innerHTML=`
+    <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWkProd(-1)">◀</button><select id="wkP" style="width:auto" onchange="PROG_WK=this.value;renderProductividad()">${weekOpts(wk)}</select><button class="btn ghost sm" type="button" onclick="shiftWkProd(1)">▶</button></div></div>
+      <div class="muted" style="font-size:12.5px;flex:1">Toca un indicador para ver el detalle. Eficiencia = tiempo real ÷ estimado en lo terminado de la semana (menos es mejor).</div>
+    </div></div>
+    <div class="kpis">
+      <div class="kpi click" onclick="prodModal('reactivo')"><div class="n" style="color:var(--bad)">${reactPend.length}</div><div class="l">reactivos pendientes</div></div>
+      <div class="kpi click" onclick="prodModal('correctivo')"><div class="n" style="color:var(--warn)">${corrPend.length}</div><div class="l">correctivos pendientes</div></div>
+      <div class="kpi click" onclick="prodModal('prevatraso')"><div class="n" style="color:${prevVenc.length?'var(--bad)':'inherit'}">${prevVenc.length}</div><div class="l">preventivos retrasados</div></div>
+      <div class="kpi"><div class="n" style="color:${efCol}">${ef==null?'—':ef+'%'}</div><div class="l">eficiencia vs estimado</div></div>
+    </div>
+    <h3 style="margin:18px 2px 8px">Cumplimiento por técnico · semana</h3>
+    <div class="prodgrid">${cards||'<div class="muted">Sin técnicos en esta sede.</div>'}</div>`;
+}
+function techProdCard(t,tks,pu,wk){
+  const cap=puestoCap(pu); const capMin=cap.prog*60||1;
+  const mine=tks.filter(r=>r.asignado_a===t.id&&r.semana_programada&&mondayOf(r.semana_programada)===wk);
+  const prog=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const done=mine.filter(DONEP);
+  const hecho=done.reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0);
+  const prevMin=mine.filter(r=>r.clasificacion==="preventivo").reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const react=mine.filter(r=>r.clasificacion==="reactivo").length;
+  const sumR=done.reduce((s,r)=>s+(r.minutos_reales||0),0), sumE=done.filter(r=>r.minutos_reales).reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  const ef=sumE?Math.round(sumR/sumE*100):null;
+  const efCol=ef==null?"var(--muted)":(ef<=100?"var(--ok)":(ef<=120?"var(--warn)":"var(--bad)"));
+  const pct=prog?Math.min(100,Math.round(hecho/prog*100)):0;
+  const cls=pct>=100?"full":(pct>=60?"":"warn");
+  const capPct=Math.min(100,Math.round(prog/capMin*100));
+  return `<div class="card"><div class="pad">
+    <div style="display:flex;align-items:center;gap:8px"><b>${esc(t.nombre_display||t.nombre)}</b><span class="ef" style="margin-left:auto;color:${efCol}">${ef==null?'—':ef+'%'} ef.</span></div>
+    <div class="prodrow"><span class="muted">Avance de la semana</span><span><b>${(hecho/60).toFixed(1)}h</b> / ${(prog/60).toFixed(1)}h programado</span></div>
+    <div class="hpila ${cls}"><i style="width:${pct}%"></i></div>
+    <div class="prodrow"><span class="muted">Carga vs capacidad (${cap.prog.toFixed(1)}h)</span><span>${capPct}%</span></div>
+    <div class="prodrow"><span>🛠️ Preventivos ${(prevMin/60).toFixed(1)}h / ${cap.minPrev}h</span><span>${prevMin>=cap.minPrev*60?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)">∗ bajo</b>'}</span></div>
+    <div class="prodrow"><span>⚡ Reactivos atendidos</span><span>${done.filter(r=>r.clasificacion==='reactivo').length} / ${react}</span></div>
+    <div class="prodrow"><span>✅ Terminados</span><span>${done.length} / ${mine.length}</span></div>
+  </div></div>`;
+}
+window.shiftWkProd=n=>{const d=new Date(PROG_WK+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+n*7);PROG_WK=d.toISOString().slice(0,10);renderProductividad();};
+window.prodModal=tipo=>{
+  if(!PROD)return;
+  const map={reactivo:['⚡ Reactivos pendientes',PROD.reactPend],correctivo:['🛠️ Correctivos pendientes',PROD.corrPend],prevatraso:['⏰ Preventivos retrasados',PROD.prevVenc]};
+  const [titulo,list]=map[tipo]||['',[]];
+  const rows=(list||[]).map(r=>{
+    if(tipo==='prevatraso'){ const e=prevEstado(r); return `<tr><td>${esc(r.tarea||'—')}${r.critico?' <span class="chip c-react">crítico</span>':''}</td><td class="num"><span class="chip ${e.cls}">${e.txt}</span></td></tr>`; }
+    return `<tr><td>${esc(r.titulo||'—')}<div class="muted" style="font-size:12px">${esc(r.ubic?.nombre||'')}${r.asignado_nombre?' · '+esc(r.asignado_nombre):' · sin asignar'}</div></td><td class="num">${r.minutos_estimados||'?'} min</td></tr>`;
+  }).join("");
+  modal(`<h3>${titulo} · ${(list||[]).length}</h3><div class="pad"><div style="max-height:56vh;overflow:auto;border:1px solid var(--rule);border-radius:8px"><table><tbody>${rows||'<tr><td class="muted" style="padding:14px">Nada por aquí 👍</td></tr>'}</tbody></table></div>
+    <div class="foot"><button class="btn sm" onclick="closeModal()">Cerrar</button></div></div>`);
 };
 async function genPrev(){
   const {data:cat}=await sb.from("mtto_preventivos_catalogo").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).eq("activo",true).order("periodicidad");
