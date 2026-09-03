@@ -493,6 +493,27 @@ const CAT={faltante_efectivo:["Faltante de efectivo","bad"],descuadre_metodo:["C
  cosmica_deposito_tarde:["Cósmica cerró de madrugada","info"],cobro_duplicado:["Cobro capturado dos veces","bad"],
  tour_sin_ayb:["Falta la parte de A&B del tour","info"],
  compensacion_forzada:["Compensación forzada","warn"]};
+
+/* La terminal deposita la venta del día siguiente hábil: lo del viernes, el sábado y
+   el domingo cae el lunes. Decir "falta el estado de cuenta" a secas no sirve —parece
+   un reproche a quien lo sube—; decir QUÉ archivo falta se puede resolver en un minuto. */
+function diaDeposito(f){
+  const d=new Date(f+'T12:00:00');
+  do { d.setDate(d.getDate()+1); } while(d.getDay()===0 || d.getDay()===6);
+  return d.toISOString().slice(0,10);
+}
+function ddmm(f){ const p=String(f||'').split('-'); return p.length===3?(p[2]+'/'+p[1]):String(f||''); }
+function faltaEstadoDe(f){
+  return 'La terminal deposita esta venta el '+ddmm(diaDeposito(f))
+        +': lo confirma el estado de cuenta de ese día, que todavía no se ha subido.';
+}
+// El camino de vuelta: qué venta cierra un depósito hecho ese día. Es el hábil anterior.
+function ventaQueCierra(f){
+  const d=new Date(f+'T12:00:00');
+  do { d.setDate(d.getDate()-1); } while(d.getDay()===0 || d.getDay()===6);
+  return d.toISOString().slice(0,10);
+}
+
 const INC_ET={cancela:["Cancelación","bad"],descuento:["Descuento o cortesía","warn"],
  mueve_mesa:["Cambio de mesa","none"],modifica:["Modificación de cuenta","warn"],
  divide:["Cuenta dividida","warn"],autoriza:["Autorización de gerente","none"]};
@@ -1004,7 +1025,7 @@ function pintaResumen(){
    +'<span class="op">=</span>'
    +tile('Sabemos dónde está',mon(t.comp),subComp(t),false,'comp','ok')
    +'<span class="op">+</span>'
-   +tile('El banco aún no lo depositó',mon(t.banco),'Pasó por TPV; la terminal deposita al día siguiente',false,'banco',t.banco>0?'warn':null)
+   +tile('El banco aún no lo depositó',mon(t.banco),'Se deposita el '+ddmm(diaDeposito(fecha))+'; falta ese estado de cuenta',false,'banco',t.banco>0?'warn':null)
    +'<span class="op">+</span>'
    +tile('No sabemos dónde está',mon(t.falta), subFalta(t),
       false,'falta', Math.abs(t.pend)>=TOL?'bad':(Math.abs(t.falta)>0.005?'ok':null));
@@ -1140,7 +1161,7 @@ function panelTile(){
   const filas=ls.map(c=>{const st=c[6],cb=c[4],tiene=(cb!==null&&cb!==undefined);
     const monto=tileAbierto==='comp'?Math.min(Number(c[3]),Number(cb)):(tiene?Number(c[3])-Number(cb):Number(c[3]));
     const pq=tileAbierto==='comp'?'Confirmado contra el comprobante.'
-      :tileAbierto==='banco'?'Pasó por una terminal o pasarela. El banco lo deposita al día siguiente: se confirma con el estado de cuenta de mañana.'
+      :tileAbierto==='banco'?('Pasó por una terminal o pasarela. '+faltaEstadoDe(fecha))
       :(st==='pendiente'?'Este cobro no dice por qué método entró.'
         :st==='sin_liquidador'?'Esta propiedad no tiene ese método de cobro conectado.'
         :'El comprobante dice $'+m(cb)+' y el sistema $'+m(c[3])+'.');
@@ -1173,7 +1194,7 @@ function bloqueBanco(){
   if(d===null) return '<div class="lede" style="margin:0">No se pudo leer el estado de cuenta de este día.</div>';
   const ls=(d.lineas||[]);
   if(!ls.length) return '<div class="empty">De este día todavía no hay ningún renglón del banco cargado. '
-    +'Ojo: lo que confirma los cobros de hoy es el estado de cuenta de mañana, porque la terminal deposita al día siguiente.</div>';
+    +'Ojo: '+esc(faltaEstadoDe(fecha))+'</div>';
   const vistos={}, uniq=ls.filter(x=>{const k=x.tipo+'|'+x.cod; if(vistos[k])return false; vistos[k]=1; return true;});
   const sin=Number(d.sin_identificar||0);
   return '<div><b>Lo que trajo el estado de cuenta de este día.</b> '
@@ -1584,7 +1605,7 @@ function bloqueCuadre(){
     const nota=!c?'No pasa por ningún liquidador: cuadra solo.'
       :(q.liq!==null?'El sistema dice $'+m(q.entro)+' y el liquidador confirma $'+m(q.liq)+'.'
         :(st==='pendiente_estado_de_cuenta'
-          ?'Pasó por terminal. El banco lo deposita al día siguiente: lo confirma el estado de cuenta de mañana.'
+          ?('Pasó por terminal. '+faltaEstadoDe(fecha))
           :'Nadie ha confirmado todavía dónde está.'));
     return {e:q.entro, h:'<tr><td class="stripe '+col+'">'+esc(c?c[1]:(PUNTO_ET[pt]||pt))
       +'<span class="sub">'+esc(nota)+'</span></td>'+celdas(q.entro,q.comp,q.esp)+'<td>'
@@ -2645,9 +2666,19 @@ async function subeEstado(f, pinta1){
     aviso='<span class="sub" style="margin:0;color:var(--warn)">Trae depósitos, pero ninguno con la marca '
       +'de la terminal (060 0302). El cuadre de la terraza va a seguir esperando su depósito.</span>';
   } else {
-    aviso='<span class="sub" style="margin:0">'+tpv+' de esos abonos son depósitos de la terminal. '
-      +'Con esto se cuadra la terraza y los pagos de Airbnb, que llegan uno o dos días después de '
-      +'cobrar la tarjeta.</span>';
+    // Lo que confunde a todo el mundo: el archivo de un día trae el depósito de ESE día,
+    // y ese depósito paga la venta del día hábil ANTERIOR. Decirlo aquí, con las dos
+    // fechas delante, evita subir el archivo equivocado creyendo que ya está cubierto.
+    const dtpv=[...new Set(r.movs.filter(x=>x.tipo==='abono'&&/060\s*0302/.test(x.concepto||''))
+                            .map(x=>x.fecha))].sort();
+    const cierra=[...new Set(dtpv.map(ventaQueCierra))].sort();
+    const ult=dtpv[dtpv.length-1];
+    aviso='<span class="sub" style="margin:0">'+tpv+' de esos abonos son depósitos de la terminal, '
+      +'del '+esc(dtpv.map(ddmm).join(' y el '))+'. '
+      +'<b>Con eso se cierra la venta del '+esc(cierra.map(ddmm).join(' y del '))+'</b>, '
+      +'porque el banco deposita al día hábil siguiente.'
+      +'<br>La venta del '+esc(ddmm(ult))+' no la cierra este archivo: la cierra el estado de cuenta '
+      +'del <b>'+esc(ddmm(diaDeposito(ult)))+'</b>.</span>';
   }
   pinta1(ab.length?'ok':'bad','Leí <b>'+r.movs.length+'</b> movimiento(s) del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+': '
     +'<b>'+ab.length+'</b> abonos por <b>$'+m(sum(ab))+'</b> y <b>'+ca.length+'</b> cargos por <b>$'+m(sum(ca))+'</b>.'
