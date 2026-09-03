@@ -1,6 +1,6 @@
 <!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Catálogo de compras · Casa Pepe</title>
+<title>Proveedores y stocks · Casa Pepe</title>
 <style>
 :root{
   --ground:#F4F1EA;--surface:#FFFFFF;--surface-2:#EFE9DD;--surface-3:#FBF8F1;
@@ -66,7 +66,7 @@ input[type=checkbox]{width:auto}
 <body>
 
 <div class="top"><div class="top-in">
-  <div class="brand">📚 Catálogo de compras<small>Casa Pepe · productos, precios y proveedores</small></div>
+  <div class="brand">📦 Proveedores y stocks<small>Casa Pepe · catálogo de compras, precios, proveedores e inventario</small></div>
   <div class="spacer"></div>
   <span id="sedeBox"></span>
 </div></div>
@@ -99,6 +99,7 @@ const PRESENTACIONES=["pieza","paquete","bolsa","botella","garrafón","caja","bo
 
 let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
 let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={};
+let STOCK=[],CONTEOS=[],CONCIL=[];
 let F={area:"",tipo:"",bodega:"",q:"",solo:"todos"};
 
 async function boot(){
@@ -121,22 +122,25 @@ function pintaSede(){
   $("selSede").onchange=e=>{SEDE=e.target.value;recargar();};
 }
 function pintaTabs(){
-  const t=[["productos","📦 Productos"],["precios","🏷️ Precios y presentaciones"],["proveedores","🚚 Proveedores"]];
+  const t=[["productos","📦 Productos"],["precios","🏷️ Precios"],["proveedores","🚚 Proveedores"],
+           ["stock","🏬 Stock por bodega"],["conteos","🧮 Conteos"],["concilia","🍽️ Conciliación A&B"]];
   $("tabs").innerHTML=t.map(([k,l])=>`<button aria-selected="${TAB===k}" onclick="irTab('${k}')">${esc(l)}</button>`).join("");
 }
 function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
     sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
-    sb.from("cmp_v_proveedores_config").select("*").order("nombre")
+    sb.from("cmp_v_proveedores_config").select("*").order("nombre"),
+    sb.from("cmp_v_valor_stock").select("*").eq("property_id",SEDE),
+    sb.from("cmp_conteos").select("*").eq("property_id",SEDE).order("periodo_fin",{ascending:false}).limit(40)
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[];
+  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   PRODS.forEach(p=>p._sinPrecio=sinPrecio.has(p.id));
   render();
@@ -145,6 +149,9 @@ function render(){
   if(TAB==="productos")  return vProductos();
   if(TAB==="precios")    return vPrecios();
   if(TAB==="proveedores")return vProveedores();
+  if(TAB==="stock")      return vStock();
+  if(TAB==="conteos")    return vConteos();
+  if(TAB==="concilia")   return vConcilia();
 }
 
 /* ───────── Productos ───────── */
@@ -430,6 +437,161 @@ async function bajaProv(id){
     baja_at:new Date().toISOString(),baja_por:EMAIL}).eq("id",id);
   if(error) return toast(error.message);
   toast("Proveedor dado de baja"); await recargar();
+}
+
+/* ───────── Stock por bodega ───────── */
+const FAMILIAS=["Alimentos","Bebidas","Limpieza","Papelería","Mantenimiento","Blancos","Música","Menaje","Otros"];
+let FBOD="";
+function vStock(){
+  const l=FBOD?STOCK.filter(x=>x.bodega_id===FBOD):STOCK;
+  const valor=l.reduce((a,x)=>a+(+x.valor||0),0);
+  const sinCosto=l.filter(x=>x.costo_unidad_base==null&&x.existencia>0).length;
+  const porFam={}; FAMILIAS.forEach(f=>porFam[f]={n:0,u:0,v:0});
+  l.forEach(x=>{ const f=x.familia||"Otros"; porFam[f]=porFam[f]||{n:0,u:0,v:0};
+    porFam[f].n++; porFam[f].u+=(+x.existencia||0); porFam[f].v+=(+x.valor||0); });
+  const porBod={};
+  STOCK.forEach(x=>{ const k=x.bodega_id; porBod[k]=porBod[k]||{nombre:x.bodega,area:x.bodega_area,n:0,u:0,v:0};
+    porBod[k].n++; porBod[k].u+=(+x.existencia||0); porBod[k].v+=(+x.valor||0); });
+
+  $("view").innerHTML=`
+    <div class="kpis">
+      <div class="kpi"><div class="n">${money(valor)}</div><div class="l">valor del inventario</div></div>
+      <div class="kpi"><div class="n">${l.length}</div><div class="l">productos con existencia</div></div>
+      <div class="kpi"><div class="n">${Object.keys(porBod).length}</div><div class="l">bodegas con stock</div></div>
+      <div class="kpi"><div class="n" style="color:${sinCosto?"var(--warn)":"var(--muted)"}">${sinCosto}</div><div class="l">sin costo para valorizar</div></div>
+    </div>
+    ${sinCosto?`<div class="avisos">${sinCosto} productos tienen existencia pero no tienen precio cargado, así que no suman al valor. Captúralos en la pestaña Precios.</div>`:""}
+    <div class="card"><h3>Valor por familia</h3><div class="scroll"><table>
+      <thead><tr><th>Familia</th><th class="num">Productos</th><th class="num">Unidades</th><th class="num">Valor</th></tr></thead>
+      <tbody>${FAMILIAS.filter(f=>porFam[f]&&porFam[f].n).map(f=>`<tr>
+        <td><b>${esc(f)}</b></td><td class="num">${num(porFam[f].n)}</td>
+        <td class="num">${num(Math.round(porFam[f].u))}</td><td class="num">${money(porFam[f].v)}</td></tr>`).join("")}
+      </tbody><tfoot><tr><th>Total</th><th class="num">${l.length}</th><th></th><th class="num">${money(valor)}</th></tr></tfoot>
+    </table></div></div>
+
+    <div class="card"><h3>Bodegas ${PUEDE?`<button class="btn sm" style="margin-left:auto" onclick="editaBodega()">＋ Nueva bodega</button>`:""}</h3>
+      <div class="scroll"><table>
+      <thead><tr><th>Bodega</th><th>Área</th><th class="num">Productos</th><th class="num">Unidades</th><th class="num">Valor</th><th></th></tr></thead>
+      <tbody>${BODEGAS.map(b=>{ const d=porBod[b.id]||{n:0,u:0,v:0};
+        return `<tr><td><b>${esc(b.nombre)}</b></td><td class="small">${esc(b.area||"—")}</td>
+          <td class="num">${num(d.n)}</td><td class="num">${num(Math.round(d.u))}</td><td class="num">${money(d.v)}</td>
+          <td class="num"><button class="btn ghost sm" onclick="FBOD='${b.id}';TAB='stock';render()">Ver</button>
+            ${PUEDE?`<button class="btn ghost sm" onclick="editaBodega('${b.id}')">✎</button>`:""}
+            ${PUEDE?`<button class="btn ghost sm" onclick="abrirConteo('${b.id}')">Contar</button>`:""}</td></tr>`;
+      }).join("")}</tbody></table></div></div>
+
+    ${FBOD?`<div class="card"><h3>${esc((BODEGAS.find(b=>b.id===FBOD)||{}).nombre||"")}
+        <button class="btn ghost sm" style="margin-left:auto" onclick="FBOD='';render()">Ver todas</button></h3>
+      <div class="scroll"><table>
+      <thead><tr><th>Producto</th><th>Familia</th><th class="num">Existencia</th><th class="num">Mínimo</th><th class="num">Costo</th><th class="num">Valor</th></tr></thead>
+      <tbody>${l.sort((a,b)=>(+b.valor||0)-(+a.valor||0)).slice(0,300).map(x=>`<tr>
+        <td>${esc(x.producto)}</td><td class="small">${esc(x.familia||"")}</td>
+        <td class="num">${num(x.existencia)} ${esc(x.unidad_base)}</td>
+        <td class="num">${x.stock_min!=null?num(x.stock_min):"—"}</td>
+        <td class="num small">${x.costo_unidad_base!=null?"$"+Number(x.costo_unidad_base).toFixed(3):'<span class="chip c-warn">falta</span>'}</td>
+        <td class="num">${money(x.valor)}</td></tr>`).join("")}</tbody></table></div></div>`:""}`;
+}
+function editaBodega(id){
+  const b=id?BODEGAS.find(x=>x.id===id):{tipo:"almacen",activo:true};
+  modal(`<h3 style="margin:0 0 8px">${id?"Editar bodega":"Nueva bodega"}</h3>
+    <div class="grid2">
+      <div class="full"><label>Nombre</label><input id="bNom" value="${esc(b.nombre||"")}"></div>
+      <div><label>Tipo</label><select id="bTipo">${["almacen","cocina","barra","otro"].map(t=>`<option ${b.tipo===t?"selected":""}>${t}</option>`).join("")}</select></div>
+      <div><label>Área</label><select id="bArea">${AREAS.map(a=>`<option ${b.area===a?"selected":""}>${a}</option>`).join("")}</select></div>
+      <div><label><input type="checkbox" id="bServ" ${b.es_servicio?"checked":""}> Bodega de servicio (de aquí descuentan las ventas)</label></div>
+      <div><label><input type="checkbox" id="bBlan" ${b.es_blancos?"checked":""}> Bodega de blancos</label></div>
+      <div class="full"><label>Responsable</label><input id="bJefe" value="${esc(b.jefe_nombre||"")}"></div>
+    </div>
+    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="guardaBodega(${id?"'"+id+"'":"null"})">Guardar</button></div>`);
+}
+async function guardaBodega(id){
+  const nombre=$("bNom").value.trim(); if(!nombre) return toast("El nombre es obligatorio");
+  const rec={property_id:SEDE,nombre,tipo:$("bTipo").value,area:$("bArea").value,
+    es_servicio:$("bServ").checked,es_blancos:$("bBlan").checked,
+    jefe_nombre:$("bJefe").value.trim()||null,activo:true};
+  const r=id? await sb.from("pos_almacenes").update(rec).eq("id",id)
+            : await sb.from("pos_almacenes").insert(rec);
+  if(r.error) return toast(r.error.message);
+  toast("Bodega guardada"); closeModal(); await recargar();
+}
+
+/* ───────── Conteos periódicos ───────── */
+async function abrirConteo(bodegaId){
+  const {data,error}=await sb.rpc("cmp_abrir_conteo",{p_bodega:bodegaId,p_fecha:new Date().toISOString().slice(0,10),p_nombre:EMAIL});
+  if(error) return toast(error.message);
+  toast("Conteo abierto"); await recargar(); TAB="conteos"; pintaTabs(); capturaConteo(data);
+}
+function vConteos(){
+  $("view").innerHTML=`
+    <div class="avisos">Un conteo por bodega y quincena (del 1 al 15 y del 16 a fin de mes). Al cerrarlo, la diferencia contra el sistema entra al kardex como ajuste y queda la merma valorizada.</div>
+    <div class="card"><h3>Conteos</h3><div class="scroll"><table>
+      <thead><tr><th>Bodega</th><th>Periodo</th><th>Estado</th><th>Contó</th><th class="num">Líneas</th><th></th></tr></thead>
+      <tbody>${CONTEOS.length?CONTEOS.map(c=>{
+        const b=BODEGAS.find(x=>x.id===c.bodega_id);
+        return `<tr><td><b>${esc(b?b.nombre:"—")}</b></td>
+          <td class="small">${c.periodo_inicio} → ${c.periodo_fin}</td>
+          <td>${c.estado==="cerrado"?'<span class="chip c-ok">cerrado</span>':'<span class="chip c-warn">abierto</span>'}</td>
+          <td class="small">${esc(c.contado_por_nombre||"")}</td>
+          <td class="num" id="cn-${c.id}">…</td>
+          <td class="num"><button class="btn ghost sm" onclick="capturaConteo('${c.id}')">${c.estado==="cerrado"?"Ver":"Capturar"}</button></td></tr>`;
+      }).join(""):'<tr><td colspan="6" class="center">Aún no hay conteos. Ábrelo desde la pestaña Stock, botón «Contar».</td></tr>'}</tbody>
+    </table></div></div>`;
+  CONTEOS.forEach(async c=>{ const {count}=await sb.from("cmp_conteo_items").select("id",{count:"exact",head:true}).eq("conteo_id",c.id);
+    const el=$("cn-"+c.id); if(el) el.textContent=count||0; });
+}
+async function capturaConteo(id){
+  const c=CONTEOS.find(x=>x.id===id)||{};
+  const {data}=await sb.from("cmp_v_conteo_vs_anterior").select("*").eq("conteo_id",id).order("producto");
+  const l=data||[];
+  const cerrado=c.estado==="cerrado";
+  modal(`<h3 style="margin:0 0 4px">Conteo · ${esc((BODEGAS.find(b=>b.id===c.bodega_id)||{}).nombre||"")}</h3>
+    <div class="small muted" style="margin-bottom:8px">${c.periodo_inicio} → ${c.periodo_fin}${c.periodo_anterior?" · anterior: "+c.periodo_anterior:""}</div>
+    <div class="card" style="margin-top:0"><div class="scroll"><table>
+      <thead><tr><th>Producto</th><th class="num">Sistema</th><th class="num">Teórico</th><th class="num">Contado</th><th class="num">vs anterior</th><th class="num">Merma $</th></tr></thead>
+      <tbody>${l.map(x=>`<tr data-p="${x.producto_id}">
+        <td>${esc(x.producto)}<div class="small muted">${esc(x.familia||"")} · ${esc(x.unidad_base)}</div></td>
+        <td class="num">${num(x.cantidad_sistema)}</td>
+        <td class="num small">${x.cantidad_teorica!=null?num(x.cantidad_teorica):"—"}</td>
+        <td class="num">${cerrado?num(x.cantidad_contada):`<input class="mini cc" type="number" step="0.01" min="0" value="${x.cantidad_contada!=null?x.cantidad_contada:""}">`}</td>
+        <td class="num small" style="color:${(+x.vs_anterior||0)<0?"var(--bad)":"var(--muted)"}">${x.vs_anterior!=null?num(x.vs_anterior):"—"}</td>
+        <td class="num small">${x.merma_valor!=null?money(x.merma_valor):"—"}</td></tr>`).join("")}
+      </tbody></table></div></div>
+    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cerrar</button>
+      ${cerrado?"":`<button class="btn ghost" onclick="guardaConteo('${id}',false)">Guardar avance</button>
+        <button class="btn" onclick="guardaConteo('${id}',true)">Cerrar conteo y ajustar</button>`}</div>`);
+}
+async function guardaConteo(id,cerrar){
+  for(const tr of document.querySelectorAll('#modal tbody tr[data-p]')){
+    const inp=tr.querySelector(".cc"); if(!inp||inp.value==="") continue;
+    await sb.from("cmp_conteo_items").update({cantidad_contada:parseFloat(inp.value)})
+      .eq("conteo_id",id).eq("producto_id",tr.dataset.p);
+  }
+  if(cerrar){
+    const {data,error}=await sb.rpc("cmp_cerrar_conteo",{p_conteo:id,p_nombre:EMAIL});
+    if(error) return toast(error.message);
+    toast(`Conteo cerrado · ${data} ajuste(s) al inventario`);
+  } else toast("Avance guardado");
+  closeModal(); await recargar();
+}
+
+/* ───────── Conciliación A&B ───────── */
+async function vConcilia(){
+  const {data}=await sb.from("cmp_v_conciliacion_ayb").select("*").eq("property_id",SEDE).order("semana",{ascending:false}).limit(60);
+  const l=data||[];
+  $("view").innerHTML=`
+    <div class="avisos">Compras de alimentos y bebidas de la semana contra lo que las ventas dicen que debió consumirse. La diferencia es lo que se compró de más (o de menos) respecto al consumo teórico.</div>
+    <div class="card"><h3>Semana a semana</h3><div class="scroll"><table>
+      <thead><tr><th>Semana</th><th>Familia</th><th class="num">Compras</th><th class="num">Consumo teórico</th><th class="num">Diferencia</th><th class="num">Venta A&B</th><th class="num">Compras / venta</th></tr></thead>
+      <tbody>${l.length?l.map(x=>`<tr>
+        <td class="small">${x.semana}</td><td>${esc(x.familia||"")}</td>
+        <td class="num">${money(x.compras_valor)}</td>
+        <td class="num">${money(x.consumo_valor)}</td>
+        <td class="num" style="color:${(+x.diferencia_valor||0)>0?"var(--warn)":"var(--muted)"}">${money(x.diferencia_valor)}</td>
+        <td class="num">${money(x.venta_total)}</td>
+        <td class="num">${x.compras_pct_venta!=null?x.compras_pct_venta+"%":"—"}</td></tr>`).join("")
+        :'<tr><td colspan="7" class="center">Todavía no hay movimientos de compra registrados para conciliar.</td></tr>'}</tbody>
+    </table></div></div>`;
 }
 
 boot();
