@@ -203,6 +203,13 @@ th.n,td.n{text-align:right}
 tbody td{padding:9px 13px;border-bottom:1px solid var(--rule);vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
 tbody tr.sum td{background:var(--surface-3);font-weight:600}
+/* Abrir un método de cobro hasta los tickets que lo forman. */
+tr.cob{cursor:pointer}
+tr.cob:hover td{background:var(--surface-3)}
+tr.cob .cabre{color:var(--faint);font-size:.8em}
+tr.cobdet td{background:var(--surface-3);padding:10px 13px}
+table.det thead th{background:transparent;padding:6px 10px}
+table.det tbody td{padding:6px 10px;font-size:13px}
 tr.lv2 td{background:var(--surface-3)}
 tr.lv3 td{background:var(--surface-3);font-size:13.5px}
 tr.lv4 td{background:var(--surface-3);font-size:13px;color:var(--ink-2)}
@@ -603,6 +610,25 @@ function totales(){
 
 /* ---------- carga ---------- */
 async function rpc(fn,args){const {data,error}=await sb.rpc(fn,args||{});if(error)throw error;return data;}
+/* Lo mismo, pero aguantando un tropiezo de red. Desde el móvil, una llamada de
+   diez segundos se cae si la pantalla se apaga o la señal parpadea, y el
+   navegador sólo dice «Failed to fetch»: no es que el cálculo fallara, es que
+   la petición no llegó. Se reintenta antes de dar nada por malo. */
+function esFalloDeRed(e){
+  const m=String((e&&e.message)||e||'');
+  return /failed to fetch|networkerror|load failed|fetch failed|timeout|aborted/i.test(m);
+}
+async function rpcReintenta(fn,args,intentos,avisa){
+  intentos=intentos||3;
+  for(let i=1;i<=intentos;i++){
+    try{ return await rpc(fn,args); }
+    catch(e){
+      if(i===intentos || !esFalloDeRed(e)) throw e;
+      if(avisa) avisa('Se cortó la conexión. Reintentando ('+i+' de '+(intentos-1)+')…');
+      await new Promise(r=>setTimeout(r, 1500*i));
+    }
+  }
+}
 function fmtFecha(f){const d=new Date(f+'T12:00:00');
   return d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}).replace(/^./,c=>c.toUpperCase());}
 
@@ -800,7 +826,7 @@ async function cargaDia(f){
     return; }
   const g0=document.getElementById('gate'); if(g0) g0.innerHTML='';
   const tk=++CARGA;
-  cargando=true; fecha=f; D=null; pinta();
+  cargando=true; fecha=f; D=null; cobAbierto=null; pinta();
   let d;
   try{ d=await rpc('aud_panel_dia',{p_property:prop,p_fecha:f}); }
   catch(e){ if(tk!==CARGA) return; cargando=false; pinta(); throw e; }
@@ -1033,6 +1059,36 @@ const TILE_TXT={
  comp:["Sabemos dónde está","El método de cobro por el que entró ese dinero confirma la misma cifra: la caja fuerte contó lo que declaró el turno, la terminal de recepción pasó esas tarjetas, Stripe cobró esos cargos. Está localizado."],
  banco:["Falta el estado de cuenta","SÓLO lo que el sistema origen dice que pasó por una TPV: la terminal de la terraza o la de recepción. El dinero va en camino; hasta que el estado de cuenta lo confirme sigue siendo una creencia, no un hecho. Lo que no se sabe por dónde entró NO va aquí."],
  falta:["No sabemos dónde está","Cobros que no tienen ninguna ruta de comprobación, o cuyo liquidador reportó menos de lo que dice el sistema. Aquí es donde se esconde cualquier faltante: si hay un peso, el día va en rojo."]};
+/* El detalle de un método de cobro: los tickets que lo forman. Se pide sólo
+   cuando alguien abre la fila, y se recuerda mientras no cambie el día. */
+let cobAbierto=null, COB={};
+function claveCob(p){ return prop+'|'+fecha+'|'+p; }
+function detalleCobros(punto){
+  const d=COB[claveCob(punto)];
+  if(d===undefined) return '<div class="lede" style="margin:0">Buscando los cobros…</div>';
+  if(d===null) return '<div class="lede" style="margin:0">No se pudo leer el detalle.</div>';
+  const l=(d.cobros||[]);
+  if(!l.length) return '<div class="lede" style="margin:0">Este método no tiene cobros sueltos ese día: '
+    +'la cifra viene del cierre del turno, no de tickets.</div>';
+  return '<div class="scroll"><table class="det"><thead><tr><th>Hora</th><th>Ticket</th>'
+    +'<th>Dónde</th><th class="n">Importe</th></tr></thead><tbody>'
+    +l.map(x=>'<tr><td>'+esc(x.hora||'')+'</td><td>'+esc(x.ticket||'—')+'</td>'
+      +'<td>'+esc([x.fuente,x.centro,x.metodo].filter(Boolean).join(' · '))+'</td>'
+      +'<td class="n">'+m(x.monto)+'</td></tr>').join('')
+    +'<tr class="sum"><td colspan="3">'+l.length+' cobro(s)</td><td class="n">'+m(d.total)+'</td></tr>'
+    +'</tbody></table></div>';
+}
+async function abreCobros(punto){
+  cobAbierto = (cobAbierto===punto) ? null : punto;
+  pinta();
+  if(!cobAbierto) return;
+  const k=claveCob(punto);
+  if(COB[k]!==undefined) return;
+  try{ COB[k]=await rpc('aud_panel_cobros',{p_property:prop,p_fecha:fecha,p_punto:punto}); }
+  catch(e){ COB[k]=null; }
+  pinta();
+}
+
 function panelTile(){
   if(!tileAbierto||!D)return '';
   const t=TILE_TXT[tileAbierto];if(!t)return '';
@@ -1049,8 +1105,14 @@ function panelTile(){
         :st==='sin_liquidador'?'Esta propiedad no tiene ese método de cobro conectado.'
         :'El comprobante dice $'+m(cb)+' y el sistema $'+m(c[3])+'.');
     const col=tileAbierto==='comp'?'ok':tileAbierto==='banco'?'info':'warn';
-    return '<tr><td class="stripe '+col+'">'+esc(c[1])+'<span class="sub">'+esc(pq)+(c[7]?' '+esc(c[7]):'')+'</span></td>'
-      +'<td class="n">'+m(monto)+'</td><td class="n">'+c[2]+'</td><td>'+chip(col,(ESTADO[st]||['none',st])[1])+'</td></tr>';}).join('');
+    // Una cifra no es investigable; un ticket con folio y hora sí. Cada método
+    // se abre hasta los cobros que lo componen.
+    const abierta = cobAbierto===c[0];
+    return '<tr class="cob'+(abierta?' on':'')+'" data-cob="'+esc(c[0])+'">'
+      +'<td class="stripe '+col+'"><span class="cabre">'+(abierta?'▾':'▸')+'</span> '+esc(c[1])
+      +'<span class="sub">'+esc(pq)+(c[7]?' '+esc(c[7]):'')+'</span></td>'
+      +'<td class="n">'+m(monto)+'</td><td class="n">'+c[2]+'</td><td>'+chip(col,(ESTADO[st]||['none',st])[1])+'</td></tr>'
+      +(abierta?'<tr class="cobdet"><td colspan="4">'+detalleCobros(c[0])+'</td></tr>':'');}).join('');
   return '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">'
     +'<div><b>'+esc(t[0])+'.</b> <span class="lede" style="display:inline">'+esc(t[1])+'</span></div>'
     +(filas?'<div class="scroll"><table><thead><tr><th>Método de cobro</th><th class="n">Importe</th><th class="n">Movs</th><th>Estado</th></tr></thead><tbody>'+filas+'</tbody></table></div>'
@@ -2687,7 +2749,12 @@ document.addEventListener('change',e=>{
   pinta();
 });
 document.getElementById('tiles').addEventListener('click',e=>{const b=e.target.closest('[data-t]');if(!b)return;
-  tileAbierto=(tileAbierto===b.dataset.t)?null:b.dataset.t;pinta();});
+  tileAbierto=(tileAbierto===b.dataset.t)?null:b.dataset.t; cobAbierto=null; pinta();});
+// Abrir un método de cobro hasta sus tickets.
+document.getElementById('cuerpo').addEventListener('click',e=>{
+  const cb=e.target.closest('tr.cob'); if(!cb) return;
+  abreCobros(cb.dataset.cob);
+});
 document.getElementById('cuerpo').addEventListener('click',async e=>{
   const tg=e.target.closest('.tg'); if(tg){abierto[tg.dataset.k]=!abierto[tg.dataset.k];pinta();return;}
   const nb=e.target.closest('[data-notif]');
@@ -2842,17 +2909,32 @@ document.getElementById('recalc').addEventListener('click',async function(){
   const b=this; b.disabled=true;
   try{
     b.textContent='Releyendo Cloudbeds y Turitop…';
-    estadoRecalc('Pidiendo a Cloudbeds, Turitop y Poster los movimientos del '+fecha+'…','');
-    const r1=await rpc('aud_panel_releer',{p_fecha:fecha});
+    estadoRecalc('Pidiendo a Cloudbeds, Turitop y Poster los movimientos del '+fecha+'. '
+      +'Tarda unos quince segundos: no cierres la pantalla.','');
+    const r1=await rpcReintenta('aud_panel_releer',{p_fecha:fecha},3,m=>estadoRecalc(m,''));
     if(r1&&r1.error){estadoRecalc('No tienes permiso para recalcular.','bad');return;}
+    // Antes se dormían 15 segundos a ciegas y luego se pedía el cuadre. En el
+    // móvil eso significaba llegar a la llamada larga con la conexión ya dormida,
+    // y el navegador devolvía «Failed to fetch». Se espera menos y se reintenta.
     b.textContent='Esperando a las fuentes…';
-    await new Promise(r=>setTimeout(r,15000));
+    await new Promise(r=>setTimeout(r,7000));
     b.textContent='Volviendo a cuadrar…';
     estadoRecalc('Fuentes releídas. Rehaciendo el cuadre, la conciliación, las excepciones y la póliza…','');
-    await rpc('aud_panel_correr',{p_fecha:fecha});
+    await rpcReintenta('aud_panel_correr',{p_fecha:fecha},3,m=>estadoRecalc(m,''));
     await cargaMes(); await cargaDia(fecha);
     estadoRecalc('Listo. El día '+fecha+' se releyó de las fuentes y se volvió a cuadrar.','ok');
-  }catch(err){ estadoRecalc('No se pudo recalcular: '+((err&&err.message)||'error desconocido')+'.','bad'); }
+  }catch(err){
+    // Distinguir las dos cosas importa: que se caiga la red no quiere decir que
+    // el cuadre esté mal, y decirlo así manda a la gente a buscar un problema
+    // que no existe.
+    if(esFalloDeRed(err)){
+      estadoRecalc('Se cortó la conexión antes de terminar. El cálculo del servidor '
+        +'puede haber acabado igualmente: recarga la pantalla y míralo antes de '
+        +'volver a darle. Si sigue igual, inténtalo desde la computadora.','bad');
+    }else{
+      estadoRecalc('No se pudo recalcular: '+((err&&err.message)||'error desconocido')+'.','bad');
+    }
+  }
   finally{ recalculando=false; b.disabled=false; b.textContent='Recalcular cierre'; }
 });
 
