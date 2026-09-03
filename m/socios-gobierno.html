@@ -420,7 +420,7 @@ async function gobLoad(){
  ]);
  const pg={}; (pag||[]).forEach(x=>{ if(x.estatus==='pagado') pg[x.compromiso_id]=(pg[x.compromiso_id]||0)+ +x.monto; });
  (ref||[]).forEach(r=>r.pagado=pg[r.id]||0);
- GOB_CACHE={ap:ap||[],cu:cu||[],movs:movs||[],actas:actas||[],tit:tit||[],ref:ref||[]};
+ GOB_CACHE={ap:ap||[],cu:cu||[],movs:movs||[],actas:actas||[],tit:tit||[],ref:ref||[],pagos:pag||[]};
  return GOB_CACHE;
 }
 function gobFecha(d){return d?new Date(d+'T12:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}):'—';}
@@ -543,30 +543,41 @@ function apoCadena(D){
 }
 function apoRef(D){
  const R=D.ref.slice().sort((a,b)=>(+b.pct_total||0)-(+a.pct_total||0));
- const efe=R.reduce((t,r)=>t+ +r.monto_comprometido,0)-(+((R.find(x=>x.id==='REF-07')||{}).monto_comprometido)||0);
- const pag=R.reduce((t,r)=>t+(+r.pagado||0),0);
+ const P=D.pagos||[];
+ const cuota=(id,ex)=>{const r=P.find(x=>x.compromiso_id===id&&x.exhibicion===ex);return r||null;};
+ const suma=(ex,f)=>P.filter(x=>x.exhibicion===ex&&(!f||f(x))).reduce((t,x)=>t+ +x.monto,0);
+ const ene=suma(1), eneP=suma(1,x=>x.estatus==='pagado'), enePend=ene-eneP;
+ const mar=suma(2), marP=suma(2,x=>x.estatus==='pagado');
+ const ves=suma(3);
+ const efe=ene+mar, pag=eneP+marP;
  const accT=R.reduce((t,r)=>t+(+r.acciones_total||0),0);
  const ST={pendiente:['nd','pendiente'],parcial:['warn','1er pago recibido'],pagado:['ok','pagado'],no_aporta:['q','no aporta']};
+ const cel=(id,ex)=>{const c=cuota(id,ex); if(!c||+c.monto===0)return '<td class="n" style="color:var(--faint)">—</td>';
+   const ok=c.estatus==='pagado';
+   return `<td class="n" style="${ok?'color:var(--ok);font-weight:700':'color:var(--bad)'}">${money(+c.monto)}${ok?' ✓':''}</td>`;};
  return `<div class="cards">
-   <div class="kpi"><div class="lb">A exhibir en efectivo</div><div class="v">${money(efe)}</div><div class="s">sin contar la tesorería</div></div>
-   <div class="kpi"><div class="lb">Exhibido y capturado</div><div class="v" style="color:${pag?'var(--ok)':'var(--bad)'}">${money(pag)}</div><div class="s">${pag?'':'falta capturar los pagos recibidos'}</div></div>
-   <div class="kpi"><div class="lb">Pendiente de exhibir</div><div class="v" style="color:var(--bad)">${money(efe-pag)}</div><div class="s">${R.filter(r=>r.estatus==='pendiente').length} socios sin depositar</div></div>
-   <div class="kpi"><div class="lb">Acciones post-refundación</div><div class="v">${Number(accT).toLocaleString('es-MX',{maximumFractionDigits:0})}</div><div class="s">incluye la tesorería</div></div>
+   <div class="kpi"><div class="lb">A exhibir en efectivo</div><div class="v" style="font-size:1.15rem">${money(efe)}</div><div class="s">$1,500,000 más van al vesting</div></div>
+   <div class="kpi"><div class="lb">Exhibido</div><div class="v" style="font-size:1.15rem;color:var(--ok)">${money(pag)}</div><div class="s">Juan José y Luis Javier, enero 2026</div></div>
+   <div class="kpi"><div class="lb">Vencido y sin pagar</div><div class="v" style="font-size:1.15rem;color:var(--bad)">${money(enePend)}</div><div class="s">de la exhibición del 14-ene-2026</div></div>
+   <div class="kpi"><div class="lb">Por vencer</div><div class="v" style="font-size:1.15rem">${money(mar-marP)}</div><div class="s">exhibición de marzo 2026</div></div>
   </div>
-  <div class="note">Tenencia según el <b>cálculo de refundación</b> de tu libro. El acta todavía está <b>proyectada</b>: sin escritura, sin firma y sin protocolo.</div>
-  <div class="tscroll"><table><thead><tr><th>Socio</th><th>RFC</th><th>Serie</th><th class="n">Aporta</th><th class="n">Exhibido</th><th class="n">Acciones</th><th class="n">% post</th><th>Estatus</th></tr></thead><tbody>`+
+  <div class="note">Calendario de exhibiciones de la ampliación de $5,000,000: <b>80% el 14-ene-2026</b>, <b>20% en marzo 2026</b> y el <b>vesting Serie D en 2026/2027</b>. De la primera exhibición solo depositaron Juan José y Luis Javier Cué.</div>
+  <div class="tscroll"><table><thead><tr><th>Socio</th><th>Serie</th><th class="n">Acciones</th><th class="n">% post</th><th class="n">Total a aportar</th><th class="n">14-ene-26</th><th class="n">mar-26</th><th class="n">2026/27</th><th>Estatus</th></tr></thead><tbody>`+
   R.map(r=>{const st=ST[r.estatus]||['nd',r.estatus]; const tes=r.id==='REF-07';
    return `<tr${tes?' style="background:var(--surface3)"':''}><td><b>${gobEsc(r.nombre)}</b>${r.notas?'<div style="font-size:.72rem;color:var(--muted)">'+gobEsc(r.notas)+'</div>':''}</td>
-    <td class="mono">${gobEsc(r.rfc||'—')}</td><td>${gobEsc(r.serie||'—')}</td>
-    <td class="n">${+r.monto_comprometido?money(+r.monto_comprometido):'—'}</td>
-    <td class="n">${r.pagado?money(r.pagado):'—'}</td>
+    <td>${gobEsc(r.serie||'—')}</td>
     <td class="n">${Number(r.acciones_total||0).toLocaleString('es-MX',{maximumFractionDigits:0})}</td>
     <td class="n">${((+r.pct_total||0)*100).toFixed(2)}%</td>
+    <td class="n">${+r.monto_comprometido?money(+r.monto_comprometido):'—'}</td>
+    ${cel(r.id,1)}${cel(r.id,2)}${cel(r.id,3)}
     <td><span class="chip ${st[0]}">${st[1]}</span></td></tr>`;}).join('')+
-  `<tr style="background:#EFE9DD;font-weight:700"><td>TOTAL</td><td></td><td></td><td class="n">${money(efe)}</td><td class="n">${money(pag)}</td>
+  `<tr style="background:#EFE9DD;font-weight:700"><td>TOTAL</td><td></td>
     <td class="n">${Number(accT).toLocaleString('es-MX',{maximumFractionDigits:0})}</td>
-    <td class="n">${(R.reduce((t,r)=>t+(+r.pct_total||0),0)*100).toFixed(2)}%</td><td></td></tr></tbody></table></div>
-  <div class="note">Falta capturar el calendario de exhibiciones y el monto, fecha y folio de los primeros pagos de Juan José y Luis Javier Cué.</div>`;
+    <td class="n">${(R.reduce((t,r)=>t+(+r.pct_total||0),0)*100).toFixed(2)}%</td>
+    <td class="n">${money(efe+ves)}</td><td class="n">${money(ene)}</td><td class="n">${money(mar)}</td><td class="n">${money(ves)}</td><td></td></tr>
+   <tr style="background:var(--okB);color:var(--ok);font-weight:700"><td>Exhibido</td><td></td><td></td><td></td><td class="n">${money(pag)}</td><td class="n">${money(eneP)}</td><td class="n">${money(marP)}</td><td class="n">—</td><td></td></tr>
+  </tbody></table></div>
+  <div class="note notew">Falta el folio y la fecha valor de los dos depósitos de enero (Juan José y Luis Javier, $825,000 cada uno), y cobrar los <b>${money(enePend)}</b> vencidos de PITAO, AE Future y Starseeker.</div>`;
 }
 function apoFaltantes(D){
  const rows=[];
