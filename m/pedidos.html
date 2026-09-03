@@ -75,6 +75,13 @@ input.mini{padding:4px 7px;font-size:13px;width:86px;text-align:right}
 .pcard .pprec{font-weight:700;margin:6px 0 4px}
 .pcard .padd{display:flex;gap:6px;margin-top:8px}.pcard .padd .mini{width:64px}
 .pcard select{font-size:12px;padding:4px 6px}
+.pcard.sinprecio{border-style:dashed;border-color:var(--rule-2)}
+.acc{border:1px solid var(--rule);border-radius:10px;margin-top:8px;background:var(--surface);overflow:hidden}
+.acch{width:100%;display:flex;align-items:center;gap:10px;background:none;border:0;font:inherit;padding:11px 13px;cursor:pointer;text-align:left}
+.acch:hover{background:var(--surface-2)}
+.accmas{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:var(--accent-soft);color:var(--accent);font-weight:700}
+.accnom{font-weight:600;flex:1}.accn{font-size:12px;color:var(--muted)}
+.acc .pgrid{padding:0 12px 12px;margin-top:0}
 @media(max-width:640px){.farrow{display:none}}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
 </style></head>
@@ -117,7 +124,7 @@ const chipEst=e=>{const m=estMeta(e);return `<span class="chip ${m[2]}">${esc(m[
 let USER=null, EMAIL="", PROPS=[], SEDE=null, TAB="funnel";
 let PUEDE_APROBAR=false, PUEDE_EDITAR=false;
 let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[], SOLMTTO=[];
-let MISAREAS=[], CATPROV=[];
+let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={};
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
 
 /* ───────────────── arranque ───────────────── */
@@ -137,7 +144,10 @@ async function boot(){
   SEDE=PROPS[0].id;
   pintaSede(); pintaTabs();
 
-  const q=new URLSearchParams(location.search); if(q.get("tab")) TAB=q.get("tab");
+  const q=new URLSearchParams(location.search);
+  MODO = q.get("modo")||"";            // ?modo=pedir -> vista simple de Soy Pepe
+  if(MODO==="pedir") TAB="pedir";
+  else if(q.get("tab")) TAB=q.get("tab");
   if(TAB==="aprobar" && !PUEDE_APROBAR) TAB="sugeridos";
   await recargar();
 }
@@ -154,6 +164,12 @@ function pintaSede(){
   $("selSede").onchange=e=>{SEDE=e.target.value; SEL={}; recargar();};
 }
 function pintaTabs(){
+  if(MODO==="pedir"){
+    $("tabs").innerHTML=[["pedir","🛒 Pedir"],["pedidos","🧾 Mis pedidos"]]
+      .map(([k,l])=>`<button aria-selected="${TAB===k}" onclick="irTab('${k}')">${esc(l)}</button>`).join("");
+    $("btnNuevo").style.display="none";
+    return;
+  }
   const t=[["funnel","🔭 Funnel"],["sugeridos","📉 Sugeridos por mínimo"],["pedidos","🧾 Pedidos"]];
   if(PUEDE_APROBAR) t.push(["aprobar","✔️ Por aprobar"]);
   t.push(["recepcion","📦 Recepción"]);
@@ -185,6 +201,7 @@ async function recargar(){
 
 /* ───────────────── vistas ───────────────── */
 function render(){
+  if(TAB==="pedir")       return vPedir();
   if(TAB==="funnel")      return vFunnel();
   if(TAB==="sugeridos")   return vSugeridos();
   if(TAB==="pedidos")     return vPedidos();
@@ -493,24 +510,38 @@ async function guardaCab(id){
 let CART=[], CATFIL="", PLANTILLAS=[];
 
 /* Pedir se parece a pedir el súper: categorías, tarjetas y carrito. */
-function nuevoPedido(){
-  if(!MISAREAS.length) return toast("Tu rol no tiene un área de compras asignada. Pídeselo a administración.");
-  CART=[]; CATFIL="";
-  modal(`<h3 style="margin:0 0 2px">¿Qué necesitas?</h3>
+function cpCuerpo(titulo){
+  return `<h3 style="margin:0 0 2px">${esc(titulo)}</h3>
     <div class="small muted" style="margin-bottom:8px">Solo ves lo de tus áreas: ${esc(MISAREAS.join(" · "))}</div>
     <div id="cpPlant"></div>
     <input id="cpBusca" placeholder="Buscar producto…" oninput="cpPintaGrid()">
     <div id="cpCats" class="chips"></div>
     <div id="cpGrid"></div>
-    <div id="cpCart"></div>
-    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <div id="cpCart"></div>`;
+}
+function cpInit(){ cargaPlantillas(); cpPintaCats(); cpPintaGrid(); cpPintaCart(); }
+
+function nuevoPedido(){
+  if(!MISAREAS.length) return toast("Tu rol no tiene un área de compras asignada. Pídeselo a administración.");
+  CART=[]; CATFIL=""; ABIERTAS={};
+  modal(cpCuerpo("¿Qué necesitas?")+
+    `<div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn ghost" id="cpGuardar" onclick="cpGuardarBase()" disabled>Guardar como pedido base</button>
       <button class="btn" id="cpCrear" onclick="cpCheckout()" disabled>Revisar y pedir</button></div>`);
-  cargaPlantillas(); cpPintaCats(); cpPintaGrid(); cpPintaCart();
+  cpInit();
 }
-function misItems(){ return CATPROV.filter(c=>MISAREAS.includes(c.area)&&c.precio!=null); }
+// Vista simple de Soy Pepe: se pide navegando el producto, nada más.
+function vPedir(){
+  if(!MISAREAS.length){ $("view").innerHTML='<div class="card"><div class="center">Tu puesto no tiene un área de compras asignada. Pídeselo a administración.</div></div>'; return; }
+  $("view").innerHTML=cpCuerpo("¿Qué necesitas?")+
+    `<div class="foot">
+      <button class="btn ghost" id="cpGuardar" onclick="cpGuardarBase()" disabled>Guardar como pedido base</button>
+      <button class="btn" id="cpCrear" onclick="cpCheckout()" disabled>Revisar y pedir</button></div>`;
+  cpInit();
+}
+function misItems(){ return catalogo(); }
 function cpPintaCats(){
-  const cats=[...new Set(misItems().map(c=>catDe(c.producto_id)).filter(Boolean))].sort();
+  const cats=[...new Set(catalogo().map(x=>x.p.categoria||x.p.area).filter(Boolean))].sort();
   $("cpCats").innerHTML=[["","Todo"]].concat(cats.map(c=>[c,c]))
     .map(([k,l])=>`<span class="pill ${CATFIL===k?"on":""}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(l)}</span>`).join("");
 }
@@ -532,45 +563,68 @@ function cvtBase(cant,de,a){
 }
 function cpPintaGrid(){
   const q=($("cpBusca").value||"").trim().toLowerCase();
-  const vistos={};
-  misItems().forEach(c=>{
-    if(CATFIL && catDe(c.producto_id)!==CATFIL) return;
-    if(q && !c.producto.toLowerCase().includes(q)) return;
-    vistos[c.producto_id]=c;
-  });
-  const l=Object.values(vistos).slice(0,60);
-  if(!l.length){ $("cpGrid").innerHTML=`<div class="avisos">Nada con precio en esa categoría. Cárgalo en el catálogo.</div>`; return; }
-  $("cpGrid").innerHTML=`<div class="pgrid">${l.map(c=>{
-    const ops=cpOpciones(c.producto_id), b=ops[0];
-    const sug=(SUG.find(s=>s.producto_id===c.producto_id)||{}).piezas_a_pedir;
-    return `<div class="pcard">
-      <div class="pnom">${esc(c.producto)}</div>
-      <div class="small muted">${esc(catDe(c.producto_id)||"")}${sug?` · <b style="color:var(--warn)">bajo mínimo</b>`:""}</div>
-      <div class="pprec">${money(b.precio)} <span class="small muted">${esc(b.presentacion)} ${num(b.contenido)}${esc(b.unidad_contenido)}</span></div>
-      ${ops.length>1?`<select id="op-${c.producto_id}" class="small">${ops.map((o,i)=>
-          `<option value="${o.presentacion_id}">${esc(o.proveedor)} · ${money(o.precio)}${i===0?" · más barato":""}</option>`).join("")}</select>`
-        :`<input type="hidden" id="op-${c.producto_id}" value="${b.presentacion_id}"><div class="small muted">${esc(b.proveedor)}</div>`}
-      <div class="padd">
-        <input class="mini" id="qt-${c.producto_id}" type="number" min="1" step="1" value="${sug||1}">
-        <button class="btn sm" onclick="cpAdd('${c.producto_id}')">Agregar</button>
-      </div></div>`;
-  }).join("")}</div>`;
+  let items=catalogo();
+  if(CATFIL) items=items.filter(x=>(x.p.categoria||x.p.area)===CATFIL);
+  if(q) items=items.filter(x=>x.p.nombre.toLowerCase().includes(q));
+  if(!items.length){ $("cpGrid").innerHTML=`<div class="avisos">No hay productos con ese nombre en tus áreas.</div>`; return; }
+
+  // Con búsqueda se muestra plano; sin búsqueda se navega por categorías con +
+  if(q){ $("cpGrid").innerHTML=`<div class="pgrid">${items.slice(0,80).map(tarjeta).join("")}</div>`; return; }
+
+  const grupos={};
+  items.forEach(x=>{ const k=x.p.categoria||x.p.area; (grupos[k]=grupos[k]||[]).push(x); });
+  $("cpGrid").innerHTML=Object.keys(grupos).sort().map(k=>{
+    const ab=!!ABIERTAS[k], l=grupos[k];
+    const sinPrecio=l.filter(x=>!x.mejor).length;
+    return `<div class="acc">
+      <button class="acch" onclick="ABIERTAS['${k.replace(/'/g,"\\'")}']=${ab?"false":"true"};cpPintaGrid()">
+        <span class="accmas">${ab?"−":"+"}</span>
+        <span class="accnom">${esc(k)}</span>
+        <span class="accn">${l.length}${sinPrecio?` · ${sinPrecio} sin precio`:""}</span>
+      </button>
+      ${ab?`<div class="pgrid">${l.map(tarjeta).join("")}</div>`:""}
+    </div>`;
+  }).join("");
+}
+function tarjeta(x){
+  const p=x.p, ops=x.ops, b=x.mejor;
+  const sug=(SUG.find(s=>s.producto_id===p.id)||{}).piezas_a_pedir;
+  const bajo=(SUG.find(s=>s.producto_id===p.id)||{}).faltante>0;
+  return `<div class="pcard${b?"":" sinprecio"}">
+    <div class="pnom">${esc(p.nombre)}</div>
+    <div class="small muted">${esc(p.unidad_texto||p.unidad_base)}${bajo?` · <b style="color:var(--warn)">bajo mínimo</b>`:""}</div>
+    ${b? `<div class="pprec">${money(b.precio)} <span class="small muted">${esc(b.presentacion)} ${num(b.contenido)}${esc(b.unidad_contenido)}</span></div>
+          ${ops.length>1?`<select id="op-${p.id}" class="small">${ops.map((o,i)=>
+              `<option value="${o.presentacion_id}">${esc(o.proveedor)} · ${money(o.precio)}${i===0?" · más barato":""}</option>`).join("")}</select>`
+            :`<input type="hidden" id="op-${p.id}" value="${b.presentacion_id}"><div class="small muted">${esc(b.proveedor)}</div>`}`
+       : `<div class="pprec small" style="color:var(--warn)">Sin precio cargado</div>
+          <input type="hidden" id="op-${p.id}" value="">
+          <div class="small muted">Se pide igual; administración le pone proveedor.</div>`}
+    <div class="padd">
+      <input class="mini" id="qt-${p.id}" type="number" min="1" step="1" value="${sug||1}">
+      <button class="btn sm" onclick="cpAdd('${p.id}')">Agregar</button>
+    </div></div>`;
 }
 function cpAdd(prodId){
-  const el=$("op-"+prodId); const presId=el.value;
-  const cant=parseFloat($("qt-"+prodId).value)||1;
-  const c=CATPROV.find(x=>x.presentacion_id===presId); if(!c) return;
-  const ya=CART.find(x=>x.presentacion_id===presId);
-  if(ya) ya.cant+=cant; else CART.push({producto_id:prodId,presentacion_id:presId,proveedor_id:c.proveedor_id,
-    proveedor:c.proveedor,producto:c.producto,precio:c.precio,area:c.area,
-    tasa:c.tasa_iva_default!=null?c.tasa_iva_default:16,cant});
+  const p=PRODS.find(x=>x.id===prodId); if(!p) return;
+  const presId=($("op-"+prodId)||{}).value||"";
+  const cant=parseFloat(($("qt-"+prodId)||{}).value)||1;
+  const c=presId?CATPROV.find(x=>x.presentacion_id===presId):null;
+  const clave=presId||("np-"+prodId);
+  const ya=CART.find(x=>x.clave===clave);
+  if(ya){ ya.cant+=cant; }
+  else CART.push({clave, producto_id:prodId, presentacion_id:presId||null,
+    proveedor_id:c?c.proveedor_id:null, proveedor:c?c.proveedor:"Por asignar",
+    producto:p.nombre, precio:c?c.precio:null, area:p.area,
+    tasa:p.tasa_iva_default!=null?p.tasa_iva_default:16, cant});
   cpPintaCart();
 }
 function cpQuita(i){ CART.splice(i,1); cpPintaCart(); }
 function cpTotales(){
+  const sinPrecio=CART.filter(x=>x.precio==null).length;
   const sub=CART.reduce((a,x)=>a+x.cant*(+x.precio||0),0);
   const iva=CART.reduce((a,x)=>a+x.cant*(+x.precio||0)*(x.tasa/100),0);
-  return {sub,iva,total:sub+iva};
+  return {sub,iva,total:sub+iva,sinPrecio};
 }
 function cpPintaCart(){
   const box=$("cpCart"); if(!box) return;
@@ -578,7 +632,8 @@ function cpPintaCart(){
   $("cpCrear").disabled=!CART.length; $("cpGuardar").disabled=!CART.length;
   if(!CART.length){ box.innerHTML=`<div class="small muted" style="margin-top:10px">Tu carrito está vacío.</div>`; return; }
   const provs=[...new Set(CART.map(x=>x.proveedor))];
-  box.innerHTML=`<div class="card"><h3>🛒 Carrito · ${CART.length} producto(s) · ${provs.length} proveedor(es)</h3>
+  box.innerHTML=`${t.sinPrecio?`<div class="avisos">${t.sinPrecio} producto(s) sin precio: el pedido saldrá marcado como <b>info pendiente</b> para que administración le ponga proveedor y costo.</div>`:""}
+    <div class="card"><h3>🛒 Carrito · ${CART.length} producto(s) · ${provs.length} proveedor(es)</h3>
     <div class="scroll"><table><tbody>
       ${CART.map((x,i)=>`<tr><td>${esc(x.producto)}<div class="small muted">${esc(x.proveedor)} · IVA ${num(x.tasa)}%</div></td>
         <td class="num">${num(x.cant)} × ${money(x.precio)}</td>
@@ -606,9 +661,9 @@ function cpCargaBase(id){
   (pl.items||[]).forEach(it=>{
     const c=CATPROV.find(x=>x.presentacion_id===it.presentacion_id)||CATPROV.find(x=>x.producto_id===it.producto_id);
     if(!c||!MISAREAS.includes(c.area)) return;
-    const ya=CART.find(x=>x.presentacion_id===c.presentacion_id);
+    const ya=CART.find(x=>x.clave===c.presentacion_id);
     if(ya) ya.cant+=(+it.cantidad||1);
-    else CART.push({producto_id:c.producto_id,presentacion_id:c.presentacion_id,proveedor_id:c.proveedor_id,
+    else CART.push({clave:c.presentacion_id,producto_id:c.producto_id,presentacion_id:c.presentacion_id,proveedor_id:c.proveedor_id,
       proveedor:c.proveedor,producto:c.producto,precio:c.precio,area:c.area,
       tasa:c.tasa_iva_default!=null?c.tasa_iva_default:16,cant:+it.cantidad||1});
   });
@@ -654,8 +709,15 @@ async function cpCheckout(){
       Subtotal ${money(t.sub)} · IVA ${money(t.iva)} · <b>${money(t.total)}</b></div></div>
     <h3 style="margin:14px 0 0;font-size:.95rem">Presupuesto</h3>
     ${avisos||'<div class="small muted">Sin cuentas asociadas a estos productos.</div>'}
-    <div class="foot"><button class="btn ghost" onclick="nuevoPedido()">Volver al carrito</button>
+    <div class="foot"><button class="btn ghost" onclick="cpVolver()">Volver al carrito</button>
       <button class="btn" onclick="cpCrear()">Confirmar y crear ${Object.keys(grupos).length} pedido(s)</button></div>`);
+}
+function cpVolver(){
+  if(MODO==="pedir"){ closeModal(); render(); }
+  else { modal(cpCuerpo("¿Qué necesitas?")+
+    `<div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn ghost" id="cpGuardar" onclick="cpGuardarBase()" disabled>Guardar como pedido base</button>
+      <button class="btn" id="cpCrear" onclick="cpCheckout()" disabled>Revisar y pedir</button></div>`); cpInit(); }
 }
 async function cpCrear(){
   const grupos={};
@@ -677,7 +739,7 @@ async function cpCrear(){
   }
   CART=[]; closeModal(); toast(`${hechos} pedido(s) creados`);
   await recargar(); TAB="pedidos"; pintaTabs(); render();
-  if(hechos===1&&ultimo) verPedido(ultimo);
+  if(hechos===1&&ultimo&&MODO!=="pedir") verPedido(ultimo);
 }
 function agregarLinea(pedidoId){
   const p=PEDIDOS.find(x=>x.id===pedidoId);
