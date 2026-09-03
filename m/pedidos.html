@@ -62,6 +62,14 @@ input.mini{padding:4px 7px;font-size:13px;width:86px;text-align:right}
 .bar{height:8px;background:var(--surface-2);border-radius:6px;overflow:hidden}
 .bar > i{display:block;height:100%;background:var(--accent)}
 .bar.over > i{background:var(--bad)}
+.funnel{display:flex;align-items:stretch;gap:6px;padding:14px;overflow-x:auto}
+.fstep{flex:1 1 0;min-width:132px;background:var(--surface-3);border:1px solid var(--rule);border-radius:10px;padding:12px;cursor:pointer}
+.fstep:hover{border-color:var(--accent)}
+.fstep.alerta{border-color:var(--bad);background:var(--bad-bg)}
+.fstep .fnum{font-size:1.7rem;font-weight:700;line-height:1}
+.fstep .fl{font-weight:600;font-size:.85rem;margin:2px 0 6px}
+.farrow{display:flex;align-items:center;color:var(--faint);font-size:1.3rem}
+@media(max-width:640px){.farrow{display:none}}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
 </style></head>
 <body>
@@ -100,9 +108,10 @@ const EST=[["borrador","Borrador","c-bor"],["solicitado","Solicitado","c-sol"],[
 const estMeta=e=>EST.find(x=>x[0]===e)||[e,e,"c-bor"];
 const chipEst=e=>{const m=estMeta(e);return `<span class="chip ${m[2]}">${esc(m[1])}</span>`;};
 
-let USER=null, EMAIL="", PROPS=[], SEDE=null, TAB="sugeridos";
+let USER=null, EMAIL="", PROPS=[], SEDE=null, TAB="funnel";
 let PUEDE_APROBAR=false, PUEDE_EDITAR=false;
-let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[];
+let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[], SOLMTTO=[];
+let MISAREAS=[], CATPROV=[];
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
 
 /* ───────────────── arranque ───────────────── */
@@ -112,6 +121,7 @@ async function boot(){
   USER=session.user; EMAIL=(USER.email||"").toLowerCase();
 
   PUEDE_EDITAR  = await nivel("PAG-SERV-PEDIDOS") === "editar";
+  try{ const {data}=await sb.rpc("cmp_mis_areas",{p_email:EMAIL}); MISAREAS=data||[]; }catch(_){ MISAREAS=[]; }
   PUEDE_APROBAR = await nivel("PAG-SERV-PEDIDOS-APR") === "editar";
 
   let props=(await sb.from("properties").select("id,nombre,pl_loc").not("pl_loc","is",null)).data||[];
@@ -138,7 +148,8 @@ function pintaSede(){
   $("selSede").onchange=e=>{SEDE=e.target.value; SEL={}; recargar();};
 }
 function pintaTabs(){
-  const t=[["sugeridos","📉 Sugeridos por mínimo"],["pedidos","🧾 Pedidos"]];
+  const t=[["funnel","🔭 Funnel"],["sugeridos","📉 Sugeridos por mínimo"],
+           ["mtto","🔧 De mantenimiento"],["pedidos","🧾 Pedidos"]];
   if(PUEDE_APROBAR) t.push(["aprobar","✔️ Por aprobar"]);
   t.push(["recepcion","📦 Recepción"]);
   t.push(["presupuesto","📊 Presupuesto"]);
@@ -151,27 +162,185 @@ function irTab(k){ TAB=k; pintaTabs(); render(); }
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
   const sede=PROPS.find(p=>p.id===SEDE);
-  const [sug,ped,prov,bod,cue,pro]=await Promise.all([
+  const [sug,ped,prov,bod,cue,pro,sm,cp]=await Promise.all([
     sb.from("cmp_v_pedido_sugerido").select("*").eq("property_id",SEDE).gt("faltante",0).order("faltante",{ascending:false}),
     sb.from("cmp_pedidos").select("*, items:cmp_pedido_items(*, prod:producto_id(nombre,unidad_base), pres:presentacion_id(tipo,contenido,unidad_contenido))")
       .eq("property_id",SEDE).order("created_at",{ascending:false}).limit(200),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE),
     sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
-    sb.from("cmp_productos").select("id,nombre,area,unidad_base,tipo,bodega_id,cuenta_id").eq("property_id",SEDE).eq("activo",true).order("nombre")
+    sb.from("cmp_productos").select("id,nombre,area,unidad_base,tipo,bodega_id,cuenta_id").eq("property_id",SEDE).eq("activo",true).order("nombre"),
+    sb.from("cmp_v_solicitudes_mtto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}),
+    sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE)
   ]);
-  SUG=sug.data||[]; PEDIDOS=ped.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; PRODS=pro.data||[];
+  SUG=sug.data||[]; PEDIDOS=ped.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; PRODS=pro.data||[]; SOLMTTO=sm.data||[]; CATPROV=cp.data||[];
   window.__sede=sede;
   render();
 }
 
 /* ───────────────── vistas ───────────────── */
 function render(){
+  if(TAB==="funnel")      return vFunnel();
+  if(TAB==="mtto")        return vMtto();
   if(TAB==="sugeridos")   return vSugeridos();
   if(TAB==="pedidos")     return vPedidos();
   if(TAB==="aprobar")     return vAprobar();
   if(TAB==="recepcion")   return vRecepcion();
   if(TAB==="presupuesto") return vPresupuesto();
+}
+
+/* ── Funnel ── */
+const ETAPAS=[
+  {k:"borrador",   l:"Borrador",   d:"Lo arma el jefe de área",     ts:p=>p.created_at},
+  {k:"solicitado", l:"Solicitado", d:"Esperando autorización",      ts:p=>p.solicitado_at||p.created_at},
+  {k:"aprobado",   l:"Aprobado",   d:"Falta mandarlo al proveedor", ts:p=>p.aprobado_at},
+  {k:"enviado",    l:"Enviado",    d:"En manos del proveedor",      ts:p=>p.enviado_at},
+  {k:"recibido_parcial",l:"Parcial",d:"Llegó incompleto",           ts:p=>p.recibido_at},
+  {k:"recibido",   l:"Recibido",   d:"Cerrado y en stock",          ts:p=>p.recibido_at}
+];
+const dias=t=>t?Math.floor((Date.now()-new Date(t).getTime())/86400000):null;
+
+function vFunnel(){
+  if(!PEDIDOS.length){
+    $("view").innerHTML=`<div class="card"><div class="center">Todavía no hay pedidos en esta sede.<br>
+      <button class="btn" style="margin-top:12px" onclick="irTab('sugeridos')">Ver qué hay bajo mínimo</button></div></div>`;
+    return;
+  }
+  const max=Math.max(...ETAPAS.map(e=>PEDIDOS.filter(p=>p.estado===e.k).length),1);
+  const pasos=ETAPAS.map(e=>{
+    const l=PEDIDOS.filter(p=>p.estado===e.k);
+    const monto=l.reduce((a,p)=>a+(+p.total||0),0);
+    const eds=l.map(p=>dias(e.ts(p))).filter(d=>d!=null);
+    const viejo=eds.length?Math.max(...eds):null;
+    const prom=eds.length?Math.round(eds.reduce((a,b)=>a+b,0)/eds.length):null;
+    const alerta=viejo!=null&&viejo>7&&!["recibido"].includes(e.k);
+    return `<div class="fstep ${alerta?"alerta":""}" onclick="FEST='${e.k}';irTab('pedidos')">
+      <div class="fnum">${l.length}</div>
+      <div class="fl">${esc(e.l)}</div>
+      <div class="bar"><i style="width:${Math.round(l.length/max*100)}%"></i></div>
+      <div class="small muted" style="margin-top:6px">${money(monto)}</div>
+      <div class="small ${alerta?"":"muted"}" style="margin-top:2px">${
+        l.length? (prom!=null?`${prom} d en promedio`:"") + (alerta?` · el más viejo ${viejo} d`:"") : esc(e.d)}</div>
+    </div>`;
+  }).join('<div class="farrow">›</div>');
+
+  const atorados=PEDIDOS.filter(p=>{
+    const e=ETAPAS.find(x=>x.k===p.estado); if(!e||p.estado==="recibido") return false;
+    const d=dias(e.ts(p)); return d!=null&&d>7;
+  }).sort((a,b)=>{
+    const ea=ETAPAS.find(x=>x.k===a.estado), eb=ETAPAS.find(x=>x.k===b.estado);
+    return dias(eb.ts(b))-dias(ea.ts(a));
+  });
+
+  const enCurso=PEDIDOS.filter(p=>!["recibido","cancelado","rechazado"].includes(p.estado));
+  const comprometido=enCurso.reduce((a,p)=>a+(+p.total||0),0);
+  const cerrados=PEDIDOS.filter(p=>p.estado==="recibido");
+  const ciclo=cerrados.map(p=>p.solicitado_at&&p.recibido_at?
+      Math.round((new Date(p.recibido_at)-new Date(p.solicitado_at))/86400000):null).filter(x=>x!=null);
+  const cicloProm=ciclo.length?Math.round(ciclo.reduce((a,b)=>a+b,0)/ciclo.length):null;
+  const conDif=cerrados.filter(p=>p.total_recibo!=null&&Math.abs((+p.total_recibo)-(+p.total))>0.5).length;
+
+  $("view").innerHTML=`
+    <div class="kpis">
+      <div class="kpi"><div class="n">${enCurso.length}</div><div class="l">pedidos en curso</div></div>
+      <div class="kpi"><div class="n">${money(comprometido)}</div><div class="l">comprometido sin recibir</div></div>
+      <div class="kpi"><div class="n" style="color:${atorados.length?"var(--bad)":"var(--ok)"}">${atorados.length}</div><div class="l">atorados más de 7 días</div></div>
+      <div class="kpi"><div class="n">${cicloProm!=null?cicloProm+" d":"—"}</div><div class="l">de solicitud a recepción</div></div>
+      <div class="kpi"><div class="n" style="color:${conDif?"var(--warn)":"var(--muted)"}">${conDif}</div><div class="l">recibidos con diferencia de precio</div></div>
+    </div>
+
+    <div class="card"><h3>En qué etapa está cada pedido</h3>
+      <div class="funnel">${pasos}</div>
+      <div class="small muted" style="padding:0 14px 14px">Toca una etapa para ver sus pedidos.</div>
+    </div>
+
+    ${atorados.length?`<div class="card"><h3>⚠️ Atorados — llevan más de una semana sin moverse</h3><div class="scroll"><table>
+      <thead><tr><th>Folio</th><th>Etapa</th><th>Área · proveedor</th><th class="num">Días</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody>${atorados.map(p=>{
+        const e=ETAPAS.find(x=>x.k===p.estado); const prov=PROVS.find(x=>x.proveedor_id===p.proveedor_id);
+        return `<tr><td><b>${esc(p.folio)}</b></td><td>${chipEst(p.estado)}</td>
+          <td>${esc(p.area||"")}<div class="small muted">${esc(prov?prov.proveedor:"sin proveedor")}</div></td>
+          <td class="num" style="color:var(--bad);font-weight:700">${dias(e.ts(p))}</td>
+          <td class="num">${money(p.total)}</td>
+          <td class="num"><button class="btn ghost sm" onclick="verPedido('${p.id}')">Abrir</button></td></tr>`;
+      }).join("")}</tbody></table></div></div>`:""}
+
+    ${SOLMTTO.filter(s=>!s.pedido_id).length?`<div class="avisos">Hay ${SOLMTTO.filter(s=>!s.pedido_id).length} solicitud(es) de mantenimiento sin convertir en pedido.
+      <button class="btn sm" style="margin-left:8px" onclick="irTab('mtto')">Verlas</button></div>`:""}`;
+}
+
+/* ── Solicitudes que vienen de mantenimiento ── */
+function vMtto(){
+  const pend=SOLMTTO.filter(s=>!s.pedido_id);
+  const enPed=SOLMTTO.filter(s=>s.pedido_id);
+  const monto=pend.reduce((a,s)=>a+(+s.costo||0),0);
+  const fila=s=>`<tr>
+    <td><b>${esc(s.material||"—")}</b>
+        ${s.link?` <a class="small" href="${esc(s.link)}" target="_blank" rel="noopener">🔗</a>`:""}
+        <div class="small muted">${s.ticket_titulo?"Ticket "+esc(s.ticket_folio||"")+" · "+esc(s.ticket_titulo):"Sin ticket"}${s.ubicacion?" · "+esc(s.ubicacion):""}</div></td>
+    <td class="small">${esc(s.solicitado_por_nombre||"—")}<div class="small muted">${s.created_at?new Date(s.created_at).toLocaleDateString("es-MX"):""}</div></td>
+    <td class="num">${money(s.costo)}</td>
+    <td>${s.pedido_id?`<span class="chip c-apr">${esc(s.pedido_folio)}</span> ${chipEst(s.pedido_estado)}`:`<span class="chip c-sol">${esc(s.estatus)}</span>`}</td>
+    <td class="num">${s.pedido_id
+        ? `<button class="btn ghost sm" onclick="verPedido('${s.pedido_id}')">Ver pedido</button>`
+        : (PUEDE_EDITAR?`<button class="btn sm" onclick="convertir('${s.suministro_id}')">Convertir en pedido</button>`:"")}</td>
+  </tr>`;
+  $("view").innerHTML=`
+    <div class="kpis">
+      <div class="kpi"><div class="n" style="color:var(--warn)">${pend.length}</div><div class="l">solicitudes sin pedido</div></div>
+      <div class="kpi"><div class="n">${money(monto)}</div><div class="l">costo estimado por el técnico</div></div>
+      <div class="kpi"><div class="n">${enPed.length}</div><div class="l">ya dentro de un pedido</div></div>
+    </div>
+    <div class="avisos">Estas solicitudes las levanta mantenimiento desde su ticket, en su app o en el tablero. Al convertirlas se vuelven una línea de pedido; cuando el pedido se recibe, el ticket del técnico se marca solo.</div>
+    <div class="card"><h3>Material pedido desde mantenimiento</h3><div class="scroll"><table>
+      <thead><tr><th>Material</th><th>Solicitó</th><th class="num">Costo estimado</th><th>Estatus</th><th></th></tr></thead>
+      <tbody>${SOLMTTO.length?SOLMTTO.map(fila).join(""):'<tr><td colspan="5" class="center">Sin solicitudes de mantenimiento</td></tr>'}</tbody>
+    </table></div></div>`;
+}
+
+async function convertir(sumId){
+  const s=SOLMTTO.find(x=>x.suministro_id===sumId); if(!s) return;
+  const abiertos=PEDIDOS.filter(p=>p.estado==="borrador");
+  modal(`<h3 style="margin:0 0 4px">Convertir en pedido</h3>
+    <div class="small muted" style="margin-bottom:10px">${esc(s.material||"")}${s.ticket_titulo?" · ticket "+esc(s.ticket_titulo):""}</div>
+    <label>¿Dónde va?</label>
+    <select id="cvDestino">
+      <option value="nuevo">Crear un pedido nuevo</option>
+      ${abiertos.map(p=>`<option value="${p.id}">Agregar a ${esc(p.folio)} (borrador)</option>`).join("")}
+    </select>
+    <div class="grid2">
+      <div><label>Proveedor (opcional por ahora)</label><select id="cvProv">${optProv(null)}</select></div>
+      <div><label>Cuenta contable</label><select id="cvCta">${optCta(null)}</select></div>
+      <div><label>Bodega destino</label><select id="cvBod">${optBod(null)}</select></div>
+      <div><label>Costo estimado</label><input id="cvCosto" type="number" step="0.01" value="${s.costo||""}"></div>
+      <div class="full"><label>Qué se compra</label><input id="cvDesc" value="${esc(s.material||"")}"></div>
+    </div>
+    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="guardaConversion('${sumId}')">Convertir</button></div>`);
+  const cta=CUENTAS.find(c=>c.codigo==="600-04-02-04"); if(cta) $("cvCta").value=cta.id;
+  const bod=BODEGAS.find(b=>/mantenimiento/i.test(b.nombre)); if(bod) $("cvBod").value=bod.id;
+}
+async function guardaConversion(sumId){
+  const s=SOLMTTO.find(x=>x.suministro_id===sumId);
+  const desc=$("cvDesc").value.trim(); if(!desc) return toast("Escribe qué se compra");
+  let pedidoId=$("cvDestino").value;
+  if(pedidoId==="nuevo"){
+    const {data,error}=await sb.from("cmp_pedidos").insert({
+      property_id:SEDE, area:"Mantenimiento", origen:"mantenimiento", estado:"borrador",
+      ticket_id:s.ticket_id||null, proveedor_id:$("cvProv").value||null,
+      cuenta_id:$("cvCta").value||null, bodega_destino_id:$("cvBod").value||null,
+      solicitado_por:USER.id, solicitado_por_nombre:EMAIL,
+      notas:s.ticket_titulo?("Ticket: "+s.ticket_titulo):null
+    }).select().single();
+    if(error) return toast(error.message);
+    pedidoId=data.id;
+  }
+  const {error}=await sb.from("cmp_pedido_items").insert({
+    pedido_id:pedidoId, descripcion:desc, suministro_id:sumId,
+    cantidad_solicitada:1, precio_unitario:parseFloat($("cvCosto").value)||null
+  });
+  if(error) return toast(error.message);
+  toast("Convertida en línea de pedido"); closeModal(); await recargar(); verPedido(pedidoId);
 }
 
 /* ── Sugeridos ── */
@@ -309,9 +478,10 @@ function verPedido(id){
   const lineas=(p.items||[]).map(i=>{
     const pres=i.pres?`${i.pres.tipo} ${num(i.pres.contenido)} ${i.pres.unidad_contenido}`:"—";
     return `<tr>
-      <td>${esc(i.prod?i.prod.nombre:"—")}<div class="small muted">${esc(pres)}</div></td>
+      <td>${esc(i.prod?i.prod.nombre:(i.descripcion||"—"))}<div class="small muted">${i.prod?esc(pres):(i.suministro_id?"solicitud de mantenimiento":"texto libre")}</div></td>
       <td class="num">${num(i.cantidad_solicitada)}</td>
       <td class="num">${money(i.precio_unitario)}</td>
+      <td class="num small">${num(i.tasa_iva)}%</td>
       <td class="num">${money(i.importe)}</td>
       ${editable?`<td class="num"><button class="btn ghost sm" onclick="borraLinea('${i.id}','${p.id}')">✕</button></td>`:""}
     </tr>`;
@@ -338,17 +508,22 @@ function verPedido(id){
     <div class="small muted" style="margin-bottom:10px">${esc(p.area||"")} · ${esc(prov?prov.proveedor:"sin proveedor")} · destino ${esc(bod?bod.nombre:"—")} · cuenta ${esc(cta?cta.codigo+" "+cta.cuenta:"—")}</div>
     ${avisoProv}
     ${editable?`<div class="grid2">
-      <div><label>Proveedor</label><select id="edProv">${optProv(p.proveedor_id)}</select></div>
-      <div><label>Bodega destino</label><select id="edBod">${optBod(p.bodega_destino_id)}</select></div>
-      <div><label>Cuenta contable</label><select id="edCta">${optCta(p.cuenta_id)}</select></div>
+      <div><label>Área</label><select id="edArea" onchange="edCascada()">${optArea(p.area)}</select></div>
+      <div><label>Proveedor</label><select id="edProv">${optProv(p.proveedor_id,p.area)}</select></div>
+      <div><label>Cuenta contable</label><select id="edCta">${optCta(p.cuenta_id,p.area)}</select></div>
+      <div><label>Bodega destino</label><select id="edBod">${optBod(p.bodega_destino_id,p.area)}</select></div>
       <div><label>Fecha requerida</label><input type="date" id="edFecha" value="${p.fecha_requerida||""}"></div>
       <div class="full"><label>Notas</label><input id="edNotas" value="${esc(p.notas||"")}"></div>
       <div class="full"><button class="btn ghost sm" onclick="guardaCab('${p.id}')">Guardar encabezado</button></div>
     </div>`:""}
     <div class="card" style="margin-top:12px"><div class="scroll"><table>
-      <thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Importe</th>${editable?"<th></th>":""}</tr></thead>
-      <tbody>${lineas||`<tr><td colspan="5" class="center">Sin líneas</td></tr>`}</tbody>
-      <tfoot><tr><th colspan="3" class="num">Total</th><th class="num">${money(p.total)}</th>${editable?"<th></th>":""}</tr></tfoot>
+      <thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th>${editable?"<th></th>":""}</tr></thead>
+      <tbody>${lineas||`<tr><td colspan="6" class="center">Sin líneas</td></tr>`}</tbody>
+      <tfoot>
+        <tr><th colspan="4" class="num">Subtotal</th><th class="num">${money(p.subtotal)}</th>${editable?"<th></th>":""}</tr>
+        <tr><th colspan="4" class="num">IVA</th><th class="num">${money(p.impuestos)}</th>${editable?"<th></th>":""}</tr>
+        <tr><th colspan="4" class="num">Total</th><th class="num">${money(p.total)}</th>${editable?"<th></th>":""}</tr>
+      </tfoot>
     </table></div></div>
     ${bitacora(p)}
     <div class="foot"><button class="btn ghost" onclick="closeModal()">Cerrar</button>${acciones}</div>`);
@@ -363,64 +538,160 @@ function bitacora(p){
   if(p.total_recibo!=null) l.push(`Ticket: ${money(p.total_recibo)} · diferencia ${money((+p.total_recibo)-(+p.total))}`);
   return l.length?`<div class="card"><h3>Bitácora</h3><div style="padding:10px 14px" class="small muted">${l.join("<br>")}</div></div>`:"";
 }
-const optProv=v=>`<option value="">— elegir —</option>`+PROVS.filter(p=>p.estado!=="baja").map(p=>`<option value="${p.proveedor_id}" ${p.proveedor_id===v?"selected":""}>${esc(p.proveedor)}${p.suministra?" · "+esc(p.suministra):""}</option>`).join("");
-const optBod=v=>`<option value="">— elegir —</option>`+BODEGAS.map(b=>`<option value="${b.id}" ${b.id===v?"selected":""}>${esc(b.nombre)}</option>`).join("");
-const optCta=v=>`<option value="">— elegir —</option>`+CUENTAS.map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("");
+// Todo se acota por el área del pedido: así recepción no pide insumos de cocina
+// ni cocina carga el gasto a una cuenta de Cuartos.
+const areasDe = ()=> MISAREAS.length?MISAREAS:["A&B","Cuartos","Tours","Administración","Mantenimiento","Tienda"];
+const optArea=v=>areasDe().map(a=>`<option ${a===v?"selected":""}>${esc(a)}</option>`).join("");
+const provsDe=area=>PROVS.filter(p=>p.estado!=="baja"&&(!area||!p.area||p.area===area));
+const optProv=(v,area)=>`<option value="">— elegir —</option>`+provsDe(area).map(p=>`<option value="${p.proveedor_id}" ${p.proveedor_id===v?"selected":""}>${esc(p.proveedor)}${p.suministra?" · "+esc(p.suministra):""}</option>`).join("");
+const optBod=(v,area)=>`<option value="">— elegir —</option>`+BODEGAS.filter(b=>!area||!b.area||b.area===area).map(b=>`<option value="${b.id}" ${b.id===v?"selected":""}>${esc(b.nombre)}</option>`).join("");
+const optCta=(v,area)=>`<option value="">— elegir —</option>`+CUENTAS.filter(c=>!area||!c.areas||c.areas.includes(area)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("");
 
+function edCascada(){
+  const a=$("edArea").value;
+  $("edProv").innerHTML=optProv(null,a); $("edCta").innerHTML=optCta(null,a); $("edBod").innerHTML=optBod(null,a);
+}
 async function guardaCab(id){
-  const patch={proveedor_id:$("edProv").value||null,bodega_destino_id:$("edBod").value||null,
+  const patch={area:$("edArea").value,proveedor_id:$("edProv").value||null,bodega_destino_id:$("edBod").value||null,
     cuenta_id:$("edCta").value||null,fecha_requerida:$("edFecha").value||null,notas:$("edNotas").value||null};
   const {error}=await sb.from("cmp_pedidos").update(patch).eq("id",id);
   if(error) return toast(error.message);
   toast("Guardado"); await recargar(); verPedido(id);
 }
-async function nuevoPedido(){
+function nuevoPedido(){
+  if(!MISAREAS.length){ return toast("Tu rol no tiene un área de compras asignada. Pídeselo a administración."); }
+  const a0=MISAREAS[0];
+  modal(`<h3 style="margin:0 0 4px">Nuevo pedido</h3>
+    <div class="small muted" style="margin-bottom:10px">Elige primero el área: de ahí salen el proveedor, la cuenta y la bodega. Solo verás lo que te corresponde.</div>
+    <label>1 · Área que pide</label>
+    <select id="npArea" onchange="npCascada()">${optArea(a0)}</select>
+    <div class="grid2">
+      <div><label>2 · Proveedor</label><select id="npProv"></select></div>
+      <div><label>3 · Cuenta contable</label><select id="npCta"></select></div>
+      <div><label>4 · Bodega que recibe</label><select id="npBod"></select></div>
+      <div><label>Fecha requerida</label><input type="date" id="npFecha"></div>
+    </div>
+    <div id="npAviso"></div>
+    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="creaPedido()">Crear pedido</button></div>`);
+  npCascada();
+}
+function npCascada(){
+  const a=$("npArea").value;
+  $("npProv").innerHTML=optProv(null,a);
+  $("npCta").innerHTML=optCta(null,a);
+  $("npBod").innerHTML=optBod(null,a);
+  const nProv=provsDe(a).length;
+  $("npAviso").innerHTML = nProv? "" :
+    `<div class="avisos">No hay proveedores dados de alta para ${esc(a)} en esta sede. Puedes crear el pedido y asignarlo después, o darlo de alta en el catálogo.</div>`;
+  const cta=$("npCta"); if(cta.options.length===2) cta.selectedIndex=1;
+  const bod=$("npBod"); if(bod.options.length===2) bod.selectedIndex=1;
+}
+async function creaPedido(){
+  const area=$("npArea").value;
   const {data,error}=await sb.from("cmp_pedidos").insert({
-    property_id:SEDE, area:"A&B", estado:"borrador", origen:"manual",
+    property_id:SEDE, area, estado:"borrador", origen:"manual",
+    proveedor_id:$("npProv").value||null, cuenta_id:$("npCta").value||null,
+    bodega_destino_id:$("npBod").value||null, fecha_requerida:$("npFecha").value||null,
     solicitado_por:USER.id, solicitado_por_nombre:EMAIL
   }).select().single();
   if(error) return toast(error.message);
-  await recargar(); TAB="pedidos"; pintaTabs(); render(); verPedido(data.id);
+  closeModal(); await recargar(); TAB="pedidos"; pintaTabs(); render(); verPedido(data.id);
 }
 function agregarLinea(pedidoId){
-  const opts=PRODS.map(p=>`<option value="${p.id}">${esc(p.nombre)} · ${esc(p.area)}</option>`).join("");
-  modal(`<h3 style="margin:0 0 8px">Agregar producto al pedido</h3>
-    <label>Producto</label>
-    <input id="busca" placeholder="Escribe para filtrar…" oninput="filtraProd()">
-    <select id="lnProd" size="8" style="margin-top:6px">${opts}</select>
+  const p=PEDIDOS.find(x=>x.id===pedidoId);
+  const area=p.area, provId=p.proveedor_id;
+  // Solo lo que ESE proveedor vende, y solo del área del pedido.
+  let cat = CATPROV.filter(c=>(!provId||c.proveedor_id===provId) && (!area||c.area===area));
+  const idsProv=new Set(cat.map(c=>c.producto_id));
+  const nombreProv=(PROVS.find(x=>x.proveedor_id===provId)||{}).proveedor||"";
+
+  const aviso = !provId
+    ? `<div class="avisos">Este pedido no tiene proveedor. Asígnalo primero para ver solo lo que ese proveedor vende.</div>`
+    : (!cat.length ? `<div class="avisos">${esc(nombreProv)} no tiene ningún producto de ${esc(area)} dado de alta con precio. Cárgalo en el catálogo, o agrégalo como texto libre.</div>` : "");
+
+  modal(`<h3 style="margin:0 0 4px">Agregar al pedido</h3>
+    <div class="small muted" style="margin-bottom:8px">${esc(area||"")}${provId?" · "+esc(nombreProv):""}</div>
+    ${aviso}
+    <div class="chips" style="margin-bottom:6px">
+      <span class="pill on" id="mCat" onclick="modoLinea('cat')">Del catálogo del proveedor</span>
+      <span class="pill" id="mLib" onclick="modoLinea('libre')">Texto libre</span>
+    </div>
+    <div id="boxCat">
+      <label>Producto</label>
+      <input id="busca" placeholder="Escribe para filtrar…" oninput="filtraProd()">
+      <select id="lnProd" size="7" style="margin-top:6px"></select>
+      <label>Presentación</label><select id="lnPres"></select>
+    </div>
+    <div id="boxLib" style="display:none">
+      <label>¿Qué se compra?</label>
+      <input id="lnDesc" placeholder="Servicio, material puntual, algo fuera de catálogo">
+      <div class="small muted" style="margin-top:4px">Las líneas de texto libre no entran al inventario.</div>
+    </div>
     <div class="grid2">
-      <div><label>Presentación</label><select id="lnPres"><option value="">— sin presentación —</option></select></div>
       <div><label>Cantidad</label><input id="lnCant" type="number" min="0.01" step="0.01" value="1"></div>
       <div><label>Precio unitario</label><input id="lnPrecio" type="number" min="0" step="0.01"></div>
+      <div><label>IVA</label><select id="lnIva"><option value="16">16%</option><option value="8">8%</option><option value="0">0% / exento</option></select></div>
+      <div><label>Importe con IVA</label><input id="lnTotal" readonly></div>
     </div>
     <div class="foot"><button class="btn ghost" onclick="verPedido('${pedidoId}')">Cancelar</button>
       <button class="btn" onclick="guardaLinea('${pedidoId}')">Agregar</button></div>`);
-  $("lnProd").onchange=cargaPres;
-  if(PRODS.length){ $("lnProd").value=PRODS[0].id; cargaPres(); }
+  window.__cat=cat; window.__modo="cat";
+  ["lnCant","lnPrecio","lnIva"].forEach(id=>$(id).addEventListener("input",calcLinea));
+  $("lnIva").addEventListener("change",calcLinea);
+  filtraProd();
+}
+function modoLinea(m){
+  window.__modo=m;
+  $("boxCat").style.display = m==="cat"?"":"none";
+  $("boxLib").style.display = m==="libre"?"":"none";
+  $("mCat").classList.toggle("on",m==="cat");
+  $("mLib").classList.toggle("on",m==="libre");
 }
 function filtraProd(){
   const q=($("busca").value||"").toLowerCase();
-  $("lnProd").innerHTML=PRODS.filter(p=>p.nombre.toLowerCase().includes(q))
-    .map(p=>`<option value="${p.id}">${esc(p.nombre)} · ${esc(p.area)}</option>`).join("");
+  const vistos={}; 
+  (window.__cat||[]).forEach(c=>{ if(!vistos[c.producto_id]) vistos[c.producto_id]=c; });
+  const l=Object.values(vistos).filter(c=>c.producto.toLowerCase().includes(q));
+  $("lnProd").innerHTML=l.length?l.map(c=>`<option value="${c.producto_id}">${esc(c.producto)}</option>`).join("")
+    :`<option value="">— este proveedor no tiene productos que coincidan —</option>`;
+  $("lnProd").onchange=cargaPres;
+  if(l.length){ $("lnProd").value=l[0].producto_id; }
   cargaPres();
 }
-async function cargaPres(){
-  const pid=$("lnProd").value; if(!pid) return;
-  const {data}=await sb.from("cmp_v_presentaciones").select("*").eq("producto_id",pid).eq("activo",true);
-  const l=data||[];
-  $("lnPres").innerHTML=`<option value="">— sin presentación —</option>`+
-    l.map(x=>`<option value="${x.id}" data-precio="${x.precio||""}">${esc(x.tipo)} ${num(x.contenido)} ${esc(x.unidad_contenido)}${x.precio!=null?" · "+money(x.precio):""}${x.proveedor?" · "+esc(x.proveedor):""}</option>`).join("");
-  $("lnPres").onchange=()=>{ const o=$("lnPres").selectedOptions[0]; if(o&&o.dataset.precio) $("lnPrecio").value=o.dataset.precio; };
-  if(l.length){ const pref=l.find(x=>x.preferida)||l[0]; $("lnPres").value=pref.id; if(pref.precio!=null)$("lnPrecio").value=pref.precio; }
+function cargaPres(){
+  const pid=$("lnProd").value;
+  const l=(window.__cat||[]).filter(c=>c.producto_id===pid);
+  $("lnPres").innerHTML=l.map(x=>`<option value="${x.presentacion_id}" data-precio="${x.precio!=null?x.precio:""}">${esc(x.presentacion)} ${num(x.contenido)} ${esc(x.unidad_contenido)}${x.precio!=null?" · "+money(x.precio):""}${x.preferida?" · preferida":""}</option>`).join("")
+    || `<option value="">—</option>`;
+  $("lnPres").onchange=()=>{const o=$("lnPres").selectedOptions[0]; if(o&&o.dataset.precio)$("lnPrecio").value=o.dataset.precio; calcLinea();};
+  const pref=l.find(x=>x.preferida)||l[0];
+  if(pref){
+    $("lnPres").value=pref.presentacion_id;
+    if(pref.precio!=null)$("lnPrecio").value=pref.precio;
+    // Los alimentos básicos van a tasa 0; se propone la del producto, no un 16 fijo.
+    if(pref.tasa_iva_default!=null) $("lnIva").value=String(pref.tasa_iva_default);
+  }
+  calcLinea();
+}
+function calcLinea(){
+  const c=parseFloat($("lnCant").value)||0, pr=parseFloat($("lnPrecio").value)||0, iva=parseFloat($("lnIva").value)||0;
+  const base=c*pr; $("lnTotal").value=money(base+base*iva/100);
 }
 async function guardaLinea(pedidoId){
   const cant=parseFloat($("lnCant").value);
   if(!(cant>0)) return toast("Escribe una cantidad");
-  const {error}=await sb.from("cmp_pedido_items").insert({
-    pedido_id:pedidoId, producto_id:$("lnProd").value,
-    presentacion_id:$("lnPres").value||null,
-    cantidad_solicitada:cant, precio_unitario:parseFloat($("lnPrecio").value)||null
-  });
+  const rec={pedido_id:pedidoId, cantidad_solicitada:cant,
+    precio_unitario:parseFloat($("lnPrecio").value)||null,
+    tasa_iva:parseFloat($("lnIva").value)||0};
+  if(window.__modo==="libre"){
+    const d=$("lnDesc").value.trim(); if(!d) return toast("Escribe qué se compra");
+    rec.descripcion=d;
+  }else{
+    const pid=$("lnProd").value; if(!pid) return toast("Elige un producto");
+    rec.producto_id=pid; rec.presentacion_id=$("lnPres").value||null;
+  }
+  const {error}=await sb.from("cmp_pedido_items").insert(rec);
   if(error) return toast(error.message);
   await recargar(); verPedido(pedidoId);
 }
@@ -463,9 +734,9 @@ function textoPedido(p){
     p.fecha_requerida?`Fecha requerida: ${p.fecha_requerida}`:"",``,`Detalle:`];
   (p.items||[]).forEach(i=>{
     const pres=i.pres?` (${i.pres.tipo} ${i.pres.contenido} ${i.pres.unidad_contenido})`:"";
-    l.push(`· ${i.cantidad_solicitada} × ${i.prod?i.prod.nombre:""}${pres}`);
+    l.push(`· ${i.cantidad_solicitada} × ${i.prod?i.prod.nombre:(i.descripcion||"")}${pres}`);
   });
-  l.push(``,`Total estimado: ${money(p.total)}`,``,
+  l.push(``,`Subtotal: ${money(p.subtotal)}`,`IVA: ${money(p.impuestos)}`,`Total estimado: ${money(p.total)}`,``,
     `Favor de confirmar disponibilidad y fecha de entrega.`,``,`Casa Pepe — ${sede}`);
   return l.filter(x=>x!==undefined).join("\n");
 }
@@ -568,7 +839,7 @@ function abrirRecepcion(id){
     const rec=i.cantidad_recibida!=null?i.cantidad_recibida:i.cantidad_solicitada;
     const pre=i.precio_recibido!=null?i.precio_recibido:(i.precio_unitario||"");
     return `<tr data-item="${i.id}">
-      <td>${esc(i.prod?i.prod.nombre:"")}<div class="small muted">${esc(pres)}</div></td>
+      <td>${esc(i.prod?i.prod.nombre:(i.descripcion||""))}<div class="small muted">${i.prod?esc(pres):"no entra a stock"}</div></td>
       <td class="num">${num(i.cantidad_solicitada)}</td>
       <td class="num"><input class="mini rc" type="number" min="0" step="0.01" value="${rec}" oninput="calcRec()"></td>
       <td class="num"><input class="mini rp" type="number" min="0" step="0.01" value="${pre}" oninput="calcRec()"></td>
