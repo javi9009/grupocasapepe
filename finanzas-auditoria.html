@@ -2565,7 +2565,7 @@ function leeEstadoBanorte(matriz){
    sucursal pegados— porque de ahí se reconoce el depósito de la terminal (060) y su
    comisión (600/601). Si eso cambia, deja de cuadrar la terminal. */
 function leeEstadoBanorteTabla(matriz){
-  const M=matriz||[], movs=[], malos=[];
+  const M=matriz||[], movs=[], malos=[], cuentas=[];
   let h=-1, ix=null;
   for(let i=0;i<Math.min(M.length,40);i++){
     const fila=(M[i]||[]).map(SIN);
@@ -2575,7 +2575,8 @@ function leeEstadoBanorteTabla(matriz){
       h=i;
       ix={ fecha:j(/^fecha de operacion/), fecha2:fec, ref:j(/referencia/),
            desc:j(/^descripcion$/), cod:j(/cod.*transac/), suc:j(/sucursal/),
-           dep:dep, ret:ret, saldo:j(/^saldo$/), mov:j(/^movimiento$/) };
+           dep:dep, ret:ret, saldo:j(/^saldo$/), mov:j(/^movimiento$/),
+           cuenta:j(/^cuenta$/) };
       break;
     }
   }
@@ -2594,8 +2595,10 @@ function leeEstadoBanorteTabla(matriz){
                 concepto:[g('desc'),g('cod'),g('suc')].filter(Boolean).join(' ')
                           .replace(/\s+/g,' ').trim().slice(0,80),
                 tipo:tipo, monto:monto, saldo:numMX(g('saldo')) });
+    const cta=(g('cuenta')||'').replace(/\D/g,'');
+    if(cta && cuentas.indexOf(cta)<0) cuentas.push(cta);
   }
-  return {movs:movs, malos:malos};
+  return {movs:movs, malos:malos, cuentas:cuentas};
 }
 // ¿Esto es un estado de cuenta y no un corte de terminal?
 function pareceEstadoCuenta(matriz){
@@ -2621,12 +2624,37 @@ async function subeEstado(f, pinta1){
   const dias=[...new Set(r.movs.map(x=>x.fecha))].sort();
   // Se guarda el archivo tal cual, no sólo lo que entendí de él: quien revise el cierre
   // tiene que poder abrir el PDF del banco.
-  EDO={movs:r.movs, archivo:f.name, file:f};
-  pinta1('ok','Leí <b>'+r.movs.length+'</b> movimiento(s) del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+': '
+  EDO={movs:r.movs, archivo:f.name, file:f, cuentas:r.cuentas||[]};
+  // Un archivo se lee bien y aun así no sirve: si es de la cuenta con la que se PAGA
+  // a proveedores, trae 40 retiros y ningún depósito, y el cuadre no se mueve ni un
+  // peso. Eso hay que decirlo ANTES de guardar, porque leído desde fuera parece que
+  // el lector está roto cuando lo que está mal es la cuenta.
+  const sal=r.movs.map(x=>x.saldo).filter(x=>x!==null&&x!==undefined);
+  const rango=sal.length?('$'+m(Math.min.apply(null,sal))+' a $'+m(Math.max.apply(null,sal))):null;
+  const cta=(r.cuentas&&r.cuentas.length)?r.cuentas.join(', '):null;
+  const tpv=ab.filter(x=>/060\s*0302/.test(x.concepto||'')).length;
+  let aviso='';
+  if(!ab.length){
+    aviso='<span class="sub" style="margin:0;color:var(--bad)"><b>Este archivo no trae ningún depósito: '
+      +'sólo salidas.</b> Así no puede cuadrar nada. Casi siempre es la cuenta con la que se paga a '
+      +'proveedores, no la cuenta donde deposita la terminal. '
+      +(cta?'El archivo dice cuenta <b>'+esc(cta)+'</b>. ':'')
+      +(rango?'Sus saldos van de '+rango+'. ':'')
+      +'Puedes guardarlo igual —los movimientos quedan registrados— pero el cuadre seguirá esperando.</span>';
+  } else if(!tpv){
+    aviso='<span class="sub" style="margin:0;color:var(--warn)">Trae depósitos, pero ninguno con la marca '
+      +'de la terminal (060 0302). El cuadre de la terraza va a seguir esperando su depósito.</span>';
+  } else {
+    aviso='<span class="sub" style="margin:0">'+tpv+' de esos abonos son depósitos de la terminal. '
+      +'Con esto se cuadra la terraza y los pagos de Airbnb, que llegan uno o dos días después de '
+      +'cobrar la tarjeta.</span>';
+  }
+  pinta1(ab.length?'ok':'bad','Leí <b>'+r.movs.length+'</b> movimiento(s) del '+esc(dias[0])+' al '+esc(dias[dias.length-1])+': '
     +'<b>'+ab.length+'</b> abonos por <b>$'+m(sum(ab))+'</b> y <b>'+ca.length+'</b> cargos por <b>$'+m(sum(ca))+'</b>.'
-    +'<span class="sub" style="margin:0">Con esto se cuadra el depósito de la terminal y los pagos de Airbnb, '
-    +'que llegan uno o dos días después de cobrar la tarjeta.</span>'
-    +'<div style="margin-top:8px"><button class="mini go" type="button" data-edo="guardar">Guardar y volver a cuadrar</button></div>');
+    +(cta?' Cuenta <b>'+esc(cta)+'</b>.':'')
+    +aviso
+    +'<div style="margin-top:8px"><button class="mini'+(ab.length?' go':'')+'" type="button" data-edo="guardar">'
+    +(ab.length?'Guardar y volver a cuadrar':'Guardarlo de todas formas')+'</button></div>');
 }
 async function guardaEstado(el){
   if(!EDO) return;
