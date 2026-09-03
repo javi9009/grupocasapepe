@@ -258,6 +258,7 @@ tr.lv4.s3 .difnota{color:var(--sev3)} tr.lv4.s4 .difnota{color:var(--sev4)}
 .mini.go{border-color:var(--ok);color:var(--ok)}
 td.n.esperando{color:var(--warn)}
 td.n.cuadra{color:var(--ok)}
+td.n.nocuadra{color:var(--bad);font-weight:600}
 @keyframes entraSec{from{opacity:.25;transform:translateY(6px)}to{opacity:1;transform:none}}
 .entra{animation:entraSec .22s ease-out}
 @media (prefers-reduced-motion:reduce){.entra{animation:none}}
@@ -285,6 +286,20 @@ td.n.cuadra{color:var(--ok)}
 /* Aceptar la perdida no se deshace: al pasar el cursor se pone rojo, para que
    nadie lo pulse creyendo que es un boton mas. */
 .mini.peligro:hover{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+/* Saldar un hueco con una explicacion firmada. Ni es un arrastre —eso lo demuestra
+   el sistema— ni es dar el dinero por perdido: es confiar en quien firma, con el
+   papel encima. Por eso tiene su propia ventana y no un prompt de una linea. */
+.velo{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;align-items:center;
+  justify-content:center;padding:20px;z-index:60}
+.dlg{background:var(--surface);border:1px solid var(--rule-2);border-radius:8px;box-shadow:var(--shadow);
+  width:min(560px,100%);max-height:88vh;overflow:auto;padding:20px 22px;display:flex;flex-direction:column;gap:13px}
+.dlg h3{margin:0;font-size:1rem;font-weight:600;color:var(--ink)}
+.dlg .sub{margin:0}
+.dlg textarea{font:inherit;font-size:.88rem;line-height:1.5;color:var(--ink);background:var(--surface-3);
+  border:1px solid var(--rule-2);border-radius:5px;padding:9px 11px;resize:vertical;width:100%;min-height:88px}
+.dlg input[type=file]{font-size:.8rem;color:var(--ink-2)}
+.dlgpie{display:flex;gap:9px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
+.dlgmsg{font-size:.8rem;color:var(--muted);margin-right:auto}
 .quien{padding:15px 17px;display:flex;flex-direction:column;gap:11px}
 .qfila{display:flex;flex-direction:column;gap:5px;padding-top:9px;border-top:1px solid var(--rule)}
 .qnombres{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
@@ -826,7 +841,7 @@ async function cargaDia(f){
     return; }
   const g0=document.getElementById('gate'); if(g0) g0.innerHTML='';
   const tk=++CARGA;
-  cargando=true; fecha=f; D=null; cobAbierto=null; pinta();
+  cargando=true; fecha=f; D=null; cobAbierto=null; EFE={}; pinta();
   let d;
   try{ d=await rpc('aud_panel_dia',{p_property:prop,p_fecha:f}); }
   catch(e){ if(tk!==CARGA) return; cargando=false; pinta(); throw e; }
@@ -1061,8 +1076,28 @@ const TILE_TXT={
  falta:["No sabemos dónde está","Cobros que no tienen ninguna ruta de comprobación, o cuyo liquidador reportó menos de lo que dice el sistema. Aquí es donde se esconde cualquier faltante: si hay un peso, el día va en rojo."]};
 /* El detalle de un método de cobro: los tickets que lo forman. Se pide sólo
    cuando alguien abre la fila, y se recuerda mientras no cambie el día. */
-let cobAbierto=null, COB={};
+let cobAbierto=null, COB={}, EFE={};
 function claveCob(p){ return prop+'|'+fecha+'|'+p; }
+/* El efectivo no se deposita en un sitio: son tres cajas distintas metiendo billetes
+   en la misma máquina. Decir «faltan $107.50 en efectivo» no sirve; decir «el cierre
+   de Cósmica declaró $812.50 y en CashProtect entraron $705.00» sí, porque ya sabes
+   a qué turno preguntarle. La comparación la hace cuadre_efectivo_dia, que es la
+   misma que alimenta el renglón: aquí sólo se abre en sus tres partes. */
+function detalleEfectivo(punto){
+  const d=EFE[claveCob(punto)];
+  if(d===undefined) return '<div class="lede" style="margin:0">Leyendo el cuadre del efectivo…</div>';
+  if(d===null||!d.length) return '';
+  return '<div class="scroll"><table class="det"><thead><tr><th>De dónde sale</th>'
+    +'<th class="n">Declarado</th><th class="n">En CashProtect</th><th class="n">Diferencia</th></tr></thead><tbody>'
+    +d.map(x=>{
+      const dl=(x.delta===null||x.delta===undefined)?null:Number(x.delta);
+      return '<tr><td>'+esc(x.linea)+'<span class="sub">'+esc(x.nota||'')+'</span></td>'
+      +'<td class="n">'+(x.declarado===null?'—':m(x.declarado))+'</td>'
+      +'<td class="n">'+(x.depositado===null?'—':m(x.depositado))+'</td>'
+      +'<td class="n '+(dl===null?'':(Math.abs(dl)<0.005?'cuadra':'nocuadra'))+'">'
+      +(dl===null?'—':m(dl))+'</td></tr>';}).join('')
+    +'</tbody></table></div>';
+}
 function detalleCobros(punto){
   const d=COB[claveCob(punto)];
   if(d===undefined) return '<div class="lede" style="margin:0">Buscando los cobros…</div>';
@@ -1083,6 +1118,11 @@ async function abreCobros(punto){
   pinta();
   if(!cobAbierto) return;
   const k=claveCob(punto);
+  if(punto==='cashprotect' && EFE[k]===undefined){
+    try{ EFE[k]=await rpc('aud_cuadre_efectivo',{p_property:prop,p_fecha:fecha}); }
+    catch(e){ EFE[k]=null; }
+    pinta();
+  }
   if(COB[k]!==undefined) return;
   try{ COB[k]=await rpc('aud_panel_cobros',{p_property:prop,p_fecha:fecha,p_punto:punto}); }
   catch(e){ COB[k]=null; }
@@ -1112,7 +1152,9 @@ function panelTile(){
       +'<td class="stripe '+col+'"><span class="cabre">'+(abierta?'▾':'▸')+'</span> '+esc(c[1])
       +'<span class="sub">'+esc(pq)+(c[7]?' '+esc(c[7]):'')+'</span></td>'
       +'<td class="n">'+m(monto)+'</td><td class="n">'+c[2]+'</td><td>'+chip(col,(ESTADO[st]||['none',st])[1])+'</td></tr>'
-      +(abierta?'<tr class="cobdet"><td colspan="4">'+detalleCobros(c[0])+'</td></tr>':'');}).join('');
+      +(abierta?'<tr class="cobdet"><td colspan="4">'
+        +(c[0]==='cashprotect'?detalleEfectivo(c[0]):'')
+        +detalleCobros(c[0])+'</td></tr>':'');}).join('');
   return '<div class="card" style="padding:16px;display:flex;flex-direction:column;gap:12px">'
     +'<div><b>'+esc(t[0])+'.</b> <span class="lede" style="display:inline">'+esc(t[1])+'</span></div>'
     +(filas?'<div class="scroll"><table><thead><tr><th>Método de cobro</th><th class="n">Importe</th><th class="n">Movs</th><th>Estado</th></tr></thead><tbody>'+filas+'</tbody></table></div>'
@@ -1198,7 +1240,7 @@ function botonPreguntar(id,resp,ctx){
       +(i.resuelto?esc(i.resuelto):'El mensaje completo está en Revisiones.')+'</span></span>'; }
   if(!resp)        return '<span class="difacc"><span class="sub" style="margin:0">No hay nadie identificado a quien pedirle la explicación.</span></span>';
   return '<span class="difacc"><button class="mini" type="button" data-notif="'+esc(id)+'" data-nom="'+esc(resp)
-    +'" data-ctx="'+esc(ctx)+'">Pedir explicación a '+esc(resp.split(' ')[0])+'</button></span>';
+    +'" data-ctx="'+esc(ctx)+'">Preguntar a '+esc(resp.split(' ')[0])+' por SoyPepe</button></span>';
 }
 // Dos cosas muy distintas, y por eso son dos botones.
 //
@@ -1216,23 +1258,94 @@ function arrastreDe(punto){
 // El cuadre forzado y el arrastre son OTRO liquidador, no una corrección del banco.
 // Por eso viven en su propia columna y se enseñan en su propia línea: lo que el banco
 // depositó sigue a la vista, y al lado se ve quién puso el resto y por qué.
-const AJU_ET={forzado:'Cuadre forzado del auditor', arrastre:'Arrastre de otro día'};
+const AJU_ET={forzado:'Cuadre forzado del auditor', arrastre:'Arrastre de otro día',
+              explicado:'Saldado con explicación firmada'};
 function filaAjuste(c){
   const monto=Number(c[8]||0); if(Math.abs(monto)<0.005) return '';
   const tipo=c[9]||'forzado', quien=c[10]||'—', motivo=c[11]||'';
+  const et=(tipo==='arrastre')?['ok','Se arrastró']
+          :(tipo==='explicado')?['ok','Explicado']:['warn','Pérdida aceptada'];
   return '<tr class="lv3"><td class="ind2">'+esc(AJU_ET[tipo]||'Ajuste firmado')
     +'<span class="sub">Lo firmó '+esc(quien)+'. '+esc(motivo)+'</span></td>'
     +'<td class="n">—</td><td class="n">'+m(monto)+'</td>'
     +'<td class="n cuadra">0.00</td><td class="n">—</td>'
-    +'<td>'+chip(tipo==='arrastre'?'ok':'warn', tipo==='arrastre'?'Se arrastró':'Pérdida aceptada')+'</td></tr>';
+    +'<td>'+chip(et[0], et[1])+'</td></tr>';
 }
 function botonCompensar(ref, punto){
   const a=punto?arrastreDe(punto):null;
   let h='<span class="difacc">';
   if(a) h+='<button class="mini go" type="button" data-arr="'+esc(punto)+'">Dar por compensado · se arrastró</button>'
           +'<span class="sub" style="margin:0">'+esc(a[3])+'</span>';
+  h+='<button class="mini" type="button" data-expl="'+esc(ref)+'">Conciliar</button>';
   h+='<button class="mini peligro" type="button" data-comp="'+esc(ref)+'">Aceptar la pérdida</button>';
   return h+'</span>';
+}
+// CONCILIAR es el escalón de en medio, y existe para confiar en quien firma: no hay
+// otro día que lo demuestre —eso es el arrastre— pero tampoco hay que dar el dinero
+// por perdido, porque el contador sabe qué pasó y lo puede enseñar. Sube el documento
+// o escribe la explicación, y el hueco queda saldado con su nombre encima.
+let EXPL=null;
+function pintaExpl(){
+  const v=document.getElementById('velo');
+  if(!EXPL){ if(v) v.remove(); return; }
+  const html='<div class="velo" id="velo"><div class="dlg">'
+    +'<h3>Conciliar el descuadre</h3>'
+    +'<p class="sub">Sube el documento que lo explica, escribe la explicación, o las dos cosas. '
+    +'El hueco se salda y queda firmado con tu nombre. No cuenta como pérdida y no pinta el punto rojo: '
+    +'para eso está el otro botón.</p>'
+    +'<textarea id="explTxt" placeholder="¿Qué pasó con ese dinero?"></textarea>'
+    +'<input type="file" id="explDoc" accept="image/*,application/pdf">'
+    +'<div class="dlgpie"><span class="dlgmsg" id="explMsg"></span>'
+    +'<button class="mini" type="button" id="explNo">Cancelar</button>'
+    +'<button class="mini go" type="button" id="explSi">Saldar el descuadre</button></div>'
+    +'</div></div>';
+  if(v) v.outerHTML=html; else document.body.insertAdjacentHTML('beforeend', html);
+  const t=document.getElementById('explTxt'); if(t){ t.value=EXPL.txt||''; t.focus(); }
+  // La ventana vive fuera de #cuerpo, así que no le llegan los clics del panel:
+  // se escucha a sí misma.
+  const nv=document.getElementById('velo');
+  nv.addEventListener('click', ev=>{ if(ev.target===nv) cierraExpl(); });
+  document.getElementById('explNo').addEventListener('click', cierraExpl);
+  document.getElementById('explSi').addEventListener('click', guardaExpl);
+}
+function cierraExpl(){ EXPL=null; pintaExpl(); }
+async function guardaExpl(){
+  if(!EXPL) return;
+  const txt=(document.getElementById('explTxt')||{}).value||'';
+  const f=((document.getElementById('explDoc')||{}).files||[])[0]||null;
+  const msg=document.getElementById('explMsg'), si=document.getElementById('explSi');
+  EXPL.txt=txt;
+  if(!f && txt.trim().length<8){
+    if(msg){ msg.style.color='var(--bad)';
+             msg.textContent='Sube el documento o escribe la explicación.'; }
+    return;
+  }
+  si.disabled=true; si.textContent='Guardando…';
+  if(msg){ msg.style.color='var(--muted)'; msg.textContent=''; }
+  let ruta=null;
+  // Si el archivo no sube, el descuadre no se salda: el documento es la mitad del trato.
+  try{
+    if(f){
+      const ext=({'application/pdf':'pdf','image/png':'png','image/webp':'webp','image/heic':'heic'})[f.type]||'jpg';
+      ruta='descuadres/'+prop+'/'+fecha+'/'+Date.now()+'.'+ext;
+      const up=await sb.storage.from('comprobantes').upload(ruta, f, {contentType:f.type||'image/jpeg'});
+      if(up.error) throw up.error;
+    }
+  }catch(e){
+    if(msg){ msg.style.color='var(--bad)';
+             msg.textContent='No se pudo subir el documento: '+((e&&e.message)||e); }
+    si.disabled=false; si.textContent='Saldar el descuadre'; return;
+  }
+  try{
+    const r=await rpc('aud_descuadre_explicar',
+      {p_property:prop, p_fecha:fecha, p_ref:EXPL.ref, p_nota:txt.trim()||null, p_doc:ruta});
+    if(r&&r.ok){ cierraExpl(); estadoRecalc(r.mensaje,'ok'); await cargaMes(); await cargaDia(fecha); }
+    else{ if(msg){ msg.style.color='var(--bad)'; msg.textContent=(r&&r.mensaje)||'No se pudo saldar.'; }
+          si.disabled=false; si.textContent='Saldar el descuadre'; }
+  }catch(e){
+    if(msg){ msg.style.color='var(--bad)'; msg.textContent='No se pudo saldar: '+((e&&e.message)||e); }
+    si.disabled=false; si.textContent='Saldar el descuadre';
+  }
 }
 async function arrastrar(punto,btn){
   const nota=prompt('Se va a cuadrar contra el otro día. ¿Quieres añadir alguna nota? (opcional)');
@@ -2798,6 +2911,8 @@ document.getElementById('cuerpo').addEventListener('click',async e=>{
   if(bar){ await abreArchivo(bar); return; }
   const ba=e.target.closest('[data-arr]');
   if(ba){ await arrastrar(ba.dataset.arr, ba); return; }
+  const bex=e.target.closest('[data-expl]');
+  if(bex){ EXPL={ref:bex.dataset.expl, txt:''}; pintaExpl(); return; }
   const bc=e.target.closest('[data-comp]');
   if(bc){ await compensar(bc.dataset.comp, bc); return; }
   // Resuelto: para los avisos que no llevan dinero.
