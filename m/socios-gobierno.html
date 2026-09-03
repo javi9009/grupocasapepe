@@ -29,6 +29,18 @@ td.n{text-align:right}
 .btn{font:inherit;font-weight:600;border-radius:7px;cursor:pointer;padding:6px 12px;border:1px solid var(--accent);background:var(--accent);color:#fff}
 .btn:hover{filter:brightness(1.08)}.btn.ghost{background:transparent;color:var(--accent)}.btn.sm{padding:3px 9px;font-size:.78rem}
 .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.68rem;font-weight:600}
+.chip.warn{background:var(--warnB);color:var(--warn)}.chip.nd{background:#E9E4DA;color:#66707A}.chip.bad{background:var(--badB);color:var(--bad)}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px}
+.pills button{font:inherit;font-size:.82rem;font-weight:600;padding:6px 13px;border-radius:999px;border:1px solid var(--rule);background:#fff;color:var(--muted);cursor:pointer}
+.pills button[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.pills button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.neg{color:var(--bad);font-weight:700}.pos{color:var(--ok);font-weight:700}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;color:var(--ink2);word-break:break-all}
+.tscroll{overflow-x:auto}
+.ev2{background:#fff;border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:9px;padding:11px 13px;margin:9px 0;box-shadow:var(--shadow)}
+.flow{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:.83rem;margin-top:5px}
+.flow .who{background:#EFE9DD;border:1px solid var(--rule);border-radius:6px;padding:2px 8px}
+.flow .ar{color:var(--faint)}
 .chip.ok{background:var(--okB);color:var(--ok)}.chip.falta{background:var(--badB);color:var(--bad)}.chip.void{background:var(--badB);color:var(--bad)}.chip.prot{background:var(--okB);color:var(--ok)}.chip.q{background:var(--accentS);color:var(--accent)}
 .tl{position:relative;margin:10px 0;padding-left:24px}.tl:before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:var(--rule2)}
 .ev{position:relative;margin:0 0 12px}.ev:before{content:"";position:absolute;left:-21px;top:15px;width:10px;height:10px;border-radius:50%;background:var(--accent);border:2px solid var(--ground)}
@@ -67,6 +79,7 @@ iframe{width:100%;height:calc(100vh - 220px);min-height:460px;border:1px solid v
 <nav class="secnav"><div class="secnav-in">
  <button data-s="res" aria-selected="true">Resumen</button>
  <button data-s="soc">Socios</button>
+ <button data-s="apo">Aportaciones</button>
  <button data-s="asm">Asambleas</button>
  <button data-s="lib">Libro</button>
  <button data-s="tit">Títulos</button>
@@ -111,6 +124,17 @@ iframe{width:100%;height:calc(100vh - 220px);min-height:460px;border:1px solid v
    </div>
    <div style="margin-top:14px"><button class="btn" onclick="guardarDecision()">Guardar mi decisión</button><span id="dec-msg" style="margin-left:10px;font-size:.82rem;color:var(--muted)"></span></div>
 
+  </div>
+
+  <div class="sect" id="apo">
+   <div class="pills" id="apo-pills">
+    <button data-p="cua" aria-selected="true">Cuadre</button>
+    <button data-p="mov">Transferencias</button>
+    <button data-p="cad">Cadena de acciones</button>
+    <button data-p="ref">Refundación</button>
+    <button data-p="fal">Faltantes</button>
+   </div>
+   <div id="apo-body"></div>
   </div>
 
   <div class="sect" id="asm"><h2 class="s">Asambleas</h2>
@@ -367,11 +391,18 @@ function gobApi(path){
 }
 async function gobLoad(){
  if(GOB_CACHE) return GOB_CACHE;
- const [ap,cu]=await Promise.all([
+ const [ap,cu,movs,actas,tit,ref,pag]=await Promise.all([
    gobApi('gob_aportaciones?select=*&order=fecha_operacion'),
-   gobApi('gob_v_cuadre?select=*')
+   gobApi('gob_v_cuadre?select=*'),
+   gobApi('gob_movimientos_capital?select=*&order=orden'),
+   gobApi('gob_actas?select=*&order=orden'),
+   gobApi('gob_titulares?select=*&order=orden'),
+   gobApi('gob_refundacion_compromisos?select=*&order=orden'),
+   gobApi('gob_refundacion_pagos?select=*')
  ]);
- GOB_CACHE={ap:ap||[],cu:cu||[]};
+ const pg={}; (pag||[]).forEach(x=>{ if(x.estatus==='pagado') pg[x.compromiso_id]=(pg[x.compromiso_id]||0)+ +x.monto; });
+ (ref||[]).forEach(r=>r.pagado=pg[r.id]||0);
+ GOB_CACHE={ap:ap||[],cu:cu||[],movs:movs||[],actas:actas||[],tit:tit||[],ref:ref||[]};
  return GOB_CACHE;
 }
 function gobFecha(d){return d?new Date(d+'T12:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}):'—';}
@@ -413,6 +444,120 @@ async function renderAport(s){
    }</tbody></table>
   </details>
   <div class="note" style="margin-top:8px">El detalle completo, la cadena de compraventas y el seguimiento de la refundación están en <b>Socios → Aportaciones y cuadre</b>.</div>`;
+}
+let APOSUB='cua';
+function apoPill(){
+ document.querySelectorAll('#apo-pills button').forEach(b=>{
+  b.onclick=()=>{APOSUB=b.dataset.p;
+   document.querySelectorAll('#apo-pills button').forEach(x=>x.setAttribute('aria-selected',x===b));
+   renderApoBody();};
+ });
+}
+async function renderApoPanel(){
+ const box=document.getElementById('apo-body'); if(!box) return;
+ document.getElementById('apo-pills').style.display = (SOC==='hbr')?'flex':'none';
+ if(SOC!=='hbr'){ box.innerHTML='<div class="note">El cuadre de aportaciones está construido para Hostal Boutique República de Uruguay. Para los vehículos de inversión todavía no hay libro de depósitos cargado.</div>'; return; }
+ box.innerHTML='<div class="note">Cargando…</div>';
+ try{ await gobLoad(); }catch(e){ box.innerHTML='<div class="note">No se pudieron cargar los datos de aportaciones.</div>'; return; }
+ renderApoBody();
+}
+function renderApoBody(){
+ const box=document.getElementById('apo-body'); if(!box||!GOB_CACHE) return;
+ const D=GOB_CACHE;
+ if(APOSUB==='cua') box.innerHTML=apoCuadre(D);
+ else if(APOSUB==='mov') box.innerHTML=apoMovs(D);
+ else if(APOSUB==='cad') box.innerHTML=apoCadena(D);
+ else if(APOSUB==='ref') box.innerHTML=apoRef(D);
+ else box.innerHTML=apoFaltantes(D);
+}
+function apoCuadre(D){
+ const fila=r=>{const d=+r.diferencia;
+  return `<tr><td><b>${gobEsc(r.razon_social)}</b><div style="font-size:.72rem;color:var(--muted)">${gobEsc(r.persona||'')}</div></td>
+   <td class="n">${money(+r.depositos_comprobados)}<div style="font-size:.7rem;color:var(--muted)">${r.n_transferencias} mov.</div></td>
+   <td class="n">${+r.en_especie?money(+r.en_especie):'—'}</td>
+   <td class="n">${+r.sin_respaldo?'<span class="neg">'+money(+r.sin_respaldo)+'</span>':'—'}</td>
+   <td class="n">${+r.cv_neto?money(+r.cv_neto):'—'}</td>
+   <td class="n">${money(+r.capital_en_acta)}</td>
+   <td class="n ${Math.abs(d)<1?'':(d<0?'neg':'pos')}">${Math.abs(d)<1?'✓':money(d)}</td></tr>`;};
+ const head=`<thead><tr><th>Titular</th><th class="n">Depósitos</th><th class="n">Especie</th><th class="n">Sin respaldo</th><th class="n">C/V acciones</th><th class="n">Capital en acta</th><th class="n">Diferencia</th></tr></thead>`;
+ const vig=D.cu.filter(r=>r.vigente), out=D.cu.filter(r=>!r.vigente);
+ const T=k=>vig.reduce((t,r)=>t+ +r[k],0);
+ const nf=D.ap.filter(a=>a.materialidad==='folio').length;
+ const nb=D.ap.filter(a=>a.materialidad==='folio'||a.materialidad==='linea_banco').length;
+ return `<div class="cards">
+   <div class="kpi"><div class="lb">Capital reconocido en actas</div><div class="v">${money(T('capital_en_acta'))}</div><div class="s">socios vigentes</div></div>
+   <div class="kpi"><div class="lb">Depósitos identificados</div><div class="v">${money(T('depositos_comprobados'))}</div><div class="s">${nb} transferencias · ${nf} con folio</div></div>
+   <div class="kpi"><div class="lb">Sin respaldo documental</div><div class="v" style="color:var(--bad)">${money(T('sin_respaldo'))}</div><div class="s">cifras globales sin transferencia</div></div>
+   <div class="kpi"><div class="lb">Diferencia neta</div><div class="v" style="color:${T('diferencia')<0?'var(--bad)':'var(--ok)'}">${money(T('diferencia'))}</div><div class="s">aportado − reconocido</div></div>
+  </div>
+  <div class="note">«Depósitos» es lo que entró al banco. «C/V» son acciones compradas o vendidas a otro socio: dinero que ya estaba en la sociedad, aportado por quien vendió. «Acta» es el capital que la asamblea reconoce hoy.</div>
+  <div class="tscroll"><table>${head}<tbody>${vig.map(fila).join('')}
+   <tr style="background:#EFE9DD;font-weight:700"><td>TOTAL vigentes</td><td class="n">${money(T('depositos_comprobados'))}</td><td class="n">${money(T('en_especie'))}</td><td class="n">${money(T('sin_respaldo'))}</td><td class="n">${money(T('cv_neto'))}</td><td class="n">${money(T('capital_en_acta'))}</td><td class="n ${T('diferencia')<0?'neg':'pos'}">${money(T('diferencia'))}</td></tr>
+  </tbody></table></div>
+  <h2 class="s">Socios que ya salieron</h2>
+  <div class="tscroll"><table>${head}<tbody>${out.map(fila).join('')}</tbody></table></div>`;
+}
+function apoMovs(D){
+ const rows=D.ap.slice().sort((a,b)=>(a.titular===b.titular)?String(a.fecha_operacion||'').localeCompare(String(b.fecha_operacion||'')):a.titular.localeCompare(b.titular));
+ const tot=rows.reduce((t,a)=>t+ +a.monto,0);
+ return `<div class="note">${rows.length} movimientos · ${money(tot)}. Cada renglón es una línea del estado de cuenta.</div>
+  <div class="tscroll"><table><thead><tr><th>Titular</th><th>Fecha</th><th class="n">Importe</th><th>Materialidad</th><th>Folio / CVE de rastreo</th><th>Concepto</th></tr></thead><tbody>`+
+  rows.map(m=>{const L=MATLBL[m.materialidad]||['nd',m.materialidad];
+   return `<tr><td>${gobEsc(m.titular)}</td><td style="white-space:nowrap">${gobFecha(m.fecha_operacion)}</td>
+    <td class="n">${money(+m.monto)}</td><td><span class="chip ${L[0]}">${L[1]}</span></td>
+    <td class="mono">${gobEsc(m.clave_rastreo||'—')}${m.referencia?'<br>ref. '+gobEsc(m.referencia):''}</td>
+    <td style="font-size:.73rem;color:var(--muted);max-width:340px;word-break:break-word">${gobEsc(m.concepto||'—')}${m.notas?'<div style="color:var(--bad);margin-top:3px">'+gobEsc(m.notas)+'</div>':''}</td></tr>`;}).join('')+
+  `</tbody></table></div>`;
+}
+function apoCadena(D){
+ const A={}; D.actas.forEach(a=>A[a.codigo]=a);
+ const N={}; D.tit.forEach(t=>N[t.clave]=t.razon_social);
+ const cvs=D.movs.filter(m=>m.concepto==='cv');
+ const by={}; cvs.forEach(m=>{(by[m.acta_codigo]=by[m.acta_codigo]||[]).push(m);});
+ const keys=Object.keys(by).sort((a,b)=>(A[a]?.orden||0)-(A[b]?.orden||0));
+ return `<div class="note">Cada compraventa se empareja con quien vendió. Las acciones que hoy tiene un socio por compra <b>no son aportación suya</b>: son la aportación de quien se las vendió, que sí entró a la sociedad en su momento.</div>`+
+  keys.map(k=>{const a=A[k]||{},L=by[k];
+   const compras=L.filter(m=>+m.monto>0).map(m=>`<div class="flow"><span class="who">${gobEsc(N[m.titular]||m.titular)}</span><span class="ar">← compra ${money(+m.monto)} →</span><span class="who">${gobEsc(N[m.contraparte]||m.contraparte||'—')}</span>${m.notas?'<span style="color:var(--muted);font-size:.78rem">· '+gobEsc(m.notas)+'</span>':''}</div>`).join('');
+   const ventas=L.filter(m=>+m.monto<0).map(m=>`<div class="flow"><span class="who">${gobEsc(N[m.titular]||m.titular)}</span><span class="ar">vende ${money(-m.monto)}</span>${m.notas?'<span style="color:var(--muted);font-size:.78rem">· '+gobEsc(m.notas)+'</span>':''}</div>`).join('');
+   return `<div class="ev2"><div style="font-weight:700">${gobEsc(a.tipo||k)} ${a.escritura?'<span class="chip q">esc. '+gobEsc(a.escritura)+'</span>':''}${a.firmada===false?'<span class="chip bad">sin firma</span>':''}</div>
+    <div style="font-size:.78rem;color:var(--muted)">${gobEsc(a.fecha_texto||'')}</div>${compras}${ventas}
+    ${a.notas?'<div style="font-size:.76rem;color:var(--muted);margin-top:6px">⚠ '+gobEsc(a.notas)+'</div>':''}</div>`;}).join('');
+}
+function apoRef(D){
+ const R=D.ref, totC=R.reduce((t,r)=>t+ +r.monto_comprometido,0);
+ const efe=R.filter(r=>r.id!=='REF-07').reduce((t,r)=>t+ +r.monto_comprometido,0);
+ const pag=R.reduce((t,r)=>t+(+r.pagado||0),0);
+ const ST={pendiente:['nd','pendiente'],parcial:['warn','1er pago recibido'],pagado:['ok','pagado']};
+ return `<div class="cards">
+   <div class="kpi"><div class="lb">Ampliación acordada</div><div class="v">${money(totC)}</div><div class="s">80% del capital post-refundación</div></div>
+   <div class="kpi"><div class="lb">A exhibir en efectivo</div><div class="v">${money(efe)}</div><div class="s">sin contar tesorería</div></div>
+   <div class="kpi"><div class="lb">Exhibido y capturado</div><div class="v" style="color:${pag?'var(--ok)':'var(--bad)'}">${money(pag)}</div><div class="s">${pag?'':'falta capturar los pagos'}</div></div>
+   <div class="kpi"><div class="lb">Pendiente</div><div class="v" style="color:var(--bad)">${money(efe-pag)}</div><div class="s">por exhibir</div></div>
+  </div>
+  <div class="tscroll"><table><thead><tr><th>Socio</th><th>RFC</th><th class="n">%</th><th class="n">Acciones</th><th class="n">Comprometido</th><th class="n">Exhibido</th><th>Estatus</th></tr></thead><tbody>`+
+  R.map(r=>{const st=ST[r.estatus]||['nd',r.estatus];
+   return `<tr><td><b>${gobEsc(r.nombre)}</b>${r.notas?'<div style="font-size:.72rem;color:var(--muted)">'+gobEsc(r.notas)+'</div>':''}</td>
+    <td class="mono">${gobEsc(r.rfc||'—')}</td><td class="n">${(+r.pct*100).toFixed(2)}%</td>
+    <td class="n">${Number(r.acciones).toLocaleString('es-MX',{maximumFractionDigits:0})}</td>
+    <td class="n">${money(+r.monto_comprometido)}</td><td class="n">${r.pagado?money(r.pagado):'—'}</td>
+    <td><span class="chip ${st[0]}">${st[1]}</span></td></tr>`;}).join('')+
+  `<tr style="background:#EFE9DD;font-weight:700"><td>TOTAL</td><td></td><td class="n">100%</td><td></td><td class="n">${money(totC)}</td><td class="n">${money(pag)}</td><td></td></tr></tbody></table></div>
+  <div class="note">Falta capturar el calendario de exhibiciones y el monto, fecha y folio de los primeros pagos de Juan José y Luis Javier Cué.</div>`;
+}
+function apoFaltantes(D){
+ const rows=[];
+ D.cu.forEach(r=>{
+  if(+r.sin_respaldo>0) rows.push([r.razon_social,'Sin materialidad',+r.sin_respaldo,'Importe registrado como cifra global, sin transferencia que lo respalde. Conseguir el comprobante o reclasificarlo (AFAC, especie, trabajo).']);
+  if(Math.abs(+r.diferencia)>=1) rows.push([r.razon_social,(+r.diferencia<0?'Faltante vs acta':'Sobrante vs acta'),+r.diferencia,
+   +r.diferencia<0?'Se reconoce en acta más capital del que se puede sustentar. Decidir: conseguir comprobante, ajustar el acta o aceptar.'
+                  :'Aportó más de lo que el acta le reconoce. Decidir: emitir títulos, dejarlo como AFAC o devolver.']);
+ });
+ rows.sort((a,b)=>Math.abs(b[2])-Math.abs(a[2]));
+ return `<div class="note">Lista de trabajo: cada renglón es una decisión — conseguir el comprobante, ajustar el acta o aceptar la diferencia.</div>
+  <div class="tscroll"><table><thead><tr><th>Titular</th><th>Tipo</th><th class="n">Importe</th><th>Qué hay que resolver</th></tr></thead><tbody>`+
+  rows.map(r=>`<tr><td><b>${gobEsc(r[0])}</b></td><td><span class="chip ${r[2]<0?'bad':'warn'}">${r[1]}</span></td>
+   <td class="n ${r[2]<0?'neg':'pos'}">${money(r[2])}</td><td style="max-width:460px">${gobEsc(r[3])}</td></tr>`).join('')+
+  `</tbody></table></div>`;
 }
 const ESTATUS={
  hbr:{snapshot:"14-may-26",
@@ -671,6 +816,7 @@ function renderAll(){
  $('#hi').innerHTML=`${D.nombre} <small>· gobierno societario</small>`;
  $('#k-prox').textContent=D.prox;
  renderResumen(D);
+ renderApoPanel();
  $('#asm-tl').innerHTML=D.asambleas.map((e,i)=>`<div class="ev ${e.warn?'warn':''}"><div class="card" onclick="this.classList.toggle('open')"><div class="top"><span class="date">${e.date}</span><span class="chip ${e.warn?'void':'prot'}">${e.chip}</span><span class="chip q">Quórum: ${e.quorum}</span></div><h3>${e.tit}</h3><div class="det"><div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Minuta → acuerdos</div>${e.acu.map(a=>`<div class="acu"><b>${a[0]}:</b> ${a[1]}</div>`).join('')}</div></div></div>`).join('');
  const t=D.tenencia; let libHTML='';
  if(D.evol){
@@ -694,6 +840,7 @@ function renderAll(){
  renderGrid(); renderSoc();
 }
 // selector superior derecho eliminado: la sociedad se determina por el menú (#soc=)
+apoPill();
 document.querySelectorAll('.secnav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.secnav button').forEach(x=>x.setAttribute('aria-selected',x===b));document.querySelectorAll('.sect').forEach(x=>x.classList.toggle('on',x.id===b.dataset.s));});
 renderAll();
 // Cambiar de sociedad desde el menú solo cambia el #hash (el iframe no recarga): re-renderiza.
