@@ -97,6 +97,10 @@ button{font-family:inherit}
 .act .go{background:var(--accent);color:#fff}
 .act .end{background:var(--gold);color:#16130f}
 .act .off{background:var(--bg3);color:var(--txt3)}
+.act .paus{background:var(--bg2);color:var(--txt2);border:1px solid var(--bd)}
+.act .und{background:var(--surface,#fff);color:var(--txt3);border:1px solid var(--bd);font-weight:600}
+.act .sec{font-size:13.5px;padding:11px}
+.res.pausa{background:#f2f0ea;color:var(--txt2);border-radius:12px;padding:11px 12px;margin-top:11px;font-size:13.5px}
 .act .nomol{background:var(--surface,#fff);color:#8a6212;border:1px solid #e8d4a8;font-weight:700;font-size:14px;padding:11px}
 .res.nom{background:#fff8ea;color:#8a6212;border-radius:12px;padding:11px 12px;margin-top:11px;font-size:13.5px;line-height:1.45}
 .res.nom .tk{color:#a58348;font-size:12px}
@@ -543,7 +547,8 @@ function pintar(){
   // ---- mis cuartos ----
   const ts=(MIA.hk_tareas||[]).sort((a,b)=>a.orden-b.orden);
   const hechas=ts.filter(t=>t.estado==='terminada').length;
-  const enCurso=ts.find(t=>t.estado==='en_curso');
+  // Un cuarto pausado deja empezar otro: para eso se pausa.
+  const enCurso=ts.find(t=>t.estado==='en_curso' && !enPausa(t));
   const estim=ts.reduce((s,t)=>s+(t.minutos_estimados||0),0);
   const real=ts.reduce((s,t)=>s+(Number(t.minutos_reales)||0),0);
   const estimHechas=ts.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0);
@@ -611,12 +616,18 @@ function pintar(){
         ? `<div class="res">Hecho en <b>${n1(t.minutos_reales)} min</b> ${dif>0?`<span class="fast">· ${dif} min menos de lo previsto</span>`:dif<0?`<span class="slow">· ${n1(-dif)} min más</span>`:''}${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`
         : t.estado==='no_realizada'
         ? `<div class="res nom">🚫 No se limpió · ${esc(MOTIVOS.find(m=>m.codigo===t.motivo_codigo)?.nombre||'el huésped no quiso')}${t.comentario?`<br>“${esc(t.comentario)}”`:''}<br><span class="tk">No cuenta en tu día: se te descontó de lo asignado.</span></div>`
+        : t.estado==='en_curso'
+        ? (enPausa(t)
+          ? `<div class="res pausa">⏸ En pausa desde las ${horaDe(t.metadata.pausado_at)} · llevas ${minTrabajados(t)} min de trabajo</div>
+             <div class="act"><button class="go" data-rea="${t.id}">▶ Reanudar limpieza</button></div>
+             <div class="act"><button class="und sec" data-und="${t.id}">↩ Empecé por error · deshacer</button></div>`
+          : `<div class="act"><button class="end" data-fin="${t.id}">Terminar limpieza · <b data-crono="${t.iniciado_at}">0 min</b></button></div>
+             <div class="act"><button class="paus sec" data-pau="${t.id}">⏸ Pausar</button>
+               <button class="und sec" data-und="${t.id}">↩ Deshacer</button></div>`)
         : `<div class="act">
-            ${t.estado==='en_curso'
-              ? `<button class="end" data-fin="${t.id}">Terminar limpieza · <b data-crono="${t.iniciado_at}">0 min</b></button>`
-              : `<button class="go" data-ini="${t.id}" ${(pendiente||enCurso)?'disabled':''} style="${(pendiente||enCurso)?'background:var(--bg3);color:var(--txt3)':''}">${libre?'Limpiarla de todos modos':'Iniciar limpieza'}</button>`}
+            <button class="go" data-ini="${t.id}" ${(pendiente||enCurso)?'disabled':''} style="${(pendiente||enCurso)?'background:var(--bg3);color:var(--txt3)':''}">${libre?'Limpiarla de todos modos':'Iniciar limpieza'}</button>
           </div>
-          ${(a.tipo&&!op&&!pendiente&&t.estado!=='en_curso')?`<div class="act"><button class="nomol" data-nom="${t.id}">🚫 No quisieron limpieza</button></div>`:''}`}
+          ${(a.tipo&&!op&&!pendiente)?`<div class="act"><button class="nomol" data-nom="${t.id}">🚫 No quisieron limpieza</button></div>`:''}`}
     </div>`;}).join('');
 
   if(!ts.length)html+='<div class="ph">No hay tareas en tu orden de hoy.</div>';
@@ -672,7 +683,9 @@ function tarjetaCuarto(t,a){
       ${dif>0?`· <span class="rap">${dif} min menos</span>`:dif<0?`· <span class="len">${n1(-dif)} min más</span>`:''}
       ${t.comentario?`<br>“${esc(t.comentario)}”`:''}</div>`;
   }else if(t.estado==='en_curso'){
-    caja=puede?`<button class="btn end" data-fin="${t.id}">Terminar · <b data-crono="${t.iniciado_at}">0 min</b></button>
+    caja=enPausa(t)
+      ? `<div class="hecho">⏸ En pausa desde las ${horaDe(t.metadata.pausado_at)} · lleva ${minTrabajados(t)} min de trabajo</div>`
+      : puede?`<button class="btn end" data-fin="${t.id}">Terminar · <b data-crono="${t.iniciado_at}">0 min</b></button>
       <button class="btn atras" data-und="${t.id}">↩ No pude entrar · deshacer</button>`
               :`<div class="hecho">En limpieza desde las ${new Date(t.iniciado_at).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})}</div>`;
   }else if(esperaPase(t)){
@@ -837,11 +850,54 @@ async function avisarRoomAudit(){
   }
 }
 
+// ── Pausar una limpieza ───────────────────────────────────────────────────
+// minutos_reales es una columna generada (terminado_at - iniciado_at). Para no
+// contar el rato parado, al reanudar se corre iniciado_at hacia delante lo que
+// duró la pausa. Así el tiempo sale bien en todas partes sin casos especiales.
+const enPausa=t=>!!(t?.estado==='en_curso' && t?.metadata?.pausado_at);
+const horaDe=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
+const minTrabajados=t=>{
+  if(!t?.iniciado_at) return 0;
+  const hasta = t.metadata?.pausado_at ? new Date(t.metadata.pausado_at) : new Date();
+  return Math.max(0, Math.round((hasta - new Date(t.iniciado_at))/60000));
+};
+
+async function pausar(id){
+  const {t}=buscarTarea(id);
+  if(!t || t.estado!=='en_curso' || enPausa(t)) return;
+  const now=new Date().toISOString();
+  const meta={...(t.metadata||{}), pausado_at:now, pausas:(t.metadata?.pausas||0)+1};
+  const {error}=await sb.from('hk_tareas').update({metadata:meta,updated_at:now}).eq('id',id);
+  if(error) return toast('No se pudo pausar: '+error.message);
+  try{ await sb.from('hk_eventos').insert({tarea_id:id,tipo:'comentario',employee_id:EMP,
+    employee_nombre:NOMBRE,nota:'Limpieza pausada'}); }catch(_e){}
+  toast('En pausa · el tiempo parado no se te cuenta');
+  cargar();
+}
+
+async function reanudar(id){
+  const {t}=buscarTarea(id);
+  if(!enPausa(t)) return;
+  const now=new Date();
+  const parado=Math.max(0, now-new Date(t.metadata.pausado_at));
+  // Se corre el arranque: lo que estuvo parada no cuenta como trabajo.
+  const nuevoIni=new Date(new Date(t.iniciado_at).getTime()+parado).toISOString();
+  const meta={...(t.metadata||{}), pausado_at:null,
+    pausado_min:Math.round(((t.metadata?.pausado_min||0)+parado/60000)*10)/10};
+  const {error}=await sb.from('hk_tareas').update({
+    iniciado_at:nuevoIni, metadata:meta, updated_at:now.toISOString()}).eq('id',id);
+  if(error) return toast('No se pudo reanudar: '+error.message);
+  toast('Seguimos · retomamos donde lo dejaste');
+  cargar();
+}
+
 function engancharCuartos(root){
   root.querySelectorAll('.cuarto .lin').forEach(l=>l.onclick=()=>l.parentElement.classList.toggle('on'));
   root.querySelectorAll('[data-ini]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); iniciar(b.dataset.ini); });
   root.querySelectorAll('[data-fin]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirFin(b.dataset.fin); });
   root.querySelectorAll('[data-und]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deshacerInicio(b.dataset.und); });
+  root.querySelectorAll('[data-pau]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); pausar(b.dataset.pau); });
+  root.querySelectorAll('[data-rea]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); reanudar(b.dataset.rea); });
   root.querySelectorAll('[data-nom]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirNoMolestar(b.dataset.nom); });
   const bd=root.querySelector('#btnDnd'); if(bd){ bd.onclick=abrirDnd; pintarDndChips(); }
 }
@@ -859,7 +915,8 @@ function buscarTarea(id){
 function minutosEnCurso(){
   const t=(MIA?.hk_tareas||[]).find(x=>x.estado==='en_curso');
   if(!t||!t.iniciado_at) return {min:0,tarea:null};
-  return {min:(Date.now()-new Date(t.iniciado_at))/60000, tarea:t};
+  const hasta = t.metadata?.pausado_at ? new Date(t.metadata.pausado_at) : new Date();
+  return {min:Math.max(0,(hasta-new Date(t.iniciado_at))/60000), tarea:t};
 }
 // Estimado contra real de una persona del día: lo que se esperaba de los
 // cuartos que ya cerró contra lo que de verdad tardó. El cuarto en curso cuenta
@@ -928,7 +985,7 @@ function pintarPila(){
 let RELOJ=null;
 function arrancarReloj(){
   clearInterval(RELOJ);
-  const hay=(MIA?.hk_tareas||[]).some(t=>t.estado==='en_curso');
+  const hay=(MIA?.hk_tareas||[]).some(t=>t.estado==='en_curso' && !enPausa(t));
   const tic=()=>{
     document.querySelectorAll('[data-crono]').forEach(el=>{
       const ini=el.getAttribute('data-crono'); if(!ini)return;
@@ -1242,10 +1299,12 @@ async function iniciar(id){
 async function deshacerInicio(id){
   const {t}=buscarTarea(id);
   if(!t||t.estado!=='en_curso') return;
+  if(!confirm('El cuarto vuelve a quedar pendiente y no se te cuenta nada de tiempo. ¿Seguimos?')) return;
   const now=new Date().toISOString();
   // Sin iniciado_at, minutos_reales se queda solo en nulo: es una columna generada.
+  const meta={...(t.metadata||{})}; delete meta.pausado_at; delete meta.pausado_min; delete meta.pausas;
   const {error}=await sb.from('hk_tareas').update({estado:'pendiente',iniciado_at:null,
-    terminado_at:null,ejecutado_por:null,ejecutado_por_nombre:null,updated_at:now}).eq('id',id);
+    terminado_at:null,ejecutado_por:null,ejecutado_por_nombre:null,metadata:meta,updated_at:now}).eq('id',id);
   if(error) return toast('No se pudo deshacer: '+error.message);
   // Se le quita la marca de "limpiando": el cuarto queda como estaba.
   if(t.area_id) await sb.from('hk_estatus_dia').update({limpieza:null,limpieza_at:null,
