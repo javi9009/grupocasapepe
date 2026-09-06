@@ -15,6 +15,19 @@ const {useState,useEffect,useRef,useCallback,useMemo}=React;
 const SBU='https://rehophywchakfapivsbh.supabase.co';
 const SBK='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const SBH={apikey:SBK,Authorization:'Bearer '+SBK};
+/* ---- idioma del quiz y bono por practicar otro idioma ---- */
+let PQLANG='es';
+try{
+  const u=new URLSearchParams(location.search).get('lang');
+  const g=localStorage.getItem('pq_lang');
+  PQLANG=(u==='es'||u==='en')?u:((g==='es'||g==='en')?g:'es');
+}catch(e){}
+let PQCFG={idioma_base:'es', idioma_bono:'en', multiplicador:2, bono_activo:true};
+const pqCargaCfg=()=>fetch(SBU+'/rest/v1/rpc/pq_config_publica',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},SBH),body:'{}'})
+  .then(r=>r.json()).then(d=>{ if(d&&d.idioma_base) PQCFG=d; }).catch(()=>{});
+const PQBONO=()=>PQCFG.bono_activo && PQCFG.idioma_bono!==PQCFG.idioma_base ? Number(PQCFG.multiplicador)||2 : 1;
+const pqMult=(idioma)=> idioma===PQCFG.idioma_bono ? PQBONO() : 1;
+const pqSetLang=(l)=>{ if(l===PQLANG) return; PQLANG=l; try{localStorage.setItem('pq_lang',l)}catch(e){} location.reload(); };
 
 
 /* =====================================================================
@@ -204,8 +217,9 @@ function App() {
           fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,emoji,color,construccion,orden&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
           (async () => { // PostgREST corta en 1000 filas: hay que paginar
             const out = []; const PAGE = 1000;
-            for (let off = 0; off < 6000; off += PAGE) {
-              const p = await fetch(SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,explicacion,segundos&activa=is.true&order=id.asc&limit=" + PAGE + "&offset=" + off, { headers: SBH }).then(r => r.json()).catch(() => []);
+            await pqCargaCfg();
+            for (let off = 0; off < 20000; off += PAGE) {
+              const p = await fetch(SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,explicacion,segundos,idioma&activa=is.true&order=id.asc&limit=" + PAGE + "&offset=" + off, { headers: SBH }).then(r => r.json()).catch(() => []);
               if (!Array.isArray(p) || !p.length) break;
               out.push.apply(out, p);
               if (p.length < PAGE) break;
@@ -223,13 +237,21 @@ function App() {
               if (!q.enunciado || o.length < 2) return;
               const a = Number(q.correcta);
               if (!(a >= 0 && a < o.length)) return;
-              (byCat[q.categoria_id] = byCat[q.categoria_id] || []).push({ q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+              const k = q.categoria_id + "|" + (q.idioma || "es");
+              (byCat[k] = byCat[k] || []).push({ q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
             });
-            const nuevas = cats.map((c) => ({
-              id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
-              questions: byCat[c.id] || [],
-              construccion: (byCat[c.id] || []).length === 0,
-            }));
+            const nuevas = cats.map((c) => {
+              const pedido = byCat[c.id + "|" + PQLANG] || [];
+              const base   = byCat[c.id + "|" + PQCFG.idioma_base] || [];
+              const usar   = pedido.length ? pedido : base;
+              return {
+                id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
+                questions: usar,
+                idioma: pedido.length ? PQLANG : PQCFG.idioma_base,
+                hayBono: !!(byCat[c.id + "|" + PQCFG.idioma_bono] || []).length,
+                construccion: usar.length === 0,
+              };
+            });
             CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
           }
           OBLIG_ROWS = Array.isArray(obl) ? obl : [];
@@ -361,6 +383,28 @@ function App() {
 }
 
 /* ===================== TOP BAR ===================== */
+function LangPill() {
+  const bono = PQBONO();
+  const on = PQLANG === PQCFG.idioma_bono;
+  const otro = PQLANG === "es" ? "en" : "es";
+  return (
+    <button
+      onClick={() => pqSetLang(otro)}
+      title={on ? "Estás jugando en inglés · puntos ×" + bono : "Juega en inglés y gana ×" + bono + " puntos"}
+      style={{
+        display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+        font: "inherit", fontSize: 12, fontWeight: 800, letterSpacing: ".02em",
+        border: "1.5px solid " + (on ? "#E9B44C" : "rgba(255,255,255,.22)"),
+        background: on ? "rgba(233,180,76,.16)" : "rgba(255,255,255,.06)",
+        color: on ? "#E9B44C" : "#fff", borderRadius: 999, padding: "5px 11px",
+      }}>
+      <span style={{ fontSize: 14, lineHeight: 1 }}>{PQLANG === "es" ? "🇲🇽" : "🇬🇧"}</span>
+      <span>{PQLANG === "es" ? "ES" : "EN"}</span>
+      {bono > 1 && <span style={{ opacity: on ? 1 : .75 }}>{on ? "×" + bono : "EN ×" + bono}</span>}
+    </button>
+  );
+}
+
 function TopBar({ me, onHome, onLogout }) {
   return (
     <div style={S.topbar}>
@@ -369,6 +413,7 @@ function TopBar({ me, onHome, onLogout }) {
         <span style={S.logoTxt}>PEPE<span style={{ color: "#E9B44C" }}>QUIZ</span></span>
       </button>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <LangPill />
         <div style={S.walletPill}><span style={{ fontSize: 14 }}>🪙</span><strong style={{ fontVariantNumeric: "tabular-nums" }}>{me.walletHist}</strong></div>
         <button style={S.userChip} onClick={onLogout} title="Cambiar usuario">{me.avatar}</button>
       </div>
@@ -540,12 +585,13 @@ function GymGame({ cat, isObl, onFinish }) {
     const ok = choice === qs[idx].a;
     const pts = ok ? gymPts(ratio) : 0;
     answers.current[idx] = { picked: choice }; // -1 si se acabó el tiempo
+    const _m = pqMult(cat.idioma || "es");
     setPicked(choice); setEarned((e) => e + pts); if (ok) setCorrect((c) => c + 1);
-    setPop(ok ? `+${pts}` : "✗");
+    setPop(ok ? `+${Math.round(pts * _m)}` : "✗");
     setTimeout(() => {
       setPop(null);
       if (idx + 1 < qs.length) { setIdx(idx + 1); setPicked(null); }
-      else onFinish(earned + pts, correct + (ok ? 1 : 0), qs, answers.current);
+      else onFinish(Math.round((earned + pts) * pqMult(cat.idioma || "es")), correct + (ok ? 1 : 0), qs, answers.current);
     }, 1050);
   };
 
