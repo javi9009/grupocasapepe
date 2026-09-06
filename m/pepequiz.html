@@ -29,6 +29,17 @@ const PQBONO=()=>PQCFG.bono_activo && PQCFG.idioma_bono!==PQCFG.idioma_base ? Nu
 const pqMult=(idioma)=> idioma===PQCFG.idioma_bono ? PQBONO() : 1;
 const pqSetLang=(l)=>{ if(l===PQLANG) return; PQLANG=l; try{localStorage.setItem('pq_lang',l)}catch(e){} location.reload(); };
 
+/* ---- plaza ---- */
+const SEDE_A_PROY = { CDMX:'cdmx', Puebla:'puebla', Virreyes:'virreyes', Corp:'corp' };
+const STICKER = { CDMX:'/stickers/cdmx.webp', Virreyes:'/stickers/cdmx.webp', Puebla:'/stickers/pue.webp' };
+let MI_PLAZA = 'cdmx';
+const VE_TODO = () => MI_PLAZA === 'corp';
+const tocaAqui = (proyectos) => {
+  if (VE_TODO()) return true;
+  if (!Array.isArray(proyectos) || !proyectos.length) return true;
+  return proyectos.indexOf(MI_PLAZA) > -1 || (MI_PLAZA === 'virreyes' && proyectos.indexOf('cdmx') > -1);
+};
+
 
 /* =====================================================================
    PEPEQUIZ — Plataforma de e-learning gamificada · Grupo Casa Pepe
@@ -214,12 +225,12 @@ function App() {
         const [ue, pu, cats, preg, obl] = await Promise.all([
           fetch(SBU + "/rest/v1/v_empleados_publico?select=id,nombre,nombre_display,puesto,area,property_id,estatus&order=nombre_display.asc.nullslast", { headers: SBH }).then(r => r.json()).catch(() => []),
           fetch(SBU + "/rest/v1/pq_puntos?select=employee_id,pts_hist,pts_mes", { headers: SBH }).then(r => r.json()).catch(() => []),
-          fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,emoji,color,construccion,orden&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
+          fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,emoji,color,construccion,orden,proyectos&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
           (async () => { // PostgREST corta en 1000 filas: hay que paginar
             const out = []; const PAGE = 1000;
             await pqCargaCfg();
             for (let off = 0; off < 20000; off += PAGE) {
-              const p = await fetch(SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,explicacion,segundos,idioma&activa=is.true&order=id.asc&limit=" + PAGE + "&offset=" + off, { headers: SBH }).then(r => r.json()).catch(() => []);
+              const p = await fetch(SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,explicacion,segundos,idioma,proyectos&activa=is.true&order=id.asc&limit=" + PAGE + "&offset=" + off, { headers: SBH }).then(r => r.json()).catch(() => []);
               if (!Array.isArray(p) || !p.length) break;
               out.push.apply(out, p);
               if (p.length < PAGE) break;
@@ -228,34 +239,37 @@ function App() {
           })(),
           fetch(SBU + "/rest/v1/pq_puesto_obligatorio?select=puesto,categoria_id,sede", { headers: SBH }).then(r => r.json()).catch(() => []),
         ]);
+        const construirBanco = () => {
         // Banco de preguntas y categorías vivas desde Supabase
-        try {
-          if (Array.isArray(cats) && cats.length) {
-            const byCat = {};
-            (Array.isArray(preg) ? preg : []).forEach((q) => {
-              const o = Array.isArray(q.opciones) ? q.opciones : [];
-              if (!q.enunciado || o.length < 2) return;
-              const a = Number(q.correcta);
-              if (!(a >= 0 && a < o.length)) return;
-              const k = q.categoria_id + "|" + (q.idioma || "es");
-              (byCat[k] = byCat[k] || []).push({ q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
-            });
-            const nuevas = cats.map((c) => {
-              const pedido = byCat[c.id + "|" + PQLANG] || [];
-              const base   = byCat[c.id + "|" + PQCFG.idioma_base] || [];
-              const usar   = pedido.length ? pedido : base;
-              return {
-                id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
-                questions: usar,
-                idioma: pedido.length ? PQLANG : PQCFG.idioma_base,
-                hayBono: !!(byCat[c.id + "|" + PQCFG.idioma_bono] || []).length,
-                construccion: usar.length === 0,
-              };
-            });
-            CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
-          }
-          OBLIG_ROWS = Array.isArray(obl) ? obl : [];
-        } catch (e) {}
+          try {
+            if (Array.isArray(cats) && cats.length) {
+              const byCat = {};
+              (Array.isArray(preg) ? preg : []).forEach((q) => {
+                const o = Array.isArray(q.opciones) ? q.opciones : [];
+                if (!q.enunciado || o.length < 2) return;
+                const a = Number(q.correcta);
+                if (!(a >= 0 && a < o.length)) return;
+                if (!tocaAqui(q.proyectos)) return;
+                const k = q.categoria_id + "|" + (q.idioma || "es");
+                (byCat[k] = byCat[k] || []).push({ q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+              });
+              const nuevas = cats.filter((c) => tocaAqui(c.proyectos)).map((c) => {
+                const pedido = byCat[c.id + "|" + PQLANG] || [];
+                const base   = byCat[c.id + "|" + PQCFG.idioma_base] || [];
+                const usar   = pedido.length ? pedido : base;
+                return {
+                  id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
+                  questions: usar,
+                  idioma: pedido.length ? PQLANG : PQCFG.idioma_base,
+                  hayBono: !!(byCat[c.id + "|" + PQCFG.idioma_bono] || []).length,
+                  construccion: usar.length === 0,
+                };
+              });
+              CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
+            }
+            OBLIG_ROWS = Array.isArray(obl) ? obl : [];
+          } catch (e) {}
+        };
         const pmap = {}; (Array.isArray(pu) ? pu : []).forEach(p => { pmap[p.employee_id] = { h: p.pts_hist, m: p.pts_mes }; });
         const PROP = { "45e69775-d877-4507-a9e1-a45bd3400dc5": "CDMX", "febfbef6-7fd1-4b45-84d9-13533e8dcb72": "Puebla", "3e10a9ea-4913-4f7c-86ef-0c829caa851d": "Virreyes", "fde2f615-2c65-40fa-9df3-6336b5ab312c": "Corp" };
         const friendly = (e) => { const a = (e.nombre_display || "").trim(); if (a) return a; const toks = String(e.nombre || "").trim().split(/\s+/); return toks[toks.length - 1] || "Pepe"; };
@@ -284,6 +298,11 @@ function App() {
           finalUsers = [{ id: fid, nombre: fnombre, avatar: "🧑", puesto: "Colaborador", nivel: 1, sede: "CDMX", enPrueba: false, walletHist: 0, walletMes: 0 }, ...finalUsers];
           meIdToSet = fid;
         }
+        try {
+          const yo = finalUsers.find(u => u.id === meIdToSet);
+          MI_PLAZA = SEDE_A_PROY[(yo && yo.sede) || "CDMX"] || "cdmx";
+        } catch (e) {}
+        construirBanco();
         setUsers(finalUsers);
         setMeId(meIdToSet);
         setScreen("home");

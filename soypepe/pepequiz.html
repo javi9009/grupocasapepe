@@ -29,6 +29,19 @@ const PQBONO=()=>PQCFG.bono_activo && PQCFG.idioma_bono!==PQCFG.idioma_base ? Nu
 const pqMult=(idioma)=> idioma===PQCFG.idioma_bono ? PQBONO() : 1;
 const pqSetLang=(l)=>{ if(l===PQLANG) return; PQLANG=l; try{localStorage.setItem('pq_lang',l)}catch(e){} location.reload(); };
 
+/* ---- plaza: cada quien estudia lo suyo ---- */
+const SEDE_A_PROY = { CDMX:'cdmx', Puebla:'puebla', Virreyes:'virreyes', Corp:'corp' };
+const STICKER = { CDMX:'/stickers/cdmx.webp', Virreyes:'/stickers/cdmx.webp', Puebla:'/stickers/pue.webp' };
+const SEDE_NOMBRE = { CDMX:'CDMX', Virreyes:'CDMX · Virreyes', Puebla:'Puebla', Corp:'Corporativo' };
+let MI_PLAZA = 'cdmx';   // se fija al identificar al colaborador
+const VE_TODO = () => MI_PLAZA === 'corp';
+const tocaAqui = (proyectos) => {
+  if (VE_TODO()) return true;
+  if (!Array.isArray(proyectos) || !proyectos.length) return true;   // sin plaza = para todos
+  return proyectos.indexOf(MI_PLAZA) > -1
+      || (MI_PLAZA === 'virreyes' && proyectos.indexOf('cdmx') > -1);
+};
+
 
 /* =====================================================================
    PEPEQUIZ — Plataforma de e-learning gamificada · Grupo Casa Pepe
@@ -244,29 +257,48 @@ function App() {
         }
         setUsers(finalUsers);
         setMeId(meIdToSet);
+        try {
+          const yo = finalUsers.find(u => u.id === meIdToSet);
+          MI_PLAZA = SEDE_A_PROY[(yo && yo.sede) || "CDMX"] || "cdmx";
+        } catch (e) {}
         // Preguntas desde la BBDD (pq_preguntas). Si una categoria trae preguntas, reemplaza el seed.
         try {
           await pqCargaCfg();
           const ids = CATEGORIES.map(c => c.id).join(",");
-          const url = SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,idioma&activa=eq.true"
+          // qué plaza cubre cada categoría
+          let catPlaza = {};
+          try {
+            const cs = await fetch(SBU + "/rest/v1/pq_categorias?select=id,proyectos", { headers: SBH }).then(r => r.json());
+            (Array.isArray(cs) ? cs : []).forEach(c => { catPlaza[c.id] = c.proyectos; });
+          } catch (e) {}
+          const url = SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,idioma,proyectos&activa=eq.true"
                     + "&categoria_id=in.(" + ids + ")&limit=20000";
           const pregs = await fetch(url, { headers: SBH }).then(r => r.json());
           if (Array.isArray(pregs) && pregs.length) {
             const byCat = {};
             pregs.forEach(p => {
               if (!Array.isArray(p.opciones)) return;
+              if (!tocaAqui(p.proyectos)) return;              // pregunta de otra plaza
               const k = p.categoria_id + "|" + (p.idioma || "es");
               (byCat[k] = byCat[k] || []).push({ q: p.enunciado, o: p.opciones, a: p.correcta });
             });
             CATEGORIES.forEach(c => {
+              c.deMiPlaza = tocaAqui(catPlaza[c.id]);
+              const pl = catPlaza[c.id];
+              c.compartida = !Array.isArray(pl) || pl.length === 0
+                             || (pl.indexOf('cdmx') > -1 && pl.indexOf('puebla') > -1);
               // el idioma elegido; si esa categoría no lo tiene, se queda en el idioma base
               const pedido = byCat[c.id + "|" + PQLANG];
               const base   = byCat[c.id + "|" + PQCFG.idioma_base];
               const usar   = (pedido && pedido.length) ? pedido : base;
               c.idioma = (pedido && pedido.length) ? PQLANG : PQCFG.idioma_base;
               c.hayBono = !!(byCat[c.id + "|" + PQCFG.idioma_bono] || []).length;
-              if (usar && usar.length) { c.questions = usar; c.construccion = false; }
+              if (usar && usar.length && c.deMiPlaza) { c.questions = usar; c.construccion = false; }
+              else if (!c.deMiPlaza) { c.questions = []; c.construccion = true; c.otraPlaza = true; }
             });
+            // las categorías de otra plaza salen de la lista
+            const vivas = CATEGORIES.filter(c => !c.otraPlaza);
+            if (vivas.length) { CATEGORIES.length = 0; vivas.forEach(c => CATEGORIES.push(c)); }
           }
         } catch (e) {}
         setScreen("home");
@@ -399,9 +431,9 @@ function App() {
           {screen === "admin" && <Admin users={users} progress={progress} />}
           {screen === "catselect" && <CatSelect mode={mode} obligatorios={obligatorios} prog={myProg} onPick={onCatChosen} />}
           {screen === "gym" && <GymGame cat={activeCat} isObl={obligatorios.includes(activeCat.id)} onFinish={finishGym} />}
-          {screen === "duelselect" && <DuelSelect me={me} users={users} onPick={onOppChosen} />}
+          {screen === "duelselect" && <DuelSelect me={me} cat={activeCat} users={users} onPick={onOppChosen} />}
           {screen === "duel" && <DuelGame cat={activeReto ? retoCat(activeReto) : activeCat} qs={activeReto ? activeReto.test : null} onFinish={finishDuelPlay} />}
-          {screen === "retospend" && <RetosPend retos={retos} onPick={(r) => { setActiveReto(r); setScreen("duel"); }} onBack={() => setScreen("home")} />}
+          {screen === "retospend" && <RetosPend retos={retos} users={users} onPick={(r) => { setActiveReto(r); setScreen("duel"); }} onBack={() => setScreen("home")} />}
           {screen === "retoout" && <RetoResult data={retoOut} onHome={() => setScreen("home")} />}
           {screen === "result" && <Result res={lastResult} onAgain={() => setScreen("home")} onReview={() => setScreen("review")} />}
           {screen === "review" && <Review res={lastResult} onBack={() => setScreen("result")} onHome={() => setScreen("home")} />}
@@ -463,6 +495,13 @@ function Av({ id, emoji }) {
   return <span>{emoji}</span>;
 }
 /* ===================== TOP BAR ===================== */
+function Sticker({ sede, size = 22, titulo }) {
+  const src = STICKER[sede];
+  if (!src) return null;
+  return <img src={src} alt={sede} title={titulo || SEDE_NOMBRE[sede] || sede} width={size} height={size}
+              loading="lazy" style={{ borderRadius: 6, objectFit: "cover", verticalAlign: "-5px", flex: "0 0 auto" }} />;
+}
+
 function LangPill() {
   const bono = PQBONO();
   const on = PQLANG === PQCFG.idioma_bono;
@@ -524,6 +563,39 @@ function Login({ users, onPick }) {
 }
 
 /* ===================== HOME ===================== */
+function IngresBanner() {
+  const bono = PQBONO();
+  if (bono <= 1) return null;
+  const on = PQLANG === PQCFG.idioma_bono;
+  const otro = on ? PQCFG.idioma_base : PQCFG.idioma_bono;
+  return (
+    <button
+      onClick={() => pqSetLang(otro)}
+      style={{
+        display: "flex", alignItems: "center", gap: 14, width: "100%", cursor: "pointer",
+        font: "inherit", textAlign: "left", marginTop: 12,
+        border: "1.5px solid " + (on ? "#E9B44C" : "#ffffff22"),
+        background: on
+          ? "linear-gradient(135deg,rgba(233,180,76,.20),rgba(233,180,76,.06))"
+          : "linear-gradient(135deg,rgba(255,255,255,.09),rgba(255,255,255,.03))",
+        borderRadius: 18, padding: "16px 18px",
+      }}>
+      <div style={{ fontSize: 30, lineHeight: 1, flex: "0 0 auto" }}>{on ? "🇬🇧" : "🇲🇽"}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: on ? "#E9B44C" : "#fff", marginBottom: 3 }}>
+          {on ? "Estás jugando en inglés · cada punto vale ×" + bono
+              : "¿Quieres practicar tu inglés y puntuar ×" + bono + "?"}
+        </div>
+        <div style={{ fontSize: 13, color: "#cabfae", lineHeight: 1.45 }}>
+          {on ? "Toca aquí para volver al español cuando quieras. Los puntos dobles sólo cuentan mientras juegas en inglés."
+              : "Las mismas preguntas, en inglés. Aciertas y ganas el doble de puntos — y de paso practicas el idioma con el que trabajas todos los días."}
+        </div>
+      </div>
+      <div style={{ fontSize: 22, color: on ? "#E9B44C" : "#fff", flex: "0 0 auto" }}>{on ? "↺" : "→"}</div>
+    </button>
+  );
+}
+
 function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin, retosN, onRetos, histCoins, histRank, qCoins, qRank }) {
   const stShell = { display: "flex", gap: 10, marginTop: 10 };
   const stCard = { flex: 1, background: "#ffffff0d", border: "1px solid #ffffff14", borderRadius: 16, padding: "12px 14px" };
@@ -537,6 +609,8 @@ function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, o
         <p style={S.heroSub}>Entrena, reta a otro colega y súbete al ranking del mes.</p>
         <p style={{ fontSize: 11.5, fontStyle: "italic", color: "#a99a82", marginTop: 8, letterSpacing: ".2px" }}>🦉 «Por mi raza hablará el espíritu» · <span style={{ color: "#E9B44C" }}>José Vasconcelos, Pepe</span></p>
       </div>
+
+      <IngresBanner />
 
       {me.enPrueba && obligatorios.length > 0 && (
         <button style={S.pruebaBanner} onClick={onPrueba}>
@@ -718,20 +792,58 @@ function GymGame({ cat, isObl, onFinish }) {
 }
 
 /* ===================== DUEL SELECT ===================== */
-function DuelSelect({ me, users, onPick }) {
+function DuelSelect({ me, cat, users, onPick }) {
+  const esCDMX = (u) => (u.sede === "CDMX" || u.sede === "Virreyes");
+  const miPlaza = esCDMX(me) ? "CDMX" : (me.sede || "CDMX");
+  const otraPlaza = miPlaza === "Puebla" ? "CDMX" : "Puebla";
   const [q, setQ] = useState("");
   const [area, setArea] = useState("Todas");
+  const cruzaPlazas = !cat || cat.compartida !== false;
+  const [plaza, setPlaza] = useState(miPlaza);
   const all = (users || []).filter((u) => u.id !== me.id);
   const areaOf = (u) => (u.puesto || u.area || "Otros");
-  const areas = ["Todas", ...Array.from(new Set(all.map(areaOf))).sort()];
+  const enPlaza = (u, p) => p === "Todas" || (p === "CDMX" ? esCDMX(u) : u.sede === p);
+  const areas = ["Todas", ...Array.from(new Set(all.filter(u => enPlaza(u, plaza)).map(areaOf))).sort()];
   const norm = (x) => (x || "").toString().toLowerCase();
-  const filtered = all.filter((u) => (!q || norm(u.nombre).includes(norm(q))) && (area === "Todas" || areaOf(u) === area));
+  const filtered = all.filter((u) => (!q || norm(u.nombre).includes(norm(q)))
+    && (area === "Todas" || areaOf(u) === area) && enPlaza(u, plaza));
+  const chipP = (on) => ({
+    display: "flex", alignItems: "center", gap: 7, flex: "0 0 auto", cursor: "pointer", font: "inherit",
+    padding: "8px 14px", borderRadius: 20, fontSize: 13.5, fontWeight: 700,
+    border: "1px solid " + (on ? "#E9B44C" : "#ffffff22"),
+    background: on ? "#E9B44C22" : "transparent", color: on ? "#E9B44C" : "#cdbfa8",
+  });
   const inputSt = { width: "100%", boxSizing: "border-box", padding: "11px 12px", borderRadius: 12, border: "1px solid #ffffff22", background: "#ffffff10", color: "#fff", fontSize: 14, outline: "none", marginBottom: 10 };
   const chip = (on) => ({ flex: "0 0 auto", padding: "7px 12px", borderRadius: 20, border: "1px solid " + (on ? "#E9B44C" : "#ffffff22"), background: on ? "#E9B44C22" : "transparent", color: on ? "#E9B44C" : "#cdbfa6", fontSize: 12.5, fontWeight: 700, cursor: "pointer" });
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>Elige rival</h2>
       <p style={S.muted}>Reta a cualquier colaborador. Ambos juegan el MISMO test.</p>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", padding: "2px 0 10px" }}>
+        <button style={chipP(plaza === miPlaza)} onClick={() => { setPlaza(miPlaza); setArea("Todas"); }}>
+          <Sticker sede={miPlaza} size={20} /> Mi casa
+        </button>
+        <button
+          style={{ ...chipP(plaza === otraPlaza), opacity: cruzaPlazas ? 1 : .45, cursor: cruzaPlazas ? "pointer" : "not-allowed" }}
+          disabled={!cruzaPlazas}
+          onClick={() => { if (cruzaPlazas) { setPlaza(otraPlaza); setArea("Todas"); } }}>
+          <Sticker sede={otraPlaza} size={20} /> Retar a {otraPlaza}
+        </button>
+        {cruzaPlazas && <button style={chipP(plaza === "Todas")} onClick={() => { setPlaza("Todas"); setArea("Todas"); }}>Todos</button>}
+      </div>
+      {!cruzaPlazas && (
+        <div style={{ background: "#ffffff0d", border: "1px solid #ffffff14", borderRadius: 14,
+                      padding: "11px 14px", marginBottom: 10, fontSize: 13, color: "#cabfae", lineHeight: 1.45 }}>
+          <b style={{ color: "#fff" }}>{cat.name}</b> es de tu casa nada más, así que aquí sólo puedes retar a los tuyos.
+          Para retar a {otraPlaza}, vuelve y elige una categoría que compartan — <b style={{ color: "#E9B44C" }}>Ser Casa Pepe</b> es la de todos.
+        </div>
+      )}
+      {cruzaPlazas && plaza === otraPlaza && (
+        <div style={{ background: "rgba(233,180,76,.10)", border: "1px solid rgba(233,180,76,.35)", borderRadius: 14,
+                      padding: "11px 14px", marginBottom: 10, fontSize: 13, color: "#e7dcc9", lineHeight: 1.45 }}>
+          Vas contra la otra casa. Mismo test para los dos, y el marcador se ve en el ranking de las dos plazas.
+        </div>
+      )}
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 Buscar por nombre…" style={inputSt} />
       <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 0 6px", marginBottom: 6, WebkitOverflowScrolling: "touch" }}>
         {areas.map((a) => (<button key={a} style={chip(a === area)} onClick={() => setArea(a)}>{a}</button>))}
@@ -742,7 +854,7 @@ function DuelSelect({ me, users, onPick }) {
           <button key={b.id} style={S.oppCard} onClick={() => onPick(b)}>
             <div style={S.oppAvatar}><Av id={b.id} emoji={b.avatar} /></div>
             <div style={{ flex: 1, textAlign: "left" }}>
-              <div style={S.oppName}>{b.nombre}</div>
+              <div style={{ ...S.oppName, display: "flex", alignItems: "center", gap: 7 }}>{b.nombre}<Sticker sede={b.sede} size={19} /></div>
               <div style={S.oppMeta}>{areaOf(b)}{b.sede ? " · " + b.sede : ""} · 🪙 {b.walletHist || 0}</div>
             </div>
             <div style={S.oppGo}>Retar</div>
@@ -800,7 +912,8 @@ function DuelGame({ cat, qs: qsProp, onFinish }) {
   );
 }
 
-function RetosPend({ retos, onPick, onBack }) {
+function RetosPend({ retos, users, onPick, onBack }) {
+  const sedeDe = (id) => ((users || []).find((u) => u.id === id) || {}).sede;
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>⚔️ Retos pendientes</h2>
@@ -813,7 +926,9 @@ function RetosPend({ retos, onPick, onBack }) {
             <button key={r.id} style={S.oppCard} onClick={() => onPick(r)}>
               <div style={S.oppAvatar}>⚔️</div>
               <div style={{ flex: 1, textAlign: "left" }}>
-                <div style={S.oppName}>{(r.a_nombre || "Alguien")} te retó</div>
+                <div style={{ ...S.oppName, display: "flex", alignItems: "center", gap: 7 }}>
+                  {(r.a_nombre || "Alguien")} te retó<Sticker sede={sedeDe(r.usuario_a)} size={19} />
+                </div>
                 <div style={S.oppMeta}>{(r.cat_nombre || "")} · su marcador: {r.score_a || 0}</div>
               </div>
               <div style={S.oppGo}>Responder</div>
@@ -971,18 +1086,37 @@ function Review({ res, onBack, onHome }) {
 }
 
 function Ranking({ users, meId }) {
-  const board = [...users].sort((a, b) => b.walletMes - a.walletMes);
+  const [plaza, setPlaza] = useState("Todas");
+  const sedeDe = (u) => u.sede || "";
+  const esCDMX = (u) => sedeDe(u) === "CDMX" || sedeDe(u) === "Virreyes";
+  const board = [...users]
+    .filter((u) => plaza === "Todas" || (plaza === "CDMX" ? esCDMX(u) : sedeDe(u) === plaza))
+    .sort((a, b) => b.walletMes - a.walletMes);
   const medals = ["🥇", "🥈", "🥉"];
+  const chip = (on) => ({
+    display: "flex", alignItems: "center", gap: 7, flex: "0 0 auto", cursor: "pointer", font: "inherit",
+    padding: "7px 13px", borderRadius: 20, fontSize: 13, fontWeight: 700,
+    border: "1px solid " + (on ? "#E9B44C" : "#ffffff22"),
+    background: on ? "#E9B44C22" : "transparent", color: on ? "#E9B44C" : "#cdbfa8",
+  });
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>Ranking del mes</h2>
       <p style={S.muted}>Los puntos del mes no se acumulan al siguiente. Premios al cierre.</p>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", padding: "2px 0 10px" }}>
+        <button style={chip(plaza === "Todas")} onClick={() => setPlaza("Todas")}>Todas</button>
+        <button style={chip(plaza === "CDMX")} onClick={() => setPlaza("CDMX")}><Sticker sede="CDMX" size={20} /> CDMX</button>
+        <button style={chip(plaza === "Puebla")} onClick={() => setPlaza("Puebla")}><Sticker sede="Puebla" size={20} /> Puebla</button>
+      </div>
       <div style={S.rankList}>
         {board.map((p, i) => (
           <div key={p.id} style={{ ...S.rankRow, ...(p.id === meId ? S.rankMe : {}) }}>
             <div style={S.rankPos}>{medals[i] || i + 1}</div>
             <div style={S.rankAv}><Av id={p.id} emoji={p.avatar} /></div>
-            <div style={{ flex: 1, fontWeight: p.id === meId ? 800 : 600 }}>{p.nombre}{p.id === meId && " (tú)"}<div style={S.rankRole}>{p.puesto}</div></div>
+            <div style={{ flex: 1, fontWeight: p.id === meId ? 800 : 600 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 7 }}>{p.nombre}{p.id === meId && " (tú)"}<Sticker sede={p.sede} size={20} /></span>
+              <div style={S.rankRole}>{p.puesto}</div>
+            </div>
             <div style={S.rankPts}>{p.walletMes} pts</div>
           </div>
         ))}
