@@ -30,16 +30,39 @@
   .msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#13261d;border:1px solid #1d4d3a;color:#bfe8d4;padding:10px 16px;border-radius:10px;display:none;z-index:9}
   .pill{display:inline-block;background:#241c10;border:1px dashed #5a4422;color:#cdb079;font-size:11px;padding:2px 8px;border-radius:999px}
   .gate{max-width:420px;margin:60px auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;text-align:center}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{padding:9px 15px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--muted);cursor:pointer;font-weight:700;font-size:13px}
+  .tab.on{background:var(--gold);border-color:var(--gold);color:#1a1208}
+  .au{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  .au .cab{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px}
+  .au .mot{background:#3a2a12;border:1px solid #6b4d1c;color:#e6c583;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px}
+  .au .quien{color:var(--muted);font-size:12px}
+  .au .txt{font-size:14px;line-height:1.5;margin:6px 0}
+  .au .nota{background:#0e0c08;border-left:3px solid var(--gold);border-radius:0 8px 8px 0;padding:9px 11px;color:#cdb079;font-size:13px;margin:8px 0}
+  .au .acc{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .badoff{background:#2a1414;border:1px solid #6b2a2a;color:#e79a9a;font-size:11px;padding:2px 9px;border-radius:999px}
 </style>
 </head><body>
 <div class="wrap">
   <h1>🧠 PepeQuiz · Admin de preguntas</h1>
   <div class="sub">Revisa, edita y comenta el banco de preguntas. Los comentarios nutren la skill de PepeQuiz.</div>
   <div id="gate" class="gate" style="display:none">Inicia sesión en el <b>Dashboard</b> (grupocasapepe) en esta misma ventana para poder guardar cambios. Puedes ver las preguntas, pero guardar requiere sesión.</div>
+  <div class="tabs" id="tabs">
+    <div class="tab on" data-v="banco">Banco de preguntas</div>
+    <div class="tab" data-v="audit">Auditoría <span id="au-n" style="opacity:.75"></span></div>
+  </div>
+  <div id="vista-banco">
   <div id="idioma" style="display:flex;gap:6px;margin-bottom:10px"></div>
   <div class="cats" id="cats"></div>
   <div class="bar"><div class="small" id="count">—</div><button class="btn" id="addBtn">+ Nueva pregunta</button></div>
   <div id="list"></div>
+  </div>
+
+  <div id="vista-audit" style="display:none">
+    <div class="sub">Preguntas que alguien marcó mientras jugaba. Las de motivo fuerte ya salieron del juego — nada se borró.</div>
+    <div class="cats" id="au-filtros"></div>
+    <div id="au-list"></div>
+  </div>
 </div>
 <div class="msg" id="msg"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -52,6 +75,65 @@ const $=id=>document.getElementById(id);
 function toast(t){ const m=$('msg'); m.textContent=t; m.style.display='block'; setTimeout(()=>m.style.display='none',2200); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+/* ---------- auditoría ---------- */
+let AU_ESTADO='abierta';
+const MOT_ES={simplificar:'Simplificar el texto',no_relacionado:'Tema no relacionado',muy_cuantitativa:'Muy cuantitativa',
+  quitar_categoria:'Quitar de esta categoría',borrar:'Borrar la pregunta',procedimiento:'Habla de un procedimiento',otro:'Otro'};
+
+async function rpc(fn, body){
+  const {data,error}=await sb.rpc(fn, body||{});
+  if(error){ toast('Error: '+error.message); return null; }
+  return data;
+}
+function verVista(v){
+  document.getElementById('vista-banco').style.display = v==='banco' ? '' : 'none';
+  document.getElementById('vista-audit').style.display = v==='audit' ? '' : 'none';
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
+  if(v==='audit') cargaAudit();
+}
+function pintaFiltrosAudit(){
+  const c=$('au-filtros'); if(!c) return;
+  const ops=[['abierta','Por revisar'],['resuelta','Resueltas'],['descartada','Descartadas']];
+  c.innerHTML=ops.map(([v,t])=>`<div class="chip ${v===AU_ESTADO?'on':''}" data-e="${v}">${t}</div>`).join('');
+  c.querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{ AU_ESTADO=ch.dataset.e; cargaAudit(); });
+}
+async function cargaAudit(){
+  pintaFiltrosAudit();
+  const l=$('au-list'); l.innerHTML='<div class="small">Cargando…</div>';
+  const filas = await rpc('pq_auditorias', {p_estado: AU_ESTADO}) || [];
+  if(AU_ESTADO==='abierta'){ const n=$('au-n'); if(n) n.textContent = filas.length ? '('+filas.length+')' : ''; }
+  if(!filas.length){ l.innerHTML='<div class="small">Nada por aquí.</div>'; return; }
+  l.innerHTML = filas.map(f=>{
+    const ops=(Array.isArray(f.opciones)?f.opciones:[]).map((o,i)=>
+      `<div class="small">${i===f.correcta?'✔️':'·'} ${esc(o)}</div>`).join('');
+    const fecha=new Date(f.creado).toLocaleDateString('es-MX',{day:'numeric',month:'short'});
+    return `<div class="au" data-id="${f.id}">
+      <div class="cab">
+        <span class="mot">${esc(MOT_ES[f.motivo]||f.motivo)}</span>
+        ${f.activa?'':'<span class="badoff">fuera del juego</span>'}
+        <span class="quien">${esc(f.email)} · ${fecha} · ${esc(f.categoria||'')} · ${esc(f.idioma||'')}</span>
+      </div>
+      <div class="txt">${esc(f.enunciado)}</div>
+      ${ops}
+      ${f.nota?`<div class="nota">${esc(f.nota)}</div>`:''}
+      <div class="acc">
+        ${AU_ESTADO!=='resuelta'?`<button class="btn" data-a="resuelta">Marcar resuelta</button>`:''}
+        ${!f.activa?`<button class="btn sec" data-a="reactivar">Regresarla al juego</button>`:''}
+        ${AU_ESTADO!=='descartada'?`<button class="btn sec" data-a="descartada">Descartar aviso</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+  l.querySelectorAll('.au').forEach(card=>{
+    card.querySelectorAll('button[data-a]').forEach(b=>b.onclick=async()=>{
+      const a=b.dataset.a;
+      const r=await rpc('pq_auditoria_resolver', a==='reactivar'
+        ? {p_id:card.dataset.id, p_estado:'resuelta', p_reactivar:true}
+        : {p_id:card.dataset.id, p_estado:a});
+      if(r && r.ok){ toast(a==='reactivar'?'De vuelta en el juego.':'Listo.'); cargaAudit(); }
+    });
+  });
+}
+
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
   if(!session) $('gate').style.display='block';
@@ -61,6 +143,9 @@ async function boot(){
   for(const c of CATS){ const {count}=await sb.from('pq_preguntas').select('*',{count:'exact',head:true}).eq('categoria_id',c.id).eq('idioma',IDIOMA); COUNTS[c.id]=count||0; }
   CUR=CATS[0]?CATS[0].id:null;
   renderCats(); render();
+  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>verVista(t.dataset.v));
+  try{ const abiertas = await rpc('pq_auditorias', {p_estado:'abierta'});
+       const n=$('au-n'); if(n && abiertas) n.textContent = abiertas.length ? '('+abiertas.length+')' : ''; }catch(e){}
 }
 let IDIOMA = (function(){ try{ return localStorage.getItem('pq_admin_idioma')||'es'; }catch(e){ return 'es'; } })();
 function setIdioma(l){ IDIOMA=l; try{localStorage.setItem('pq_admin_idioma',l)}catch(e){}; boot(); }
