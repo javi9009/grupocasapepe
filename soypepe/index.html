@@ -2050,7 +2050,11 @@ $('desayList').addEventListener('click', async (e)=>{
    Registra retraso vs turno en la hoja `asistencias` (por quincena).
    Modo rodaje esta semana: registra geo/teléfono pero NO bloquea.
    ============================================================ */
-const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false };
+const CH = { loaded:false, shift:null, asis:null, prevDevice:null, tick:null, exento:false,
+  descanso:false, motivoDescanso:null };
+// Lo que se le ofrece al tocar «Me presenté a trabajar». La última es libre.
+const CH_MOT_DESCANSO=['Me lo pidió mi jefe de área','Vine a cubrir a una compañera',
+  'Había mucho trabajo y me quedé','Emergencia / imprevisto de la casa'];
 const CH_ANTES_ENT=30, CH_ANTES_SAL=5, CH_DESP_SAL=180; // minutos
 const CH_MIN_SALIDA_MIN=60; // minutos: "Me voy" no aparece hasta 60 min despues de la entrada (evita salidas por doble-tap)
 const CH_RODAJE=true; // semana de ajuste de horario: no bloquea por geo/teléfono
@@ -2093,13 +2097,17 @@ async function chLoad(){
     if(data && data.exento_checador) CH.exento=true;
   }catch(e){}
 
-  // Turno de hoy (sus propias filas en horarios)
-  CH.shift=null;
+  // Turno de hoy (sus propias filas en horarios). Se traen también las filas sin
+  // hora: son las de descanso, y hay que saber si hoy le tocaba descansar.
+  CH.shift=null; CH.descanso=false;
   try{
     const { data:rows } = await sb.from('horarios')
       .select('id,hora_inicio,hora_fin,actividad,ubicacion,employee_id,nombre_display')
-      .eq('fecha',ds).not('hora_inicio','is',null);
-    let mine=(rows||[]).filter(r=> (empId&&r.employee_id===empId) || (HZ.nombreDisplay&&r.nombre_display&&r.nombre_display.trim().toLowerCase()===HZ.nombreDisplay.trim().toLowerCase()));
+      .eq('fecha',ds);
+    let todas=(rows||[]).filter(r=> (empId&&r.employee_id===empId) || (HZ.nombreDisplay&&r.nombre_display&&r.nombre_display.trim().toLowerCase()===HZ.nombreDisplay.trim().toLowerCase()));
+    let mine=todas.filter(r=>r.hora_inicio);
+    // Descansa si tiene fila del día pero ninguna con hora de entrada.
+    CH.descanso = !mine.length && todas.length>0;
     mine.sort((a,b)=>String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
     if(mine.length){
       const now=today.getTime();
@@ -2221,6 +2229,14 @@ function chRender(){
     chRenderRecords(); return;
   }
 
+  // Hoy descansaba y aun así vino: primero dice por qué, y se le devuelve su turno.
+  if(!yaEntro && CH.descanso){
+    if(turno) turno.textContent='Hoy es tu día de descanso.';
+    btn.className='ch-btn go'; btn.disabled=false; btn.textContent='Me presenté a trabajar'; btn.dataset.mode='descanso';
+    if(hint) hint.textContent='Si viniste a trabajar en tu descanso, dínoslo: se te devuelve tu turno normal y queda avisada gerencia.';
+    chRenderRecords(); return;
+  }
+
   // MODO ABIERTO: todos pueden marcar siempre (sin ventanas que bloqueen).
   if(!yaEntro){
     btn.className='ch-btn go'; btn.disabled=false; btn.textContent='Llegué'; btn.dataset.mode='entrada';
@@ -2251,11 +2267,50 @@ function chRender(){
  }
 }
 
+/* Vino a trabajar en su día de descanso. Se le pregunta el motivo, se le
+   devuelve el turno que tendría un día normal —mismo puesto y mismo horario que
+   su último día trabajado— y el día queda como incidencia con aviso a gerencia.
+   A partir de ahí sus módulos (cuartos, mantenimiento, comidas) la ven en turno
+   como cualquier otro día. Todo el trabajo lo hace presentarse_en_descanso(). */
+async function chDescansoTrabajado(){
+  const btn=$('ch-btn'); if(!btn) return;
+  const opts=CH_MOT_DESCANSO.map((m,i)=>(i+1)+'. '+m).join('\n');
+  const r=prompt('Hoy es tu día de descanso. ¿Por qué te presentaste a trabajar?\n\n'
+    +opts+'\n\nEscribe el número, o cuéntalo con tus palabras:');
+  if(r===null) return;
+  const n=parseInt(String(r).trim(),10);
+  const motivo=(n>=1&&n<=CH_MOT_DESCANSO.length)?CH_MOT_DESCANSO[n-1]:String(r).trim();
+  if(!motivo){ if($('ch-hint')) $('ch-hint').textContent='Cuéntanos el motivo para poder registrarlo.'; return; }
+  const prev=btn.textContent; btn.disabled=true; btn.textContent='Registrando…';
+  try{
+    const {data,error}=await sb.rpc('presentarse_en_descanso',{
+      p_property: HZ.propId||REP_PROP||CDMX_PROP, p_fecha: ymdMX(), p_motivo: motivo });
+    if(error) throw error;
+    if(data&&data.error){
+      const t={ sin_ficha:'Tu cuenta todavía no está ligada a tu ficha. Avísale a RH.',
+        ya_tenia_turno:'Hoy sí tienes turno cargado: marca normal con «Llegué».',
+        sin_horario_previo:'No encontramos tu horario habitual. Pídele a tu jefe que te cargue el turno de hoy.',
+        sin_sesion:'Vuelve a entrar a tu cuenta.' }[data.error]||'No se pudo registrar.';
+      alert(t); btn.disabled=false; btn.textContent=prev; chRender(); return;
+    }
+    CH.motivoDescanso=motivo;
+    await chLoad();   // ya tiene turno: el botón vuelve a ser «Llegué»
+    const b2=$('ch-btn');
+    if(b2 && b2.dataset.mode==='entrada') chMark();
+    const hint=$('ch-hint');
+    if(hint) hint.textContent='Registrado. Gerencia ya lo sabe y hoy cuentas como en turno.';
+  }catch(e){
+    btn.disabled=false; btn.textContent=prev;
+    const hint=$('ch-hint'); if(hint) hint.textContent='No se pudo registrar. Revisa tu conexión e intenta otra vez.';
+  }
+}
+
 async function chMark(){
   const btn=$('ch-btn');
   if(!btn) return;
   if(CH_BUSY){ chCantinflas(); return; }
   if(btn.dataset.mode==='espera'){ chCantinflas(); return; }
+  if(btn.dataset.mode==='descanso'){ chDescansoTrabajado(); return; }
   if(btn.disabled) return;
   const empId = EMP || HZ.empId;
   if(!empId){ const hint=$('ch-hint'); if(hint) hint.textContent='Tu cuenta aún no está ligada a tu ficha. Avisa a RH.'; return; }
@@ -2309,6 +2364,12 @@ async function chMark(){
         check_in:new Date().toISOString(), hora_turno:(CH.shift?CH.shift.hora_inicio:null), minutos_retraso:retraso, estatus, quincena:chQuincena(today),
         lat, lng, distancia_m:dist, dentro_geocerca:dentro, device_id:device, device_ok:deviceOk };
       if(sinTurno){ fila.requiere_validacion=true; fila.validacion_estatus='pendiente'; }
+      // Vino en su descanso: no se le mide retraso contra un turno que no tenía.
+      if(CH.motivoDescanso){
+        fila.estatus='descanso_trabajado'; fila.minutos_retraso=0;
+        fila.notas='Día de descanso trabajado · '+CH.motivoDescanso;
+        fila.requiere_validacion=true; fila.validacion_estatus='pendiente';
+      }
       if(CH.asis && CH.asis.id){ const {error}=await sb.from('asistencias').update(fila).eq('id',CH.asis.id); if(error) throw error; }
       else { const {data,error}=await sb.from('asistencias').insert(fila).select(); if(error) throw error; CH.asis=(data&&data[0])||fila; }
     }else{
