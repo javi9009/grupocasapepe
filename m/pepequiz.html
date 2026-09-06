@@ -293,6 +293,37 @@ function explicar(enun) {
   return m ? { explicacion: m.e, fuente_url: m.u, fuente_label: m.l } : {};
 }
 
+// Baja las preguntas de UN tema, la primera vez que entras a él. Después quedan en memoria.
+// Pide hasta 300 y de ahí el juego saca 5 al azar: suficiente variedad, descarga chica.
+async function asegurarCat(catId) {
+  const cat = CATEGORIES.find((c) => c.id === catId);
+  if (!cat || cat.questions.length) return cat;
+  const traer = async (idioma) => {
+    const url = SBU + "/rest/v1/pq_preguntas?select=id,enunciado,opciones,correcta,explicacion,segundos,proyectos"
+      + "&activa=is.true&categoria_id=eq." + encodeURIComponent(catId)
+      + "&idioma=eq." + idioma + "&limit=300";
+    const p = await fetch(url, { headers: SBH }).then(r => r.json()).catch(() => []);
+    if (!Array.isArray(p)) return [];
+    const out = [];
+    p.forEach((q) => {
+      const o = Array.isArray(q.opciones) ? q.opciones : [];
+      if (!q.enunciado || o.length < 2) return;
+      const a = Number(q.correcta);
+      if (!(a >= 0 && a < o.length)) return;
+      if (!tocaAqui(q.proyectos)) return;
+      out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+    });
+    return out;
+  };
+  let qs = await traer(PQLANG);
+  let idioma = PQLANG;
+  if (!qs.length && PQLANG !== PQCFG.idioma_base) { qs = await traer(PQCFG.idioma_base); idioma = PQCFG.idioma_base; }
+  cat.questions = qs;
+  cat.idioma = idioma;
+  if (qs.length) cat.construccion = false;
+  return cat;
+}
+
 function pickQuestions(catId, n) {
   const cat = CATEGORIES.find((c) => c.id === catId);
   if (!cat || cat.questions.length === 0) return [];
@@ -320,56 +351,43 @@ function App() {
     (async () => {
       try {
         const AV = ["🧑","👩","🧔","👨","👩‍🦱","🧑‍🦰","👩‍🦰","🧑🏽","👨🏻","👩🏾","🧑🏼","👩🏽"];
-        const [ue, pu, cats, preg, obl] = await Promise.all([
+        const [ue, pu, cats, conteo, obl] = await Promise.all([
           fetch(SBU + "/rest/v1/v_empleados_publico?select=id,nombre,nombre_display,puesto,area,property_id,estatus&order=nombre_display.asc.nullslast", { headers: SBH }).then(r => r.json()).catch(() => []),
           fetch(SBU + "/rest/v1/pq_puntos?select=employee_id,pts_hist,pts_mes", { headers: SBH }).then(r => r.json()).catch(() => []),
           fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,emoji,color,construccion,orden,proyectos&en_pepequiz=is.true&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
-          (async () => { // PostgREST corta en 1000 filas: hay que paginar
-            const out = []; const PAGE = 1000;
+          (async () => {
+            // Al abrir NO bajamos el banco (son miles de preguntas y tardaba media hora
+            // en un celular). Sólo el conteo por categoría/idioma/plaza: 113 filas.
+            // Las preguntas de un tema se bajan cuando eliges ese tema.
             await pqCargaCfg();
             try { ES_AUDITOR = (await pqRpc('pq_auditor')) === true; } catch (e) { ES_AUDITOR = false; }
-            // sólo las categorías que se juegan aquí: sin esto se bajaban las 12 mil
-            let soloEstas = "";
-            try {
-              const cs = await fetch(SBU + "/rest/v1/pq_categorias?select=id&en_pepequiz=is.true", { headers: SBH }).then(r => r.json());
-              if (Array.isArray(cs) && cs.length) soloEstas = "&categoria_id=in.(" + cs.map(c => c.id).join(",") + ")";
-            } catch (e) {}
-            for (let off = 0; off < 20000; off += PAGE) {
-              const p = await fetch(SBU + "/rest/v1/pq_preguntas?select=id,categoria_id,enunciado,opciones,correcta,explicacion,segundos,idioma,proyectos&activa=is.true" + soloEstas + "&order=id.asc&limit=" + PAGE + "&offset=" + off, { headers: SBH }).then(r => r.json()).catch(() => []);
-              if (!Array.isArray(p) || !p.length) break;
-              out.push.apply(out, p);
-              if (p.length < PAGE) break;
-            }
-            return out;
+            return await fetch(SBU + "/rest/v1/v_pq_cat_conteo?select=categoria_id,idioma,plaza,n", { headers: SBH }).then(r => r.json()).catch(() => []);
           })(),
           fetch(SBU + "/rest/v1/pq_puesto_obligatorio?select=puesto,categoria_id,sede", { headers: SBH }).then(r => r.json()).catch(() => []),
         ]);
         const construirBanco = () => {
-        // Banco de preguntas y categorías vivas desde Supabase
+        // Categorías vivas desde Supabase. Las preguntas NO: sólo cuántas hay.
           try {
             if (Array.isArray(cats) && cats.length) {
-              const byCat = {};
-              (Array.isArray(preg) ? preg : []).forEach((q) => {
-                const o = Array.isArray(q.opciones) ? q.opciones : [];
-                if (!q.enunciado || o.length < 2) return;
-                const a = Number(q.correcta);
-                if (!(a >= 0 && a < o.length)) return;
-                if (!tocaAqui(q.proyectos)) return;
-                const k = q.categoria_id + "|" + (q.idioma || "es");
-                (byCat[k] = byCat[k] || []).push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+              const cuenta = {}; // categoria|idioma -> n (ya filtrado por mi plaza)
+              (Array.isArray(conteo) ? conteo : []).forEach((r) => {
+                if (r.plaza !== MI_PLAZA) return;
+                const k = r.categoria_id + "|" + (r.idioma || "es");
+                cuenta[k] = (cuenta[k] || 0) + Number(r.n || 0);
               });
               const nuevas = cats.filter((c) => tocaAqui(c.proyectos)).map((c) => {
-                const pedido = byCat[c.id + "|" + PQLANG] || [];
-                const base   = byCat[c.id + "|" + PQCFG.idioma_base] || [];
-                const usar   = pedido.length ? pedido : base;
+                const nPedido = cuenta[c.id + "|" + PQLANG] || 0;
+                const nBase   = cuenta[c.id + "|" + PQCFG.idioma_base] || 0;
+                const idioma  = nPedido ? PQLANG : PQCFG.idioma_base;
                 const pl = c.proyectos;
                 return {
                   compartida: !Array.isArray(pl) || pl.length === 0 || (pl.indexOf('cdmx') > -1 && pl.indexOf('puebla') > -1),
                   id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
-                  questions: usar,
-                  idioma: pedido.length ? PQLANG : PQCFG.idioma_base,
-                  hayBono: !!(byCat[c.id + "|" + PQCFG.idioma_bono] || []).length,
-                  construccion: usar.length === 0,
+                  questions: [],           // se llenan al entrar al tema (asegurarCat)
+                  n: nPedido || nBase,     // para pintar "N preguntas" sin bajarlas
+                  idioma: idioma,
+                  hayBono: !!(cuenta[c.id + "|" + PQCFG.idioma_bono] || 0),
+                  construccion: (nPedido || nBase) === 0,
                 };
               });
               CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
@@ -432,8 +450,10 @@ function App() {
   const startGym = () => { setMode("gym"); setScreen("catselect"); };
   const startDuel = () => { setMode("duel"); setScreen("catselect"); };
 
-  const onCatChosen = (cat) => {
+  const onCatChosen = async (cat) => {
     setActiveCat(cat);
+    setScreen("cargandocat");                 // el luchador mientras baja ese tema
+    try { await asegurarCat(cat.id); } catch (e) {}
     setScreen(mode === "gym" ? "gym" : "duelselect");
   };
   const onOppChosen = (opp) => { setOpponent(opp);
@@ -488,12 +508,12 @@ function App() {
       <div style={S.phone}>
         {me && <TopBar me={me} onHome={() => setScreen("home")} onLogout={() => setScreen("home")} />}
         <div style={S.body}>
-          {(screen === "loading") && <Cargando />}
+          {(screen === "loading" || screen === "cargandocat") && <Cargando />}
           {(screen === "noauth") && <div style={{padding:"48px 20px",textAlign:"center",color:"#a99a82"}}>Inicia sesi\u00f3n en SoyPepe para jugar PepeQuiz.</div>}
           {screen === "home" && <Home me={me} pendientes={pendientes} obligatorios={obligatorios}
             onGym={startGym} onDuel={startDuel} onRank={() => setScreen("rank")} onPrueba={() => setScreen("prueba")} onAdmin={() => setScreen("admin")} />}
           {screen === "prueba" && <Prueba me={me} obligatorios={obligatorios} prog={myProg}
-            onTrain={(catId) => { setMode("gym"); setActiveCat(CATEGORIES.find((c) => c.id === catId)); setScreen("gym"); }} />}
+            onTrain={async (catId) => { setMode("gym"); setActiveCat(CATEGORIES.find((c) => c.id === catId)); setScreen("cargandocat"); try { await asegurarCat(catId); } catch (e) {} setScreen("gym"); }} />}
           {screen === "rank" && <Ranking users={users} meId={meId} />}
           {screen === "admin" && <Admin users={users} progress={progress} />}
           {screen === "catselect" && <CatSelect mode={mode} obligatorios={obligatorios} prog={myProg} onPick={onCatChosen} />}
@@ -866,7 +886,7 @@ function CatSelect({ mode, obligatorios, prog, onPick }) {
       <p style={S.muted}>{mode === "gym" ? "5 preguntas · máx 10s c/u" : "5 preguntas · máx 7s c/u"}</p>
       <div style={S.catGrid}>
         {CATEGORIES.map((c) => {
-          const disabled = c.questions.length === 0;
+          const disabled = !(c.n > 0);
           const obl = obligatorios.includes(c.id);
           const aprobado = prog[c.id]?.estado === "aprobado";
           return (
@@ -874,7 +894,7 @@ function CatSelect({ mode, obligatorios, prog, onPick }) {
               {obl && <span style={{ ...S.oblDot, background: aprobado ? "#7BD389" : c.color }}>{aprobado ? "✓" : "★"}</span>}
               <div style={{ ...S.catEmoji, background: c.color + "22" }}>{c.emoji}</div>
               <div style={S.catName}>{c.name}</div>
-              <div style={S.catCount}>{disabled ? L("En construcción") : `${c.questions.length} ${PQLANG === "en" ? "questions" : "preguntas"}`}</div>
+              <div style={S.catCount}>{disabled ? L("En construcción") : `${c.n} ${PQLANG === "en" ? "questions" : "preguntas"}`}</div>
               <div style={{ ...S.catBar, background: c.color }} />
             </button>
           );
