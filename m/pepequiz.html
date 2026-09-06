@@ -115,16 +115,21 @@ const CATEGORIES = [
   { id: "filosofia", name: "Filosofía", emoji: "🦉", color: "#5E9BC4", questions: [], construccion: true },
 ];
 
-const PUESTO_OBLIGATORIOS = {
-  "Anfitrión de Tours": ["walking", "tours", "huesped"],
-  "Recepción": ["huesped", "walking"],
-  "Housekeeping": ["housekeeping", "huesped"],
-  "Mantenimiento": ["mantenimiento"],
-  "Contabilidad": ["contabilidad"],
-  "Tallerista / Ateneo": ["talleres", "ateneo"],
-  "Comunidad / Shows": ["shows", "artistas", "filosofia"],
-  "Voluntario": ["walking", "huesped"],
-};
+// Ruteo obligatorio: se carga de pq_puesto_obligatorio (por ÁREA del colaborador,
+// con filas opcionales acotadas a una sede). Si la carga falla, todos ven "Ser Casa Pepe".
+let OBLIG_ROWS = [];
+function oblFor(u) {
+  if (!u) return [];
+  const area = u.puesto || "Colaborador", sede = u.sede || "";
+  const out = [];
+  OBLIG_ROWS.forEach((r) => {
+    if (String(r.puesto) !== area) return;
+    if (r.sede && r.sede !== sede) return;
+    if (out.indexOf(r.categoria_id) === -1) out.push(r.categoria_id);
+  });
+  if (!out.length) out.push("pepe");
+  return out.filter((cid) => CATEGORIES.some((c) => c.id === cid && !c.construccion));
+}
 
 // BBDD de usuarios — SEED de demo. En producción enlazar con la página existente.
 const USUARIOS_SEED = [
@@ -193,10 +198,33 @@ function App() {
     (async () => {
       try {
         const AV = ["🧑","👩","🧔","👨","👩‍🦱","🧑‍🦰","👩‍🦰","🧑🏽","👨🏻","👩🏾","🧑🏼","👩🏽"];
-        const [ue, pu] = await Promise.all([
+        const [ue, pu, cats, preg, obl] = await Promise.all([
           fetch(SBU + "/rest/v1/v_empleados_publico?select=id,nombre,nombre_display,puesto,area,property_id,estatus&order=nombre_display.asc.nullslast", { headers: SBH }).then(r => r.json()).catch(() => []),
           fetch(SBU + "/rest/v1/pq_puntos?select=employee_id,pts_hist,pts_mes", { headers: SBH }).then(r => r.json()).catch(() => []),
+          fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,emoji,color,construccion,orden&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
+          fetch(SBU + "/rest/v1/pq_preguntas?select=categoria_id,enunciado,opciones,correcta,explicacion&activa=is.true&limit=2000", { headers: SBH }).then(r => r.json()).catch(() => []),
+          fetch(SBU + "/rest/v1/pq_puesto_obligatorio?select=puesto,categoria_id,sede", { headers: SBH }).then(r => r.json()).catch(() => []),
         ]);
+        // Banco de preguntas y categorías vivas desde Supabase
+        try {
+          if (Array.isArray(cats) && cats.length) {
+            const byCat = {};
+            (Array.isArray(preg) ? preg : []).forEach((q) => {
+              const o = Array.isArray(q.opciones) ? q.opciones : [];
+              if (!q.enunciado || o.length < 2) return;
+              const a = Number(q.correcta);
+              if (!(a >= 0 && a < o.length)) return;
+              (byCat[q.categoria_id] = byCat[q.categoria_id] || []).push({ q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+            });
+            const nuevas = cats.map((c) => ({
+              id: c.id, name: c.nombre, emoji: c.emoji || "❓", color: c.color || "#137A56",
+              questions: byCat[c.id] || [],
+              construccion: (byCat[c.id] || []).length === 0,
+            }));
+            CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
+          }
+          OBLIG_ROWS = Array.isArray(obl) ? obl : [];
+        } catch (e) {}
         const pmap = {}; (Array.isArray(pu) ? pu : []).forEach(p => { pmap[p.employee_id] = { h: p.pts_hist, m: p.pts_mes }; });
         const PROP = { "45e69775-d877-4507-a9e1-a45bd3400dc5": "CDMX", "febfbef6-7fd1-4b45-84d9-13533e8dcb72": "Puebla", "3e10a9ea-4913-4f7c-86ef-0c829caa851d": "Virreyes", "fde2f615-2c65-40fa-9df3-6336b5ab312c": "Corp" };
         const friendly = (e) => { const a = (e.nombre_display || "").trim(); if (a) return a; const toks = String(e.nombre || "").trim().split(/\s+/); return toks[toks.length - 1] || "Pepe"; };
@@ -238,7 +266,7 @@ function App() {
     setUsers((us) => us.map((u) => (u.id === meId ? { ...u, ...patch } : u)));
   }, [meId]);
 
-  const obligatorios = me ? (PUESTO_OBLIGATORIOS[me.puesto] || []) : [];
+  const obligatorios = oblFor(me);
   const myProg = (progress[meId] || {});
   const pendientes = obligatorios.filter((c) => (myProg[c]?.estado !== "aprobado"));
 
@@ -776,7 +804,7 @@ function Admin({ users, progress }) {
       <p style={S.muted}>Vista de operación/RRHH: avance de onboarding por colaborador.</p>
       <div style={S.rankList}>
         {users.map((u) => {
-          const obl = PUESTO_OBLIGATORIOS[u.puesto] || [];
+          const obl = oblFor(u);
           const prog = progress[u.id] || {};
           const done = obl.filter((c) => prog[c]?.estado === "aprobado").length;
           const ok = obl.length > 0 && done === obl.length;
