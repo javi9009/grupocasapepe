@@ -80,6 +80,17 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
     <p class="lead">Elige tu nombre para ver los tests que te tocan.</p>
     <select id="sel-jefe"><option value="">— elige —</option></select>
     <div class="lista" id="mis-tests" style="margin-top:14px"></div>
+    <div id="zona-hechos" class="hide" style="margin-top:18px">
+      <h2 style="font-size:.95rem;margin:0 0 8px">Tests que ya contestaste</h2>
+      <div class="lista" id="tests-hechos"></div>
+    </div>
+  </section>
+
+  <section class="card hide" id="paso3">
+    <button class="btn ghost volver" id="btn-volver3" type="button">← Mis tests</button>
+    <h2 id="t3-titulo"></h2>
+    <p class="lead" id="t3-sub"></p>
+    <div id="t3-respuestas"></div>
   </section>
 
   <section class="card hide" id="paso2">
@@ -125,7 +136,43 @@ function misTests(){
       <span class="vence ${dias<=14?'urge':''}">vence el ${fecha(c.vence)}</span>
     </button>`;
   }).join("") : '<p class="muted" style="margin:0">No tienes tests pendientes. 🎉</p>';
-  document.querySelectorAll(".testrow").forEach(b=>b.onclick=()=>abrir(b.dataset.id));
+  document.querySelectorAll("#mis-tests .testrow").forEach(b=>b.onclick=()=>abrir(b.dataset.id));
+  const h=CICLOS.filter(c=>c.jefe_id===j && c.estado==='contestado')
+    .sort((a,b)=>String(b.contestado_at||'').localeCompare(String(a.contestado_at||'')));
+  $("#zona-hechos").classList.toggle("hide", !j || !h.length);
+  $("#tests-hechos").innerHTML = h.map(c=>`<button type="button" class="testrow" data-id="${c.id}">
+      <span><b>${esc(nom(c.employee_id))}</b>
+        <span class="sub">${c.numero}º cuatrimestre · como jefe ${c.tipo_jefe==='funcional'?'funcional':'jerárquico'}</span></span>
+      <span class="vence">contestado el ${fecha((c.contestado_at||'').slice(0,10))}</span>
+    </button>`).join("");
+  document.querySelectorAll("#tests-hechos .testrow").forEach(b=>b.onclick=()=>revisar(b.dataset.id));
+}
+async function revisar(id){
+  const c=CICLOS.find(x=>x.id===id); if(!c) return;
+  $("#paso1").classList.add("hide"); $("#paso3").classList.remove("hide");
+  $("#t3-titulo").textContent="Test de "+nom(c.employee_id)+" · "+c.numero+"º cuatrimestre";
+  $("#t3-sub").textContent="Contestado el "+fecha((c.contestado_at||'').slice(0,10))+" por "+nom(c.jefe_id)
+    +" (jefe "+(c.tipo_jefe==='funcional'?'funcional)':'jerárquico)')+". Solo lectura: ya quedó en el expediente.";
+  $("#t3-respuestas").innerHTML='<p class="muted">Cargando respuestas…</p>';
+  let rs=[];
+  try{
+    const h={apikey:SB.key,Authorization:"Bearer "+SB.key};
+    rs=await (await fetch(SB.url+"/eval_respuestas?select=plantilla_id,valor,texto&ciclo_id=eq."+id,{headers:h})).json();
+  }catch(e){ rs=null; }
+  if(!Array.isArray(rs)){ $("#t3-respuestas").innerHTML='<div class="aviso mal">No se pudieron cargar las respuestas. Intenta desde la plataforma.</div>'; return; }
+  if(!rs.length){ $("#t3-respuestas").innerHTML='<div class="aviso mal">Este test aparece como contestado pero no tiene respuestas guardadas.</div>'; return; }
+  const porQ={}; rs.forEach(r=>{ porQ[r.plantilla_id]=r; });
+  const mias=PLQ.filter(p=>p.contesta==='ambos'||p.contesta===c.tipo_jefe);
+  $("#t3-respuestas").innerHTML=mias.map(p=>{
+    const r=porQ[p.id];
+    let cuerpo;
+    if(!r) cuerpo='<p class="faint" style="margin:0">— sin respuesta —</p>';
+    else if(p.tipo==='escala') cuerpo='<div class="escala">'+[1,2,3,4,5].map(v=>
+        `<label style="cursor:default;${Number(r.valor)===v?'background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600':''}">${v}</label>`).join("")+'</div>'
+        +'<div class="escala-tips"><span>necesita apoyo</span><span>ejemplar</span></div>';
+    else cuerpo='<p style="margin:0;white-space:pre-wrap">'+esc(r.texto||'—')+'</p>';
+    return `<div class="preg"><div class="cual">${esc(p.bloque.replace("_"," "))}</div><h3>${esc(p.pregunta)}</h3>${cuerpo}</div>`;
+  }).join("");
 }
 function abrir(id){
   actual=CICLOS.find(c=>c.id===id); if(!actual) return;
@@ -149,6 +196,7 @@ function abrir(id){
   $("#btn-enviar").textContent="Enviar test";
 }
 $("#btn-volver").onclick=()=>{ $("#paso2").classList.add("hide"); $("#paso1").classList.remove("hide"); misTests(); };
+$("#btn-volver3").onclick=()=>{ $("#paso3").classList.add("hide"); $("#paso1").classList.remove("hide"); misTests(); };
 $("#sel-jefe").onchange=misTests;
 
 $("#btn-enviar").onclick=async()=>{
@@ -170,7 +218,7 @@ $("#btn-enviar").onclick=async()=>{
       body:JSON.stringify({p_ciclo:actual.id,p_respuestas:rs.filter(r=>r.valor||r.texto)})});
     const txt=await r.json();
     if(r.ok && String(txt).startsWith("ok")){
-      actual.estado='contestado';
+      actual.estado='contestado'; actual.contestado_at=new Date().toISOString();
       $("#resultado").innerHTML='<div class="aviso ok">Guardado. Las escalas ya alimentan la pila de '
         +esc(nom(actual.employee_id))+'.</div>';
       $("#btn-enviar").classList.add("hide");
@@ -191,10 +239,10 @@ async function carga(){
     const h={apikey:SB.key,Authorization:"Bearer "+SB.key};
     const g=async p=>(await fetch(SB.url+p,{headers:h})).json();
     const [c,q,f]=await Promise.all([
-      g("/eval_ciclos?select=id,employee_id,numero,vence,jefe_id,tipo_jefe,estado&estado=in.(pendiente,notificado)&order=vence"),
+      g("/eval_ciclos?select=id,employee_id,numero,vence,jefe_id,tipo_jefe,estado,contestado_at&estado=in.(pendiente,notificado,contestado)&order=vence"),
       g("/eval_plantillas?select=*&activa=eq.true&order=orden"),
-      g("/rh_ficha?select=id,nombre")]);
-    if(Array.isArray(c)&&Array.isArray(q)&&q.length){
+      g("/v_empleados_publico?select=id,nombre,nombre_display").then(a=>Array.isArray(a)?a.map(x=>({id:x.id,nombre:x.nombre_display||x.nombre})):a)]);
+    if(Array.isArray(c)&&Array.isArray(q)&&q.length&&Array.isArray(f)&&f.length){
       CICLOS=c;PLQ=q;GENTE=f;vivo=true;
       $("#fuente").textContent="en vivo";$("#fuente").className="badge";
     }
