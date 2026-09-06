@@ -135,6 +135,26 @@ DIC["Este mes"] = "This month";
 DIC["Histórico"] = "All time";
 DIC["Contando puntos…"] = "Counting points…";
 DIC["Todavía nadie ha jugado en este periodo. El primero que entre encabeza la tabla."] = "Nobody has played in this period yet. First one in tops the table.";
+DIC["Mi plaza"] = "My house";
+DIC["Con los que más juegas"] = "The ones you play the most";
+DIC["Todo el equipo"] = "The whole team";
+DIC["colaborador"] = "teammate";
+DIC["colaboradores"] = "teammates";
+DIC["Retos pendientes"] = "Challenges waiting";
+DIC["por responder"] = "waiting for your answer";
+DIC["te retó"] = "challenged you";
+DIC["su marcador:"] = "their score:";
+DIC["Tu marcador:"] = "Your score:";
+DIC["¡Ganaste!"] = "You won!";
+DIC["Esta vez no…"] = "Not this time…";
+DIC["Le ganaste por"] = "You won by";
+DIC["pts · tu rival pierde esa diferencia."] = "pts · your rival drops that difference.";
+DIC["Te ganó por"] = "They beat you by";
+DIC["pts · pierdes esa diferencia."] = "pts · you drop that difference.";
+DIC["Cargando el historial…"] = "Loading your history…";
+DIC["Nadie más en esta plaza todavía."] = "Nobody else in this house yet.";
+DIC["Volver al español"] = "Back to Spanish";
+DIC["Practica inglés y multiplica ×2"] = "Practice English, score ×2";
 const L = (es) => (PQLANG === 'en' && DIC[es]) ? DIC[es] : es;
 
 const pqSetLang=(l)=>{ if(l===PQLANG) return; PQLANG=l; try{localStorage.setItem('pq_lang',l)}catch(e){} location.reload(); };
@@ -335,8 +355,6 @@ const USUARIOS_SEED = [
   { id: "u_beto", nombre: "Beto", avatar: "🧑🏽", puesto: "Mantenimiento", nivel: 1, sede: "Puebla", enPrueba: true, walletHist: 40, walletMes: 40 },
 ];
 
-const BOT_SKILL = { u_javi: 0.9, u_ana: 0.78, u_memo: 0.85, u_sofi: 0.68, u_diego: 0.93, u_lupe: 0.8, u_pao: 0.82, u_beto: 0.6 };
-
 /* ===================== 2. REGLAS DE JUEGO ===================== */
 const GYM_MAX = 10, GYM_WINDOW = 10, GYM_QS = 5, APROBADO_MIN = 8; // >8 para aprobar
 const DUEL_MAX = 100, DUEL_WINDOW = 7, DUEL_QS = 5;
@@ -414,6 +432,10 @@ function App() {
   const [activeCat, setActiveCat] = useState(null);
   const [opponent, setOpponent] = useState(null);
   const [lastResult, setLastResult] = useState(null);
+  // reto asíncrono: A juega y deja el test; B lo responde después con las MISMAS preguntas
+  const [activeReto, setActiveReto] = useState(null);
+  const [retos, setRetos] = useState([]);
+  const [retoOut, setRetoOut] = useState(null);
   // progreso onboarding: { [userId]: { [catId]: {best, estado} } }
   const [progress, setProgress] = useState({});
 
@@ -528,9 +550,29 @@ function App() {
     try { await asegurarCat(cat.id); } catch (e) {}
     setScreen(mode === "gym" ? "gym" : "duelselect");
   };
-  const onOppChosen = (opp) => { setOpponent(opp);
-    try { if (opp && /^[0-9a-f-]{36}$/i.test(opp.id)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: opp.id, titulo: "\u2694\uFE0F Te retaron en PepeQuiz", cuerpo: ((me && me.nombre) || "Alguien") + " te ret\u00f3 en " + ((activeCat && activeCat.nombre) || "PepeQuiz") + ". \u00a1Entra a responder!", icono: "\u2694\uFE0F" }) }); } catch (e) {}
-    setScreen("duel"); };
+  const onOppChosen = (opp) => { setOpponent(opp); setActiveReto(null); setScreen("duel"); };
+
+  // Bandeja de retos que me esperan (los que otro cre\u00f3 y yo todav\u00EDa no respondo).
+  const loadRetos = useCallback(async () => {
+    if (!meId || !/^[0-9a-f-]{36}$/i.test(meId)) { setRetos([]); return; }
+    try {
+      const r = await fetch(SBU + "/rest/v1/pq_retos?select=*&usuario_b=eq." + meId + "&estado=eq.esperando_b&order=creado.desc", { headers: SBH }).then((x) => x.json());
+      setRetos(Array.isArray(r) ? r : []);
+    } catch (e) { setRetos([]); }
+  }, [meId]);
+  useEffect(() => { loadRetos(); }, [loadRetos]);
+
+  const retoCat = (r) => CATEGORIES.find((c) => c.id === r.categoria_id) || { id: r.categoria_id, name: r.cat_nombre || "Reto", color: "#E9B44C", emoji: "\u2694\uFE0F" };
+
+  // Los puntos se escriben igual que en el Gym: POST con merge-duplicates a pq_puntos.
+  const applyPts = (eid, delta) => {
+    if (!eid || !/^[0-9a-f-]{36}$/i.test(eid)) return;
+    const u = users.find((x) => x.id === eid);
+    const nh = Math.max(0, ((u ? u.walletHist : 0) || 0) + delta);
+    const nm = Math.max(0, ((u ? u.walletMes : 0) || 0) + delta);
+    try { fetch(SBU + "/rest/v1/pq_puntos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ employee_id: eid, pts_hist: nh, pts_mes: nm, updated_at: new Date().toISOString() }) }); } catch (e) {}
+    setUsers((us) => us.map((x) => (x.id === eid ? { ...x, walletHist: nh, walletMes: nm } : x)));
+  };
 
   const finishGym = (earned, correctCount, qs, answers) => {
     updateMe({ walletHist: me.walletHist + earned, walletMes: me.walletMes + earned });
@@ -550,28 +592,43 @@ function App() {
     setScreen("result");
   };
 
-  const finishDuel = (myScore, oppScore) => {
-    const won = myScore > oppScore, tie = myScore === oppScore;
-    const diff = Math.abs(myScore - oppScore); // margen del marcador
-    // Cada quien suma SOLO lo que logró en su test.
-    // Además, el PERDEDOR pierde la diferencia de su cartera. El ganador NO la recibe.
-    let myDelta = myScore;
-    let oppDelta = oppScore;
-    if (won) {
-      oppDelta -= diff;  // el rival (perdedor) pierde la diferencia
-    } else if (!tie) {
-      myDelta -= diff;   // tú (perdedor) pierdes la diferencia
+  // Una sola pantalla de juego (DuelGame) sirve para A (crear el reto) y para B (responderlo).
+  const finishDuelPlay = async (score, qs, answers) => {
+    if (activeReto) {
+      // B responde el reto con las MISMAS preguntas: aqu\u00ed s\u00ed se aplican los puntos.
+      const r = activeReto;
+      const a = r.score_a || 0, b = score;
+      const diff = Math.abs(a - b);
+      const ganador = b > a ? meId : (a > b ? r.usuario_a : null);
+      // Cada quien suma lo que sac\u00f3; adem\u00e1s el PERDEDOR pierde la diferencia.
+      let dA = a, dB = b;
+      if (b > a) dA -= diff; else if (a > b) dB -= diff;
+      try { await fetch(SBU + "/rest/v1/pq_retos?id=eq." + r.id, { method: "PATCH", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ score_b: b, ganador, diferencia: diff, estado: "resuelto", resuelto_en: new Date().toISOString() }) }); } catch (e) {}
+      applyPts(r.usuario_a, dA); applyPts(meId, dB);
+      setActiveReto(null); loadRetos();
+      const won = ganador === null ? null : (ganador === meId ? "me" : "rival");
+      setRetoOut({
+        type: "resuelto", ganador: won,
+        rivalName: (r.a_nombre || "Rival"), meName: ((me && me.nombre) || L("T\u00fa")),
+        scoreRival: a, scoreMe: b,
+        delta: won === null ? L("Mismo marcador, sin cambios de puntos.")
+             : won === "me" ? (L("Le ganaste por") + " " + diff + " " + L("pts \u00b7 tu rival pierde esa diferencia."))
+                            : (L("Te gan\u00f3 por") + " " + diff + " " + L("pts \u00b7 pierdes esa diferencia.")),
+      });
+      setScreen("retoout");
+    } else {
+      // A crea el reto con estas preguntas. No se mueve ni un punto hasta que B responda.
+      const opp = opponent;
+      try {
+        await fetch(SBU + "/rest/v1/pq_retos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({
+          categoria_id: activeCat.id, test: qs, usuario_a: meId, usuario_b: opp && opp.id, score_a: score, estado: "esperando_b",
+          a_nombre: (me && me.nombre) || "", b_nombre: (opp && opp.nombre) || "", cat_nombre: activeCat.name,
+        }) });
+      } catch (e) {}
+      try { if (opp && /^[0-9a-f-]{36}$/i.test(opp.id)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: opp.id, titulo: "\u2694\uFE0F Te retaron en PepeQuiz", cuerpo: ((me && me.nombre) || "Alguien") + " te ret\u00f3 en " + ((activeCat && activeCat.name) || "PepeQuiz") + ". \u00a1Entra a responder!", icono: "\u2694\uFE0F" }) }); } catch (e) {}
+      setRetoOut({ type: "enviado", rival: (opp && opp.nombre) || L("tu rival"), score: score });
+      setScreen("retoout");
     }
-    updateMe({ walletHist: Math.max(0, me.walletHist + myDelta), walletMes: Math.max(0, me.walletMes + myDelta) });
-    try { if (meId && /^[0-9a-f-]{36}$/i.test(meId)) fetch(SBU + "/rest/v1/pq_puntos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ employee_id: meId, pts_hist: Math.max(0, me.walletHist + myDelta), pts_mes: Math.max(0, me.walletMes + myDelta), updated_at: new Date().toISOString() }) }); } catch (e) {}
-    try {
-      const _r = ((me && me.nombre) || "T\u00fa") + " " + myScore + " vs " + ((opponent && opponent.nombre) || "rival") + " " + oppScore + " \u00b7 " + (won ? ("gan\u00f3 " + ((me && me.nombre) || "t\u00fa")) : (tie ? "empate" : ("gan\u00f3 " + ((opponent && opponent.nombre) || "rival"))));
-      const _n = (eid) => { if (eid && /^[0-9a-f-]{36}$/i.test(eid)) fetch(SBU + "/rest/v1/notificaciones", { method: "POST", headers: { ...SBH, "Content-Type": "application/json" }, body: JSON.stringify({ employee_id: eid, titulo: "\u2694\uFE0F Resultado de reto", cuerpo: _r, icono: "\u2694\uFE0F" }) }); };
-      _n(opponent && opponent.id); _n(meId);
-    } catch (e) {}
-    setUsers((us) => us.map((u) => (u.id === opponent.id ? { ...u, walletHist: Math.max(0, u.walletHist + oppDelta), walletMes: Math.max(0, u.walletMes + oppDelta) } : u)));
-    setLastResult({ mode: "duel", myScore, oppScore, won, tie, diff, myDelta, opp: opponent });
-    setScreen("result");
   };
 
   return (
@@ -583,6 +640,7 @@ function App() {
           {(screen === "loading" || screen === "cargandocat") && <Cargando />}
           {(screen === "noauth") && <div style={{padding:"48px 20px",textAlign:"center",color:"#a99a82"}}>Inicia sesi\u00f3n en SoyPepe para jugar PepeQuiz.</div>}
           {screen === "home" && <Home me={me} pendientes={pendientes} obligatorios={obligatorios}
+            retosN={retos.length} onRetos={() => { loadRetos(); setScreen("retospend"); }}
             onGym={startGym} onDuel={startDuel} onRank={() => setScreen("rank")} onPrueba={() => setScreen("prueba")} onAdmin={() => setScreen("admin")} />}
           {screen === "prueba" && <Prueba me={me} obligatorios={obligatorios} prog={myProg}
             onTrain={async (catId) => { setMode("gym"); setActiveCat(CATEGORIES.find((c) => c.id === catId)); setScreen("cargandocat"); try { await asegurarCat(catId); } catch (e) {} setScreen("gym"); }} />}
@@ -591,7 +649,9 @@ function App() {
           {screen === "catselect" && <CatSelect mode={mode} obligatorios={obligatorios} prog={myProg} onPick={onCatChosen} />}
           {screen === "gym" && <GymGame cat={activeCat} isObl={obligatorios.includes(activeCat.id)} onFinish={finishGym} />}
           {screen === "duelselect" && <DuelSelect me={me} cat={activeCat} users={users} onPick={onOppChosen} />}
-          {screen === "duel" && <DuelGame cat={activeCat} opponent={opponent} onFinish={finishDuel} />}
+          {screen === "duel" && <DuelGame cat={activeReto ? retoCat(activeReto) : activeCat} qs={activeReto ? activeReto.test : null} onFinish={finishDuelPlay} />}
+          {screen === "retospend" && <RetosPend retos={retos} users={users} onPick={(r) => { setActiveReto(r); setScreen("duel"); }} onBack={() => setScreen("home")} />}
+          {screen === "retoout" && <RetoResult data={retoOut} onHome={() => { loadRetos(); setScreen("home"); }} />}
           {screen === "result" && <Result res={lastResult} onAgain={() => setScreen("home")} onReview={() => setScreen("review")} />}
           {screen === "review" && <Review res={lastResult} onBack={() => setScreen("result")} onHome={() => setScreen("home")} />}
         </div>
@@ -821,34 +881,17 @@ function PlazaSwitch() {
 }
 
 function IngresBanner() {
+  // Chica, abajo, junto a Los Vasconcelistas. La bandera es la del idioma AL QUE VAS.
   const bono = PQBONO();
   if (bono <= 1) return null;
-  const on = PQLANG === PQCFG.idioma_bono;
+  const on = PQLANG === PQCFG.idioma_bono;                 // ya estoy jugando en inglés
   const otro = on ? PQCFG.idioma_base : PQCFG.idioma_bono;
   return (
-    <button
-      onClick={() => pqSetLang(otro)}
-      style={{
-        display: "flex", alignItems: "center", gap: 14, width: "100%", cursor: "pointer",
-        font: "inherit", textAlign: "left", marginTop: 12,
-        border: "1.5px solid " + (on ? "#E9B44C" : "#ffffff22"),
-        background: on
-          ? "linear-gradient(135deg,rgba(233,180,76,.20),rgba(233,180,76,.06))"
-          : "linear-gradient(135deg,rgba(255,255,255,.09),rgba(255,255,255,.03))",
-        borderRadius: 18, padding: "16px 18px",
-      }}>
-      <div style={{ fontSize: 30, lineHeight: 1, flex: "0 0 auto" }}>{on ? "🇬🇧" : "🇲🇽"}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 800, fontSize: 15.5, color: on ? "#E9B44C" : "#fff", marginBottom: 3 }}>
-          {on ? L("Estás jugando en inglés · cada punto vale ×") + bono
-              : "¿Quieres practicar tu inglés y puntuar ×" + bono + "?"}
-        </div>
-        <div style={{ fontSize: 13, color: "#cabfae", lineHeight: 1.45 }}>
-          {on ? L("Toca aquí para volver al español cuando quieras. Los puntos dobles sólo cuentan mientras juegas en inglés.")
-              : "Las mismas preguntas, en inglés. Aciertas y ganas el doble de puntos — y de paso practicas el idioma con el que trabajas todos los días."}
-        </div>
-      </div>
-      <div style={{ fontSize: 22, color: on ? "#E9B44C" : "#fff", flex: "0 0 auto" }}>{on ? "↺" : "→"}</div>
+    <button onClick={() => pqSetLang(otro)}
+      style={{ ...S.smallBtn, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+               borderColor: on ? "#E9B44C" : undefined, color: on ? "#E9B44C" : undefined }}>
+      <span style={{ fontSize: 17, lineHeight: 1 }}>{on ? "🇲🇽" : "🇬🇧"}</span>
+      {on ? L("Volver al español") : ("Practica inglés y multiplica ×" + bono)}
     </button>
   );
 }
@@ -958,7 +1001,7 @@ function Login({ users, onPick }) {
 }
 
 /* ===================== HOME ===================== */
-function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin }) {
+function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin, retosN, onRetos }) {
   return (
     <div style={S.screen}>
       <div style={S.heroWrap}>
@@ -967,7 +1010,6 @@ function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, o
         <p style={S.heroSub}>Entrena, reta a otro colaborador y súbete al ranking del mes.</p>
       </div>
 
-      <IngresBanner />
       <PlazaSwitch />
 
       {me.enPrueba && obligatorios.length > 0 && (
@@ -997,8 +1039,18 @@ function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, o
         <div style={S.bigArrow}>→</div>
       </button>
 
+      <button style={{ ...S.bigCard, ...S.retosCard }} onClick={onRetos}>
+        <div style={S.bigIcon}>📬</div>
+        <div style={S.bigTxt}>
+          <div style={S.bigName}>{L("Retos pendientes")}{retosN > 0 ? " · " + retosN : ""}</div>
+          <div style={S.bigDesc}>{retosN > 0 ? L("Responde las mismas preguntas y compite") : L("No tienes retos por responder 🎉")}</div>
+        </div>
+        <div style={S.bigArrow}>→</div>
+      </button>
+
       <div style={S.homeRow}>
         <button style={S.smallBtn} onClick={onRank}>🏆 {L("Los Vasconcelistas")}</button>
+        <IngresBanner />
       </div>
     </div>
   );
@@ -1147,54 +1199,143 @@ function GymGame({ cat, isObl, onFinish }) {
 }
 
 /* ===================== DUEL SELECT ===================== */
+/* Todo el equipo, con chips de plaza, buscador, los rivales de siempre arriba
+   y el cara a cara con cada quien (todo calculado en el cliente con una sola
+   lectura de pq_retos al entrar). */
 function DuelSelect({ me, cat, users, onPick }) {
   const esCDMX = (u) => (u.sede === "CDMX" || u.sede === "Virreyes");
   const miPlaza = esCDMX(me) ? "CDMX" : (me.sede || "CDMX");
   const otraPlaza = miPlaza === "Puebla" ? "CDMX" : "Puebla";
   const cruzaPlazas = !cat || cat.compartida !== false;
   const [plaza, setPlaza] = useState(miPlaza);
+  const [q, setQ] = useState("");
+  const [hist, setHist] = useState(null);   // id del rival -> {jugados, ganados, perdidos, ptsGan, ptsPer}
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      if (!me || !/^[0-9a-f-]{36}$/i.test(me.id)) { if (vivo) setHist({}); return; }
+      try {
+        const url = SBU + "/rest/v1/pq_retos?select=usuario_a,usuario_b,ganador,diferencia,estado"
+          + "&or=(usuario_a.eq." + me.id + ",usuario_b.eq." + me.id + ")";
+        const filas = await fetch(url, { headers: SBH }).then((r) => r.json()).catch(() => []);
+        const h = {};
+        (Array.isArray(filas) ? filas : []).forEach((r) => {
+          const otro = r.usuario_a === me.id ? r.usuario_b : r.usuario_a;
+          if (!otro || otro === me.id) return;
+          const x = h[otro] || (h[otro] = { jugados: 0, ganados: 0, perdidos: 0, ptsGan: 0, ptsPer: 0 });
+          x.jugados++;
+          if (r.estado !== "resuelto" || !r.ganador) return;
+          const d = Number(r.diferencia) || 0;
+          if (r.ganador === me.id) { x.ganados++; x.ptsGan += d; }
+          else if (r.ganador === otro) { x.perdidos++; x.ptsPer += d; }
+        });
+        if (vivo) setHist(h);
+      } catch (e) { if (vivo) setHist({}); }
+    })();
+    return () => { vivo = false; };
+  }, [me && me.id]);
+
+  const H = hist || {};
+  const norm = (x) => (x || "").toString().toLowerCase();
   const enPlaza = (u, pz) => pz === "Todas" || (pz === "CDMX" ? esCDMX(u) : u.sede === pz);
+  const all = (users || []).filter((u) => u.id !== me.id);
+  const porNombre = (a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""));
+
+  // Con los que más juegas: los 5 con más retos conmigo (de cualquier plaza).
+  const frecuentes = (!q && hist)
+    ? all.filter((u) => (H[u.id] || {}).jugados > 0)
+         .sort((a, b) => (H[b.id].jugados - H[a.id].jugados) || porNombre(a, b))
+         .slice(0, 5)
+    : [];
+  const arriba = frecuentes.map((u) => u.id);
+  const lista = all
+    .filter((u) => enPlaza(u, plaza) && (!q || norm(u.nombre).indexOf(norm(q)) > -1) && arriba.indexOf(u.id) === -1)
+    .sort(porNombre);
+
   const chipP = (on) => ({ display: "flex", alignItems: "center", gap: 7, flex: "0 0 auto", cursor: "pointer",
     font: "inherit", padding: "8px 14px", borderRadius: 20, fontSize: 13.5, fontWeight: 700,
-    border: "1px solid " + (on ? "#E9B44C" : "#ffffff22"),
-    background: on ? "#E9B44C22" : "transparent", color: on ? "#E9B44C" : "#cdbfa8" });
-  const offer = useMemo(() => {
-    const pool = users.filter((u) => u.id !== me.id && Math.abs(u.nivel - me.nivel) <= 1);
-    return shuffle(pool.length >= 3 ? pool : users.filter((u) => u.id !== me.id)).slice(0, 3);
-  }, [me, users]);
+    border: "1px solid " + (on ? ACCENT : "#ffffff22"),
+    background: on ? "#E9B44C22" : "transparent", color: on ? ACCENT : "#cdbfa8" });
+  const inputSt = { width: "100%", boxSizing: "border-box", padding: "11px 12px", borderRadius: 12,
+    border: "1px solid #ffffff22", background: "#ffffff10", color: "#fff", fontSize: 14, outline: "none" };
+
+  const marca = (b) => {   // 3-1 · +120 / -45 — sólo si ya jugaron
+    const x = H[b.id];
+    if (!x || !(x.ganados || x.perdidos)) return null;
+    return x.ganados + "-" + x.perdidos + " · +" + x.ptsGan + " / -" + x.ptsPer;
+  };
+  const fila = (b) => {
+    const m = marca(b);
+    return (
+      <button key={b.id} style={S.oppCard} onClick={() => onPick(b)}>
+        <div style={S.oppAvatar}>{b.avatar}</div>
+        <div style={{ flex: 1, textAlign: "left" }}>
+          <div style={{ ...S.oppName, display: "flex", alignItems: "center", gap: 7 }}>{b.nombre}<Sticker sede={b.sede} size={19} /></div>
+          <div style={S.oppMeta}>{b.puesto}{b.sede ? " · " + b.sede : ""}</div>
+          {m && <div style={{ ...S.oppMeta, color: ACCENT, fontWeight: 700 }}>{m}</div>}
+        </div>
+        <div style={S.oppGo}>{L("Retar")}</div>
+      </button>
+    );
+  };
+
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>{L("Elige rival")}</h2>
-      <p style={S.muted}>3 colaboradores de tu nivel. Ambos juegan el MISMO test.</p>
-      <div style={S.oppList}>
-        {offer.map((b) => (
-          <button key={b.id} style={S.oppCard} onClick={() => onPick(b)}>
-            <div style={S.oppAvatar}>{b.avatar}</div>
-            <div style={{ flex: 1, textAlign: "left" }}>
-              <div style={S.oppName}>{b.nombre}</div>
-              <div style={S.oppMeta}>{b.puesto}{b.sede ? " · " + b.sede : ""} · 🪙 {b.walletHist}</div>
-            </div>
-            <div style={S.oppGo}>{L("Retar")}</div>
-          </button>
-        ))}
+      <p style={S.muted}>{L("Reta a cualquier colaborador. Ambos juegan el MISMO test.")}</p>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", padding: "2px 0 4px" }}>
+        <button style={chipP(plaza === miPlaza)} onClick={() => setPlaza(miPlaza)}>
+          <Sticker sede={miPlaza} size={20} /> {L("Mi plaza")}
+        </button>
+        <button
+          style={{ ...chipP(plaza === otraPlaza), opacity: cruzaPlazas ? 1 : .45, cursor: cruzaPlazas ? "pointer" : "not-allowed" }}
+          disabled={!cruzaPlazas}
+          onClick={() => { if (cruzaPlazas) setPlaza(otraPlaza); }}>
+          <Sticker sede={otraPlaza} size={20} /> {otraPlaza}
+        </button>
+        {cruzaPlazas && <button style={chipP(plaza === "Todas")} onClick={() => setPlaza("Todas")}>{L("Todas")}</button>}
+      </div>
+      {cruzaPlazas && plaza === otraPlaza && (
+        <div style={S.oblNote}>{L("Vas contra la otra casa. Mismo test para los dos, y el marcador se ve en el ranking de las dos plazas.")}</div>
+      )}
+      {!cruzaPlazas && cat && (
+        <div style={S.oblNote}><b>{cat.name}</b> {L("es de tu casa nada más, así que aquí sólo puedes retar a los tuyos.")}</div>
+      )}
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={L("🔎 Buscar por nombre…")} style={inputSt} />
+      {frecuentes.length > 0 && (
+        <div>
+          <div style={{ ...S.muted, fontWeight: 700, color: ACCENT }}>{L("Con los que más juegas")}</div>
+          <div style={S.oppList}>{frecuentes.map(fila)}</div>
+        </div>
+      )}
+      <div>
+        <div style={{ ...S.muted, fontWeight: 700 }}>
+          {frecuentes.length > 0 ? L("Todo el equipo") : (lista.length + " " + (lista.length === 1 ? L("colaborador") : L("colaboradores")))}
+        </div>
+        <div style={S.oppList}>
+          {lista.length ? lista.map(fila)
+            : <div style={{ textAlign: "center", color: "#a99a82", padding: 26 }}>{hist === null ? L("Cargando el historial…") : (q ? L("Sin resultados · ajusta el filtro") : L("Nadie más en esta plaza todavía."))}</div>}
+        </div>
       </div>
     </div>
   );
 }
 
 /* ===================== DUEL GAME ===================== */
-function DuelGame({ cat, opponent, onFinish }) {
-  const [qs] = useState(() => pickQuestions(cat.id, DUEL_QS));
+/* Un test contra el reloj. No hay rival en pantalla: el marcador del otro
+   aparece cuando el reto se resuelve (RetoResult). */
+function DuelGame({ cat, qs: qsProp, onFinish }) {
+  const [qs] = useState(() => ((qsProp && qsProp.length) ? qsProp : pickQuestions(cat.id, DUEL_QS)));
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [my, setMy] = useState(0);
-  const [opp, setOpp] = useState(0);
-  const [tLeft, setTLeft] = useState(ventana(qs[0], DUEL_WINDOW));
+  const win = () => ventana(qs[idx], DUEL_WINDOW);
+  const [tLeft, setTLeft] = useState(() => ventana(qs[0], DUEL_WINDOW));
   const [pop, setPop] = useState(null);
-  const [oppPop, setOppPop] = useState(null);
   const timer = useRef(null);
+  const answers = useRef([]);
   const [cuenta, setCuenta] = useState(5);   // 5-4-3-2-1, sólo al empezar la ronda
-  const skill = BOT_SKILL[opponent.id] ?? 0.78;
 
   useEffect(() => {
     if (cuenta === null) return;
@@ -1205,7 +1346,7 @@ function DuelGame({ cat, opponent, onFinish }) {
   useEffect(() => { setTLeft(ventana(qs[idx], DUEL_WINDOW)); /* eslint-disable-next-line */ }, [idx]);
 
   useEffect(() => {
-    if (cuenta !== null) { clearInterval(timer.current); return; }
+    if (cuenta !== null || !qs.length) { clearInterval(timer.current); return; }
     timer.current = setInterval(() => {
       setTLeft((t) => { if (t <= 0.1) { clearInterval(timer.current); resolve(-1, ventana(qs[idx], DUEL_WINDOW)); return 0; } return +(t - 0.1).toFixed(1); });
     }, 100);
@@ -1219,32 +1360,105 @@ function DuelGame({ cat, opponent, onFinish }) {
   const resolve = (choice, elapsedOv) => {
     if (picked !== null) return;
     clearInterval(timer.current);
-    const elapsed = elapsedOv !== undefined ? elapsedOv : ventana(qs[idx], DUEL_WINDOW) - tLeft;
+    const w = ventana(qs[idx], DUEL_WINDOW);
+    const elapsed = elapsedOv !== undefined ? elapsedOv : w - tLeft;
     const ok = choice === qs[idx].a;
-    const myPts = ok ? duelPts(elapsed) : 0;
-    const oppOk = Math.random() < skill;
-    const oPts = oppOk ? duelPts(1.5 + Math.random() * 5) : 0;
-    setPicked(choice); setMy((s) => s + myPts); setOpp((s) => s + oPts);
-    setPop(ok ? `+${myPts}` : "✗"); setOppPop(oppOk ? `+${oPts}` : "✗");
+    const myPts = ok ? duelPts(elapsed, w) : 0;
+    answers.current[idx] = { picked: choice };
+    setPicked(choice); setMy((s) => s + myPts);
+    setPop(ok ? `+${myPts}` : "✗");
     setTimeout(() => {
-      setPop(null); setOppPop(null);
+      setPop(null);
       if (idx + 1 < qs.length) { setIdx(idx + 1); setPicked(null); }
-      else onFinish(my + myPts, opp + oPts);
-    }, 1250);
+      else onFinish(my + myPts, qs, answers.current);
+    }, 1100);
   };
 
+  if (!qs.length) return <div style={S.screen}><p style={S.muted}>{L("En construcción")}</p></div>;
   const cur = qs[idx];
   return (
     <div style={S.screen}>
-      <div style={S.versusRow}>
-        <PlayerChip avatar="🙋" name="Tú" score={my} pop={pop} side="left" color={cat.color} />
-        <div style={S.vsCenter}><TimerRing ratio={tLeft / ventana(qs[idx], DUEL_WINDOW)} color="#E9B44C" label={Math.ceil(tLeft)} /><div style={S.vsTxt}>VS</div></div>
-        <PlayerChip avatar={opponent.avatar} name={opponent.nombre} score={opp} pop={oppPop} side="right" color="#3E7CB1" />
-      </div>
-      <GameHeader cat={cat} idx={idx} total={qs.length} compact />
+      <GameHeader cat={cat} idx={idx} total={qs.length}
+        right={<TimerRing ratio={tLeft / win()} color={ACCENT} label={Math.ceil(tLeft)} />} />
+      <div style={S.oblNote}>{L("⚔️ Reto · mismas preguntas para los dos")}</div>
+      <div style={S.scoreRow}><span style={S.muted}>{L("Tu marcador")}</span><strong style={{ color: ACCENT }}>{my} pts</strong></div>
       {cuenta !== null
         ? <Preparate cat={cat} n={cuenta} frase={frasePrev(cat.id, idx)} />
         : <QuestionCard cur={cur} picked={picked} onPick={(i) => resolve(i)} color={cat.color} />}
+      {pop && <Pop txt={pop} good={pop[0] === "+"} />}
+    </div>
+  );
+}
+
+/* ===================== RETOS PENDIENTES ===================== */
+function RetosPend({ retos, users, onPick, onBack }) {
+  const sedeDe = (id) => ((users || []).find((u) => u.id === id) || {}).sede;
+  return (
+    <div style={S.screen}>
+      <h2 style={S.h2}>{L("⚔️ Retos pendientes")}</h2>
+      <p style={S.muted}>{L("Responde las MISMAS preguntas con las que te retaron — así se compara el desempeño.")}</p>
+      {(!retos || !retos.length) ? (
+        <div style={{ textAlign: "center", color: "#a99a82", padding: 34 }}>{L("No tienes retos por responder 🎉")}</div>
+      ) : (
+        <div style={S.oppList}>
+          {retos.map((r) => (
+            <button key={r.id} style={S.oppCard} onClick={() => onPick(r)}>
+              <div style={S.oppAvatar}>⚔️</div>
+              <div style={{ flex: 1, textAlign: "left" }}>
+                <div style={{ ...S.oppName, display: "flex", alignItems: "center", gap: 7 }}>
+                  {(r.a_nombre || "Alguien") + " " + L("te retó")}<Sticker sede={sedeDe(r.usuario_a)} size={19} />
+                </div>
+                <div style={S.oppMeta}>{(r.cat_nombre || "")} · {L("su marcador:")} {r.score_a || 0}</div>
+              </div>
+              <div style={S.oppGo}>{L("Responder")}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={S.homeRow}><button style={S.smallBtn} onClick={onBack}>{L("← Volver")}</button></div>
+    </div>
+  );
+}
+
+/* ===================== RESULTADO DEL RETO ===================== */
+function RetoResult({ data, onHome }) {
+  if (!data) return null;
+  if (data.type === "enviado") {
+    return (
+      <div style={S.screen}>
+        <div style={S.resultWrap}>
+          <div style={S.resultEmoji}>🏆</div>
+          <h2 style={S.resultTitle}>{L("¡Reto enviado!")}</h2>
+          <p style={S.muted}>{L("Retaste a")} <b style={{ color: ACCENT }}>{data.rival}</b></p>
+          <div style={S.scoreRow}><span style={S.muted}>{L("Tu marcador:")}</span><strong style={{ color: ACCENT }}>{data.score} pts</strong></div>
+          <p style={S.muted}>{L("Cuando responda las MISMAS preguntas se comparan y se aplican los puntos.")}</p>
+        </div>
+        <button style={S.primaryBtn} onClick={onHome}>{L("Volver al inicio")}</button>
+      </div>
+    );
+  }
+  const win = data.ganador;   // 'me' | 'rival' | null
+  return (
+    <div style={S.screen}>
+      <div style={S.resultWrap}>
+        <div style={S.resultEmoji}>{win === "me" ? "🎉" : win === "rival" ? "💪" : "🤝"}</div>
+        <h2 style={S.resultTitle}>{win === "me" ? L("¡Ganaste!") : win === "rival" ? L("Esta vez no…") : L("¡Empate!")}</h2>
+        <div style={S.duelScoreRow}>
+          <div style={S.dsCol}>
+            <div style={S.dsAv}>🙋</div>
+            <div style={{ ...S.dsScore, color: win === "me" ? "#7BD389" : "#fff" }}>{data.scoreMe}</div>
+            <div style={S.muted}>{data.meName}</div>
+          </div>
+          <div style={S.dsVs}>—</div>
+          <div style={S.dsCol}>
+            <div style={S.dsAv}>⚔️</div>
+            <div style={{ ...S.dsScore, color: win === "rival" ? "#7BD389" : "#fff" }}>{data.scoreRival}</div>
+            <div style={S.muted}>{data.rivalName}</div>
+          </div>
+        </div>
+        <div style={win === "me" ? S.stealMsg : S.loseMsg}>{data.delta}</div>
+      </div>
+      <button style={S.primaryBtn} onClick={onHome}>{L("Volver al inicio")}</button>
     </div>
   );
 }
@@ -1531,6 +1745,7 @@ const S = {
   bigCard: { display: "flex", alignItems: "center", gap: 14, padding: "18px 16px", borderRadius: 20, border: "1px solid #ffffff14", cursor: "pointer", textAlign: "left", color: "#fff", width: "100%" },
   gymCard: { background: "linear-gradient(120deg,#2d1b3a,#3a2147)" },
   duelCard: { background: "linear-gradient(120deg,#3a1e22,#4a2330)" },
+  retosCard: { background: "linear-gradient(120deg,#1e2f3a,#22394a)" },
   bigIcon: { fontSize: 28, width: 52, height: 52, display: "grid", placeItems: "center", background: "#00000030", borderRadius: 14 },
   bigTxt: { flex: 1 },
   bigName: { fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: 21 },
