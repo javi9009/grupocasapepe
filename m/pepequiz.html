@@ -15,6 +15,18 @@ const {useState,useEffect,useRef,useCallback,useMemo}=React;
 const SBU='https://rehophywchakfapivsbh.supabase.co';
 const SBK='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const SBH={apikey:SBK,Authorization:'Bearer '+SBK};
+const pqUID=()=>{try{const u=new URLSearchParams(location.search).get('uid'); if(u) return u;
+  for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
+    if(k&&k.indexOf('auth-token')>-1){const v=JSON.parse(localStorage.getItem(k)||'{}');
+      const id=(v.user&&v.user.id)||(v.currentSession&&v.currentSession.user&&v.currentSession.user.id); if(id) return id;}}}catch(e){}return null;};
+const PQUID=pqUID();
+/* La pila: cuánto llevas acertado de cada tema y de cada tour, y si ese tema cuenta
+   para tu Conocimiento del puesto o para tu Discurso Casa Pepe. Lo calcula el servidor. */
+let AVANCE={es_exp:false,cats:{},tours:[]};
+const pqCargaAvance=async()=>{ if(!PQUID) return; try{
+  const d=await fetch(SBU+'/rest/v1/rpc/pq_mi_avance',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},SBH),body:JSON.stringify({p_usuario:PQUID})}).then(r=>r.json());
+  if(d&&d.cats){ const m={}; d.cats.forEach(c=>{m[c.id]=c;}); AVANCE={es_exp:!!d.es_exp,cats:m,tours:Array.isArray(d.tours)?d.tours:[]}; }
+}catch(e){} };
 const pqTok=()=>{try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
   if(k&&/auth-token/.test(k)){const v=JSON.parse(localStorage.getItem(k)||'null');
     const ss=v&&(v.currentSession||v); if(ss&&ss.access_token) return ss.access_token;}}}catch(e){}return '';};
@@ -155,6 +167,13 @@ DIC["Cargando el historial…"] = "Loading your history…";
 DIC["Nadie más en esta plaza todavía."] = "Nobody else in this house yet.";
 DIC["Volver al español"] = "Back to Spanish";
 DIC["Practica inglés y multiplica ×2"] = "Practice English, score ×2";
+DIC["Temas"] = "Topics";
+DIC["Una pila por tour: se llena con las preguntas que ya acertaste. Al 90% del banco ese tour te da el 10. Empieza por las pilas más bajas."] = "One stack per tour: it fills with the questions you already got right. At 90% of the bank that tour gives you a 10. Start with the lowest stacks.";
+DIC["Cuenta para tu Conocimiento del puesto"] = "Counts toward your job knowledge";
+DIC["Cuenta para tu Discurso Casa Pepe"] = "Counts toward your Casa Pepe story";
+DIC["Conocimiento"] = "Knowledge";
+DIC["Discurso"] = "Story";
+DIC["Aro amarillo = cuenta para tu Conocimiento del puesto · aro verde = para tu Discurso Casa Pepe. La pila se llena con aciertos: al 90% del banco tienes el 10, y baja cuando entran preguntas nuevas."] = "Yellow ring = counts toward your job knowledge · green ring = toward your Casa Pepe story. The stack fills with correct answers: at 90% of the bank you have a 10, and it drops when new questions come in.";
 const L = (es) => (PQLANG === 'en' && DIC[es]) ? DIC[es] : es;
 
 const pqSetLang=(l)=>{ if(l===PQLANG) return; PQLANG=l; try{localStorage.setItem('pq_lang',l)}catch(e){} location.reload(); };
@@ -414,7 +433,8 @@ async function asegurarCat(catId) {
 }
 
 function pickQuestions(catId, n) {
-  const cat = CATEGORIES.find((c) => c.id === catId);
+  // acepta el id de la categoría o el objeto ya armado (así se juega un tour suelto)
+  const cat = (catId && typeof catId === 'object') ? catId : CATEGORIES.find((c) => c.id === catId);
   if (!cat || cat.questions.length === 0) return [];
   return shuffle(cat.questions).slice(0, n).map((q) => {
     const correct = q.o[q.a];
@@ -522,6 +542,7 @@ function App() {
           if (MI_PLAZA === 'corp') { ES_CORP = true; MI_PLAZA = pqPlazaGuardada() || 'cdmx'; }
         } catch (e) {}
         construirBanco();
+        await pqCargaAvance();
         setUsers(finalUsers);
         setMeId(meIdToSet);
         setScreen("home");
@@ -546,6 +567,10 @@ function App() {
 
   const onCatChosen = async (cat) => {
     setActiveCat(cat);
+    // Los temas de tours no se juegan enteros: cada tour tiene su propio test.
+    if (mode === "gym" && (cat.id === "htbm" || cat.id === "pue_tours") && AVANCE.tours.some((t) => t.cat === cat.id)) {
+      setScreen("tourpila"); return;
+    }
     setScreen("cargandocat");                 // el luchador mientras baja ese tema
     try { await asegurarCat(cat.id); } catch (e) {}
     setScreen(mode === "gym" ? "gym" : "duelselect");
@@ -575,6 +600,7 @@ function App() {
   };
 
   const finishGym = (earned, correctCount, qs, answers) => {
+    setTimeout(pqCargaAvance, 1600);
     updateMe({ walletHist: me.walletHist + earned, walletMes: me.walletMes + earned });
     try { fetch(SBU + "/rest/v1/pq_puntos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ employee_id: meId, pts_hist: me.walletHist + earned, pts_mes: me.walletMes + earned, updated_at: new Date().toISOString() }) }); } catch (e) {}
     // registrar progreso si es categoría obligatoria
@@ -647,6 +673,7 @@ function App() {
           {screen === "rank" && <Ranking users={users} meId={meId} />}
           {screen === "admin" && <Admin users={users} progress={progress} />}
           {screen === "catselect" && <CatSelect mode={mode} obligatorios={obligatorios} prog={myProg} onPick={onCatChosen} />}
+          {screen === "tourpila" && <TourPila cat={activeCat} onBack={() => setScreen("catselect")} onTrain={(sub) => { setActiveCat(sub); setScreen("gym"); }} />}
           {screen === "gym" && <GymGame cat={activeCat} isObl={obligatorios.includes(activeCat.id)} onFinish={finishGym} />}
           {screen === "duelselect" && <DuelSelect me={me} cat={activeCat} users={users} onPick={onOppChosen} />}
           {screen === "duel" && <DuelGame cat={activeReto ? retoCat(activeReto) : activeCat} qs={activeReto ? activeReto.test : null} onFinish={finishDuelPlay} />}
@@ -1085,23 +1112,118 @@ function Prueba({ me, obligatorios, prog, onTrain }) {
   );
 }
 
+/* ===================== PILA DE EVOLUCIÓN ===================== */
+const pqFlags = (cid) => (AVANCE.cats[cid] || {});
+const CHIP_CON = { fontSize: 9.5, fontWeight: 700, color: "#E9B44C", border: "1px solid #E9B44C", borderRadius: 8, padding: "1px 6px" };
+const CHIP_DIS = { fontSize: 9.5, fontWeight: 700, color: "#7BD389", border: "1px solid #7BD389", borderRadius: 8, padding: "1px 6px" };
+
+function PilaBar({ aciertos, banco, color }) {
+  const meta = Math.max(1, Math.ceil(0.9 * banco));
+  const pct = Math.min(100, Math.round(((aciertos || 0) / meta) * 100));
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ height: 7, borderRadius: 4, background: "#ffffff14", overflow: "hidden" }}>
+        <div style={{ width: pct + "%", height: "100%", borderRadius: 4, background: pct >= 100 ? "#7BD389" : (color || "#E9B44C"), transition: "width .4s" }} />
+      </div>
+      <div style={{ fontSize: 10, color: "#ffffff8c", marginTop: 2 }}>{aciertos || 0}/{banco} · {pct}%</div>
+    </div>
+  );
+}
+
+function TourPila({ cat, onBack, onTrain }) {
+  const [cargando, setCargando] = useState(null);
+  const lista = AVANCE.tours.filter((t) => t.cat === cat.id);
+  const f = pqFlags(cat.id);
+  const borde = f.conocimiento ? "#E9B44C77" : (f.discurso ? "#7BD38966" : "#ffffff18");
+
+  // Las preguntas del tour se bajan por id: el tema entero son miles y aquí sólo hacen falta unas pocas.
+  const entrenar = async (t) => {
+    setCargando(t.id);
+    let ids = [];
+    try {
+      for (let off = 0; off < 6000; off += 1000) {
+        const pg = await fetch(SBU + "/rest/v1/pq_pregunta_tour?select=pregunta_id&tour_id=eq." + t.id + "&limit=1000&offset=" + off, { headers: SBH }).then((r) => r.json());
+        if (!Array.isArray(pg) || !pg.length) break;
+        ids = ids.concat(pg.map((x) => x.pregunta_id));
+        if (pg.length < 1000) break;
+      }
+    } catch (e) {}
+    const muestra = shuffle(ids).slice(0, 60);
+    let qs = [];
+    if (muestra.length) {
+      const traer = async (idioma) => {
+        const url = SBU + "/rest/v1/pq_preguntas?select=id,enunciado,opciones,correcta,explicacion,segundos,proyectos"
+          + "&activa=is.true&idioma=eq." + idioma + "&id=in.(" + muestra.join(",") + ")&limit=60";
+        const p = await fetch(url, { headers: SBH }).then((r) => r.json()).catch(() => []);
+        if (!Array.isArray(p)) return [];
+        const out = [];
+        p.forEach((q) => {
+          const o = Array.isArray(q.opciones) ? q.opciones : [];
+          const a = Number(q.correcta);
+          if (!q.enunciado || o.length < 2 || !(a >= 0 && a < o.length)) return;
+          out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+        });
+        return out;
+      };
+      qs = await traer(PQLANG);
+      if (!qs.length && PQLANG !== PQCFG.idioma_base) qs = await traer(PQCFG.idioma_base);
+    }
+    setCargando(null);
+    if (!qs.length) return;
+    onTrain(Object.assign({}, cat, { name: t.nombre, questions: qs, _tour: t.slug }));
+  };
+
+  return (
+    <div style={S.screen}>
+      <button style={{ font: "inherit", fontWeight: 700, background: "transparent", border: "1px solid #ffffff33", color: "#fff", borderRadius: 10, padding: "6px 13px", cursor: "pointer", marginBottom: 10 }} onClick={onBack}>← {L("Temas")}</button>
+      <h2 style={S.h2}>{cat.emoji} {cat.name}</h2>
+      <p style={S.muted}>{L("Una pila por tour: se llena con las preguntas que ya acertaste. Al 90% del banco ese tour te da el 10. Empieza por las pilas más bajas.")}</p>
+      {(f.conocimiento || f.discurso) && <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
+        {f.conocimiento && <span style={CHIP_CON}>🧠 {L("Cuenta para tu Conocimiento del puesto")}</span>}
+        {f.discurso && <span style={CHIP_DIS}>🗣️ {L("Cuenta para tu Discurso Casa Pepe")}</span>}
+      </div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {lista.map((t) => (
+          <div key={t.id} style={{ background: "#ffffff0d", border: "1px solid " + borde, borderRadius: 12, padding: "10px 13px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, color: "#fff", fontSize: 13.5 }}>{t.nombre}</div>
+                <PilaBar aciertos={t.aciertos} banco={t.banco} color={cat.color} />
+              </div>
+              <button style={S.trainBtn} disabled={cargando === t.id} onClick={() => entrenar(t)}>{cargando === t.id ? "…" : L("Entrenar")}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ===================== SELECCIÓN DE CATEGORÍA ===================== */
 function CatSelect({ mode, obligatorios, prog, onPick }) {
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>{mode === "gym" ? L("Elige tema para entrenar") : L("Elige tema del reto")}</h2>
       <p style={S.muted}>{mode === "gym" ? L("5 preguntas · el tiempo lo marca lo larga que sea") : L("5 preguntas · reto a contrarreloj")}</p>
+      {PQUID && <p style={{ ...S.tinyNote, textAlign: "left", margin: "0 0 10px" }}>{L("Aro amarillo = cuenta para tu Conocimiento del puesto · aro verde = para tu Discurso Casa Pepe. La pila se llena con aciertos: al 90% del banco tienes el 10, y baja cuando entran preguntas nuevas.")}</p>}
       <div style={S.catGrid}>
         {CATEGORIES.map((c) => {
           const disabled = !(c.n > 0);
           const obl = obligatorios.includes(c.id);
           const aprobado = prog[c.id]?.estado === "aprobado";
+          const f = pqFlags(c.id);
+          const aro = f.conocimiento ? "0 0 0 2px #E9B44C" : (f.discurso ? "0 0 0 2px #7BD38966" : "none");
           return (
-            <button key={c.id} style={{ ...S.catCard, borderColor: c.color, opacity: disabled ? 0.5 : 1 }} disabled={disabled} onClick={() => !disabled && onPick(c)}>
+            <button key={c.id} style={{ ...S.catCard, borderColor: c.color, opacity: disabled ? 0.5 : 1, boxShadow: aro }} disabled={disabled} onClick={() => !disabled && onPick(c)}>
               {obl && <span style={{ ...S.oblDot, background: aprobado ? "#7BD389" : c.color }}>{aprobado ? "✓" : "★"}</span>}
               <div style={{ ...S.catEmoji, background: c.color + "22" }}>{c.emoji}</div>
               <div style={S.catName}>{c.name}</div>
               <div style={S.catCount}>{disabled ? L("En construcción") : "\u00a0"}</div>
+              {PQUID && !disabled && f.banco > 0 && <PilaBar aciertos={f.aciertos} banco={f.banco} color={c.color} />}
+              {(f.conocimiento || f.discurso) && <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
+                {f.conocimiento && <span style={CHIP_CON}>🧠 {L("Conocimiento")}</span>}
+                {f.discurso && <span style={CHIP_DIS}>🗣️ {L("Discurso")}</span>}
+              </div>}
               <div style={{ ...S.catBar, background: c.color }} />
             </button>
           );
@@ -1129,7 +1251,7 @@ function TimerRing({ ratio, color, label }) {
 
 /* ===================== GYM ===================== */
 function GymGame({ cat, isObl, onFinish }) {
-  const [qs] = useState(() => pickQuestions(cat.id, GYM_QS));
+  const [qs] = useState(() => pickQuestions(cat, GYM_QS));
   const [auditando, setAuditando] = useState(false);
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
@@ -1175,7 +1297,17 @@ function GymGame({ cat, isObl, onFinish }) {
     setTimeout(() => {
       setPop(null);
       if (idx + 1 < qs.length) { setIdx(idx + 1); setPicked(null); }
-      else onFinish(Math.round((earned + pts) * pqMult(cat.idioma || "es")), correct + (ok ? 1 : 0), qs, answers.current);
+      else {
+        // El servidor es quien guarda la partida (sesión, multiplicador y acierto por pregunta):
+        // sin esto no se llenan ni el ranking por periodo ni Conocimiento/Discurso.
+        const _ac = correct + (ok ? 1 : 0), _base = earned + pts;
+        try { if (PQUID) fetch(SBU + "/rest/v1/rpc/pq_registrar_gym", { method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, SBH),
+          body: JSON.stringify({ p_usuario: PQUID, p_categoria: cat.id, p_aciertos: _ac, p_puntos: _base,
+            p_idioma: cat.idioma || "es",
+            p_detalle: qs.map((q, i) => { const a = answers.current[i]; return { id: q.qid || null, ok: !!a && a.picked === q.a }; }).filter((x) => x.id) }) }); } catch (e) {}
+        onFinish(Math.round(_base * pqMult(cat.idioma || "es")), _ac, qs, answers.current);
+      }
     }, 1050);
   };
 
