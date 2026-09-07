@@ -319,11 +319,54 @@ async function vPlanes(){
       <button class="btn" id="nGo">Crear plan</button>
     </div>
     <p class="meta" id="nBrecha" style="margin-top:8px"></p>
+    <div id="nCfg" style="margin-top:6px"></div>
    </div>
    ${mapaHTML(L)}
    ${L.length?L.map(p=>tarjetaPlan(p)).join(''):'<p class="vacia">Sin planes de carrera abiertos en esta vista.</p>'}`;
 
   const dest=$('nDest'), emp=$('nEmp');
+  const CAMINO_DE={practicante:'jefatura',tecnico:'jefatura',subjefe:'gerencia',jefe_area:'gerencia',subgerencia:'regional',gerencia:'regional'};
+  let NCFG={}, NEXTRA=[];
+  const renderCfg=()=>{
+    const tipo=$('nTipo').value, box=$('nCfg');
+    NCFG={}; NEXTRA=[];
+    if(!emp.value||!tipo){ box.innerHTML=''; return; }
+    const rs=REQS.filter(r=>r.tipo_codigo===tipo);
+    const kops=Object.values(KPN||{}).sort((a,b)=>(a.grupo+a.nombre).localeCompare(b.grupo+b.nombre));
+    box.innerHTML=`<div style="border:1px solid var(--rule);border-radius:8px;padding:12px;background:var(--surface-3)">
+      <strong>Configuración de este camino para ${esc((EMPS.find(x=>x.id===emp.value)||{}).nombre||'')}</strong>
+      <p class="meta" style="margin:4px 0 8px">Parte de la vara general del camino; lo que ajustes aquí aplica <strong>solo a este plan</strong>. Los generales se editan en «Los tres caminos».</p>
+      <table><thead><tr><th>Área de medición</th><th class="num">Mínimo</th><th>KPI</th></tr></thead><tbody>
+      ${rs.map(r=>`<tr><td>${esc(r.nombre)}</td>
+        <td class="num">${r.medida==='bono'?'ganado':`<input data-ncmin="${esc(r.codigo)}" type="number" step="0.5" min="0.5" value="${r.minimo??''}" style="font:inherit;font-size:.75rem;width:56px;padding:3px 5px;border:1px solid var(--rule);border-radius:5px;text-align:right">${r.medida==='meses_ganados'?' <span class="faint" style="font-size:.66rem">de '+r.ventana_meses+' m</span>':''}`}</td>
+        <td><select data-nckpi="${esc(r.codigo)}" style="font:inherit;font-size:.7rem;padding:3px;border:1px solid var(--rule);border-radius:5px;max-width:200px">
+          ${kops.map(k=>`<option value="${esc(k.id)}"${k.id===r.kpi_id?' selected':''}>${esc(k.grupo)} · ${esc(k.nombre)}</option>`).join('')}</select></td></tr>`).join('')}
+      </tbody></table>
+      <div id="nExLista"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px">
+        <input id="nExNom" placeholder="Requisito extra (opcional)" style="font:inherit;font-size:.75rem;padding:5px 8px;border:1px solid var(--rule);border-radius:6px;min-width:190px">
+        <select id="nExMed" style="font:inherit;font-size:.75rem;padding:5px;border:1px solid var(--rule);border-radius:6px"><option value="puntos">puntos (0–10)</option><option value="bono">bono</option><option value="meses_ganados">meses</option></select>
+        <input id="nExMin" type="number" step="0.5" value="7" style="font:inherit;font-size:.75rem;width:56px;padding:5px;border:1px solid var(--rule);border-radius:6px">
+        <select id="nExKpi" style="font:inherit;font-size:.75rem;padding:5px;border:1px solid var(--rule);border-radius:6px;max-width:200px"><option value="">— KPI —</option>${kops.map(k=>`<option value="${esc(k.id)}">${esc(k.grupo)} · ${esc(k.nombre)}</option>`).join('')}</select>
+        <button class="btn ghost mini" id="nExAdd" type="button">+ extra</button>
+      </div></div>`;
+    $('nExAdd').onclick=()=>{
+      const n=($('nExNom').value||'').trim(), kpi=$('nExKpi').value;
+      if(!n||!kpi){ estado('⚠ el extra necesita nombre y KPI','err'); return; }
+      NEXTRA.push({nombre:n, medida:$('nExMed').value, minimo:Number($('nExMin').value)||null, kpi_id:kpi});
+      $('nExNom').value='';
+      $('nExLista').innerHTML=NEXTRA.map((x,i)=>`<span class="pill warn" style="font-size:.66rem;margin:4px 4px 0 0;display:inline-block">${esc(x.nombre)} · ${esc((KPN[x.kpi_id]||{}).nombre||x.kpi_id)}</span>`).join('');
+    };
+  };
+  const restringeCamino=()=>{
+    const o=emp.selectedOptions[0];
+    const e=EMPS.find(x=>x.id===emp.value)||{};
+    const permitido=CAMINO_DE[(e.categoria||'').toLowerCase()]||null;
+    [...$('nTipo').options].forEach(op=>{ if(op.value) op.disabled = !!permitido && op.value!==permitido; });
+    if(permitido){ $('nTipo').value=permitido; }
+    else if(emp.value){ estado('sin categoría clara: elige el camino a mano',''); }
+    renderCfg();
+  };
   const llenaDest=()=>{
     const o=emp.selectedOptions[0], sede=o?o.dataset.sede:'';
     const rs=RANGOS.filter(r=>!sede||r.sede===sede||r.sede==='Corp');
@@ -340,17 +383,40 @@ async function vPlanes(){
     $('nBrecha').innerHTML= n1? `Hoy gana <strong>${mxn(sal)}</strong> · nivel 1 del destino <strong>${mxn(n1)}</strong> · brecha a cubrir con bono <strong>${mxn(br)}</strong> al mes (escalones de ${mxn(br*.25)} / ${mxn(br*.5)} / ${mxn(br*.75)} / ${mxn(br)}).`
       : 'Ese puesto no tiene tabulador cargado — hay que darle su fila en Rangos salariales antes de abrir el plan.';
   };
-  emp.onchange=llenaDest; dest.onchange=brecha;
+  emp.onchange=()=>{llenaDest();restringeCamino();}; dest.onchange=brecha; $('nTipo').onchange=renderCfg;
   $('nGo').onclick=async()=>{
     if(!emp.value||!$('nTipo').value||!dest.value){alert('Falta colaborador, camino o puesto destino.');return;}
     const e=EMPS.find(x=>x.id===emp.value)||{};
     if(!confirm('¿Abrir el plan de carrera de '+(e.nombre||'')+' hacia '+dest.value+'?')) return;
     estado('creando…');
     try{
-      await api('/rpc/crear_plan_carrera',{method:'POST',body:JSON.stringify({
+      const _rid=await api('/rpc/crear_plan_carrera',{method:'POST',body:JSON.stringify({
         p_employee_id:emp.value,p_tipo:$('nTipo').value,p_puesto_destino:dest.value,
         p_sede:e.sede||null,p_inicio:$('nIni').value||null})});
-      estado('✓ plan creado','ok'); await cargar(); render();
+      const nuevoId=(typeof _rid==='string')?_rid:(_rid&&_rid.length?_rid[0]:_rid);
+      try{
+        const tipo=$('nTipo').value;
+        const rs=REQS.filter(r=>r.tipo_codigo===tipo);
+        for(const r of rs){
+          const im=document.querySelector('[data-ncmin="'+r.codigo+'"]');
+          const ik=document.querySelector('[data-nckpi="'+r.codigo+'"]');
+          const nm=im?Number(im.value):null, nk=ik?ik.value:null;
+          const cambioMin=im && !isNaN(nm) && nm>0 && Number(r.minimo)!==nm;
+          const cambioKpi=ik && nk && nk!==r.kpi_id;
+          if(cambioMin||cambioKpi){
+            const body={plan_id:nuevoId,codigo:r.codigo};
+            if(cambioMin) body.minimo=nm;
+            if(cambioKpi) body.kpi_id=nk;
+            await api('/carrera_requisitos_plan',{method:'POST',headers:{...H,Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(body)});
+          }
+        }
+        for(const x of NEXTRA){
+          const slug='x_'+x.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,28);
+          await api('/carrera_requisitos_plan',{method:'POST',headers:{...H,Prefer:'return=minimal'},
+            body:JSON.stringify({plan_id:nuevoId,codigo:slug,nombre:x.nombre,medida:x.medida,minimo:(x.medida==='bono'?1:x.minimo),kpi_id:x.kpi_id})});
+        }
+      }catch(_){ }
+      estado('✓ plan creado con su configuración','ok'); await cargar(); render();
     }catch(err){alert('No se pudo crear: '+err.message);}
   };
   L.forEach(p=>{
