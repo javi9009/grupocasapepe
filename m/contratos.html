@@ -85,6 +85,9 @@ textarea{min-height:54px;resize:vertical}
 <h2>2 · Contratos generados</h2>
 <style>.xcancel{margin-left:8px;border:1px solid #e0b3b3;background:#fff;color:#b03434;border-radius:6px;padding:2px 7px;font-size:12px;cursor:pointer}.xcancel:hover{background:#fbeaea}</style>
 <div id="lista" class="state">Cargando…</div>
+
+<h2>3 · Adendums (aumentos y bonos)</h2>
+<div id="addlista" class="state">Cargando…</div>
 </div>
 </div>
 
@@ -180,6 +183,7 @@ try{MACHOTE_PRACT=await fetch('/m/carta-practicas-machote.html?cb='+Date.now(),{
 try{MACHOTE_INDET=await fetch('/m/contrato-machote-indeterminado.html?cb='+Date.now(),{cache:'no-store'}).then(r=>r.text());}catch(e){MACHOTE_INDET='';}}
 /* ---- Etapa contractual: dónde va cada quien en su cadena de prueba ---- */
 let CSALL=[],RANGOS=[],ROLORDEN={},TEC_ORD=7;
+let ADDS=[],ADCUR=null;
 const SM_MENS=9577; // salario minimo mensual 2026 (~$315.04/dia x 30.4)
 function rangoDe(rol,sede){
  if(!rol)return null;const rl=rol.trim().toLowerCase();
@@ -290,6 +294,7 @@ try{const {data:props}=await sb.from('properties').select('id,direccion');window
 // contratos (una sola lectura, reutilizada)
 const {data:csAll}=await sb.from('contratos').select('*').order('created_at',{ascending:false});
 CSALL=csAll||[];
+try{const {data:_ad}=await sb.from('contrato_addendums').select('*').neq('estatus','cancelado').order('created_at',{ascending:false});ADDS=_ad||[];}catch(e){ADDS=[];}
 try{pintaAlertaEtapas();}catch(e){}
 // actas / llamadas / reconocimientos pendientes de firma
 const {data:actas}=await sb.from('actas_administrativas').select('*').is('firma_url',null).order('fecha_emision',{ascending:false});
@@ -325,6 +330,16 @@ $('lista').innerHTML=(csAll&&csAll.length)? csAll.map(c=>{
 const stp=c.estatus==='firmado'?'ok':(c.estatus==='vencido'?'warn':'send');
 return `<div class="row" onclick='verContrato(${JSON.stringify(c).replace(/'/g,"&#39;")})'><span class="nm">${esc(c.nombre||'')}<span class="id"> · ${esc(c.rol||'')} · contrato ${c.numero}/${c.total_contratos} · vence ${fmtd(c.vigencia_fin)}</span></span><span class="pill ${stp}">${esc((c.estatus||'').replace(/_/g,' '))}</span>${c.estatus!=='firmado'&&c.estatus!=='cancelado'?`<button class="xcancel" title="Cancelar contrato" onclick='event.stopPropagation();cancelarContrato("${c.employee_id}","${esc(c.nombre||'').replace(/"/g,'&quot;')}")'>✕</button>`:''}</div>`;
 }).join('') : '<div class="state">Aún no hay contratos generados.</div>';
+
+// ---------- 3 · adendums ----------
+const _al=$('addlista');
+if(_al){_al.className='';
+_al.innerHTML=(ADDS&&ADDS.length)? ADDS.map((a,i)=>{
+ const nm=((EMPS.find(e=>e.id===a.employee_id)||{}).nombre)||'—';
+ const stp=a.estatus==='firmado'?'ok':(a.estatus==='pendiente'?'warn':'send');
+ const lbl=a.estatus==='pendiente'?'pendiente de emitir':(a.estatus==='enviado_pendiente_firma'?'enviado · pdte firma':(a.estatus||''));
+ return `<div class="row" onclick="verAdendum(${i})"><span class="nm">${esc(nm)}<span class="id"> · ${esc(a.concepto||'')} · ${fmtd(a.created_at)}</span></span><span class="pill ${stp}">${esc(lbl)}</span></div>`;
+}).join('') : '<div class="state">Sin adendums.</div>';}
 const _qe=new URLSearchParams(location.search).get('emp');if(_qe)openForm(_qe);
 }
 
@@ -409,6 +424,47 @@ ${(c.hospedaje||c.otros)?('<h3>Sexta · Otros</h3>'+(c.hospedaje?'<p>'+esc(HOSPE
 <div style="margin-top:18px;font-size:10px;color:#999;text-align:center">Documento generado en la plataforma Casa Pepe · pendiente de firma electrónica</div>`;
 }
 async function cancelarContrato(empId,nombre){if(!empId)return;if(!confirm('¿Cancelar el contrato de '+(nombre||'este colaborador')+'? Vuelve a "sin contrato" para regenerarlo.'))return;const {error}=await sb.rpc('cancelar_contrato',{p_id:empId});if(error){alert('No se pudo: '+error.message);return;}load();}
+function verAdendum(i){
+ const a=(ADDS||[])[i]; if(!a)return; ADCUR=a;
+ let ov=document.getElementById('adov');
+ if(!ov){
+  ov=document.createElement('div'); ov.id='adov';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;overflow:auto;padding:20px;display:none';
+  ov.innerHTML='<div style="max-width:760px;margin:0 auto;background:#fff;border-radius:12px;padding:26px 30px">'
+   +'<div id="addoc" style="font-size:.92rem;line-height:1.5"></div>'
+   +'<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">'
+   +'<button id="adEmit" style="font:inherit;padding:9px 14px;border:1px solid #173404;background:#173404;color:#fff;border-radius:8px;cursor:pointer">✍ Firmar como patrón y enviar a firma</button>'
+   +'<button id="adCancel" style="font:inherit;padding:9px 14px;border:1px solid #9E3B2E;background:#fff;color:#9E3B2E;border-radius:8px;cursor:pointer">✕ Cancelar adendum</button>'
+   +'<button id="adClose" style="font:inherit;padding:9px 14px;border:1px solid #ccc;background:#fff;border-radius:8px;cursor:pointer">Cerrar</button>'
+   +'</div><div id="adMsg" style="margin-top:8px;font-size:.85rem"></div></div>';
+  document.body.appendChild(ov);
+  document.getElementById('adClose').onclick=()=>{ov.style.display='none';};
+  document.getElementById('adEmit').onclick=adEmitir;
+  document.getElementById('adCancel').onclick=adCancelar;
+ }
+ document.getElementById('addoc').innerHTML=a.cuerpo_html||'<p>(sin contenido)</p>';
+ document.getElementById('adEmit').style.display=(a.estatus==='pendiente')?'':'none';
+ document.getElementById('adCancel').style.display=(a.estatus!=='firmado')?'':'none';
+ document.getElementById('adMsg').textContent='';
+ ov.style.display='block';
+}
+async function adEmitir(){
+ if(!ADCUR)return; const m=document.getElementById('adMsg');
+ if(!confirm('¿Firmar como patrón y enviar el adendum a firma del colaborador en SoyPepe?'))return;
+ const img=(typeof FIRMA_PATRON!=='undefined'&&FIRMA_PATRON)?('<img src="'+FIRMA_PATRON+'" alt="firma" style="height:60px;display:block;margin:2px 0">'):'<i>(firma electrónica)</i>';
+ const fecha=fmtd(new Date().toISOString().slice(0,10));
+ const html=(ADCUR.cuerpo_html||'')+'<div style="margin-top:14px;padding-top:8px;font-size:12px;color:#173404">'+img+'<b>Firmado por el patrón:</b> Javier Puente García · '+fecha+'.</div>';
+ const r=await sb.from('contrato_addendums').update({cuerpo_html:html,estatus:'enviado_pendiente_firma'}).eq('id',ADCUR.id);
+ if(r.error){m.textContent='⚠ '+r.error.message;return;}
+ try{await sb.from('notificaciones').insert({employee_id:ADCUR.employee_id,titulo:'📄 Adendum a tu contrato por firmar',cuerpo:(ADCUR.concepto||'Complemento de contrato')+' — léelo y fírmalo en SoyPepe.',icono:'📄',accion:{url:'/soypepe/firmar.html'},leido:false});}catch(e){}
+ m.textContent='✓ Enviado a firma del colaborador.';
+ setTimeout(()=>{document.getElementById('adov').style.display='none';location.reload();},900);
+}
+async function adCancelar(){
+ if(!ADCUR)return; if(!confirm('¿Cancelar este adendum? Deja de aparecer para todos.'))return;
+ const r=await sb.from('contrato_addendums').update({estatus:'cancelado'}).eq('id',ADCUR.id);
+ if(!r.error){document.getElementById('adov').style.display='none';location.reload();}
+}
 async function verContrato(c){$('doc').innerHTML=c.contrato_html||'';$('doc').setAttribute('contenteditable','false');$('doc').style.outline='none';['ovFirma','ovSend'].forEach(id=>{const b=$(id);if(b){b.style.display='none';b.disabled=false;}});if($('ovHint'))$('ovHint').textContent='';if(c.estatus==='firmado'&&c.firma_acuse){await appendFirma(c.firma_acuse);}$('ov').classList.add('show');window.scrollTo(0,0);}
 async function appendFirma(ac){
  try{if(typeof ac==='string')ac=JSON.parse(ac);}catch(e){ac=ac||{};}
