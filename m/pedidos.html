@@ -46,6 +46,7 @@ tr.grp td{background:var(--surface-2);font-weight:700;font-size:12.5px;letter-sp
 .pill{border:1px solid var(--rule);background:var(--surface);border-radius:20px;padding:5px 12px;font-size:13px;cursor:pointer;font-weight:600;color:var(--muted)}
 .pill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.vistas{display:flex;gap:6px;margin:0 0 8px}
 .cpfil{display:flex;gap:8px;align-items:center}
 .cpfil input{flex:2 1 180px}
 .cpfil select{flex:1 1 150px}
@@ -511,13 +512,17 @@ async function guardaCab(id){
   if(error) return toast(error.message);
   toast("Guardado"); await recargar(); verPedido(id);
 }
-let CART=[], CATFIL="", PLANTILLAS=[];
+let CART=[], CATFIL="", PLANTILLAS=[], VISTA="pasillo";
 
 /* Pedir se parece a pedir el súper: categorías, tarjetas y carrito. */
 function cpCuerpo(titulo){
   return `<h3 style="margin:0 0 2px">${esc(titulo)}</h3>
     <div class="small muted" style="margin-bottom:8px">Solo ves lo de tus áreas: ${esc(MISAREAS.join(" · "))}</div>
     <div id="cpPlant"></div>
+    <div class="vistas">
+      <span class="pill" id="vwPasillo" onclick="cpVista('pasillo')">🧺 Por pasillo</span>
+      <span class="pill" id="vwProv" onclick="cpVista('proveedor')">🚚 Por proveedor</span>
+    </div>
     <div class="cpfil">
       <input id="cpBusca" placeholder="Buscar producto…" oninput="cpPintaGrid()">
       <select id="cpSel" onchange="CATFIL=this.value;cpPintaCats();cpPintaGrid()"></select>
@@ -526,11 +531,17 @@ function cpCuerpo(titulo){
     <div id="cpGrid"></div>
     <div id="cpCart"></div>`;
 }
-function cpInit(){ cargaPlantillas(); cpPintaCats(); cpPintaGrid(); cpPintaCart(); }
+function cpInit(){ cargaPlantillas(); cpPintaVista(); cpPintaCats(); cpPintaGrid(); cpPintaCart(); }
+function cpVista(v){ VISTA=v; CATFIL=""; ABIERTAS={}; cpPintaVista(); cpPintaCats(); cpPintaGrid(); }
+function cpPintaVista(){
+  const a=$("vwPasillo"), b=$("vwProv");
+  if(a) a.className="pill"+(VISTA==="pasillo"?" on":"");
+  if(b) b.className="pill"+(VISTA==="proveedor"?" on":"");
+}
 
 function nuevoPedido(){
   if(!MISAREAS.length) return toast("Tu rol no tiene un área de compras asignada. Pídeselo a administración.");
-  CART=[]; CATFIL=""; ABIERTAS={};
+  CART=[]; CATFIL=""; ABIERTAS={}; VISTA="pasillo";
   modal(cpCuerpo("¿Qué necesitas?")+
     `<div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn ghost" id="cpGuardar" onclick="cpGuardarBase()" disabled>Guardar como pedido base</button>
@@ -553,17 +564,31 @@ function catalogo(){
               .map(p=>{ const ops=cpOpciones(p.id); return {p, ops, mejor:ops[0]||null}; });
 }
 function misItems(){ return catalogo(); }
+
+// El mismo catálogo visto de dos maneras: por pasillo (categoría) o por proveedor.
+// En "proveedor" un producto que venden dos aparece en los dos, con el precio de cada uno.
+const SINPROV="Sin proveedor asignado";
+function itemsVista(){
+  const base=catalogo();
+  if(VISTA!=="proveedor") return base.map(x=>Object.assign({},x,{grupo:x.p.categoria||x.p.area||"Sin categoría", key:x.p.id}));
+  const out=[];
+  base.forEach(x=>{
+    if(!x.ops.length){ out.push(Object.assign({},x,{grupo:SINPROV, key:x.p.id})); return; }
+    x.ops.forEach(o=>out.push({p:x.p, ops:[o], mejor:o, grupo:o.proveedor||SINPROV, key:x.p.id+"-"+o.presentacion_id}));
+  });
+  return out;
+}
 function cpCats(){
   const m={};
-  catalogo().forEach(x=>{ const k=x.p.categoria||x.p.area||"Sin categoría"; m[k]=(m[k]||0)+1; });
-  return Object.keys(m).sort().map(k=>[k,m[k]]);
+  itemsVista().forEach(x=>{ m[x.grupo]=(m[x.grupo]||0)+1; });
+  return Object.keys(m).sort((a,b)=>a===SINPROV?1:b===SINPROV?-1:a.localeCompare(b)).map(k=>[k,m[k]]);
 }
 function cpPintaCats(){
   const cats=cpCats(), tot=cats.reduce((a,c)=>a+c[1],0);
   const el=$("cpCats"); if(el) el.innerHTML=[["","Todo",tot]].concat(cats.map(([k,n])=>[k,k,n]))
     .map(([k,l,n])=>`<span class="pill ${CATFIL===k?"on":""}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(l)} <b class="small muted">${n}</b></span>`).join("");
   const s=$("cpSel");
-  if(s) s.innerHTML=`<option value="">Todas las categorías (${tot})</option>`+
+  if(s) s.innerHTML=`<option value="">${VISTA==="proveedor"?"Todos los proveedores":"Todos los pasillos"} (${tot})</option>`+
     cats.map(([k,n])=>`<option value="${esc(k)}"${CATFIL===k?" selected":""}>${esc(k)} (${n})</option>`).join("");
 }
 const catDe=pid=>{const p=PRODS.find(x=>x.id===pid); return p?(p.categoria||p.area):null;};
@@ -585,8 +610,16 @@ function cvtBase(cant,de,a){
 function cpPintaGrid(){
   const g=$("cpGrid"); if(!g) return;
   const q=(($("cpBusca")||{}).value||"").trim().toLowerCase();
-  const todo=catalogo();
+  const todo=itemsVista();
   const sede=(PROPS.find(p=>p.id===SEDE)||{}).nombre||"esta sede";
+
+  // Por proveedor solo tiene sentido si el catálogo tiene precios cargados.
+  if(VISTA==="proveedor" && todo.length && !todo.some(x=>x.grupo!==SINPROV)){
+    g.innerHTML=`<div class="avisos">En <b>${esc(sede)}</b> ningún producto tiene todavía proveedor con precio,
+      así que la vista por proveedor sale vacía. Carga precios en Proveedores y stocks, o
+      <a href="javascript:void(0)" onclick="cpVista('pasillo')">mira el catálogo por pasillo</a>.</div>`;
+    return;
+  }
 
   // Sin catálogo cargado en la sede: decirlo, no dejar la pantalla muda.
   if(!todo.length){
@@ -598,7 +631,7 @@ function cpPintaGrid(){
   }
 
   let items=todo;
-  if(CATFIL) items=items.filter(x=>(x.p.categoria||x.p.area||"Sin categoría")===CATFIL);
+  if(CATFIL) items=items.filter(x=>x.grupo===CATFIL);
   if(q) items=items.filter(x=>x.p.nombre.toLowerCase().includes(q));
   if(!items.length){
     g.innerHTML=`<div class="avisos">Ningún producto de tus áreas coincide con «${esc(q||CATFIL)}».
@@ -606,16 +639,16 @@ function cpPintaGrid(){
     return;
   }
 
-  // Con búsqueda o categoría elegida se muestra plano; si no, se navega por categorías con +
+  // Con búsqueda o grupo elegido se muestra plano; si no, se navega con +
   if(q||CATFIL){
-    const mas=items.length>120?`<div class="avisos">Mostrando 120 de ${items.length}. Afina la búsqueda o elige categoría.</div>`:"";
+    const mas=items.length>120?`<div class="avisos">Mostrando 120 de ${items.length}. Afina la búsqueda o elige ${VISTA==="proveedor"?"proveedor":"pasillo"}.</div>`:"";
     g.innerHTML=`<div class="pgrid">${items.slice(0,120).map(tarjeta).join("")}</div>${mas}`;
     return;
   }
 
   const grupos={};
-  items.forEach(x=>{ const k=x.p.categoria||x.p.area||"Sin categoría"; (grupos[k]=grupos[k]||[]).push(x); });
-  const claves=Object.keys(grupos).sort();
+  items.forEach(x=>{ (grupos[x.grupo]=grupos[x.grupo]||[]).push(x); });
+  const claves=Object.keys(grupos).sort((a,b)=>a===SINPROV?1:b===SINPROV?-1:a.localeCompare(b));
   if(!Object.keys(ABIERTAS).length && claves.length) ABIERTAS[claves[0]]=true; // la primera abierta, para ver producto sin buscar
   g.innerHTML=claves.map(k=>{
     const ab=!!ABIERTAS[k], l=grupos[k];
@@ -633,28 +666,31 @@ function cpPintaGrid(){
 }
 function cpLimpiaFil(){ CATFIL=""; const b=$("cpBusca"); if(b) b.value=""; cpPintaCats(); cpPintaGrid(); }
 function tarjeta(x){
-  const p=x.p, ops=x.ops, b=x.mejor;
+  const p=x.p, ops=x.ops, b=x.mejor, k=x.key||p.id;
   const sug=(SUG.find(s=>s.producto_id===p.id)||{}).piezas_a_pedir;
   const bajo=(SUG.find(s=>s.producto_id===p.id)||{}).faltante>0;
+  // En la vista por proveedor cada tarjeta ya es de un proveedor: se muestra el pasillo.
+  const pie=VISTA==="proveedor"?esc(p.categoria||p.area||""):(b?esc(b.proveedor):"");
   return `<div class="pcard${b?"":" sinprecio"}">
     <div class="pnom">${esc(p.nombre)}</div>
     <div class="small muted">${esc(p.unidad_texto||p.unidad_base)}${bajo?` · <b style="color:var(--warn)">bajo mínimo</b>`:""}</div>
     ${b? `<div class="pprec">${money(b.precio)} <span class="small muted">${esc(b.presentacion)} ${num(b.contenido)}${esc(b.unidad_contenido)}</span></div>
-          ${ops.length>1?`<select id="op-${p.id}" class="small">${ops.map((o,i)=>
+          ${ops.length>1?`<select id="op-${k}" class="small">${ops.map((o,i)=>
               `<option value="${o.presentacion_id}">${esc(o.proveedor)} · ${money(o.precio)}${i===0?" · más barato":""}</option>`).join("")}</select>`
-            :`<input type="hidden" id="op-${p.id}" value="${b.presentacion_id}"><div class="small muted">${esc(b.proveedor)}</div>`}`
+            :`<input type="hidden" id="op-${k}" value="${b.presentacion_id}"><div class="small muted">${pie}</div>`}`
        : `<div class="pprec small" style="color:var(--warn)">Sin precio cargado</div>
-          <input type="hidden" id="op-${p.id}" value="">
+          <input type="hidden" id="op-${k}" value="">
           <div class="small muted">Se pide igual; administración le pone proveedor.</div>`}
     <div class="padd">
-      <input class="mini" id="qt-${p.id}" type="number" min="1" step="1" value="${sug||1}">
-      <button class="btn sm" onclick="cpAdd('${p.id}')">Agregar</button>
+      <input class="mini" id="qt-${k}" type="number" min="1" step="1" value="${sug||1}">
+      <button class="btn sm" onclick="cpAdd('${p.id}','${k}')">Agregar</button>
     </div></div>`;
 }
-function cpAdd(prodId){
+function cpAdd(prodId,key){
   const p=PRODS.find(x=>x.id===prodId); if(!p) return;
-  const presId=($("op-"+prodId)||{}).value||"";
-  const cant=parseFloat(($("qt-"+prodId)||{}).value)||1;
+  const k=key||prodId;
+  const presId=($("op-"+k)||{}).value||"";
+  const cant=parseFloat(($("qt-"+k)||{}).value)||1;
   const c=presId?CATPROV.find(x=>x.presentacion_id===presId):null;
   const clave=presId||("np-"+prodId);
   const ya=CART.find(x=>x.clave===clave);
