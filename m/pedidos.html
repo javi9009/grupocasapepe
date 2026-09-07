@@ -45,7 +45,11 @@ tr.grp td{background:var(--surface-2);font-weight:700;font-size:12.5px;letter-sp
 .c-rec{background:var(--ok-bg);color:var(--ok)}.c-can{background:var(--bad-bg);color:var(--bad)}
 .pill{border:1px solid var(--rule);background:var(--surface);border-radius:20px;padding:5px 12px;font-size:13px;cursor:pointer;font-weight:600;color:var(--muted)}
 .pill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
-.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.cpfil{display:flex;gap:8px;align-items:center}
+.cpfil input{flex:2 1 180px}
+.cpfil select{flex:1 1 150px}
+@media(max-width:520px){.cpfil{flex-wrap:wrap}.cpfil input,.cpfil select{flex:1 1 100%}}
 label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px;font-weight:600}
 input,select,textarea{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--rule-2);border-radius:8px;background:var(--surface);color:var(--ink)}
 input.mini{padding:4px 7px;font-size:13px;width:86px;text-align:right}
@@ -190,7 +194,7 @@ async function recargar(){
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE),
     sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
-    sb.from("cmp_productos").select("id,nombre,area,unidad_base,tipo,bodega_id,cuenta_id").eq("property_id",SEDE).eq("activo",true).order("nombre"),
+    sb.from("cmp_productos").select("id,nombre,area,categoria,familia,unidad_base,unidad_texto,tipo,tasa_iva_default,bodega_id,cuenta_id").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_solicitudes_mtto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}),
     sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE)
   ]);
@@ -514,7 +518,10 @@ function cpCuerpo(titulo){
   return `<h3 style="margin:0 0 2px">${esc(titulo)}</h3>
     <div class="small muted" style="margin-bottom:8px">Solo ves lo de tus áreas: ${esc(MISAREAS.join(" · "))}</div>
     <div id="cpPlant"></div>
-    <input id="cpBusca" placeholder="Buscar producto…" oninput="cpPintaGrid()">
+    <div class="cpfil">
+      <input id="cpBusca" placeholder="Buscar producto…" oninput="cpPintaGrid()">
+      <select id="cpSel" onchange="CATFIL=this.value;cpPintaCats();cpPintaGrid()"></select>
+    </div>
     <div id="cpCats" class="chips"></div>
     <div id="cpGrid"></div>
     <div id="cpCart"></div>`;
@@ -540,10 +547,18 @@ function vPedir(){
   cpInit();
 }
 function misItems(){ return catalogo(); }
+function cpCats(){
+  const m={};
+  catalogo().forEach(x=>{ const k=x.p.categoria||x.p.area||"Sin categoría"; m[k]=(m[k]||0)+1; });
+  return Object.keys(m).sort().map(k=>[k,m[k]]);
+}
 function cpPintaCats(){
-  const cats=[...new Set(catalogo().map(x=>x.p.categoria||x.p.area).filter(Boolean))].sort();
-  $("cpCats").innerHTML=[["","Todo"]].concat(cats.map(c=>[c,c]))
-    .map(([k,l])=>`<span class="pill ${CATFIL===k?"on":""}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(l)}</span>`).join("");
+  const cats=cpCats(), tot=cats.reduce((a,c)=>a+c[1],0);
+  const el=$("cpCats"); if(el) el.innerHTML=[["","Todo",tot]].concat(cats.map(([k,n])=>[k,k,n]))
+    .map(([k,l,n])=>`<span class="pill ${CATFIL===k?"on":""}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(l)} <b class="small muted">${n}</b></span>`).join("");
+  const s=$("cpSel");
+  if(s) s.innerHTML=`<option value="">Todas las categorías (${tot})</option>`+
+    cats.map(([k,n])=>`<option value="${esc(k)}"${CATFIL===k?" selected":""}>${esc(k)} (${n})</option>`).join("");
 }
 const catDe=pid=>{const p=PRODS.find(x=>x.id===pid); return p?(p.categoria||p.area):null;};
 function cpOpciones(prodId){
@@ -562,18 +577,41 @@ function cvtBase(cant,de,a){
   return cant;
 }
 function cpPintaGrid(){
-  const q=($("cpBusca").value||"").trim().toLowerCase();
-  let items=catalogo();
-  if(CATFIL) items=items.filter(x=>(x.p.categoria||x.p.area)===CATFIL);
-  if(q) items=items.filter(x=>x.p.nombre.toLowerCase().includes(q));
-  if(!items.length){ $("cpGrid").innerHTML=`<div class="avisos">No hay productos con ese nombre en tus áreas.</div>`; return; }
+  const g=$("cpGrid"); if(!g) return;
+  const q=(($("cpBusca")||{}).value||"").trim().toLowerCase();
+  const todo=catalogo();
+  const sede=(PROPS.find(p=>p.id===SEDE)||{}).nombre||"esta sede";
 
-  // Con búsqueda se muestra plano; sin búsqueda se navega por categorías con +
-  if(q){ $("cpGrid").innerHTML=`<div class="pgrid">${items.slice(0,80).map(tarjeta).join("")}</div>`; return; }
+  // Sin catálogo cargado en la sede: decirlo, no dejar la pantalla muda.
+  if(!todo.length){
+    const hay=PRODS.length;
+    g.innerHTML=`<div class="avisos">${hay
+      ? `El catálogo de <b>${esc(sede)}</b> no tiene productos pedibles de tus áreas (${esc(MISAREAS.join(" · "))}).`
+      : `<b>${esc(sede)}</b> todavía no tiene catálogo de compras cargado. Pídeselo a administración o cambia de sede arriba.`}</div>`;
+    return;
+  }
+
+  let items=todo;
+  if(CATFIL) items=items.filter(x=>(x.p.categoria||x.p.area||"Sin categoría")===CATFIL);
+  if(q) items=items.filter(x=>x.p.nombre.toLowerCase().includes(q));
+  if(!items.length){
+    g.innerHTML=`<div class="avisos">Ningún producto de tus áreas coincide con «${esc(q||CATFIL)}».
+      <a href="javascript:void(0)" onclick="cpLimpiaFil()">Ver todo el catálogo</a></div>`;
+    return;
+  }
+
+  // Con búsqueda o categoría elegida se muestra plano; si no, se navega por categorías con +
+  if(q||CATFIL){
+    const mas=items.length>120?`<div class="avisos">Mostrando 120 de ${items.length}. Afina la búsqueda o elige categoría.</div>`:"";
+    g.innerHTML=`<div class="pgrid">${items.slice(0,120).map(tarjeta).join("")}</div>${mas}`;
+    return;
+  }
 
   const grupos={};
-  items.forEach(x=>{ const k=x.p.categoria||x.p.area; (grupos[k]=grupos[k]||[]).push(x); });
-  $("cpGrid").innerHTML=Object.keys(grupos).sort().map(k=>{
+  items.forEach(x=>{ const k=x.p.categoria||x.p.area||"Sin categoría"; (grupos[k]=grupos[k]||[]).push(x); });
+  const claves=Object.keys(grupos).sort();
+  if(!Object.keys(ABIERTAS).length && claves.length) ABIERTAS[claves[0]]=true; // la primera abierta, para ver producto sin buscar
+  g.innerHTML=claves.map(k=>{
     const ab=!!ABIERTAS[k], l=grupos[k];
     const sinPrecio=l.filter(x=>!x.mejor).length;
     return `<div class="acc">
@@ -582,10 +620,12 @@ function cpPintaGrid(){
         <span class="accnom">${esc(k)}</span>
         <span class="accn">${l.length}${sinPrecio?` · ${sinPrecio} sin precio`:""}</span>
       </button>
-      ${ab?`<div class="pgrid">${l.map(tarjeta).join("")}</div>`:""}
+      ${ab?`<div class="pgrid">${l.slice(0,120).map(tarjeta).join("")}</div>
+           ${l.length>120?`<div class="avisos">Mostrando 120 de ${l.length}. Usa el buscador para afinar.</div>`:""}`:""}
     </div>`;
   }).join("");
 }
+function cpLimpiaFil(){ CATFIL=""; const b=$("cpBusca"); if(b) b.value=""; cpPintaCats(); cpPintaGrid(); }
 function tarjeta(x){
   const p=x.p, ops=x.ops, b=x.mejor;
   const sug=(SUG.find(s=>s.producto_id===p.id)||{}).piezas_a_pedir;
