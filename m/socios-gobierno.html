@@ -99,6 +99,12 @@ td.n{text-align:right}
 .proj a em{display:block;font-style:normal;color:var(--muted);font-weight:400;font-size:.78rem;line-height:1.45;margin-top:7px}
 .proj a b{display:block;margin-top:8px;color:var(--accent);font-size:.78rem}
 .proj a.soon b{display:none}
+.simbox{background:#FAF7F0;border:1px solid var(--rule);border-radius:10px;padding:11px 13px;margin:10px 0 12px}
+.simhead{font-size:.86rem;margin-bottom:8px}.simhead span{color:var(--muted);font-weight:400}
+.simrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.simrow input[type=range]{flex:1 1 240px;accent-color:var(--accent)}
+.simrow input[type=number]{width:140px;padding:6px 8px;border:1px solid var(--rule);border-radius:8px;font:inherit;text-align:right}
+.simout{margin-top:9px;font-size:.84rem;line-height:1.5;color:var(--ink)}
 .scard{background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;cursor:pointer;transition:transform .08s}
 .scard:hover{transform:translateY(-2px)} .scard.sel{outline:2px solid var(--accent);outline-offset:1px}
 .scard.muted{opacity:.55;filter:grayscale(.4)} .scard .pad{padding:12px}
@@ -547,6 +553,25 @@ async function renderValorChart(s){
   serie.push({dual:1,inv:inv,val:obj,objv:1,lb:EXITY,tt:'2030 · proyección (valuación $60 mdp de regreso / EBITDA ~$7 mdp/año)'});
  }
  if(serie.length<2){ box.innerHTML=''; return; }
+ let comp=0; try{ const G=await gobLoad(SOC); const r=(G.ref||[]).find(x=>x.socio_id&&x.socio_id===s.id)||(G.ref||[]).find(x=>x.nombre&&x.nombre.toLowerCase().includes((s.n||'').split(' ')[0].toLowerCase())); comp=r?+r.monto_comprometido||0:0; }catch(e){ comp=0; }
+ VALSIM={serie:serie,obj:obj,pctPart:pctPart,share:share,comp:comp,nombre:s.n};
+ pintaValor(0);
+ return;
+}
+const VALREF=6250000, TESORERIA=0.24;   // en la refundación, 1% de la sociedad cuesta $62,500
+let VALSIM=null;
+function pintaValor(x){
+ const box=document.getElementById('p-valor'); if(!box||!VALSIM) return;
+ const S=VALSIM, comp=S.comp, extra=Math.max(0,+x||0), p0=S.pctPart;
+ const pctComprado=Math.min(extra/VALREF,TESORERIA);
+ const pN=(p0!=null)?p0+pctComprado:null;
+ const serie=S.serie.map(e=>{
+  if(!e.dual) return e;
+  if(e.lb==='2026·ref') return Object.assign({},e,{inv:(e.inv||0)+extra,val:(e.val||0)+extra});
+  if(e.lb===String(EXITY)) return Object.assign({},e,{inv:(e.inv||0)+extra,val:pN*S.share*VALFUT});
+  return e;
+ });
+ const obj=(pN!=null)?pN*S.share*VALFUT:S.obj;
  const W=880,H=214,pl=10,pr=10,pt=26,pb=40, n=serie.length;
  const max=Math.max(...serie.map(x=>x.dual?Math.max(x.inv||0,x.val||0):x.v))*1.16||1;
  const bw=(W-pl-pr)/n, gap=Math.min(14,bw*.24), y0=H-pb;
@@ -581,13 +606,36 @@ async function renderValorChart(s){
  const yObj=obj!=null?yOf(obj):null;
  const linea=yObj!=null?`<line x1="${pl}" y1="${yObj.toFixed(1)}" x2="${W-pr}" y2="${yObj.toFixed(1)}" stroke="#137A56" stroke-width="1" stroke-dasharray="3 4" opacity=".55"></line>`+
    `<text x="${pl+2}" y="${(yObj-5).toFixed(1)}" font-size="10" fill="#137A56">objetivo ${EXITY} · valuación $60 mdp</text>`:'';
+ const inv2030=(S.pctPart!=null)?(serie.find(e=>e.lb===String(EXITY))||{}).inv||0:0;
+ const val2030=(S.pctPart!=null)?(serie.find(e=>e.lb===String(EXITY))||{}).val||0:0;
+ const mult=inv2030>0?(val2030/inv2030):0;
+ const svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Evolución del valor de la inversión">
+   <line x1="${pl}" y1="${y0}" x2="${W-pr}" y2="${y0}" stroke="#E2DCCF"></line>
+   ${linea}${barras}
+  </svg>`;
+ const marco=document.getElementById('valor-svg');
+ if(marco){
+  marco.innerHTML=svg;
+  const r=document.getElementById('sim-out');
+  if(r) r.innerHTML=simTexto(x,pctComprado,pN,val2030,inv2030,mult);
+  return;
+ }
+ const maxSlider=1500000;   // 24% de la sociedad = $1,500,000 (toda la tesorería)
+ const control=(S.pctPart==null)?'':`<div class="simbox">
+   <div class="simhead"><b>¿Quieres entrar en la siguiente ronda?</b> <span>En la refundación <b>1% de la sociedad cuesta $62,500</b>. Mueve cuánto meterías y mira cómo suben tu capital invertido y tu recuperación potencial en ${EXITY}.</span></div>
+   <div class="simrow">
+    <input id="sim-rango" type="range" min="0" max="${maxSlider}" step="6250" value="${x}">
+    <input id="sim-monto" type="number" min="0" step="6250" value="${x}">
+    <button class="btn ghost sm" type="button" onclick="pintaValor(62500)">1% · $62,500</button>
+    ${comp>0?`<button class="btn ghost sm" type="button" onclick="pintaValor(${comp})">Mi compromiso · ${money(comp)}</button>`:''}
+   </div>
+   <div id="sim-out" class="simout">${simTexto(x,pctComprado,pN,val2030,inv2030,mult)}</div>
+  </div>`;
  box.innerHTML=`<div class="chartbox">
   <h4>Valor de tu inversión</h4>
   <p class="cap"><span style="color:#274B6B;font-weight:700">Azul</span> = tu inversión. <span style="color:#137A56;font-weight:700">Verde</span> = valor de tus acciones a la valuación de cada etapa (2022 <b>$100 mdp</b> · 2024 <b>$60 mdp</b> · 2026 <b>$6.25 mdp</b>) y proyección <b>$60 mdp en ${EXITY}</b>. En cada columna apilada: si el verde queda <b>encima</b> del azul hay <b>sobrevaluación</b> (ganas); si el azul queda encima, tu inversión vale <b>menos</b> a esa valuación.</p>
-  <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Evolución del valor de la inversión">
-   <line x1="${pl}" y1="${y0}" x2="${W-pr}" y2="${y0}" stroke="#E2DCCF"></line>
-   ${linea}${barras}
-  </svg>
+  ${control}
+  <div id="valor-svg">${svg}</div>
   <p class="cap" style="margin:6px 0 0">
    <span style="display:inline-block;width:9px;height:9px;background:#5B8FD1;border-radius:2px"></span> aportado (por asamblea) &nbsp;
    <span style="display:inline-block;width:9px;height:9px;background:#AECBEA;border-radius:2px"></span> tu inversión &nbsp;
@@ -595,6 +643,15 @@ async function renderValorChart(s){
    <span style="display:inline-block;width:9px;height:9px;background:#BFE3CF;border:1px dashed #137A56;border-radius:2px"></span> recuperable ${EXITY}
   </p>
  </div>`;
+ const rg=document.getElementById('sim-rango'), nm=document.getElementById('sim-monto');
+ if(rg) rg.oninput=()=>{ if(nm) nm.value=rg.value; pintaValor(+rg.value); };
+ if(nm) nm.onchange=()=>{ if(rg) rg.value=Math.min(+nm.value||0,+rg.max); pintaValor(+nm.value||0); };
+}
+function simTexto(x,pctComprado,pN,val2030,inv2030,mult){
+ if(!x) return `Sin meter nada en esta ronda te quedas con <b>${(pN*100).toFixed(2)}%</b>: en ${EXITY} tus acciones valdrían <b style="color:#137A56">${money(val2030)}</b> sobre <b>${money(inv2030)}</b> invertidos — <b>×${mult.toFixed(2)}</b>.`;
+ return `Si metes <b>${money(x)}</b> compras <b>${(pctComprado*100).toFixed(2)}%</b> más de la sociedad y pasas a <b>${(pN*100).toFixed(2)}%</b>.
+  En ${EXITY}, a valuación de $60 mdp, tus acciones valdrían <b style="color:#137A56">${money(val2030)}</b> sobre una inversión total de <b>${money(inv2030)}</b> — <b style="color:#137A56">×${mult.toFixed(2)}</b>.
+  Solo por esta ronda: <b>${money(x)}</b> → <b style="color:#137A56">${money(pctComprado*VALFUT)}</b> en ${EXITY}, <b style="color:#137A56">×${(VALFUT/VALREF).toFixed(1)}</b>.`;
 }
 async function renderAport(s){
  const box=document.getElementById('p-aport');if(!box)return;
