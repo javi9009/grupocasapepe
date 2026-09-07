@@ -65,6 +65,12 @@ select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   background:var(--none-bg);display:flex;align-items:center;justify-content:center;
   font-size:.64rem;font-weight:700;color:var(--faint);text-align:center;overflow:hidden;padding:0 3px}
 .pila .seg.ok{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
+.pila .seg{position:relative}
+.pila .seg i.fill{position:absolute;left:0;top:0;bottom:0;pointer-events:none}
+.pila .seg span.lbl{position:relative;z-index:1}
+#tipbox{position:fixed;z-index:99;max-width:330px;background:#1F1B16;color:#FBF8F1;
+  white-space:pre-line;font-size:.78rem;line-height:1.5;border-radius:9px;padding:10px 13px;
+  box-shadow:0 8px 24px -6px rgba(31,27,22,.45);pointer-events:none;display:none}
 .pila .seg.parcial{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
 .leyenda{display:flex;gap:14px;flex-wrap:wrap;font-size:.72rem;color:var(--muted);margin-top:4px}
 
@@ -126,6 +132,34 @@ try{const _r=localStorage.getItem('sb-rehophywchakfapivsbh-auth-token');if(_r){c
   if(_t){H.Authorization='Bearer '+_t;try{ME=(JSON.parse(atob(_t.split('.')[1])).email||'').toLowerCase();}catch(e){}}}}catch(e){}
 
 const $=id=>document.getElementById(id);
+(function(){
+  const tb=document.createElement('div'); tb.id='tipbox';
+  document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(tb));
+  function mueve(e){ const w=tb.offsetWidth,h=tb.offsetHeight; let x=e.clientX+14,y=e.clientY+18;
+    if(x+w>innerWidth-8)x=Math.max(8,e.clientX-w-12); if(y+h>innerHeight-8)y=Math.max(8,e.clientY-h-14);
+    tb.style.left=x+'px'; tb.style.top=y+'px'; }
+  document.addEventListener('mouseover',e=>{ const t=e.target.closest&&e.target.closest('[data-tip]');
+    if(!t){ tb.style.display='none'; return; } tb.textContent=t.getAttribute('data-tip')||''; tb.style.display='block'; mueve(e); });
+  document.addEventListener('mousemove',e=>{ if(tb.style.display!=='none') mueve(e); });
+  document.addEventListener('scroll',()=>{ tb.style.display='none'; }, true);
+  document.addEventListener('change', async e=>{
+    const t=e.target;
+    try{
+      if(t.matches&&t.matches('[data-rmin]')){
+        const v=Number(t.value); if(isNaN(v)||v<=0) return;
+        await api('/carrera_requisitos?id=eq.'+t.dataset.rmin,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({minimo:v})});
+        const rq=REQS.find(x=>x.id===t.dataset.rmin); if(rq) rq.minimo=v;
+        estado('✓ mínimo guardado'); setTimeout(()=>estado(''),1800);
+      }
+      if(t.matches&&t.matches('[data-rkpi]')){
+        if(!t.value) return;
+        await api('/carrera_requisitos?id=eq.'+t.dataset.rkpi,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({kpi_id:t.value})});
+        const rq=REQS.find(x=>x.id===t.dataset.rkpi); if(rq) rq.kpi_id=t.value;
+        estado('✓ KPI guardado'); setTimeout(()=>estado(''),1800);
+      }
+    }catch(_){ }
+  });
+})();
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const mxn=n=>(Number(n)||0).toLocaleString('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0});
 const hoyMes=()=>new Date().toISOString().slice(0,7);
@@ -183,10 +217,26 @@ function planes(){
   });
   return Object.values(m);
 }
+const CCOL={test:'#2F6DB5',puntualidad:'#1F5E3F',calidad:'#C0552F',procedimientos:'#6C4FA1',encuesta:'#D9A21B'};
 function pilaHTML(p){
-  return '<div class="pila">'+p.reqs.map(r=>
-    `<div class="seg ${r.cumplido?'ok':''}" title="${esc(r.requisito_nombre)}${r.valor!=null?' · '+r.valor:''}">${esc(r.requisito_nombre.split(' ')[0])}</div>`
-  ).join('')+'</div>';
+  const tot=p.reqs.length||5;
+  const cerrados=p.reqs.filter(r=>r.cumplido).length;
+  const pctTotal=Math.round(p.reqs.reduce((a,r)=>a+(Number(r.pct)||0),0)/tot*100);
+  const segs=p.reqs.map(r=>{
+    const pct=Math.round((Number(r.pct)||0)*100);
+    const col=CCOL[r.requisito]||'#13805B';
+    const k=(typeof KPN!=='undefined'&&r.kpi_id&&KPN[r.kpi_id])?KPN[r.kpi_id]:null;
+    const det=r.medida==='meses_ganados' ? ((r.meses_cumplidos||0)+' de '+r.minimo+' meses ganados (ventana de '+r.ventana_meses+')')
+      : r.medida==='bono' ? (r.cumplido?'Bono ganado.':'Bono aún no ganado.')
+      : (r.mejor_valor!=null ? ('Mejor resultado: '+r.mejor_valor+' · mínimo '+r.minimo) : 'Sin dato todavía.');
+    const tip=r.requisito_nombre+' — '+pct+'%\n'+det+(k?'\nKPI: '+k.nombre+' ('+(k.fuente||'')+')':'')
+      +'\nEl orden no importa: la mezcla de logros suma. Con los 5 cerrados, el ascenso.';
+    return `<div class="seg ${r.cumplido?'ok':''}" data-tip="${esc(tip)}">
+      <i class="fill" style="width:${r.cumplido?100:pct}%;background:${col}${r.cumplido?'33':'22'};border-right:${pct>0&&pct<100?('2px solid '+col):'0'}"></i>
+      <span class="lbl">${esc(r.requisito_nombre.split(' ')[0])}${pct>0&&!r.cumplido?(' '+pct+'%'):''}${r.cumplido?' ✓':''}</span></div>`;
+  }).join('');
+  return '<div class="pila">'+segs+'</div>'
+    + `<div class="meta" style="font-size:.72rem;margin:-2px 0 6px">${cerrados} de ${tot} cerrados · avance total ${pctTotal}% — <strong>al 100% no hay nota: hay ascenso</strong> (el bono se vuelve sueldo base)</div>`;
 }
 function mesesTranscurridos(p){
   const a=new Date(p.inicio), b=new Date();
@@ -450,9 +500,15 @@ function vModelo(){
       <div style="border:1px solid var(--rule);border-radius:8px;padding:12px;background:var(--surface-3)">
         <strong>${esc(t.nombre)}</strong> <span class="pill">${t.meses} meses</span>
         <p class="meta" style="margin:6px 0 8px">${esc(t.descripcion||'')}</p>
-        <table><tbody>${rs.map(r=>`<tr><td>${esc(r.nombre)}</td><td class="num"><strong>${
-          r.medida==='meses_ganados'?(r.minimo+' de '+r.ventana_meses+' meses'):
-          (r.medida==='bono'?'ganado':(r.minimo+' o más'))}</strong></td></tr>`).join('')}</tbody></table>
+        <table><tbody>${rs.map(r=>`<tr><td>${esc(r.nombre)}<br>
+          <select data-rkpi="${r.id}" style="font:inherit;font-size:.68rem;padding:2px 4px;border:1px solid var(--rule);border-radius:5px;max-width:190px;margin-top:2px">
+            <option value="">— KPI del catálogo —</option>
+            ${Object.values(KPN||{}).sort((a,b)=>(a.grupo+a.nombre).localeCompare(b.grupo+b.nombre)).map(k=>`<option value="${esc(k.id)}"${k.id===r.kpi_id?' selected':''}>${esc(k.grupo)} · ${esc(k.nombre)}</option>`).join('')}
+          </select></td>
+          <td class="num">${r.medida==='bono'
+            ? '<strong>ganado</strong>'
+            : `<input data-rmin="${r.id}" type="number" min="1" max="20" step="0.5" value="${r.minimo}" style="font:inherit;font-size:.75rem;width:54px;padding:3px 5px;border:1px solid var(--rule);border-radius:5px;text-align:right"> <span class="faint" style="font-size:.66rem">${r.medida==='meses_ganados'?('de '+r.ventana_meses+' m'):'mín.'}</span>`}
+          </td></tr>`).join('')}</tbody></table>
       </div>`;}).join('')}
     </div>
     <p class="meta" style="margin-top:12px"><strong>La rampa del bono:</strong> 25% de la brecha con 1 requisito
