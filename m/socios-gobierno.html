@@ -547,19 +547,26 @@ async function renderValorChart(s){
   }
  }
  const obj=(pctPart!=null)?pctPart*share*VALFUT:null;
- const inv=serie.length?Math.max(...serie.map(x=>x.v)):((s.inv!=null)?s.inv:(s.nuevo?1650000:null));
+ // capital invertido en cada momento: antes y después del reconocimiento de AFACs de 2024
+ const hist=serie.filter(x=>!x.dual).map(x=>x.v);
+ const invFin=hist.length?hist[hist.length-1]:((s.inv!=null)?s.inv:(s.nuevo?1650000:null));
+ const invPre=hist.length>1?hist[hist.length-2]:invFin;
  const pctV=(s.pct!=null)?s.pct:null; // % pre-refundación (proxy para 2022/2024)
  if(!s.nuevo && pctV!=null){
-  serie.push({dual:1,inv:inv,val:pctV*100000000,lb:'2022·GP',tt:'2022 · entrada Zeltek (valuación $100 mdp)'});
-  serie.push({dual:1,inv:inv,val:pctV*60000000,lb:'2024·dil',tt:'2024 · dilución (valuación $60 mdp, ef. 1-ene)'});
+  serie.push({dual:1,inv:invPre,val:pctV*100000000,lb:'2022·GP',tt:'2022 · entrada Zeltek (valuación $100 mdp)'});
+  serie.push({dual:1,inv:invFin,val:pctV*60000000,lb:'2024·dil',tt:'2024 · dilución y reconocimiento de aportaciones y AFACs (valuación $60 mdp)'});
  }
  if(pctPart!=null){
-  serie.push({dual:1,inv:inv,val:pctPart*6250000,lb:'2026·ref',tt:'2026 · refundación (valuación $6.25 mdp)'});
-  serie.push({dual:1,inv:inv,val:obj,objv:1,lb:EXITY,tt:'2030 · proyección (valuación $60 mdp de regreso / EBITDA ~$7 mdp/año)'});
+  serie.push({dual:1,inv:invFin,val:pctPart*6250000,lb:'2026·ref',tt:'2026 · refundación (valuación $6.25 mdp)'});
+  serie.push({dual:1,inv:invFin,val:obj,objv:1,lb:EXITY,tt:'2030 · proyección (valuación $60 mdp de regreso)'});
  }
  if(serie.length<2){ box.innerHTML=''; return; }
- let comp=0; try{ const G=await gobLoad(SOC); const r=(G.ref||[]).find(x=>x.socio_id&&x.socio_id===s.id)||(G.ref||[]).find(x=>x.nombre&&x.nombre.toLowerCase().includes((s.n||'').split(' ')[0].toLowerCase())); comp=r?+r.monto_comprometido||0:0; }catch(e){ comp=0; }
- VALSIM={serie:serie,obj:obj,pctPart:pctPart,share:share,comp:comp,nombre:s.n};
+ let comp=0, pctSub=0;
+ try{ const G=await gobLoad(SOC);
+  const r=(G.ref||[]).find(x=>x.socio_id&&x.socio_id===s.id)||(G.ref||[]).find(x=>x.nombre&&x.nombre.toLowerCase().includes((s.n||'').split(' ')[0].toLowerCase()));
+  if(r){ comp=+r.monto_comprometido||0; pctSub=+r.pct||0; }
+ }catch(e){}
+ VALSIM={serie:serie,obj:obj,pctPart:pctPart,share:share,comp:comp,pctSub:pctSub,invFin:invFin,nombre:s.n};
  pintaValor(comp);
  return;
 }
@@ -567,13 +574,14 @@ const VALREF=6250000, TESORERIA=0.24;   // en la refundación, 1% de la sociedad
 let VALSIM=null;
 function pintaValor(x){
  const box=document.getElementById('p-valor'); if(!box||!VALSIM) return;
- const S=VALSIM, comp=S.comp, monto=Math.max(0,+x||0), extra=monto-comp, p0=S.pctPart;
- const pctComprado=Math.min(extra/VALREF,TESORERIA);
- const pN=(p0!=null)?p0+pctComprado:null;
+ const S=VALSIM, comp=S.comp, monto=Math.max(0,+x||0), extra=monto-comp;
+ const pBase=(S.pctPart!=null)?S.pctPart-(S.pctSub||0):null;   // lo que tiene sin suscribir la refundación
+ const pctComprado=monto/VALREF;                                // 1% de la sociedad = $62,500
+ const pN=(pBase!=null)?pBase+pctComprado:null;
  const serie=S.serie.map(e=>{
   if(!e.dual) return e;
-  if(e.lb==='2026·ref') return Object.assign({},e,{inv:(e.inv||0)+extra,val:(e.val||0)+extra});
-  if(String(e.lb)===String(EXITY)) return Object.assign({},e,{inv:(e.inv||0)+extra,val:pN*S.share*VALFUT});
+  if(e.lb==='2026·ref') return Object.assign({},e,{inv:S.invFin+monto,val:pN*VALREF});
+  if(String(e.lb)===String(EXITY)) return Object.assign({},e,{inv:S.invFin+monto,val:pN*S.share*VALFUT});
   return e;
  });
  const obj=S.obj;   // la línea del objetivo no se mueve: solo sube o baja la columna
@@ -625,9 +633,9 @@ function pintaValor(x){
   if(r) r.innerHTML=simTexto(monto,pctComprado,pN,val2030,inv2030,mult,comp,extra);
   return;
  }
- const maxSlider=1500000;   // 24% de la sociedad = $1,500,000 (toda la tesorería)
+ const maxSlider=Math.max(1500000,Math.ceil((comp+1500000)/50000)*50000);
  const control=(S.pctPart==null)?'':`<div class="simbox">
-   <div class="simhead"><b>¿Quieres entrar en la ronda actual de Refundación?</b> <span>En la refundación <b>1% de la sociedad cuesta $62,500</b>. El deslizador arranca en <b>lo que ya tienes comprometido</b> en el acta; muévelo para ver qué pasa si aportas más.</span></div>
+   <div class="simhead"><b>¿Quieres entrar en la ronda actual de Refundación?</b> <span>En la refundación <b>1% de la sociedad cuesta $62,500</b>. El deslizador arranca en <b>lo que tienes comprometido en el acta pero aún no has exhibido</b>: bájalo a cero para ver qué te queda si no lo aportas, o súbelo para ver qué ganas aportando más.</span></div>
    <div class="simrow">
     <input id="sim-rango" type="range" min="0" max="${maxSlider}" step="6250" value="${monto}">
     <input id="sim-monto" type="number" min="0" step="6250" value="${monto}">
@@ -661,11 +669,13 @@ function simTexto(x,pctComprado,pN,val2030,inv2030,mult,comp,extra){
   </div>`;
  let txt;
  if(Math.abs(extra)<1){
-  txt=`Este es tu escenario si no cambias nada: con tu compromiso del acta de <b>${money(comp)}</b>, en ${EXITY} recuperarías <b style="color:#137A56">${money(val2030)}</b> sobre los <b>${money(inv2030)}</b> que llevas invertidos — <b style="color:#137A56">×${mult.toFixed(2)}</b>. Mueve el control para ver qué pasa si aportas más.`;
+  txt=comp>0
+   ? `Escenario del acta: aportando tu compromiso de <b>${money(comp)}</b>, en ${EXITY} recuperarías <b style="color:#137A56">${money(val2030)}</b> sobre los <b>${money(inv2030)}</b> invertidos en total — <b style="color:#137A56">×${mult.toFixed(2)}</b>. Bájalo a cero para ver qué te queda si no lo exhibes.`
+   : `Hoy no tienes compromiso de aportación en la refundación. Así, en ${EXITY} recuperarías <b style="color:#137A56">${money(val2030)}</b> sobre los <b>${money(inv2030)}</b> que llevas invertidos — <b style="color:#137A56">×${mult.toFixed(2)}</b>. Mueve el control para ver qué ganarías entrando.`;
  }else if(extra>0){
-  txt=`<b style="color:#137A56">Los ${money(extra)} por encima de tu compromiso</b> te compran <b>${(pctComprado*100).toFixed(2)}%</b> adicional de la sociedad, que en ${EXITY} valdrían <b style="color:#137A56">${money(pctComprado*VALFUT)}</b>: <b style="color:#137A56">×${(VALFUT/VALREF).toFixed(1)}</b> sobre ese dinero.`;
+  txt=`<b style="color:#137A56">Los ${money(extra)} por encima de tu compromiso</b> te compran <b>${(extra/VALREF*100).toFixed(2)}%</b> adicional de la sociedad, que en ${EXITY} valdrían <b style="color:#137A56">${money(extra/VALREF*VALFUT)}</b>: <b style="color:#137A56">×${(VALFUT/VALREF).toFixed(1)}</b> sobre ese dinero.`;
  }else{
-  txt=`<span style="color:var(--bad)">Estás <b>${money(-extra)}</b> por debajo de tu compromiso del acta (${money(comp)}): dejas de tener <b>${(-pctComprado*100).toFixed(2)}%</b> de la sociedad y tu recuperación en ${EXITY} baja a ${money(val2030)}.</span>`;
+  txt=`<span style="color:var(--bad)">Estás <b>${money(-extra)}</b> por debajo de tu compromiso del acta (${money(comp)}): dejas de suscribir <b>${(-extra/VALREF*100).toFixed(2)}%</b> de la sociedad y tu recuperación en ${EXITY} baja a <b>${money(val2030)}</b>.</span>`;
  }
  return cifras+'<div style="margin-top:7px">'+txt+'</div>';
 }
