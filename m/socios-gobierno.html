@@ -525,19 +525,22 @@ function mCorto(v){ const a=Math.abs(v); return a>=1e6?'$'+(v/1e6).toFixed(a>=1e
 async function renderValorChart(s){
  const box=document.getElementById('p-valor'); if(!box) return;
  const D=DATA[SOC], share=HBRSHARE[SOC]||1, pctPart=pctRefOf(s), quien=s.n;
- let serie=[];
+ let serie=[]; PCTACTA=null;
  if(SOC==='hbr'){
   const claves=(GOB_TIT_SOC[SOC]||{})[s.n];
   if(claves){
    try{
     const G=await gobLoad(SOC); if(!socVigente(quien))return;
     const A={}; (G.actas||[]).forEach(a=>A[a.codigo]=a);
-    const por={};
-    (G.movs||[]).filter(m=>m.concepto==='saldo'&&claves.includes(m.titular)).forEach(m=>{
-      por[m.acta_codigo]=(por[m.acta_codigo]||0)+(+m.saldo_despues||0);
+    const por={}, tot={};
+    (G.movs||[]).filter(m=>m.concepto==='saldo').forEach(m=>{
+      tot[m.acta_codigo]=(tot[m.acta_codigo]||0)+(+m.saldo_despues||0);
+      if(claves.includes(m.titular)) por[m.acta_codigo]=(por[m.acta_codigo]||0)+(+m.saldo_despues||0);
     });
+    PCTACTA={p14:(tot['ACT-14']?(por['ACT-14']||0)/tot['ACT-14']:null),
+             p17:(tot['ACT-17']?(por['ACT-17']||0)/tot['ACT-17']:null)};
     serie=Object.keys(por).map(k=>({
-      v:por[k], orden:A[k]?A[k].orden:0,
+      v:por[k], cod:k, orden:A[k]?A[k].orden:0,
       lb:(A[k]&&A[k].fecha)?new Date(A[k].fecha+'T12:00:00').toLocaleDateString('es-MX',{month:'short',year:'2-digit'}).replace('.',''):'proy.',
       tt:(A[k]?A[k].tipo:k)
     })).sort((a,b)=>a.orden-b.orden);
@@ -551,10 +554,13 @@ async function renderValorChart(s){
  const hist=serie.filter(x=>!x.dual).map(x=>x.v);
  const invFin=hist.length?hist[hist.length-1]:((s.inv!=null)?s.inv:(s.nuevo?1650000:null));
  const invPre=hist.length>1?hist[hist.length-2]:invFin;
- const pctV=(s.pct!=null)?s.pct:null; // % pre-refundación (proxy para 2022/2024)
- if(!s.nuevo && pctV!=null){
-  serie.push({dual:1,inv:invPre,val:pctV*100000000,lb:'2022·GP',tt:'2022 · entrada Zeltek (valuación $100 mdp)'});
-  serie.push({dual:1,inv:invFin,val:pctV*60000000,lb:'2024·dil',tt:'2024 · dilución y reconocimiento de aportaciones y AFACs (valuación $60 mdp)'});
+ // la asamblea de diluciones no se pinta aparte: su capital ya es el azul de la columna 2024·dil
+ serie=serie.filter(x=>x.cod!=='ACT-17');
+ // % real de cada momento, tomado del libro (saldo del socio / capital total de esa asamblea)
+ const p22=(PCTACTA&&PCTACTA.p14!=null)?PCTACTA.p14:s.pct, p24=(PCTACTA&&PCTACTA.p17!=null)?PCTACTA.p17:s.pct;
+ if(!s.nuevo && p22!=null){
+  serie.push({dual:1,inv:invPre,val:p22*100000000,lb:'2022·GP',tt:'2022 · entrada Zeltek · '+(p22*100).toFixed(2)+'% de la sociedad a valuación $100 mdp'});
+  serie.push({dual:1,inv:invFin,val:p24*60000000,lb:'2024·dil',tt:'Diluciones y reconocimiento de aportaciones y AFACs · '+(p24*100).toFixed(2)+'% a valuación $60 mdp'});
  }
  if(pctPart!=null){
   serie.push({dual:1,inv:invFin,val:pctPart*6250000,lb:'2026·ref',tt:'2026 · refundación (valuación $6.25 mdp)'});
@@ -563,7 +569,11 @@ async function renderValorChart(s){
  if(serie.length<2){ box.innerHTML=''; return; }
  let comp=0, pctSub=0, pagado=0;
  try{ const G=await gobLoad(SOC);
-  const r=(G.ref||[]).find(x=>x.socio_id&&x.socio_id===s.id)||(G.ref||[]).find(x=>x.nombre&&x.nombre.toLowerCase().includes((s.n||'').split(' ')[0].toLowerCase()));
+  const sid=SOCID[(s.email||'').toLowerCase()]||null;
+  const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+  const clave=norm((s.n||'').split(/[ ,]/)[0]);
+  const r=(sid?(G.ref||[]).find(x=>x.socio_id===sid&&+x.monto_comprometido>0):null)
+        ||(G.ref||[]).find(x=>+x.monto_comprometido>0&&clave&&norm(x.nombre).indexOf(clave)>=0);
   if(r){ comp=+r.monto_comprometido||0; pctSub=+r.pct||0; pagado=+r.pagado||0; }
  }catch(e){}
  VALSIM={serie:serie,obj:obj,pctPart:pctPart,share:share,comp:comp,pctSub:pctSub,pagado:pagado,invFin:invFin,nombre:s.n};
@@ -571,7 +581,7 @@ async function renderValorChart(s){
  return;
 }
 const VALREF=6250000, TESORERIA=0.24;   // en la refundación, 1% de la sociedad cuesta $62,500
-let VALSIM=null;
+let VALSIM=null, PCTACTA=null;
 function pintaValor(x){
  const box=document.getElementById('p-valor'); if(!box||!VALSIM) return;
  const S=VALSIM, comp=S.comp, pagado=S.pagado||0, monto=Math.max(pagado,+x||0), extra=monto-comp;
