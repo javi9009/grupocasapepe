@@ -379,6 +379,8 @@ function tarjetaPregunta(p, cfg){
     h +=   '<span class="chip gris">' + esc((p.idioma || "es").toUpperCase()) + '</span>';
     h +=   (p.activa ? '<span class="chip verde">Activa</span>' : '<span class="chip rojo">Apagada</span>');
     if(p.dificultad) h += '<span class="chip gris">Dif. ' + esc(p.dificultad) + '</span>';
+    h += (p.espejo_id ? '<span class="chip">🔗 con espejo</span>'
+                      : '<span class="chip oro" title="No sabemos cuál es su versión en el otro idioma: si editas ésta, la otra se queda vieja">⚠ sin espejo</span>');
     h += '</div>';
     h += '<div class="enun" style="font-weight:700;font-size:14.5px"></div>';
     h += '<ul class="ops">';
@@ -399,6 +401,27 @@ function tarjetaPregunta(p, cfg){
     var bEd = nodo('<button class="btn sm">Editar</button>');
     bEd.onclick = function(){ abrirEditor(); };
     acc.appendChild(bEd);
+
+    if(p.espejo_id){
+      var bEsp = nodo('<button class="btn sm">Ver el espejo (' + ((p.idioma === "es") ? "EN" : "ES") + ")</button>");
+      bEsp.onclick = function(){
+        var caja = wrap.querySelector(".editor");
+        if(caja.dataset.espejo === "1"){ caja.hidden = true; caja.dataset.espejo = ""; caja.innerHTML = ""; return; }
+        bEsp.disabled = true;
+        get("pq_preguntas?select=id,enunciado,opciones,correcta,explicacion,categoria_id,idioma,activa,dificultad,espejo_id&id=eq." + p.espejo_id)
+          .then(function(r){
+            bEsp.disabled = false;
+            var q = (r || [])[0];
+            if(!q){ fallo("cargar el espejo", new Error("no existe")); return; }
+            caja.innerHTML = '<div class="small muted" style="margin:6px 0 4px"><b>Su espejo.</b> Si cambias una, acuérdate de dejar la otra igual.</div>';
+            caja.appendChild(tarjetaPregunta(q, {}));
+            caja.hidden = false;
+            caja.dataset.espejo = "1";
+          })
+          .catch(function(e){ bEsp.disabled = false; fallo("cargar el espejo", e); });
+      };
+      acc.appendChild(bEsp);
+    }
 
     var selCat = nodo('<select class="btn sm" style="width:auto;max-width:230px;padding:5px 8px">' + optsCategorias(p.categoria_id, false) + "</select>");
     selCat.title = "Cambiar de categoría";
@@ -554,7 +577,7 @@ function cargarIncidencias(){
       var ids = incDatos.map(function(a){ return a.pregunta_id; }).filter(Boolean);
       if(!ids.length) return {};
       var unicos = ids.filter(function(x,i){ return ids.indexOf(x) === i; }).slice(0,300);
-      return get("pq_preguntas?select=id,categoria_id,idioma,explicacion,dificultad,activa&id=in.(" + unicos.join(",") + ")")
+      return get("pq_preguntas?select=id,categoria_id,idioma,explicacion,dificultad,activa,espejo_id&id=in.(" + unicos.join(",") + ")")
         .then(function(rows){
           var m = {};
           (rows || []).forEach(function(r){ m[r.id] = r; });
@@ -682,7 +705,7 @@ function resolverIncidencia(a, estado, boton){
 /* ============================================================
    2 · BANCO
    ============================================================ */
-var banco = { cat: "", idioma: "es", q: "", offset: 0, limit: 50, filas: [], total: 0 };
+var banco = { cat: "", idioma: "es", q: "", tour: "", offset: 0, limit: 50, filas: [], total: 0, tours: [] };
 
 function pintaBanco(){
   var v = document.getElementById("vista");
@@ -699,6 +722,7 @@ function pintaBanco(){
         '<div class="grow"><label class="f">Categoría</label><select id="b-cat">' + optsCategorias(banco.cat, false) + "</select></div>" +
         '<div style="width:130px"><label class="f">Idioma</label><select id="b-idi">' +
           '<option value="es">Español</option><option value="en">Inglés</option></select></div>' +
+        '<div class="grow" id="b-tour-wrap" style="display:none"><label class="f">Tour</label><select id="b-tour"></select></div>' +
         '<div class="grow"><label class="f">Buscar en el enunciado</label><input type="search" id="b-q" placeholder="palabra o frase"></div>' +
         '<div style="align-self:flex-end"><button class="btn oro" id="b-buscar">Buscar</button></div>' +
         '<div style="align-self:flex-end"><button class="btn" id="b-nueva">+ Pregunta nueva</button></div>' +
@@ -710,33 +734,62 @@ function pintaBanco(){
   head.querySelector("#b-idi").value = banco.idioma;
   head.querySelector("#b-q").value = banco.q;
 
-  head.querySelector("#b-cat").onchange = function(){ banco.cat = this.value; banco.offset = 0; cargarBanco(); };
-  head.querySelector("#b-idi").onchange = function(){ banco.idioma = this.value; banco.offset = 0; cargarBanco(); };
+  head.querySelector("#b-cat").onchange = function(){ banco.cat = this.value; banco.tour = ""; banco.offset = 0; cargarTours(); cargarBanco(); };
+  head.querySelector("#b-idi").onchange = function(){ banco.idioma = this.value; banco.offset = 0; cargarTours(); cargarBanco(); };
+  head.querySelector("#b-tour").onchange = function(){ banco.tour = this.value; banco.offset = 0; cargarBanco(); };
   head.querySelector("#b-buscar").onclick = function(){ banco.q = head.querySelector("#b-q").value.trim(); banco.offset = 0; cargarBanco(); };
   head.querySelector("#b-q").onkeydown = function(ev){ if(ev.key === "Enter"){ banco.q = this.value.trim(); banco.offset = 0; cargarBanco(); } };
   head.querySelector("#b-nueva").onclick = nuevaPregunta;
 
+  cargarTours();
   v.appendChild(nodo('<div id="b-nuevo"></div>'));
   v.appendChild(nodo('<div id="b-lista"><div class="cargando">Cargando…</div></div>'));
   v.appendChild(nodo('<div class="row" style="justify-content:center;margin-top:6px" id="b-pag"></div>'));
   cargarBanco();
 }
 
+/* Los temas de tours traen miles de preguntas repartidas entre sus tours.
+   Este selector las separa tour por tour. */
+function cargarTours(){
+  var wrap = document.getElementById("b-tour-wrap");
+  var sel = document.getElementById("b-tour");
+  if(!wrap || !sel) return;
+  get("v_pq_tour_conteo?select=tour_id,nombre,n&categoria_id=eq." + encodeURIComponent(banco.cat) +
+      "&idioma=eq." + encodeURIComponent(banco.idioma) + "&order=nombre.asc")
+    .then(function(rows){
+      banco.tours = rows || [];
+      if(!banco.tours.length){ wrap.style.display = "none"; sel.innerHTML = ""; return; }
+      wrap.style.display = "";
+      var total = banco.tours.reduce(function(a,t){ return a + (t.n||0); }, 0);
+      var h = '<option value="">Todos los tours · ' + total + '</option>';
+      banco.tours.forEach(function(t){
+        h += '<option value="' + esc(t.tour_id) + '"' + (banco.tour === t.tour_id ? " selected" : "") + ">" +
+             esc(t.nombre) + " · " + t.n + "</option>";
+      });
+      sel.innerHTML = h;
+    })
+    .catch(function(){ wrap.style.display = "none"; });
+}
+
 function filtroBanco(extra){
   var f = "categoria_id=eq." + encodeURIComponent(banco.cat) + "&idioma=eq." + encodeURIComponent(banco.idioma);
+  if(banco.tour) f += "&tour_id=eq." + encodeURIComponent(banco.tour);
   if(banco.q) f += "&enunciado=ilike." + encodeURIComponent("*" + banco.q + "*");
   if(extra) f += extra;
   return f;
 }
+/* Con un tour elegido se lee de la vista que ya trae el cruce pregunta-tour. */
+function fuenteBanco(){ return banco.tour ? "v_pq_banco?" : "pq_preguntas?"; }
 
 function cargarBanco(){
   var lista = document.getElementById("b-lista");
   if(lista) lista.innerHTML = '<div class="cargando">Cargando…</div>';
-  var sel = "select=id,enunciado,opciones,correcta,explicacion,categoria_id,idioma,activa,dificultad,fecha_alta";
+  var sel = "select=id,enunciado,opciones,correcta,explicacion,categoria_id,idioma,activa,dificultad,fecha_alta,espejo_id";
+  var F = fuenteBanco();
   Promise.all([
-    contar("pq_preguntas?" + filtroBanco("&activa=is.true") + "&select=id"),
-    contar("pq_preguntas?" + filtroBanco("") + "&select=id"),
-    get("pq_preguntas?" + sel + "&" + filtroBanco("") +
+    contar(F + filtroBanco("&activa=is.true") + "&select=id"),
+    contar(F + filtroBanco("") + "&select=id"),
+    get(F + sel + "&" + filtroBanco("") +
         "&order=fecha_alta.desc&limit=" + banco.limit + "&offset=" + banco.offset)
   ]).then(function(r){
     var activas = r[0], total = r[1];
@@ -744,9 +797,11 @@ function cargarBanco(){
     banco.filas = r[2] || [];
     var c = document.getElementById("b-conteo");
     if(c){
+      var tn = banco.tour ? (banco.tours.filter(function(t){ return t.tour_id === banco.tour; })[0] || {}).nombre : "";
       c.innerHTML = "<span><b>" + activas + "</b> activas</span>" +
                     '<span style="margin-left:14px"><b>' + total + "</b> en total" + (banco.q ? " con esa búsqueda" : "") + "</span>" +
-                    '<span style="margin-left:14px">' + esc(nombreCat(banco.cat)) + " · " + esc(banco.idioma.toUpperCase()) + "</span>";
+                    '<span style="margin-left:14px">' + esc(nombreCat(banco.cat)) + " · " + esc(banco.idioma.toUpperCase()) +
+                    (tn ? " · " + esc(tn) : "") + "</span>";
     }
     pintaListaBanco();
   }).catch(function(e){
