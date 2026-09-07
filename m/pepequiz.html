@@ -476,20 +476,22 @@ function App() {
     (async () => {
       try {
         const AV = ["🧑","👩","🧔","👨","👩‍🦱","🧑‍🦰","👩‍🦰","🧑🏽","👨🏻","👩🏾","🧑🏼","👩🏽"];
-        const [ue, pu, cats, conteo, obl] = await Promise.all([
+        // El conteo por tema es lo que decide si un tema se puede jugar. Si esa
+        // sola llamada falla, el menú entero se pinta "En construcción", así que
+        // se reintenta antes de darla por perdida.
+        const traeConteo = async () => {
+          for (let i = 0; i < 3; i++) {
+            try {
+              const r = await fetch(SBU + "/rest/v1/v_pq_cat_conteo?select=categoria_id,idioma,plaza,n", { headers: SBH });
+              const j = await r.json();
+              if (Array.isArray(j) && j.length) return j;
+            } catch (e) {}
+            await new Promise((s) => setTimeout(s, 400 * (i + 1)));
+          }
+          return null;   // null = no lo sabemos (≠ lista vacía = no hay preguntas)
+        };
+        const [ue, cats, conteo, obl] = await Promise.all([
           fetch(SBU + "/rest/v1/v_empleados_publico?select=id,nombre,nombre_display,puesto,area,property_id,estatus&order=nombre_display.asc.nullslast", { headers: SBH }).then(r => r.json()).catch(() => []),
-          // La cartera del header sale de la MISMA cuenta que Los Vasconcelistas
-          // (pq_ranking), no de la tabla vieja pq_puntos: si no, marcaba un número
-          // y el ranking otro.
-          Promise.all([
-            pqRpc("pq_ranking", { periodo: "hist" }).catch(() => []),
-            pqRpc("pq_ranking", { periodo: "mes" }).catch(() => []),
-          ]).then(([h, m]) => {
-            const map = {};
-            (Array.isArray(h) ? h : []).forEach((x) => { (map[x.employee_id] = map[x.employee_id] || {}).pts_hist = Number(x.pts) || 0; });
-            (Array.isArray(m) ? m : []).forEach((x) => { (map[x.employee_id] = map[x.employee_id] || {}).pts_mes = Number(x.pts) || 0; });
-            return Object.keys(map).map((k) => ({ employee_id: k, pts_hist: map[k].pts_hist || 0, pts_mes: map[k].pts_mes || 0 }));
-          }).catch(() => []),
           fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,nombre_en,emoji,color,construccion,orden,proyectos&en_pepequiz=is.true&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
           (async () => {
             // Al abrir NO bajamos el banco (son miles de preguntas y tardaba media hora
@@ -497,10 +499,11 @@ function App() {
             // Las preguntas de un tema se bajan cuando eliges ese tema.
             await pqCargaCfg();
             try { ES_AUDITOR = (await pqRpc('pq_auditor')) === true; } catch (e) { ES_AUDITOR = false; }
-            return await fetch(SBU + "/rest/v1/v_pq_cat_conteo?select=categoria_id,idioma,plaza,n", { headers: SBH }).then(r => r.json()).catch(() => []);
+            return await traeConteo();
           })(),
           fetch(SBU + "/rest/v1/pq_puesto_obligatorio?select=puesto,categoria_id,sede", { headers: SBH }).then(r => r.json()).catch(() => []),
         ]);
+        const pu = [];   // la cartera se pide aparte, ya con la app abierta (abajo)
         const construirBanco = () => {
         // Categorías vivas desde Supabase. Las preguntas NO: sólo cuántas hay.
           try {
@@ -511,10 +514,13 @@ function App() {
                 const k = r.categoria_id + "|" + (r.idioma || "es");
                 cuenta[k] = (cuenta[k] || 0) + Number(r.n || 0);
               });
+              // Si el conteo no llegó, mandamos lo que dice la propia categoría
+              // (columna construccion) en vez de apagar todos los temas.
+              const sinConteo = !Array.isArray(conteo) || Object.keys(cuenta).length === 0;
               const nuevas = cats.filter((c) => tocaAqui(c.proyectos)).map((c) => {
-                const nPedido = cuenta[c.id + "|" + PQLANG] || 0;
-                const nBase   = cuenta[c.id + "|" + PQCFG.idioma_base] || 0;
-                const idioma  = nPedido ? PQLANG : PQCFG.idioma_base;
+                const nPedido = sinConteo ? (c.construccion ? 0 : 1) : (cuenta[c.id + "|" + PQLANG] || 0);
+                const nBase   = sinConteo ? (c.construccion ? 0 : 1) : (cuenta[c.id + "|" + PQCFG.idioma_base] || 0);
+                const idioma  = (!sinConteo && nPedido) ? PQLANG : PQCFG.idioma_base;
                 const pl = c.proyectos;
                 return {
                   compartida: !Array.isArray(pl) || pl.length === 0 || (pl.indexOf('cdmx') > -1 && pl.indexOf('puebla') > -1),
@@ -575,6 +581,28 @@ function App() {
       }
     })();
   }, []);
+
+  // La cartera del header sale de la MISMA cuenta que Los Vasconcelistas (pq_ranking),
+  // no de la tabla vieja pq_puntos. Se pide DESPUÉS de abrir: son consultas pesadas y
+  // no deben retrasar (ni tumbar) la carga del menú.
+  useEffect(() => {
+    if (!meId) return;
+    let vivo = true;
+    (async () => {
+      try {
+        const [h, m] = await Promise.all([
+          pqRpc("pq_ranking", { periodo: "hist" }).catch(() => []),
+          pqRpc("pq_ranking", { periodo: "mes" }).catch(() => []),
+        ]);
+        if (!vivo || !Array.isArray(h)) return;
+        const hh = {}, mm = {};
+        h.forEach((x) => { hh[x.employee_id] = Number(x.pts) || 0; });
+        (Array.isArray(m) ? m : []).forEach((x) => { mm[x.employee_id] = Number(x.pts) || 0; });
+        setUsers((us) => us.map((u) => ({ ...u, walletHist: hh[u.id] || 0, walletMes: mm[u.id] || 0 })));
+      } catch (e) {}
+    })();
+    return () => { vivo = false; };
+  }, [meId]);
 
   const updateMe = useCallback((patch) => {
     setUsers((us) => us.map((u) => (u.id === meId ? { ...u, ...patch } : u)));
