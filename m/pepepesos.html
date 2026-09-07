@@ -53,21 +53,23 @@ const T={
   faltan:['Te faltan {n} puntos para el siguiente cambio.','You need {n} more points for the next exchange.'],
   cambiar:['Cambiar {n} puntos por {p} pepepesos','Exchange {n} points for {p} pepepesos'],
   enque:['En qué los puedes gastar','What you can spend them on'],
-  pedir:['Pedir','Request'],
-  cotiza:['A cotizar','To be quoted'],
+  canjear:['Canjear','Redeem'],
+  faltanPP:['Te faltan {n} pepepesos','You need {n} more pepepesos'],
   cuesta:['Cuesta','Costs'],
-  misSol:['Mis solicitudes','My requests'],
-  sinSol:['Todavía no has pedido nada.','You have not requested anything yet.'],
+  misSol:['Mis canjes','My redemptions'],
+  sinSol:['Todavía no has canjeado nada.','You have not redeemed anything yet.'],
+  folio:['Enseña este folio para usarlo','Show this code to use it'],
+  canjeado:['Por usar','To use'], entregado:['Usado','Used'], cancelado:['Cancelado','Cancelled'],
+  confirma:['¿Canjear {c} por {n} pepepesos?','Redeem {c} for {n} pepepesos?'],
   movs:['Movimientos','Movements'],
   sinMov:['Aún no tienes movimientos. Juega PepeQuiz y cambia tus puntos.','No movements yet. Play PepeQuiz and exchange your points.'],
   premio:['El premio de esta semana','This week’s prize'],
   misPremios:['Premios que has ganado','Prizes you have won'],
-  nota:['Cuéntanos qué necesitas (fechas, para quién…)','Tell us what you need (dates, who for…)'],
-  enviar:['Enviar solicitud','Send request'],
+  nota:['Fechas o cualquier detalle (opcional)','Dates or any detail (optional)'],
+  enviar:['Canjear','Redeem'],
   cancelar:['Cancelar','Cancel'],
   sinSesion:['Inicia sesión en SoyPepe para ver tus pepepesos.','Sign in to SoyPepe to see your pepepesos.'],
-  pendiente:['Pendiente','Pending'], aprobada:['Aprobada','Approved'], rechazada:['Rechazada','Rejected'],
-  gracias:['Listo. Queda pendiente de aprobación.','Done. Waiting for approval.'],
+  gracias:['¡Listo! Tu folio es {f}. Guárdalo.','Done! Your code is {f}. Keep it.'],
 };
 const L=(k,r)=>{ let s=T[k]?T[k][LANG==='en'?1:0]:k; if(r) for(const a in r) s=s.replace('{'+a+'}', r[a]); return s; };
 const num=n=>Number(n||0).toLocaleString('es-MX');
@@ -92,7 +94,7 @@ async function cargar(){
     S.saldo=s;
     const [cat,sol,mov,pre,gan]=await Promise.all([
       api('pp_catalogo?select=id,nombre,tipo,plaza,costo,nota&activo=is.true&order=orden.asc').catch(()=>[]),
-      api('pp_solicitud?select=id,concepto,monto,estado,nota,nota_resol,creado&employee_id=eq.'+s.employee_id+'&order=creado.desc&limit=20').catch(()=>[]),
+      api('pp_solicitud?select=id,concepto,monto,estado,nota,nota_resol,folio,creado&employee_id=eq.'+s.employee_id+'&order=creado.desc&limit=20').catch(()=>[]),
       api('pp_movimiento?select=delta,tipo,concepto,creado&employee_id=eq.'+s.employee_id+'&order=creado.desc&limit=30').catch(()=>[]),
       rpc('pq_premio_de_semana',{}).catch(()=>[]),
       api('pq_premio_ganado?select=semana_inicio,estado,premio_id&employee_id=eq.'+s.employee_id+'&order=semana_inicio.desc&limit=10').catch(()=>[]),
@@ -121,10 +123,11 @@ function pedir(c){
     +'<button id="ca-'+c.id+'">'+L('cancelar')+'</button></div>';
   document.getElementById('ca-'+c.id).onclick=()=>{ box.innerHTML=''; };
   document.getElementById('go-'+c.id).onclick=async()=>{
+    if(!confirm(L('confirma',{c:c.nombre,n:num(c.costo)}))) return;
     const nota=document.getElementById('nota-'+c.id).value.trim();
-    const r=await rpc('pp_pedir',{p_catalogo:c.id,p_nota:nota||null}).catch(e=>({error:e.message}));
-    if(r&&r.error){ alert(r.error); return; }
-    alert(L('gracias')); cargar();
+    const r=await rpc('pp_canjear',{p_catalogo:c.id,p_nota:nota||null}).catch(e=>({error:e.message}));
+    if(r&&r.error){ alert(r.error+(r.faltan?(' · '+L('faltanPP',{n:num(r.faltan)})):'')); return; }
+    alert(L('gracias',{f:r.folio})); cargar();
   };
 }
 
@@ -164,21 +167,25 @@ function pintar(){
 
   h+='<div class="card"><h2>'+L('enque')+'</h2>';
   S.cat.forEach(c=>{
-    h+='<div class="fila"><div class="t"><div class="nm">'+esc(c.nombre)+'</div>'
+    const alcanza = s.disponible >= c.costo;
+    h+='<div class="fila" style="'+(alcanza?'':'opacity:.62')+'"><div class="t"><div class="nm">'+esc(c.nombre)+'</div>'
       +(c.nota?'<div class="mu">'+esc(c.nota)+'</div>':'')
-      +'<div class="mu">'+(c.costo>0?(L('cuesta')+' '+num(c.costo)+' pepepesos'):L('cotiza'))+'</div>'
+      +'<div class="mu"><b>'+num(c.costo)+' pepepesos</b>'
+      +(alcanza?'':' · '+L('faltanPP',{n:num(c.costo-s.disponible)}))+'</div>'
       +'<div id="ped-'+c.id+'"></div></div>'
-      +'<button data-ped="'+c.id+'">'+L('pedir')+'</button></div>';
+      +(alcanza?'<button class="p" data-ped="'+c.id+'">'+L('canjear')+'</button>':'')+'</div>';
   });
   h+='</div>';
 
   h+='<div class="card"><h2>'+L('misSol')+'</h2>';
   if(!S.sol.length) h+='<div class="sub">'+L('sinSol')+'</div>';
   S.sol.forEach(x=>{
-    const cls=x.estado==='aprobada'?'ok':(x.estado==='rechazada'?'no':'pend');
+    const cls=x.estado==='entregado'?'ok':(x.estado==='cancelado'?'no':'pend');
     h+='<div class="fila"><div class="t"><div class="nm">'+esc(x.concepto)+'</div>'
-      +'<div class="mu">'+x.creado.slice(0,10)+(x.monto>0?' · '+num(x.monto)+' pepepesos':'')
-      +(x.nota_resol?' · '+esc(x.nota_resol):'')+'</div></div>'
+      +'<div class="mu">'+x.creado.slice(0,10)+' · '+num(x.monto)+' pepepesos'
+      +(x.folio?' · <b>'+esc(x.folio)+'</b>':'')
+      +(x.nota_resol?' · '+esc(x.nota_resol):'')+'</div>'
+      +(x.estado==='canjeado'&&x.folio?'<div class="mu">'+L('folio')+'</div>':'')+'</div>'
       +'<span class="pill '+cls+'">'+L(x.estado)+'</span></div>';
   });
   h+='</div>';
