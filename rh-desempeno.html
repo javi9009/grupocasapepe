@@ -14,7 +14,7 @@
   --warn:#8C6212; --warn-bg:#F3EAD6;
   --bad:#9E3B2E; --bad-bg:#F4E2DE;
   --shadow:0 1px 1px rgba(31,27,22,.04), 0 10px 26px -20px rgba(31,27,22,.35);
-  --c1:#08402F; --c2:#0D6047; --c3:#13805B; --c4:#2D9C74; --c5:#63B894;
+  --c1:#1F5E3F; --c2:#2F6DB5; --c3:#C0552F; --c4:#6C4FA1; --c5:#D9A21B;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);
@@ -93,8 +93,16 @@ td.num{text-align:right;white-space:nowrap}
 .muted{color:var(--muted)} .faint{color:var(--faint)}
 footer.pie{padding:24px 0 44px;color:var(--faint);font-size:.78rem;line-height:1.6}
 code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.8rem}
+.pila-head{position:sticky;top:45px;z-index:15;background:var(--ground);
+  display:grid;grid-template-columns:172px 1fr 84px;gap:13px;align-items:end;
+  padding:9px 0 7px;border-bottom:1px solid var(--rule);margin-bottom:10px}
+.pila-head .cols{display:flex;gap:2px}
+.pila-head .cols span{font-size:.67rem;font-weight:700;color:#fff;text-align:center;
+  border-radius:3px;padding:3px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
+.pila-head .lbl{font-size:.7rem;color:var(--faint)}
 @media(max-width:640px){
   .row,.escala{grid-template-columns:118px 1fr 70px;gap:9px}
+  .pila-head{grid-template-columns:118px 1fr 70px;gap:9px}
 }
 </style>
 </head>
@@ -123,6 +131,7 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
     <h2>La pila</h2>
     <p class="lead">Una barra por colaborador, cinco segmentos en el mismo orden siempre.</p>
     <div class="barra">
+      <select id="f-per" title="Temporalidad: qué ventana de tiempo estás viendo"></select>
       <select id="f-sede"></select>
       <select id="f-jefe"></select>
       <select id="f-orden">
@@ -133,6 +142,7 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
       <span class="hint" id="conteo"></span>
     </div>
     <div class="leyenda" id="leyenda"></div>
+    <div class="pila-head"><span class="lbl">Colaborador</span><div class="cols" id="pila-cols"></div><span class="lbl" style="text-align:right">Score</span></div>
     <div class="pilawrap">
       <div class="rows" id="rows"></div>
       <div class="escala" aria-hidden="true">
@@ -193,6 +203,14 @@ const COLORES = {puntualidad:"var(--c1)", actitud:"var(--c2)", desempeno:"var(--
 const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num = v => v===null||v===undefined ? null : Number(v);
+let PER='trimestre';
+const PERL={quincena:'Última quincena',mes:'Último mes',trimestre:'Último trimestre',semestre:'Último semestre',anio:'Último año',hist:'Histórico'};
+const PILAV = () => {
+  const l = PILA.filter(p=>p.periodo===PER);
+  if(l.length) return l;
+  const p0 = (PILA[0]||{}).periodo;
+  return PILA.filter(p=>p.periodo===p0);
+};
 
 document.querySelectorAll(".secnav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".secnav button").forEach(x=>x.setAttribute("aria-selected", x===b));
@@ -211,7 +229,7 @@ function aviso(){
 
 function ordenados(){
   const s = $("#f-sede").value, j = $("#f-jefe").value, o = $("#f-orden").value;
-  let l = PILA.filter(p => (!s || p.sede===s) && (!j || p.jefe===j));
+  let l = PILAV().filter(p => (!s || p.sede===s) && (!j || p.jefe===j));
   const pct = p => num(p.puntos_posibles)>0 ? num(p.puntos)/num(p.puntos_posibles) : -1;
   if(o==="score")     l.sort((a,b)=> pct(a)-pct(b) || a.nombre.localeCompare(b.nombre));
   else if(o==="nombre") l.sort((a,b)=> a.nombre.localeCompare(b.nombre));
@@ -225,10 +243,19 @@ function pintaLeyenda(){
   ).join("") + '<span><i class="nm"></i>Sin medir todavía</span>';
 }
 
+function pintaCabecera(){
+  const el = $("#pila-cols"); if(!el) return;
+  const total = CRIT.reduce((a,c)=>a+Number(c.peso),0) || 100;
+  el.innerHTML = CRIT.map(c=>{
+    const w = Number(c.peso)/total*100;
+    return `<span style="width:${w}%;background:${COLORES[c.codigo]||"var(--c3)"}" title="${esc(c.nombre)} · peso general ${c.peso}">${esc(c.nombre)}</span>`;
+  }).join("");
+}
 function pintaPila(){
+  pintaCabecera();
   const total = CRIT.reduce((a,c)=>a+Number(c.peso),0) || 100;
   const l = ordenados();
-  $("#conteo").textContent = l.length + " de " + PILA.length + " colaboradores";
+  $("#conteo").textContent = l.length + " de " + PILAV().length + " colaboradores · " + (PERL[PER]||PER);
   $("#rows").innerHTML = l.map(p=>{
     const cr = p.criterios || {};
     const pesoDe = c => { const d = cr[c.codigo]||{}; return Number(d.peso!=null?d.peso:c.peso); };
@@ -239,14 +266,24 @@ function pintaPila(){
       const peso = pesoDe(c);
       const ancho = (peso/totalP*100);
       if(peso===0) return "";
-      if(v===null) return `<i class="nm" style="width:${ancho}%" title="${esc(c.nombre)}: sin medir — ${esc(c.nota_fuente||"")}"></i>`;
+      const fuentes = (typeof SUBC!=='undefined' ? SUBC.filter(x=>x.criterio===c.codigo) : [])
+        .map(x=>{ const k=(typeof kpiDe==='function')?kpiDe(x.kpi_id):{nombre:x.kpi_id}; return x.nombre+" (KPI: "+k.nombre+")"; });
+      const base = c.nombre.toUpperCase()
+        + "\nQué mide: " + (c.descripcion||"—")
+        + (fuentes.length ? "\nSe alimenta de: " + fuentes.join(" · ") : "");
+      if(v===null) return `<i class="nm" style="width:${ancho}%" title="${esc(base
+        + "\n\nSin medir para " + p.nombre + ". Por qué: " + (c.nota_fuente||"la fuente aún no trae datos de esta persona."))}"></i>`;
       const usado = peso>0 ? Math.min(v/peso,1)*ancho : 0;
       const resto = ancho-usado;
       const det = d.detalle || {};
-      const tip = `${c.nombre}: ${v} de ${peso}` + (d.peso_personal!=null ? " (peso personal)" : "") +
-        (det.con_turno ? ` · ${det.a_tiempo} a tiempo, ${det.retardo} retardos, ${det.falta} faltas en ${det.con_turno} turnos` : "");
+      const tip = base
+        + "\n\n" + p.nombre + ": " + v + " de " + peso + " puntos" + (d.peso_personal!=null ? " (peso personal " + peso + ", general " + c.peso + ")" : "")
+        + (det.con_turno!=null ? "\nEste periodo: " + (det.a_tiempo||0) + " a tiempo, " + (det.retardo||0) + " retardos, " + (det.falta||0) + " faltas en " + det.con_turno + " turnos." : "")
+        + (det.menciones!=null ? "\nEste periodo: " + det.menciones + " mención(es) en reseñas y " + (det.bonos||0) + " bono(s)." : "")
+        + (det.tipo_jefe ? "\nViene del test del jefe (" + det.tipo_jefe + ")." : "")
+        + (det.modo ? "\nModo: " + (det.modo==='su_puesto'?'categorías de su puesto':'cultura y tours') + "." : "");
       return `<i style="width:${usado}%;background:${COLORES[c.codigo]||"var(--c3)"}" title="${esc(tip)}"></i>`
-           + (resto>0.4 ? `<i style="width:${resto}%;background:var(--surface-2)" title="${esc(c.nombre)}: le faltan ${(peso-v).toFixed(1)} puntos"></i>` : "");
+           + (resto>0.4 ? `<i style="width:${resto}%;background:var(--surface-2)" title="${esc(c.nombre + ": a " + p.nombre + " le faltan " + (peso-v).toFixed(1) + " puntos para el tope de " + peso + ".")}"></i>` : "");
     }).join("");
     const pos = num(p.puntos_posibles), pts = num(p.puntos);
     const pct = pos>0 ? Math.round(100*pts/pos) : null;
@@ -261,7 +298,7 @@ function pintaPila(){
 }
 
 function pintaPuntualidad(){
-  const l = PILA.map(p=>({p, d:(p.criterios&&p.criterios.puntualidad)||{}}))
+  const l = PILAV().map(p=>({p, d:(p.criterios&&p.criterios.puntualidad)||{}}))
     .filter(x=>x.d.detalle)
     .sort((a,b)=> (num(a.d.valor)??99)-(num(b.d.valor)??99));
   $("#tb-punt").innerHTML = '<table><thead><tr><th>Colaborador</th><th>Rol</th>'
@@ -437,7 +474,7 @@ function pintaCriterios(){
 function pintaPesos(){
   const sel = $("#p-quien"); if(!sel) return;
   const prev = sel.value;
-  const gente = PILA.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const gente = PILAV().slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
   sel.innerHTML = '<option value="">— elige colaborador —</option>' +
     gente.map(p=>`<option value="${p.id}">${esc(p.nombre)}${p.rol?" · "+esc(p.rol):""}</option>`).join("");
   if(prev) sel.value = prev;
@@ -447,7 +484,7 @@ function pintaPesos(){
 async function pintaPesosPersona(){
   const id = $("#p-quien").value, box = $("#p-rows");
   if(!id){ box.innerHTML = '<p class="muted">Elige a alguien para modular la importancia de cada criterio en SU desempeño.</p>'; return; }
-  const p = PILA.find(x=>x.id===id); const cr = (p&&p.criterios)||{};
+  const p = PILAV().find(x=>x.id===id) || PILA.find(x=>x.id===id); const cr = (p&&p.criterios)||{};
   box.innerHTML = '<table><thead><tr><th>Criterio</th><th style="min-width:210px">Peso para '+esc(p.nombre)+'</th>'
     + '<th class="num">Medido</th><th>Captura manual</th></tr></thead><tbody>'
     + CRIT.map(c=>{
@@ -507,6 +544,16 @@ function filtros(){
   $("#f-sede").innerHTML = '<option value="">Todas las sedes</option>'+sedes.map(s=>`<option>${esc(s)}</option>`).join("");
   $("#f-jefe").innerHTML = '<option value="">Todos los jefes</option>'+jefes.map(s=>`<option>${esc(s)}</option>`).join("");
   ["#f-sede","#f-jefe","#f-orden"].forEach(s=>$(s).onchange = pintaPila);
+  const pers = [...new Set(PILA.map(p=>p.periodo))];
+  const conVentanas = Object.keys(PERL).filter(k=>pers.includes(k));
+  if(conVentanas.length){
+    if(!pers.includes(PER)) PER = conVentanas[0];
+    $("#f-per").innerHTML = conVentanas.map(k=>`<option value="${k}"${k===PER?" selected":""}>${PERL[k]}</option>`).join("");
+  } else {
+    PER = pers[0]||'';
+    $("#f-per").innerHTML = `<option value="${esc(PER)}">${esc(PER||'—')}</option>`;
+  }
+  $("#f-per").onchange = () => { PER = $("#f-per").value; pintaPila(); pintaPuntualidad(); if(typeof pintaPesosPersona==='function') pintaPesosPersona(); };
 }
 
 async function carga(){
