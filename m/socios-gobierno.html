@@ -1147,6 +1147,48 @@ function pipeGenConv(key,ai){
 function convCopyEmails(rid){ const out=document.getElementById('conv-out-'+rid); if(out&&navigator.clipboard)navigator.clipboard.writeText(out.getAttribute('data-emails')||''); }
 function convCopyBody(rid){ const t=document.getElementById('conv-body-'+rid); if(t&&navigator.clipboard)navigator.clipboard.writeText(t.value); }
 window.pipeSetFecha=pipeSetFecha; window.pipeGenConv=pipeGenConv; window.convCopyEmails=convCopyEmails; window.convCopyBody=convCopyBody;
+// ===== Seguimiento de minuta / acta (Supabase gob_minutas) =====
+const MIN_CACHE={};
+function minutaAsmKey(key,ai){ const asm=PIPE[key]&&PIPE[key].asambleas[ai]; return 'pipe:'+key+':'+ai+':'+((asm&&asm.tit)||''); }
+function minutaApi(method,path,body){ return fetch(GOB_SB+'/rest/v1/'+path,{method:method,headers:{apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY,'Content-Type':'application/json','Prefer':'return=representation,resolution=merge-duplicates'},body:body?JSON.stringify(body):undefined}).then(r=>r.json()); }
+function minutaFetch(key,ai){ const ak=minutaAsmKey(key,ai); return minutaApi('GET','gob_minutas?select=*&sociedad=eq.'+encodeURIComponent(SOC)+'&asamblea_key=eq.'+encodeURIComponent(ak)).then(rows=>{ const r=(rows&&rows[0])||null; if(r)MIN_CACHE[ak]=r; return r; }); }
+function minutaUpsert(key,ai,patch){ const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const ak=minutaAsmKey(key,ai); const body=Object.assign({sociedad:SOC,asamblea_key:ak,titulo:(asm&&asm.tit)||''},patch); return minutaApi('POST','gob_minutas?on_conflict=sociedad,asamblea_key',body).then(rows=>{ const r=(rows&&rows[0])||null; if(r)MIN_CACHE[ak]=r; return r; }); }
+function minutaFirmantesInit(){ return convRecipients().map(r=>({nombre:r.n,email:r.email,firmado:false,fecha:null})); }
+function minutaOpen(key,ai){ const box=document.getElementById('minuta-panel-'+key+'-'+ai); if(!box)return; if(box.getAttribute('data-open')==='1'){ box.style.display='none'; box.setAttribute('data-open',''); return; } box.style.display='block'; box.setAttribute('data-open','1'); box.innerHTML='<div style="color:var(--muted);font-size:.8rem">Cargando…</div>'; minutaFetch(key,ai).then(m=>minutaRender(key,ai,m)).catch(_=>{ box.innerHTML='<div class="acu rojo">No se pudo cargar la minuta.</div>'; }); }
+function minutaRender(key,ai,m){
+ const box=document.getElementById('minuta-panel-'+key+'-'+ai); if(!box)return;
+ const asm=PIPE[key]&&PIPE[key].asambleas[ai];
+ const LB='font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:8px 0 3px';
+ if(!m){ const od=(asm&&asm.ordenDia)||[];
+  box.innerHTML='<div style="border:1px solid var(--rule,#e6ddcb);border-radius:10px;padding:10px 12px;background:#fff"><div class="acu">Aún no hay acta. Genérala desde el orden del día y redacta el acuerdo de cada punto.</div>'+(od.length?'':'<div class="acu rojo">Esta asamblea no tiene orden del día cargado.</div>')+'<div style="margin-top:8px"><button class="btn sm" onclick="minutaGenerar(\''+key+'\','+ai+')" '+(od.length?'':'disabled')+'>Generar acta desde el orden del día</button></div></div>';
+  return; }
+ const est=m.estado||'borrador';
+ const estChip={borrador:'#e9e2cf',en_revision:'#d6e4f2',en_firma:'#d6e4f2',firmada:'#cfe0d4'}[est]||'#eee7db';
+ const acu=Array.isArray(m.acuerdos)?m.acuerdos:[];
+ let hh='<div style="border:1px solid var(--rule,#e6ddcb);border-radius:10px;padding:10px 12px;background:#fff">';
+ hh+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px"><b>Acta / minuta</b><span style="background:'+estChip+';border-radius:20px;padding:2px 10px;font-size:.72rem;font-weight:600">'+est.replace('_',' ')+'</span></div>';
+ hh+='<div style="'+LB+'">Acuerdos por punto del orden del día</div>';
+ acu.forEach((a,i)=>{ hh+='<div style="margin-bottom:6px"><div style="font-size:.8rem;font-weight:600">'+(i+1)+'. '+gobEsc(a.punto)+'</div><textarea id="min-ac-'+key+'-'+ai+'-'+i+'" style="width:100%;min-height:52px;padding:6px 8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+gobEsc(a.acuerdo||'')+'</textarea></div>'; });
+ hh+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" onclick="minutaSaveDraft(\''+key+'\','+ai+')">Guardar borrador</button><button class="btn ghost sm" onclick="minutaVerActa(\''+key+'\','+ai+')">Leer acta</button><button class="btn sm" onclick="minutaEnviarFirma(\''+key+'\','+ai+')">Enviar a firmar</button></div>';
+ hh+='<div id="min-acta-'+key+'-'+ai+'" style="margin-top:8px"></div>';
+ const fs=Array.isArray(m.firmantes)?m.firmantes:[];
+ if(fs.length){ const firm=fs.filter(x=>x.firmado).length;
+  hh+='<div style="'+LB+';margin-top:10px">Firmas ('+firm+'/'+fs.length+')'+(m.docusign_envelope_id?' · DocuSign '+gobEsc(m.docusign_envelope_id):'')+'</div>';
+  hh+='<div style="display:flex;flex-direction:column;gap:3px">'+fs.map((x,i)=>'<label style="display:flex;align-items:center;gap:8px;font-size:.82rem"><input type="checkbox" '+(x.firmado?'checked':'')+' onclick="minutaToggleFirma(\''+key+'\','+ai+','+i+')"> '+gobEsc(x.nombre)+' <span style="color:var(--faint)">'+gobEsc(x.email)+'</span>'+(x.fecha?' · <span style="color:var(--accent)">firmó '+gobEsc(x.fecha)+'</span>':'')+'</label>').join('')+'</div>';
+  hh+='<div style="font-size:.72rem;color:var(--faint);margin-top:6px">DocuSign: para envío y firma automáticos hay que conectar la cuenta (integración aparte). Mientras, envía el acta por correo y marca cada firma al llegar.</div>';
+  hh+='<div style="margin-top:6px"><a class="btn ghost sm" href="#" onclick="return minutaMailto(\''+key+'\','+ai+')" style="text-decoration:none">Enviar acta por correo a firmantes</a></div>';
+ }
+ hh+='</div>'; box.innerHTML=hh;
+}
+function minutaGenerar(key,ai){ const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const od=(asm&&asm.ordenDia)||[]; const acuerdos=od.map(t=>({punto:t,acuerdo:''})); return minutaUpsert(key,ai,{orden_dia:od,acuerdos:acuerdos,estado:'borrador',hora:(asm&&asm.hora)||null}).then(m=>minutaRender(key,ai,m)); }
+function minutaReadAc(key,ai,n){ const out=[]; for(let i=0;i<n;i++){ const t=document.getElementById('min-ac-'+key+'-'+ai+'-'+i); out.push(t?t.value:''); } return out; }
+function minutaSaveDraft(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); const nuevos=acu.map((a,i)=>({punto:a.punto,acuerdo:vals[i]})); return minutaUpsert(key,ai,{acuerdos:nuevos,estado:(m&&m.estado==='firmada')?'firmada':'en_revision'}).then(r=>minutaRender(key,ai,r)); }
+function minutaActaTexto(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const soc=DATA[SOC].nombre||''; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); let t='ACTA DE ASAMBLEA GENERAL DE SOCIOS\n'+soc+'\n'+((asm&&asm.tit)?asm.tit+'\n':'')+'\n'; t+='Orden del dia y acuerdos:\n'; acu.forEach((a,i)=>{ t+=(i+1)+'. '+a.punto+'\n   Acuerdo: '+(vals[i]||a.acuerdo||'-')+'\n'; }); t+='\nFirmas: '+(Array.isArray(m&&m.firmantes)?m.firmantes.map(x=>x.nombre+(x.firmado?' (firmado)':'')).join('; '):'-'); return t; }
+function minutaVerActa(key,ai){ const el=document.getElementById('min-acta-'+key+'-'+ai); if(el)el.innerHTML='<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Acta (vista de lectura)</div><textarea readonly style="width:100%;min-height:200px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+gobEsc(minutaActaTexto(key,ai))+'</textarea>'; }
+function minutaMailto(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const fs=Array.isArray(m&&m.firmantes)?m.firmantes:[]; const to=fs.map(x=>encodeURIComponent(x.email)).join(','); const subj=encodeURIComponent('Acta para firma - '+((asm&&asm.tit)||'')); const body=encodeURIComponent(minutaActaTexto(key,ai)+'\n\nPor favor revisar y firmar.'); window.location.href='mailto:'+to+'?subject='+subj+'&body='+body; return false; }
+function minutaEnviarFirma(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); const nuevos=acu.map((a,i)=>({punto:a.punto,acuerdo:vals[i]})); const fs=(Array.isArray(m&&m.firmantes)&&m.firmantes.length)?m.firmantes:minutaFirmantesInit(); return minutaUpsert(key,ai,{acuerdos:nuevos,firmantes:fs,estado:'en_firma'}).then(r=>{ minutaRender(key,ai,r); alert('Acta marcada En firma. Se registran '+fs.length+' firmantes. La firma automatica por DocuSign requiere conectar la cuenta.'); }); }
+function minutaToggleFirma(key,ai,idx){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; if(!m)return; const fs=Array.isArray(m.firmantes)?m.firmantes.slice():[]; if(!fs[idx])return; const nowFirmado=!fs[idx].firmado; fs[idx]=Object.assign({},fs[idx],{firmado:nowFirmado,fecha:nowFirmado?fmtFechaCorta(new Date().toISOString().slice(0,10)):null}); const allF=fs.every(x=>x.firmado); return minutaUpsert(key,ai,{firmantes:fs,estado:allF?'firmada':'en_firma'}).then(r=>minutaRender(key,ai,r)); }
+window.minutaOpen=minutaOpen; window.minutaGenerar=minutaGenerar; window.minutaSaveDraft=minutaSaveDraft; window.minutaVerActa=minutaVerActa; window.minutaEnviarFirma=minutaEnviarFirma; window.minutaToggleFirma=minutaToggleFirma; window.minutaMailto=minutaMailto;
 function fmtFechaCorta(iso){ try{ const d=new Date(iso+'T00:00:00'); const m=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; return d.getDate()+'-'+m[d.getMonth()]+'-'+d.getFullYear(); }catch(_){ return iso; } }
 function pipeDispFecha(key,ai,p){ if(p.k==='conv'){ const sv=getPipeConv(key,ai); return sv.fecha?fmtFechaCorta(sv.fecha):''; } return p.fecha||''; }
 function pipeExtraKey(key){ return 'pipeextra:'+SOC+':'+key; }
@@ -1178,6 +1220,7 @@ function pasoDetHTML(p,pkey,pai){
   {const L=p.docs||(p.doc?[p.doc]:null);
    if(L)h+=`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`+L.map(d=>`<a class="btn ghost sm" href="${d.url}" target="_blank" rel="noopener" style="text-decoration:none">📄 ${d.t} ↗</a>`).join('')+`</div>`;}
   if(p.minuta)h+=`<div style="margin-top:6px;font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Minuta → acuerdos</div>`+p.minuta.map(a=>`<div class="acu ${(a[0]==='Nota'||/⚠/.test(a[1]))?'rojo':''}"><b>${a[0]}:</b> ${a[1]}</div>`).join('');
+  h+=`<div style="margin-top:10px"><button class="btn sm" onclick="minutaOpen('${pkey}',${pai})">📝 Acta y firmas (seguimiento)</button></div><div id="minuta-panel-${pkey}-${pai}" data-open="" style="display:none;margin-top:8px"></div>`;
  } else if(p.k==="firma"){
   h+=`<div class="acu">${p.det||"Enviada a firma."}</div>`;
   if(p.firmados!=null)h+=`<div style="margin-top:6px;font-size:.8rem"><b>Firmas:</b> ${p.firmados}${p.total&&p.total!=="—"?" de "+p.total:""}</div>`;
