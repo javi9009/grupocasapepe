@@ -198,6 +198,7 @@ iframe{width:100%;height:calc(100vh - 220px);min-height:460px;border:1px solid v
     <button data-p="mov">Transferencias</button>
     <button data-p="cad">Cadena de acciones</button>
     <button data-p="ref">Refundación</button>
+    <button data-p="com">Comprobantes</button>
     <button data-p="fal">Faltantes</button>
    </div>
    <div id="apo-body"></div>
@@ -544,6 +545,32 @@ const MATLBL={folio:["ok","folio"],linea_banco:["warn","línea banco"],especie:[
 let GOB_CACHE=null, GOB_CACHE_SOC=null;
 function gobApi(path){
  return fetch(GOB_SB+'/rest/v1/'+path,{headers:{apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY}}).then(r=>r.json());
+}
+// ── Subida de documentos por los socios ──────────────────────────────────────
+// Bucket privado 'socios-docs'. Se lee siempre con URL firmada de 1 hora; nunca
+// se expone una URL pública del comprobante.
+const SOCBUCKET='socios-docs';
+const GOB_H={apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY};
+function gobPost(table,body){
+ return fetch(GOB_SB+'/rest/v1/'+table,{method:'POST',headers:Object.assign({},GOB_H,{'Content-Type':'application/json',Prefer:'return=representation'}),body:JSON.stringify(body)})
+  .then(async r=>{ if(!r.ok) throw new Error(await r.text()); return r.json(); });
+}
+function gobUpload(file,path){
+ return fetch(GOB_SB+'/storage/v1/object/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},GOB_H,{'x-upsert':'true','Content-Type':file.type||'application/octet-stream'}),body:file})
+  .then(async r=>{ if(!r.ok) throw new Error(await r.text()); return true; });
+}
+async function gobSigned(path){
+ try{
+  const r=await fetch(GOB_SB+'/storage/v1/object/sign/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},GOB_H,{'Content-Type':'application/json'}),body:JSON.stringify({expiresIn:3600})});
+  if(!r.ok) return null; const j=await r.json(); return GOB_SB+'/storage/v1'+j.signedURL;
+ }catch(e){ return null; }
+}
+function gobSlug(s){return String(s||'archivo').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Za-z0-9._-]/g,'_').slice(0,80);}
+async function gobAbrir(path,btn){
+ const t=btn?btn.textContent:''; if(btn){btn.disabled=true;btn.textContent='Abriendo…';}
+ const u=await gobSigned(path);
+ if(btn){btn.disabled=false;btn.textContent=t;}
+ if(u) window.open(u,'_blank','noopener'); else alert('No se pudo abrir el archivo.');
 }
 async function gobLoad(soc){
  const S=soc||SOC||'hbr';
@@ -934,7 +961,83 @@ function renderApoBody(){
  else if(APOSUB==='mov') box.innerHTML=apoMovs(D);
  else if(APOSUB==='cad') box.innerHTML=apoCadena(D);
  else if(APOSUB==='ref') box.innerHTML=apoRef(D);
+ else if(APOSUB==='com') box.innerHTML=apoComprobantes(D);
  else box.innerHTML=apoFaltantes(D);
+}
+// ── Comprobantes de aportación subidos por los socios ────────────────────────
+const COMPEST={nuevo:['q','⏳ pendiente de leer'],leido:['warn','👁 leído, por validar'],validado:['ok','✓ validado'],rechazado:['bad','✕ no corresponde']};
+function apoComprobantes(D){
+ const socios=(DATA[SOC].socios||[]).filter(s=>!s.tesoreria);
+ const opts=socios.map(s=>`<option value="${gobEsc(s.clv||s.lib||s.refid||s.n)}" data-n="${gobEsc(s.n)}" data-e="${gobEsc(s.email||'')}">${gobEsc(s.n)}</option>`).join('');
+ setTimeout(cargaComprobantes,0);
+ return `<div class="note"><b>Sube aquí la foto de tu transferencia.</b> Sirve una captura del comprobante, el CEP o el PDF del banco. Queda guardado en la sociedad, se lee y se cruza contra lo que el acta te reconoce. Los importes que escribas son lo que tú declaras: el cuadre solo se mueve cuando el comprobante queda validado.</div>
+  <div class="chartbox" style="margin-top:10px">
+   <h4>Subir un comprobante</h4>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px">
+    <label style="font-size:.8rem;color:var(--muted)">Socio<br><select id="cmp-socio" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px">${opts}</select></label>
+    <label style="font-size:.8rem;color:var(--muted)">Importe transferido<br><input id="cmp-monto" type="number" step="0.01" placeholder="0.00" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px"></label>
+    <label style="font-size:.8rem;color:var(--muted)">Fecha de la transferencia<br><input id="cmp-fecha" type="date" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px"></label>
+    <label style="font-size:.8rem;color:var(--muted)">Banco<br><input id="cmp-banco" placeholder="BBVA, Banorte…" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px"></label>
+    <label style="font-size:.8rem;color:var(--muted)">Referencia o clave de rastreo<br><input id="cmp-ref" placeholder="opcional" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px"></label>
+    <label style="font-size:.8rem;color:var(--muted)">Concepto<br><input id="cmp-conc" placeholder="Aportación / exhibición de enero…" style="width:100%;padding:7px;border:1px solid #ddd;border-radius:8px"></label>
+   </div>
+   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <input id="cmp-file" type="file" accept="image/*,application/pdf" capture="environment" style="font-size:.85rem">
+    <button class="btn sm" id="cmp-btn" onclick="subirComprobante()">Subir comprobante</button>
+    <span id="cmp-msg" style="font-size:.8rem;color:var(--muted)"></span>
+   </div>
+   <div style="font-size:.74rem;color:var(--muted);margin-top:8px">Formatos: foto (JPG, PNG, HEIC) o PDF, hasta 25 MB. Desde el teléfono puedes tomar la foto directamente.</div>
+  </div>
+  <div id="cmp-list" style="margin-top:12px"><div class="note">Cargando comprobantes…</div></div>`;
+}
+async function subirComprobante(){
+ const sel=document.getElementById('cmp-socio'), f=document.getElementById('cmp-file');
+ const msg=document.getElementById('cmp-msg'), btn=document.getElementById('cmp-btn');
+ const file=f&&f.files&&f.files[0];
+ if(!file){ msg.textContent='Elige primero el archivo.'; return; }
+ if(file.size>26214400){ msg.textContent='El archivo pesa más de 25 MB.'; return; }
+ const o=sel.options[sel.selectedIndex];
+ btn.disabled=true; msg.textContent='Subiendo…';
+ try{
+  const path=`comprobantes/${SOC}/${sel.value}/${Date.now()}-${gobSlug(file.name)}`;
+  await gobUpload(file,path);
+  await gobPost('gob_comprobantes',{
+   sociedad:SOC, socio_clave:sel.value, socio_nombre:o.dataset.n, email:o.dataset.e||null,
+   concepto:document.getElementById('cmp-conc').value||null,
+   monto_declarado:parseFloat(document.getElementById('cmp-monto').value)||null,
+   fecha_declarada:document.getElementById('cmp-fecha').value||null,
+   banco:document.getElementById('cmp-banco').value||null,
+   referencia:document.getElementById('cmp-ref').value||null,
+   storage_path:path, nombre_archivo:file.name, mime:file.type||null, bytes:file.size, estatus:'nuevo'
+  });
+  msg.textContent='✓ Subido. Queda pendiente de leer y validar.';
+  f.value=''; ['cmp-monto','cmp-fecha','cmp-banco','cmp-ref','cmp-conc'].forEach(id=>{const e=document.getElementById(id); if(e)e.value='';});
+  cargaComprobantes();
+ }catch(e){ msg.textContent='No se pudo subir: '+(e.message||'error'); }
+ btn.disabled=false;
+}
+async function cargaComprobantes(){
+ const box=document.getElementById('cmp-list'); if(!box) return;
+ let rows=[];
+ try{ rows=await gobApi('gob_comprobantes?select=*&sociedad=eq.'+SOC+'&order=created_at.desc'); }catch(e){}
+ if(!Array.isArray(rows)||!rows.length){ box.innerHTML='<div class="note">Todavía no hay comprobantes subidos en esta sociedad.</div>'; return; }
+ const pend=rows.filter(r=>r.estatus==='nuevo').length;
+ const filas=rows.map(r=>{
+  const E=COMPEST[r.estatus]||['nd',r.estatus];
+  const leido=(r.lectura_monto!=null||r.lectura_nota)
+   ? `${r.lectura_monto!=null?'<b>'+money(+r.lectura_monto)+'</b>':''}${r.lectura_fecha?' · '+gobFecha(r.lectura_fecha):''}${r.lectura_ordenante?'<div style="font-size:.72rem;color:var(--muted)">de '+gobEsc(r.lectura_ordenante)+'</div>':''}${r.lectura_clave_rastreo?'<div style="font-family:ui-monospace,Menlo,monospace;font-size:.7rem;color:var(--muted);word-break:break-all">'+gobEsc(r.lectura_clave_rastreo)+'</div>':''}${r.lectura_nota?'<div style="font-size:.72rem;color:var(--muted)">'+gobEsc(r.lectura_nota)+'</div>':''}`
+   : '<span style="color:var(--muted)">—</span>';
+  return `<tr>
+   <td style="white-space:nowrap">${gobFecha(String(r.created_at||'').slice(0,10))}</td>
+   <td>${gobEsc(r.socio_nombre||r.socio_clave||'')}${r.concepto?'<div style="font-size:.72rem;color:var(--muted)">'+gobEsc(r.concepto)+'</div>':''}</td>
+   <td class="n">${r.monto_declarado!=null?money(+r.monto_declarado):'—'}${r.fecha_declarada?'<div style="font-size:.72rem;color:var(--muted)">'+gobFecha(r.fecha_declarada)+'</div>':''}</td>
+   <td>${leido}</td>
+   <td><span class="chip ${E[0]}">${E[1]}</span></td>
+   <td><button class="btn ghost sm" onclick="gobAbrir('${gobEsc(r.storage_path)}',this)">Ver</button></td>
+  </tr>`;
+ }).join('');
+ box.innerHTML=`${pend?`<div class="note notew"><b>${pend} comprobante${pend>1?'s':''} pendiente${pend>1?'s':''} de leer.</b> Se revisan uno por uno contra el estado de cuenta antes de tocar el cuadre.</div>`:''}
+  <div class="tscroll"><table><thead><tr><th>Subido</th><th>Socio</th><th class="n">Declarado</th><th>Leído del comprobante</th><th>Estatus</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>`;
 }
 function apoCuadre(D){
  const fila=r=>{const d=+r.diferencia;
@@ -1631,11 +1734,54 @@ function renderPlanIngresos(){
   </div>
  </div>`;
 }
-function renderDecla(D){
+const DECLA_FORM=D=>{
+ const y=new Date().getFullYear();
+ const yrs=[]; for(let i=y;i>=2015;i--) yrs.push(`<option value="${i}">${i}</option>`);
+ return `<div class="chartbox" style="margin-top:12px">
+  <h4>Subir una declaración</h4>
+  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+   <label style="font-size:.8rem;color:var(--muted)">Ejercicio<br><select id="dec-anio" style="padding:7px;border:1px solid #ddd;border-radius:8px">${yrs.join('')}</select></label>
+   <label style="font-size:.8rem;color:var(--muted)">Tipo<br><select id="dec-tipo" style="padding:7px;border:1px solid #ddd;border-radius:8px"><option value="anual">Anual</option><option value="complementaria">Complementaria</option><option value="acuse">Acuse de recibo</option><option value="pago">Línea de captura / pago</option></select></label>
+   <input id="dec-file" type="file" accept="application/pdf,image/*" style="font-size:.85rem">
+   <button class="btn sm" id="dec-btn" onclick="subirDeclaracion()">Subir</button>
+   <span id="dec-msg" style="font-size:.8rem;color:var(--muted)"></span>
+  </div>
+  <div style="font-size:.74rem;color:var(--muted);margin-top:8px">PDF o foto, hasta 25 MB. Las que ya están en Drive siguen abriéndose desde ahí.</div>
+ </div>`;
+};
+async function subirDeclaracion(){
+ const f=document.getElementById('dec-file'), msg=document.getElementById('dec-msg'), btn=document.getElementById('dec-btn');
+ const file=f&&f.files&&f.files[0];
+ if(!file){ msg.textContent='Elige primero el archivo.'; return; }
+ if(file.size>26214400){ msg.textContent='El archivo pesa más de 25 MB.'; return; }
+ const anio=document.getElementById('dec-anio').value, tipo=document.getElementById('dec-tipo').value;
+ btn.disabled=true; msg.textContent='Subiendo…';
+ try{
+  const path=`declaraciones/${SOC}/${anio}/${tipo}-${Date.now()}-${gobSlug(file.name)}`;
+  await gobUpload(file,path);
+  await gobPost('gob_declaraciones',{sociedad:SOC,ejercicio:+anio,tipo:tipo,storage_path:path,nombre_archivo:file.name});
+  msg.textContent='✓ Subida.'; f.value='';
+  renderDecla(DATA[SOC]);
+ }catch(e){ msg.textContent='No se pudo subir: '+(e.message||'error'); }
+ btn.disabled=false;
+}
+async function renderDecla(D){
  const box=document.getElementById('decl-body'); if(!box)return;
- const list=DECLA[SOC]||[];
- if(!list.length){ box.innerHTML='<div class="note">Sin declaraciones anuales cargadas para esta sociedad. Cuando me pases el/los documentos de Drive, los agrego.</div>'; return; }
- box.innerHTML='<div class="asm-row" style="justify-content:flex-start;flex-wrap:wrap">'+list.map(d=>`<div class="asm-cell"><div class="asm-year"></div><div class="asmc" style="cursor:default"><div class="asmc-date">Ejercicio ${d.y}</div><div class="asmc-res">Declaración anual</div><div class="asmc-tit">ISR · ${D.etiqueta||''}</div><div style="margin-top:8px"><a class="btn ghost sm" href="${d.url}" target="_blank" rel="noopener" style="text-decoration:none">📄 Ver en Drive ↗</a></div></div></div>`).join('')+'</div>';
+ const list=(DECLA[SOC]||[]).map(d=>({y:d.y,url:d.url,tipo:'anual',drive:1}));
+ let subidas=[];
+ try{ subidas=await gobApi('gob_declaraciones?select=*&sociedad=eq.'+SOC+'&order=ejercicio.desc'); }catch(e){}
+ if(Array.isArray(subidas)) subidas.forEach(r=>list.push({y:String(r.ejercicio),path:r.storage_path,url:r.drive_url,tipo:r.tipo||'anual'}));
+ list.sort((a,b)=>String(b.y).localeCompare(String(a.y)));
+ const TIPO={anual:'Declaración anual',complementaria:'Complementaria',acuse:'Acuse de recibo',pago:'Línea de captura / pago'};
+ const cards=list.length
+  ? '<div class="asm-row" style="justify-content:flex-start;flex-wrap:wrap">'+list.map(d=>{
+     const abre=d.path
+      ? `<button class="btn ghost sm" onclick="gobAbrir('${gobEsc(d.path)}',this)">📄 Ver documento</button>`
+      : `<a class="btn ghost sm" href="${d.url}" target="_blank" rel="noopener" style="text-decoration:none">📄 Ver en Drive ↗</a>`;
+     return `<div class="asm-cell"><div class="asm-year"></div><div class="asmc" style="cursor:default"><div class="asmc-date">Ejercicio ${d.y}</div><div class="asmc-res">${TIPO[d.tipo]||d.tipo}</div><div class="asmc-tit">ISR · ${D.etiqueta||''}</div><div style="margin-top:8px">${abre}</div></div></div>`;
+    }).join('')+'</div>'
+  : '<div class="note">Sin declaraciones anuales cargadas para esta sociedad. Súbelas aquí abajo o pásame el link de Drive.</div>';
+ box.innerHTML=cards+DECLA_FORM(D);
 }
 function renderResumen(D){
  const nSoc=D.socios.filter(s=>!s.nuevo).length;
