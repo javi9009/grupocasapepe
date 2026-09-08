@@ -821,6 +821,9 @@
   <div class="cm-nav"><button id="cm-prev" aria-label="Semana anterior">‹</button><div id="cm-week"></div><button id="cm-next" aria-label="Semana siguiente">›</button></div>
   <div id="cm-body"><div class="ph"><div class="ico">🍲</div><div class="d">Cargando…</div></div></div>
   <div id="cm-chefnote" style="display:none;margin-top:12px"></div>
+  <datalist id="cm-dishlist"></datalist>
+  <div style="margin-top:12px;text-align:center"><button id="cm-recbtn" style="font:inherit;font-size:13px;font-weight:700;border:1px solid var(--bd);background:#fff;border-radius:16px;padding:7px 14px;cursor:pointer">📖 Recetario · lo más celebrado</button></div>
+  <div id="cm-recetario" style="display:none;margin-top:10px"></div>
 </div></div>
 
 <!-- Hoja Valoraciones -->
@@ -2465,6 +2468,7 @@ const CM_CUTOFF_H = 12;
 
 async function openComidas(){
   $('comidaSheet').classList.add('show');
+  try{ cmRecetarioCarga(); }catch(e){}
   if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
   CM.propId = HZ.propId || REP_PROP || CDMX_PROP;
   // FIX 2 — El personal de Ateneo Virreyes come en CDMX: su comida se arma bajo la propiedad CDMX.
@@ -2510,7 +2514,7 @@ async function cmLoadWeek(){
     else if((trabaja||CM.corp) && !bloqueado){ right='<button class="cm-toggle '+(apuntado?'on':'')+'" data-fecha="'+ds+'" data-on="'+(apuntado?1:0)+'">'+(apuntado?'Apuntado ✓':'Me apunto')+'</button>'; }
     else { right='<span class="cnt">'+(motivo||'—')+'</span>'; }
     const dishHtml=CM.chef
-      ? '<input class="cm-dishinput" data-fecha="'+ds+'" placeholder="Platillo del día" value="'+dish.replace(/"/g,'&quot;')+'">'
+      ? '<input class="cm-dishinput" list="cm-dishlist" data-fecha="'+ds+'" placeholder="Platillo del día" value="'+dish.replace(/"/g,'&quot;')+'">'
       : '<div class="dish">'+(dish?('🍲 '+dish):'<i>Sin menú aún</i>')+(trabaja?(' · '+cnt+' apuntados'):'')+'</div>';
     const _gest=(CM.corp||CM.gestor||CM.chef); const whoList=(CM.chef||CM.gestor)?('<div class="cm-who-list" id="who-'+ds+'" style="display:none">'+((quien[ds]&&quien[ds].length)?quien[ds].map(function(p){return '<span class="cm-who-chip'+(p.ext?' ext':'')+'">'+String(p.n).replace(/</g,'&lt;')+(p.ext?' 👤':'')+((_gest&&p.ext)?'<b class="cm-rmext" data-id="'+p.id+'">×</b>':'')+'</span>';}).join(''):'<i style="opacity:.6">Nadie apuntado</i>')+(_gest?'<button class="cm-addext" data-fecha="'+ds+'">+ Externo</button>':'')+'</div>'):'';
     return '<div class="cm-daywrap"><div class="cm-row"><div class="d"><div class="day">'+hzLbl(dt)+'</div></div><div style="flex:1">'+dishHtml+'</div><div class="right">'+right+'</div></div>'+whoList+'</div>';
@@ -2604,6 +2608,37 @@ async function cmSaveMenu(){
   try{ const {error}=await sb.from('comidas_menu').upsert(filas,{onConflict:'property_id,fecha'}); if(error) throw error; btn.textContent='✓ Menú guardado'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},1500); }
   catch(e){ btn.textContent='Error al guardar'; btn.disabled=false; }
 }
+/* ---------- Recetario: el historial unificado de platillos con sus votos ---------- */
+let CM_REC=null, CM_RECF='top';
+async function cmRecetarioCarga(){
+  if(CM_REC) return CM_REC;
+  try{ const {data}=await sb.from('v_comida_recetario').select('*'); CM_REC=data||[]; }catch(e){ CM_REC=[]; }
+  try{ const dl=$('cm-dishlist'); if(dl&&CM_REC.length) dl.innerHTML=CM_REC.map(r=>'<option value="'+String(r.nombre).replace(/"/g,'&quot;')+'">').join(''); }catch(e){}
+  return CM_REC;
+}
+function cmRecetarioPinta(){
+  const box=$('cm-recetario'); if(!box) return;
+  let L=(CM_REC||[]).slice();
+  const hoy=new Date(); const dias=r=>r.ultima?Math.round((hoy-new Date(r.ultima+'T12:00:00'))/864e5):9999;
+  if(CM_RECF==='top') L.sort((a,b)=>(b.coronas-a.coronas)||(b.mmm-a.mmm)||(b.veces-a.veces));
+  else if(CM_RECF==='olvidados') L=L.filter(r=>r.ultima).sort((a,b)=>dias(b)-dias(a));
+  else L.sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
+  const chip=(k,t)=>'<button data-recf="'+k+'" style="font:inherit;font-size:11.5px;font-weight:700;border:1px solid '+(CM_RECF===k?'var(--accent,#137a56)':'var(--bd)')+';background:'+(CM_RECF===k?'var(--accent,#137a56)':'#fff')+';color:'+(CM_RECF===k?'#fff':'inherit')+';border-radius:14px;padding:5px 10px;cursor:pointer;margin:0 4px 6px 0">'+t+'</button>';
+  box.innerHTML='<div>'+chip('top','👑 Más celebrados')+chip('olvidados','⏳ Hace más que no sale')+chip('todos','Todos (A-Z)')+'</div>'
+    +L.slice(0,40).map(r=>'<div style="display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.06);font-size:13px">'
+      +'<div style="flex:1"><b>'+String(r.nombre).replace(/</g,'&lt;')+'</b>'
+      +'<div style="font-size:11px;color:#888">servido '+r.veces+(r.veces===1?' vez':' veces')+(r.ultima?' · hace '+dias(r)+' días':'')+'</div></div>'
+      +'<div style="white-space:nowrap;font-size:12px">'+(r.votos?('👑'+r.coronas+' 😋'+r.mmm+' 🤏'+r.poquito):'<span style="color:#bbb">sin votos aún</span>')+'</div>'
+      +'</div>').join('')
+    +(L.length>40?'<div style="font-size:11px;color:#999;margin-top:6px">…y '+(L.length-40)+' más.</div>':'');
+  box.querySelectorAll('[data-recf]').forEach(b=>b.onclick=()=>{ CM_RECF=b.getAttribute('data-recf'); cmRecetarioPinta(); });
+}
+if($('cm-recbtn')) $('cm-recbtn').onclick=async()=>{
+  const box=$('cm-recetario');
+  if(box.style.display!=='none'){ box.style.display='none'; return; }
+  box.style.display='block'; box.innerHTML='<div class="ph"><div class="ico">📖</div><div class="d">Cargando recetario…</div></div>';
+  await cmRecetarioCarga(); cmRecetarioPinta();
+};
 $('comidaSheet').onclick=(e)=>{ if(e.target.id==='comidaSheet') $('comidaSheet').classList.remove('show'); };
 $('cm-prev').onclick=()=>{ CM.monday=hzAddDays(CM.monday,-7); cmLoadWeek(); };
 $('cm-next').onclick=()=>{ CM.monday=hzAddDays(CM.monday,7); cmLoadWeek(); };
