@@ -6209,8 +6209,12 @@
     // --- Aplica un mes de fin_pl sobre BU + MONTHLY ---
     function applyMonth(m, map){
       var mi=m-1, S=mkSum(map);
+      // Solo pisamos los campos que el mes realmente trae (si no trae plan/aa, se conserva lo horneado).
+      var _has={real:false,aa:false,plan:false};
+      for(var _l in map){ for(var _c in map[_l]){ var _d=map[_l][_c]; if(_d.real)_has.real=true; if(_d.aa)_has.aa=true; if(_d.plan)_has.plan=true; } }
+      var _FLDS=['real','aa','plan'].filter(function(x){return _has[x];});
       ['cdmx','pue'].forEach(function(p){ var B=buArrs(p);
-        ['real','aa','plan'].forEach(function(f){
+        _FLDS.forEach(function(f){
           // Ventas por unidad (BU): hospedaje=400-01+400-05, ayb=400-02, tour=400-03(+hijos)
           B[f].hospedaje[mi]=S(p,['400-01'],f)+S(p,['400-05'],f);
           B[f].ayb[mi]=S(p,['400-02'],f);
@@ -6230,7 +6234,7 @@
           M.pers_adm[mi]=S(p,['600-03-01'],f); M.pers_mant[mi]=S(p,['600-04-01'],f);
         });
       });
-      ['real','aa','plan'].forEach(function(f){
+      _FLDS.forEach(function(f){
         MONTHLY.corp[f].total[mi]=S('corp',['600-03'],f);
         MONTHLY.corp[f].personal[mi]=S('corp',['600-03-01'],f);
         MONTHLY.corp[f].otros_ing[mi]=S('corp',['950-OICORP'],f);
@@ -6320,7 +6324,7 @@
       try{
         // VENTAS Real 2026 (millones) = cdmx+pue por mes desde MONTHLY (Jul overrideado por overlay).
         // Su suma Ene-Jul == out.real.ing (consistente con la tarjeta).
-        var ventas=[]; for(var i=0;i<7;i++) ventas.push((tgRev('cdmx',i)+tgRev('pue',i))/1e6);
+        var ventas=[]; for(var i=0;i<8;i++) ventas.push((tgRev('cdmx',i)+tgRev('pue',i))/1e6);
         tgSetSeries(0, ventas, false);
         // RESULTADO Real 2026 (millones): Ene-Jun = neta MONTHLY re-anclada al agregado maestro MPL_EJ
         //   (reconcilia la divergencia ccrr-vs-MONTHLY en costos, preservando la forma mensual);
@@ -6344,7 +6348,7 @@
         var vd=document.getElementById('tg-ventas-delta');
         if(vd) vd.innerHTML='<span class="neg">'+fmtPct1(vsAA)+' vs 2025*</span> · <span class="neg">'+fmtPct1(vsPlan)+' vs Plan</span>';
         var vb=document.getElementById('tg-ventas-badge');
-        if(vb) vb.innerHTML='YTD 7M <b>'+fmtM(r.ing)+'</b> · vs Plan <b>'+fmtPct1(vsPlan)+'</b> · vs AA <b>'+fmtPct1(vsAA)+'*</b>';
+        if(vb) vb.innerHTML='YTD 8M <b>'+fmtM(r.ing)+'</b> · vs Plan <b>'+fmtPct1(vsPlan)+'</b> · vs AA <b>'+fmtPct1(vsAA)+'*</b>';
         // RESULTADO (tarjeta + pill): vs 2025 = AA CON Sayulita; vs Plan recalculado
         var resVs2025 = r.neta - a.neta;
         var resVsPlan = r.neta - p.neta;
@@ -6359,11 +6363,14 @@
       }catch(e){}
     }
     // --- Actualiza la tabla Resumen P&L YTD = horneado(Ene-Jun) + override(Jul) ---
-    function updateMaster(julyMap){
+    function updateMaster(byMonth){
+      var _fm = byMonth ? Object.keys(byMonth).map(Number).filter(function(m){return m>=7;}).sort(function(a,b){return a-b;}) : null;
       var out={};
       ['real','aa','plan'].forEach(function(f){
-        var jl = julyMap ? masterLines(julyMap,f) : MPL_JB[f];
-        var o={}; MKEYS.forEach(function(k){ o[k]=MPL_EJ[f][k]+jl[k]; }); out[f]=o;
+        var o={}; MKEYS.forEach(function(k){ o[k]=MPL_EJ[f][k]; });
+        if(_fm){ _fm.forEach(function(m){ var ml=masterLines(byMonth[m],f); MKEYS.forEach(function(k){ o[k]+=ml[k]; }); }); }
+        else { MKEYS.forEach(function(k){ o[k]+=MPL_JB[f][k]; }); }
+        out[f]=o;
       });
       MKEYS.forEach(function(k){
         setC('mpl-'+k+'-real', fmtMoney(out.real[k]));
@@ -6377,7 +6384,7 @@
       //   Julio   = sumado en vivo desde fin_pl (fallback horneado si no hay override).
       var ING_ACCTS=['400-01','400-05','400-02','400-03','400-04'];
       var SAYU_AA_ING_EJ=5788419.43;              // Ene-Jun sayu ingresos AA (2025)
-      var sayuJulAA = julyMap ? mkSum(julyMap)('sayu',ING_ACCTS,'aa') : 522408.91; // Julio sayu AA
+      var sayuJulAA = _fm ? _fm.reduce(function(t,m){ return t + mkSum(byMonth[m])('sayu',ING_ACCTS,'aa'); },0) : 522408.91; // sayu AA de los meses fin_pl (Jul, Ago...)
       var ingAA_noSayu = out.aa.ing - SAYU_AA_ING_EJ - sayuJulAA;
       updateHero(out, ingAA_noSayu); // hero: neta usa AA con sayu; ingresos usa AA sin sayu
       updateTotalGrupo(out, ingAA_noSayu); // TOTAL GRUPO: tarjetas + pills + series Real 2026
@@ -6422,7 +6429,7 @@
             byMonth[mm][r.loc][r.cuenta]={real:r.real==null?0:+r.real, aa:r.aa==null?0:+r.aa, plan:r.plan==null?0:+r.plan}; });
           Object.keys(byMonth).map(Number).sort(function(a,b){return a-b;}).forEach(function(mm){ restoreMonth(mm-1); applyMonth(mm, byMonth[mm]); });
           window.__finPL=window.__finPL||{}; window.__finPL.byMonth=byMonth; // [FASE 2b] mapas por mes para el motor de reglas
-          updateMaster(byMonth[7]||null); // YTD Ene-Jul: base Ene-Jun horneada + Jul override
+          updateMaster(byMonth); // YTD: base Ene-Jun horneada + todos los meses fin_pl (Jul, Ago...)
           reRender();
           if(showToast) toast('Reporte recalculado ✓');
           _running=false;
