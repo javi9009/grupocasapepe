@@ -79,6 +79,8 @@
   .twist:hover{background:var(--accent-soft);border-color:var(--accent);}
   tr.child td{background:#fdfcfa;font-size:12.5px;color:var(--text-soft);border-bottom:1px dotted var(--border);}
   tr.child td.concepto{background:#fdfcfa;padding-left:34px;font-weight:400;}
+  tr.child.catrow td{background:#f2eee7;font-weight:700;color:var(--text);border-bottom:1px solid var(--border);}
+  tr.child.catrow td.concepto{background:#f2eee7;padding-left:22px;font-weight:700;}
   tr.child.unassigned td{background:#fdf6f2;color:var(--bad);font-weight:600;}
   tr.child.unassigned td.concepto{background:#fdf6f2;padding-left:34px;}
   tr.child input.cell{width:88px;font-size:12.5px;}
@@ -244,7 +246,7 @@ var ROWTR={};     // 'evolucion' -> {tr, twist, cfg}  (fila con desglose por pro
   ROWS.forEach(function(cfg){
     var tr=document.createElement('tr');
     if(cfg.section){
-      tr.className='section';
+      tr.className='section'; tr.dataset.section=cfg.section;
       var td=document.createElement('td'); td.className='concepto'; td.colSpan=13; td.textContent=cfg.section;
       tr.appendChild(td); body.appendChild(tr); return;
     }
@@ -553,7 +555,8 @@ var AFTER_RECALC=null;
     'Rentas atrasadas Puebla':'Rentas atrasadas — Puebla',
     'Impuestos atrasados':'Impuestos atrasados'
   };
-  var CATEGORIAS=['BBVA','Renta CDMX','Sayulita','Renta Puebla','ISH locales','Impuestos','Proveedores y otros','Otros'];
+  var CATEGORIAS=['BBVA','Renta CDMX','Renta Puebla','Sayulita','ISH CDMX','ISH Puebla','ISH Nayarit',
+                  'Impuestos federales (SAT)','IMSS','Proveedores y otros'];
   var ORIGENES=[['finanzas','Finanzas'],['compras','Compras'],['mantenimiento','Mantenimiento'],['otro','Otro']];
 
   var MOV={evolucion:{}};             // tipo -> proveedor -> {categoria,rubro,origen,montos[12]}
@@ -590,70 +593,96 @@ var AFTER_RECALC=null;
 
   function td(cls){ var e=document.createElement('td'); if(cls) e.className=cls; return e; }
 
+  function anchorRow(){
+    return document.querySelector('tr.section[data-section^="PLAN"]');
+  }
+  function insertBeforeAnchor(tr){
+    var a=anchorRow();
+    if(a) a.parentNode.insertBefore(tr, a);
+    else document.getElementById('flujoBody').appendChild(tr);
+  }
+
   function renderChildren(tipo){
     clearChildren(tipo);
-    var host=ROWTR[tipo]; if(!host) return;
-    var after=host.tr;
-    var provs=Object.keys(MOV[tipo]).sort(function(a,b){ return a.localeCompare(b,'es'); });
+    if(!ROWTR[tipo]) return;
+    var provs=Object.keys(MOV[tipo]);
 
-    provs.forEach(function(prov){
-      var rec=MOV[tipo][prov];
-      var tr=document.createElement('tr');
-      tr.className='child'; tr.dataset.child=tipo; tr.dataset.prov=prov;
+    // Encabezado del desglose — va al FINAL del bloque, no en medio de la tabla
+    var trH=document.createElement('tr');
+    trH.className='section'; trH.dataset.child=tipo;
+    var ch=document.createElement('td'); ch.className='concepto'; ch.colSpan=13;
+    ch.textContent='DESGLOSE DE LA EVOLUCIÓN POR PROVEEDOR · '+provs.length+' proveedores';
+    trH.appendChild(ch); insertBeforeAnchor(trH);
 
-      var c=td('concepto');
-      var nm=document.createElement('span');
-      if(prov.indexOf('~')===0){ var tl=document.createElement('span'); tl.className='tilde'; tl.textContent='~ '; c.appendChild(tl); nm.textContent=prov.replace(/^~\s*/,''); }
-      else nm.textContent=prov;
-      c.appendChild(nm);
-      var meta=[]; if(rec.rubro) meta.push(DESTINOS_LBL[rec.rubro]||rec.rubro); else if(rec.categoria) meta.push(rec.categoria);
-      if(rec.origen && rec.origen!=='finanzas') meta.push(rec.origen);
-      if(meta.length){
-        var sm=document.createElement('span');
-        sm.style.cssText='color:var(--text-muted);font-size:11px;display:block;';
-        sm.textContent=meta.join(' · ');
-        c.appendChild(sm);
-      }
-      var del=document.createElement('button');
-      del.className='delrow'; del.type='button'; del.textContent='×';
-      del.title='Quitar esta línea';
-      del.addEventListener('click', function(){
-        MOV_DEL.push({tipo:tipo, proveedor:prov});
-        delete MOV[tipo][prov];
-        renderChildren(tipo); applyMov();
-      });
-      c.appendChild(del);
-      tr.appendChild(c);
-
-      for(var m=1;m<=12;m++){
-        var cell=td();
-        var inp=document.createElement('input');
-        inp.className='cell'; inp.type='text'; inp.setAttribute('inputmode','numeric');
-        inp.dataset.tipo=tipo; inp.dataset.prov=prov; inp.dataset.mes=m;
-        inp.value=fmtInput(rec.montos[m-1]);
-        inp.addEventListener('input', function(e){
-          var v=parseNum(e.target.value);
-          MOV[e.target.dataset.tipo][e.target.dataset.prov].montos[(+e.target.dataset.mes)-1]=isNaN(v)?null:v;
-          applyMov();
-        });
-        inp.addEventListener('focus', function(e){ var v=parseNum(e.target.value); e.target.value=isNaN(v)?'':v; e.target.select(); });
-        inp.addEventListener('blur',  function(e){ e.target.value=fmtInput(parseNum(e.target.value)); });
-        cell.appendChild(inp); tr.appendChild(cell);
-      }
-      after.parentNode.insertBefore(tr, after.nextSibling);
-      after=tr;
+    // Agrupado por categoría, con subtotal por categoría
+    var porCat={};
+    provs.forEach(function(pr){
+      var c=(MOV[tipo][pr].categoria||'Sin categoría');
+      (porCat[c]=porCat[c]||[]).push(pr);
+    });
+    var cats=Object.keys(porCat).sort(function(a,b){
+      var sa=0, sb=0, m;
+      for(m=0;m<12;m++){ porCat[a].forEach(function(p2){ sa+=Math.abs(MOV[tipo][p2].montos[m]||0); });
+                         porCat[b].forEach(function(p2){ sb+=Math.abs(MOV[tipo][p2].montos[m]||0); }); }
+      return sb-sa;
     });
 
-    // Línea «Sin repartir» — la evolución que todavía no tiene proveedor
-    if(true){
-      var trU=document.createElement('tr');
-      trU.className='child unassigned'; trU.dataset.child=tipo; trU.dataset.unassigned='1';
-      var cu=td('concepto'); cu.textContent='Sin repartir por proveedor';
-      trU.appendChild(cu);
-      for(var m2=1;m2<=12;m2++){ var cc=td(); cc.dataset.mes=m2; trU.appendChild(cc); }
-      after.parentNode.insertBefore(trU, after.nextSibling);
-      after=trU;
-    }
+    cats.forEach(function(cat){
+      // subtotal de la categoría
+      var trC=document.createElement('tr');
+      trC.className='child catrow'; trC.dataset.child=tipo; trC.dataset.cat=cat;
+      var cc=td('concepto'); cc.textContent=cat+' ('+porCat[cat].length+')';
+      trC.appendChild(cc);
+      for(var m=1;m<=12;m++){
+        var cel=td(); cel.dataset.cat=cat; cel.dataset.mes=m; trC.appendChild(cel);
+      }
+      insertBeforeAnchor(trC);
+
+      porCat[cat].sort(function(a,b){ return a.localeCompare(b,'es'); }).forEach(function(prov){
+        var rec=MOV[tipo][prov];
+        var tr=document.createElement('tr');
+        tr.className='child'; tr.dataset.child=tipo; tr.dataset.prov=prov; tr.dataset.cat=cat;
+        var c=td('concepto');
+        if(prov.indexOf('~')===0){ var tl=document.createElement('span'); tl.className='tilde'; tl.textContent='~ '; c.appendChild(tl); }
+        var nm=document.createElement('span'); nm.textContent=prov.replace(/^~\s*/,''); c.appendChild(nm);
+        if(rec.origen && rec.origen!=='finanzas'){
+          var sm=document.createElement('span');
+          sm.style.cssText='color:var(--text-muted);font-size:11px;display:block;';
+          sm.textContent=rec.origen; c.appendChild(sm);
+        }
+        var del=document.createElement('button');
+        del.className='delrow'; del.type='button'; del.textContent='×'; del.title='Quitar esta línea';
+        del.addEventListener('click', function(){
+          MOV_DEL.push({tipo:tipo, proveedor:prov});
+          delete MOV[tipo][prov]; renderChildren(tipo); applyMov();
+        });
+        c.appendChild(del); tr.appendChild(c);
+        for(var m2=1;m2<=12;m2++){
+          var cell=td();
+          var inp=document.createElement('input');
+          inp.className='cell'; inp.type='text'; inp.setAttribute('inputmode','numeric');
+          inp.dataset.tipo=tipo; inp.dataset.prov=prov; inp.dataset.mes=m2;
+          inp.value=fmtInput(rec.montos[m2-1]);
+          inp.addEventListener('input', function(e){
+            var v=parseNum(e.target.value);
+            MOV[e.target.dataset.tipo][e.target.dataset.prov].montos[(+e.target.dataset.mes)-1]=isNaN(v)?null:v;
+            applyMov();
+          });
+          inp.addEventListener('focus', function(e){ var v=parseNum(e.target.value); e.target.value=isNaN(v)?'':v; e.target.select(); });
+          inp.addEventListener('blur',  function(e){ e.target.value=fmtInput(parseNum(e.target.value)); });
+          cell.appendChild(inp); tr.appendChild(cell);
+        }
+        insertBeforeAnchor(tr);
+      });
+    });
+
+    // Línea «Sin repartir»
+    var trU=document.createElement('tr');
+    trU.className='child unassigned'; trU.dataset.child=tipo; trU.dataset.unassigned='1';
+    var cu=td('concepto'); cu.textContent='Sin repartir por proveedor';
+    trU.appendChild(cu);
+    for(var m3=1;m3<=12;m3++){ var cc2=td(); cc2.dataset.mes=m3; trU.appendChild(cc2); }
+    insertBeforeAnchor(trU);
 
     // Barra para agregar línea
     var trT=document.createElement('tr');
@@ -679,10 +708,10 @@ var AFTER_RECALC=null;
       if(!nombre){ notify('Escoge o escribe un proveedor', false); iProv.focus(); return; }
       if(MOV[tipo][nombre]){ notify('Ese proveedor ya tiene línea aquí', false); return; }
       var rec=movRow(tipo,nombre);
-      rec.categoria=sDest.value;
+      rec.categoria=sDest.value||'Proveedores y otros';
       rec.origen=sOrig.value||'finanzas';
-      var known=PROVS.filter(function(p){ return p.nombre===nombre; })[0];
-      if(known){ rec.proveedor_id=known.id; if(!rec.categoria) rec.categoria=known.categoria||''; }
+      var known=PROVS.filter(function(x){ return x.nombre===nombre; })[0];
+      if(known) rec.proveedor_id=known.id;
       MOV_DEL=MOV_DEL.filter(function(d){ return !(d.tipo===tipo && d.proveedor===nombre); });
       iProv.value=''; sDest.selectedIndex=0;
       renderChildren(tipo); applyMov();
@@ -693,34 +722,46 @@ var AFTER_RECALC=null;
     bNew.title='Lo da de alta en el catálogo compartido (compras, mantenimiento) con un ~ delante';
     bNew.addEventListener('click', function(){ nuevoProveedorForm(tipo, box, iProv); });
 
-    // Buscador — con 141 proveedores la lista es larga
     var iFind=document.createElement('input');
     iFind.type='text'; iFind.placeholder='Buscar proveedor…'; iFind.style.minWidth='150px';
     iFind.addEventListener('input', function(){
       var q=(iFind.value||'').trim().toLowerCase();
       var rs=document.querySelectorAll('tr.child[data-child="'+tipo+'"]');
       for(var i=0;i<rs.length;i++){
-        if(rs[i].dataset.unassigned) continue;
-        var p=(rs[i].dataset.prov||'').toLowerCase();
-        rs[i].hidden = (q!=='' && p.indexOf(q)<0);
+        if(rs[i].dataset.unassigned || rs[i].classList.contains('catrow')) continue;
+        rs[i].hidden = (q!=='' && (rs[i].dataset.prov||'').toLowerCase().indexOf(q)<0);
       }
     });
 
     var hint=document.createElement('span');
     hint.style.cssText='color:var(--text-muted);font-size:11.5px;';
-    hint.textContent = (provs.length?provs.length+' proveedores · ':'')
-      + 'Cada línea es el cambio de saldo de ese proveedor en el CxP.';
+    hint.textContent='Cada línea es el cambio de saldo de ese proveedor en el CxP del mes. La suma es la evolución.';
 
     box.appendChild(iProv); box.appendChild(sDest); box.appendChild(sOrig);
     box.appendChild(bAdd); box.appendChild(bNew); box.appendChild(iFind); box.appendChild(hint);
     ct.appendChild(box); trT.appendChild(ct);
-    after.parentNode.insertBefore(trT, after.nextSibling);
+    insertBeforeAnchor(trT);
 
     refreshChildValues(tipo);
   }
 
   /* Sólo refresca números (sin reconstruir el DOM) */
   function refreshChildValues(tipo){
+    // subtotales por categoría
+    var cr=document.querySelectorAll('tr.catrow[data-child="'+tipo+'"]');
+    for(var q=0;q<cr.length;q++){
+      var cat=cr[q].dataset.cat;
+      for(var mm=1;mm<=12;mm++){
+        var cel=cr[q].querySelector('td[data-mes="'+mm+'"]'); if(!cel) continue;
+        var sc=0, hay=false;
+        for(var pn in MOV[tipo]){
+          if((MOV[tipo][pn].categoria||'Sin categoría')!==cat) continue;
+          var vv=MOV[tipo][pn].montos[mm-1];
+          if(vv!=null && !isNaN(vv)){ sc+=vv; hay=true; }
+        }
+        cel.textContent = hay?fmt(sc):'—';
+      }
+    }
     var inputs=document.querySelectorAll('tr[data-child="'+tipo+'"] input.cell');
     for(var i=0;i<inputs.length;i++){
       var el=inputs[i];
