@@ -289,6 +289,11 @@ var ROWTR={};     // 'contratada'|'pago' -> {tr, twist, cfg}  (filas con desglos
 function val(bloque,rubro,m){ var inp=IN[bloque+'|'+rubro+'|'+m]; return inp?parseNum(inp.value):NaN; }
 function n0(x){ return isNaN(x)?0:x; }
 
+/* Deuda por mes segun el AGING de Roberto (fin_deuda_saldo). Ancla la conciliacion
+   para que la Deuda final del flujo cuadre con el Reporte a Socios. La carga
+   loadDeudaAging() lo llena; los meses sin aging siguen la cadena editable. */
+var AGING_DEUDA={};
+
 function recalc(){
   var flujoOperativo=[], pagosDeuda=[], deudaInicial=[], deudaFinal=[], flujoReal=[];
   var ingresosA=[], egresosA=[];
@@ -315,7 +320,11 @@ function recalc(){
 
     var nueva = n0(val('conciliacion','Deuda nueva contratada',m));
     var ini   = (m===1) ? n0(val('conciliacion','Deuda inicial',1)) : n0(prevFinal);
+    // Ancla al AGING de Roberto: el inicio del mes = cierre (aging) del mes previo
+    if(AGING_DEUDA[m-1]!=null) ini = AGING_DEUDA[m-1];
     var fin   = ini + nueva - pagos;
+    // Ancla el cierre al AGING cuando existe (verdad de Roberto = Reporte a Socios)
+    if(AGING_DEUDA[m]!=null) fin = AGING_DEUDA[m];
     var delta = ini - fin;                       // reducción de deuda del mes
     var real  = flOp - pagos + delta;            // A − B + Δdeuda
 
@@ -374,6 +383,22 @@ var AFTER_RECALC=null;
       setTimeout(function(){ d.style.transition='opacity .4s'; d.style.opacity='0';
         setTimeout(function(){ d.remove(); }, 420); }, 3200);
     }catch(e){}
+  }
+
+  // CARGA del AGING de deuda (fin_deuda_saldo). Ancla la conciliación del flujo
+  // a la misma fuente que ve el socio en el Reporte, para que SIEMPRE cuadren.
+  function loadDeudaAging(){
+    return getClient().then(function(sb){
+      return sb.auth.getSession().then(function(){
+        return sb.from('fin_deuda_saldo').select('mes,saldo').eq('anio',ANIO);
+      });
+    }).then(function(r){
+      if(!r || r.error || !r.data) return;
+      var t={};
+      r.data.forEach(function(rec){ var m=+rec.mes; if(m>=1&&m<=12) t[m]=(t[m]||0)+(+rec.saldo||0); });
+      AGING_DEUDA=t;
+      recalc();
+    }).catch(function(){ /* sin aging -> cadena editable tal cual */ });
   }
 
   // CARGAR: getSession() ANTES del select (RLS authenticated bloquea sin sesión).
@@ -887,10 +912,11 @@ var AFTER_RECALC=null;
   document.getElementById('btnReload').addEventListener('click', function(){
     this.disabled=true; var self=this;
     loadFromDB().then(loadPagosCriticos).then(loadProveedores).then(loadMov)
+      .then(loadDeudaAging)
       .then(function(){ self.disabled=false; notify('Datos recargados', true); });
   });
 
-  function boot(){ loadFromDB().then(loadPagosCriticos).then(loadProveedores).then(loadMov); }
+  function boot(){ loadFromDB().then(loadPagosCriticos).then(loadProveedores).then(loadMov).then(loadDeudaAging); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
