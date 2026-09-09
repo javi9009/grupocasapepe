@@ -249,7 +249,10 @@ async function reparto(propKey: string, fecha: string) {
   const bloqueadas = existentes.filter((a) => a.estado !== 'propuesta');
   if (bloqueadas.length) return { ok: false, ya_validado: true, mensaje: 'El reparto de este día ya fue validado; no se regenera.', asignaciones: bloqueadas.length };
   for (const a of existentes) await rest(`hk_asignaciones?id=eq.${a.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
-  await rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${fecha}&asignacion_id=is.null`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+  // Lo suelto NO se borra aquí: se borra justo antes de volver a escribirlo, al
+  // final. Si la corrida se cae a medias -como el 9-sep-, el día se quedaba sin
+  // las vacías limpias ni las opcionales y nadie se enteraba hasta que las
+  // recamaristas abrían la app.
 
   // Los dormitorios tienen tiempo propio por tamaño (8, 6 y 4 camas), tanto en la
   // limpieza general como en la profunda.
@@ -647,6 +650,8 @@ async function reparto(propKey: string, fecha: string) {
   // El motor no mueve nada por su cuenta: lo que no se reparte queda suelto en el
   // listado, sin asignación, para que el ama de llaves lo coloque si quiere.
   const sueltas = [...opsLibres, ...profundas, ...opcionales, ...libres];
+  // Ahora sí: fuera lo suelto de la corrida anterior y entra lo de esta.
+  await rest(`hk_tareas?property_id=eq.${P}&fecha=eq.${fecha}&asignacion_id=is.null`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
   if (sueltas.length) {
     const filasS = sueltas.map((t, idx) => ({ asignacion_id: null, property_id: P, fecha, area_id: t.area_id, tarea_op_id: t.op_id ?? null, titulo: t.titulo ?? null, pase: t.pase ?? null, pases: t.pases ?? null, metadata: metaDe(t), checklist_id: t.checklist_id, estatus_area: t.estatus, minutos_estimados: t.minutos, orden: 9000 + idx, estado: 'pendiente' }));
     for (let i = 0; i < filasS.length; i += 100) await rest('hk_tareas', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(filasS.slice(i, i + 100)) });
