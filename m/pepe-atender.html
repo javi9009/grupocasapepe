@@ -156,6 +156,31 @@ h1{font-family:var(--serif);font-weight:600;font-size:1.5rem;margin:0;letter-spa
 .encolado .deshacer:focus-visible{outline:2px solid var(--warn);outline-offset:2px}
 .item.encolada{opacity:.72}
 
+/* --- modo paseo: conversacion turno a turno --- */
+.item.paseando{box-shadow:0 0 0 2px var(--accent);border-color:var(--accent)}
+.paseo-bar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--ink);color:#fff;
+  border-top:2px solid var(--accent)}
+.paseo-bar[hidden]{display:none}
+.paseo-in{max-width:830px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+.paseo-info{flex:1;min-width:0}
+.paseo-pos{font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;color:#9db3a6;font-variant-numeric:tabular-nums}
+.paseo-que{display:block;font-family:var(--serif);font-size:.98rem;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.paseo-oido{font-size:.78rem;color:var(--accent-soft);font-style:italic;min-height:1.2em;
+  width:100%;order:3;opacity:.9}
+.paseo-oido:empty{display:none}
+.paseo-salir{font:inherit;font-size:.76rem;font-weight:600;border:1px solid #6B6459;background:transparent;
+  color:#fff;border-radius:6px;padding:7px 13px;cursor:pointer;flex:none}
+.paseo-salir:hover{background:var(--bad);border-color:var(--bad)}
+.paseo-onda{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none;
+  animation:onda 1.1s infinite}
+@keyframes onda{50%{opacity:.2;transform:scale(.7)}}
+@media (prefers-reduced-motion:reduce){.paseo-onda{animation:none}}
+.paseo-ayuda{font-size:.74rem;color:var(--muted);margin-top:10px;padding:9px 12px;
+  background:var(--surface-2);border:1px solid var(--rule);border-radius:6px}
+.paseo-ayuda[hidden]{display:none}
+.paseo-ayuda code{font-family:inherit;font-weight:700;color:var(--accent)}
+
 .procesado{margin-top:26px;background:var(--surface-2);border:1px solid var(--rule);border-radius:8px;padding:13px 16px}
 .procesado h3{margin:0 0 7px;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
 .procesado p{margin:0;font-family:var(--serif);font-size:.9rem;color:var(--ink-2)}
@@ -200,7 +225,8 @@ body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
       <div class="stamp" id="sello">Cargando&hellip;</div>
     </div>
     <div class="top-actions">
-      <button class="btn" id="btnLeer"><span id="leerTxt">Escuchar</span></button>
+      <button class="btn" id="btnPaseo"><span aria-hidden="true">&#128694;</span><span id="paseoTxt">Modo paseo</span></button>
+      <button class="btn ghost" id="btnLeer"><span id="leerTxt">Escuchar</span></button>
       <button class="btn ghost" id="btnDictar"><span class="dot"></span><span id="dictarTxt">Dictar</span></button>
     </div>
   </div>
@@ -215,6 +241,12 @@ body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
 
 <main class="wrap">
   <div class="aviso" id="avisoVoz" hidden></div>
+  <div class="paseo-ayuda" id="paseoAyuda" hidden>
+    Te leo uno y me callo. Puedes cortarme a media frase.
+    Di <code>b&oacute;rralo</code>, <code>cont&eacute;stale</code>, <code>spam</code>,
+    <code>siguiente</code>, <code>detalle</code>, <code>repite</code> o <code>para</code>.
+    Ponte los audi&iacute;fonos: por altavoz el micr&oacute;fono se oye a s&iacute; mismo y se corta solo.
+  </div>
   <div class="aviso-carga" id="cargando">Leyendo tu bandeja&hellip;</div>
   <div id="lista"></div>
   <div class="procesado" id="resumen" hidden></div>
@@ -222,6 +254,18 @@ body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   Los botones de acci&oacute;n no tocan Gmail al momento: dejan la orden apuntada y se ejecutan en el corte
   de la ma&ntilde;ana siguiente, a las 7. Hasta entonces puedes deshacerlas.</p>
 </main>
+
+<div class="paseo-bar" id="paseoBar" hidden>
+  <div class="paseo-in">
+    <span class="paseo-onda" aria-hidden="true"></span>
+    <div class="paseo-info">
+      <span class="paseo-pos" id="paseoPos"></span>
+      <span class="paseo-que" id="paseoQue"></span>
+    </div>
+    <button class="paseo-salir" id="paseoSalir">Salir</button>
+    <div class="paseo-oido" id="paseoOido"></div>
+  </div>
+</div>
 
 <div class="dictado" id="panelDictado" hidden>
   <div class="dictado-in">
@@ -388,6 +432,7 @@ function tarjeta(a){
   const el = document.createElement("article");
   el.className = "item" + (a.hecho ? " hecho" : "");
   el.dataset.urg = a.urg;
+  if(a.tid) el.dataset.tid = a.tid;
 
   const chk = document.createElement("button");
   chk.className = "check";
@@ -688,6 +733,171 @@ btnLeer.onclick = () => {
   });
 };
 if(tieneVoz) speechSynthesis.onvoiceschanged = () => {};
+
+/* ---------- Modo paseo: te leo uno, me callas, decides, siguiente ----------
+   El micro queda abierto TAMBIEN mientras hablo: en cuanto dices algo corto la
+   voz. Por eso hacen falta audifonos; por altavoz el micro se oye a si mismo. */
+const RCP = window.SpeechRecognition || window.webkitSpeechRecognition;
+const btnPaseo = $("btnPaseo"), paseoTxt = $("paseoTxt");
+const paseoBar = $("paseoBar"), paseoPos = $("paseoPos"), paseoQue = $("paseoQue"), paseoOido = $("paseoOido");
+let PASEO = null;
+
+const llano = s => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+/* Orden importante: lo mas especifico primero. */
+const ORDENES = [
+  {tipo:"salir",     claves:["para ya","parate","detente","stop","salir","sal del paseo","basta","termina","ya esta bien"]},
+  {tipo:"repite",    claves:["repite","repitelo","otra vez","no te escuche","no te oi","que dijiste","como dices"]},
+  {tipo:"detalle",   claves:["detalle","detalles","mas info","mas informacion","cuentame mas","ampliame","explicame","de que va"]},
+  {tipo:"spam",      claves:["spam","correo basura","no quiero saber nada"]},
+  {tipo:"gracias",   claves:["contestale","respondele","responde","dale las gracias","dale gracias","acusa recibo","gracias"]},
+  {tipo:"papelera",  claves:["borralo","borra","borrar","papelera","a la basura","basura","tiralo","quitalo","fuera"]},
+  {tipo:"siguiente", claves:["siguiente","pasa","pasalo","salta","dejalo","nada","otro","continua","adelante"]}
+];
+const CONFIRMA = {
+  papelera:"A la papelera.",
+  spam:"Spam y papelera.",
+  gracias:"Le respondo con un gracias."
+};
+
+function itemsPaseo(){
+  const grupos = vista === "tipo" ? TIPOS : URGS;
+  const campo  = vista === "tipo" ? "tipo" : "urg";
+  const out = [];
+  grupos.forEach(g => ASUNTOS.forEach(a => {
+    if(a[campo] === g.id && a.tid && !a.hecho && !COLA[a.tid]) out.push(a);
+  }));
+  return out;
+}
+
+function di(texto, cb){
+  if(!PASEO) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(texto);
+  u.lang = "es-MX";
+  const v = vozEs(); if(v) u.voice = v;
+  u.rate = 1.03;
+  PASEO.hablando = true;
+  const fin = () => { if(PASEO) PASEO.hablando = false; if(cb) cb(); };
+  u.onend = fin; u.onerror = fin;
+  speechSynthesis.speak(u);
+}
+
+function marca(a){
+  document.querySelectorAll(".paseando").forEach(n => n.classList.remove("paseando"));
+  if(!a) return;
+  let el = null;
+  try{ el = document.querySelector('.item[data-tid="' + CSS.escape(a.tid) + '"]'); }catch(e){}
+  if(el){
+    el.classList.add("paseando");
+    el.scrollIntoView({block:"center", behavior:"smooth"});
+  }
+  paseoPos.textContent = (PASEO.i + 1) + " de " + PASEO.items.length;
+  paseoQue.textContent = a["qué"];
+}
+
+function leeActual(){
+  const a = PASEO.items[PASEO.i];
+  marca(a);
+  di(a["qué"] + ". " + (a["quién"] || "") + " " + (a["cuándo"] || "") + ".");
+}
+
+function avanza(){
+  if(!PASEO) return;
+  PASEO.i++;
+  if(PASEO.i >= PASEO.items.length){
+    di("Ya está. No queda nada más que revisar.", terminaPaseo);
+    return;
+  }
+  leeActual();
+}
+
+async function ordena(tipo){
+  if(!PASEO) return;
+  const a = PASEO.items[PASEO.i];
+  if(tipo === "salir"){ di("Salgo del paseo.", terminaPaseo); return; }
+  if(!a){ avanza(); return; }
+  if(tipo === "repite"){ leeActual(); return; }
+  if(tipo === "detalle"){ di(a.detalle || "No tengo más detalle de este."); return; }
+  if(tipo === "siguiente"){ avanza(); return; }
+
+  const {data, error} = await sb.from('pepe_atender_cola')
+    .insert({thread_id:a.tid, titulo:a["qué"], accion:tipo})
+    .select('id,thread_id,accion').single();
+  if(error){ di("No pude apuntarlo. Lo dejo como está y sigo.", avanza); return; }
+  COLA[a.tid] = data;
+  pinta();
+  di(CONFIRMA[tipo], avanza);
+}
+
+function oye(){
+  const rec = new RCP();
+  rec.lang = "es-MX"; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    if(!PASEO || PASEO.ocupado) return;
+    let txt = "";
+    for(let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript + " ";
+    const t = llano(txt);
+    if(!t) return;
+    paseoOido.textContent = "“" + txt.trim() + "”";
+    /* corte en seco: si estoy hablando y dices algo, me callo */
+    if(PASEO.hablando && t.length > 2){ speechSynthesis.cancel(); PASEO.hablando = false; }
+    const o = ORDENES.find(o => o.claves.some(k => t.includes(k)));
+    if(!o) return;
+    PASEO.ocupado = true;
+    try{ rec.abort(); }catch(err){}          /* limpia el buffer para no repetir la orden */
+    Promise.resolve(ordena(o.tipo)).finally(() => { if(PASEO) PASEO.ocupado = false; });
+  };
+  rec.onerror = ev => {
+    if(!PASEO) return;
+    if(ev.error === "not-allowed"){
+      aviso("El navegador bloqueó el micrófono. Dale permiso y vuelve a entrar al paseo.");
+      terminaPaseo();
+    }
+  };
+  rec.onend = () => { if(PASEO && !PASEO.cerrando){ try{ rec.start(); }catch(e){} } };
+  try{ rec.start(); }catch(e){}
+  PASEO.rec = rec;
+}
+
+async function iniciaPaseo(){
+  if(!tieneVoz || !RCP){
+    aviso("Este navegador no sirve para el paseo: necesita voz y micrófono. Usa Chrome en Android.");
+    return;
+  }
+  const items = itemsPaseo();
+  if(!items.length){ aviso("No queda nada que revisar: todo está resuelto o ya tiene orden."); return; }
+  PASEO = {items, i:-1, rec:null, wake:null, hablando:false, ocupado:false, cerrando:false};
+  paseoTxt.textContent = "Salir";
+  btnPaseo.classList.add("live");
+  paseoBar.hidden = false;
+  $("paseoAyuda").hidden = false;
+  paseoOido.textContent = "";
+  try{ PASEO.wake = await navigator.wakeLock.request('screen'); }catch(e){}
+  oye();
+  di("Modo paseo. " + items.length + (items.length === 1 ? " asunto." : " asuntos.")
+     + " Di bórralo, contéstale, siguiente, detalle o para.", avanza);
+}
+
+function terminaPaseo(){
+  if(!PASEO) return;
+  PASEO.cerrando = true;
+  try{ PASEO.rec && PASEO.rec.stop(); }catch(e){}
+  try{ PASEO.wake && PASEO.wake.release(); }catch(e){}
+  speechSynthesis.cancel();
+  document.querySelectorAll(".paseando").forEach(n => n.classList.remove("paseando"));
+  PASEO = null;
+  paseoTxt.textContent = "Modo paseo";
+  btnPaseo.classList.remove("live");
+  paseoBar.hidden = true;
+  $("paseoAyuda").hidden = true;
+}
+
+btnPaseo.onclick = () => { PASEO ? terminaPaseo() : iniciaPaseo(); };
+$("paseoSalir").onclick = terminaPaseo;
+/* Si sales de la pagina o bloqueas el telefono, Android corta el micro de todos
+   modos: cerramos limpio para no dejar el wake lock ni la voz colgados. */
+document.addEventListener("visibilitychange", () => { if(document.hidden && PASEO) terminaPaseo(); });
 
 /* ---------- Dictar ---------- */
 const RC = window.SpeechRecognition || window.webkitSpeechRecognition;
