@@ -138,7 +138,7 @@ const SUPERVISORES=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casa
 // En CDMX lo hace el ama de llaves; en Puebla cae en front por la mañana o en
 // el guía de experiencias. Front estaba fuera de la lista aunque el aviso ya
 // decía que le tocaba.
-const TURNOS_OK=['ama_llaves','recamarista','front','experiencias'];
+const TURNOS_OK=['ama_llaves','recamarista','front','nocturno','experiencias'];
 let USER=null,EMP=null,NOMBRE=null,PROP=null,AUD={},CUARTOS=[],CAMAS={},SOLO_LLEGADAS=true;
 const ABIERTOS=new Set();   // dormitorios con el detalle de camas desplegado
 
@@ -213,14 +213,20 @@ async function arranca(){
   PROP=PROPS.includes(suya)?suya:PROPS[0];
   if(esSuper){ const s=$('sede'); s.hidden=false; s.value=PROP; s.onchange=()=>{ PROP=s.value; cargar(); }; }
 
-  // Quien no supervisa entra si hoy está en un turno que hace el room audit,
-  // o si el reparto se lo asignó a él en concreto: quien lo tiene, lo abre.
+  // Manda el permiso de la página. El reparto del día es solo un atajo para quien
+  // está hoy en el mostrador sin permiso explícito: exigirlo dejaba fuera a quien
+  // sí tiene el acceso dado pero no tiene caja en housekeeping.
   if(!esSuper){
-    const {data:a}=await sb.from('hk_asignaciones')
+    let puede=false;
+    try{
+      const {data:ps}=await sb.rpc('mis_paginas');
+      puede=(ps||[]).some(p=>p.codigo==='PAG-SP-ROOMAUDIT' && p.nivel && p.nivel!=='none');
+    }catch(e){ /* si el motor de permisos no responde, queda el turno */ }
+    const {data:a}=puede?{data:null}:await sb.from('hk_asignaciones')
       .select('turno,hk_tareas(hk_tareas_op(codigo))')
       .eq('fecha',FECHA).eq('employee_id',EMP).maybeSingle();
     const suya=(a?.hk_tareas||[]).some(t=>String(t.hk_tareas_op?.codigo||'')==='ROOM_AUDIT');
-    if(!suya && (!a || !TURNOS_OK.includes(a.turno))){
+    if(!puede && !suya && (!a || !TURNOS_OK.includes(a.turno))){
       $('wrap').innerHTML='<div class="ph">El room audit lo hacen el ama de llaves, el equipo de front y gerencia.<br><br>Si crees que deberías tener acceso, avísale a tu jefe de área.</div>';
       return;
     }
@@ -299,7 +305,9 @@ function pintar(){
     ${camasLl.length?`<div class="s" style="margin-top:9px">Dentro de los dormitorios hay <b>${camasLl.length} camas</b> con llegada hoy · ${camasHechas} revisadas.</div>`:''}
     </div>`;
 
-  if(horaMX()<12) html+=`<div class="aviso">El audit se hace a partir de las 12:00, cuando ya salieron los cuartos. Puedes adelantar lo que quieras, pero ojo con las que todavía están limpiándose.</div>`;
+  // En CDMX se hace a partir de las 12; en Puebla lo hace el front de la mañana.
+  // Es un aviso, no un candado: quien entra temprano puede trabajar igual.
+  if(horaMX()<12) html+=`<div class="aviso">Es temprano: en CDMX el audit se hace a partir de las 12:00, cuando ya salieron los cuartos. Puedes adelantar lo que quieras, pero ojo con las que todavía están limpiándose.</div>`;
 
   html+=`<div class="grupo">
     <label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-size:12.5px;font-weight:600;color:var(--txt2)">
