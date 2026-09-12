@@ -111,7 +111,8 @@
   <div id="app" style="display:none">
     <div class="topbar">
       <button class="btn warn sm bell" id="bell" onclick="bellModal()" style="display:none">🔔 Hoy<span class="bellN" id="bellN">0</span></button>
-      <button class="btn ghost sm" id="btnAdd" onclick="addTrabajo()">＋ Crear trabajo</button>
+      <button class="btn ghost sm" id="btnAdd" onclick="addTrabajo()" style="display:none">＋ Crear trabajo</button>
+      <button class="btn ghost sm" id="btnReport" onclick="reportarAveria()" style="display:none">🛠️ Reportar avería</button>
       <a class="btn ghost sm" id="btnLect" href="/m/lecturas.html" style="display:none;text-decoration:none">📷 Lecturas</a>
       <span class="verWrap" id="verWrap"></span>
       <div class="wk"><button class="arrow" onclick="shiftWk(-1)">‹</button><b id="wkLbl"></b><button class="arrow" onclick="shiftWk(1)">›</button></div>
@@ -239,9 +240,11 @@ window.setVer=v=>{VIEWEMP=v;const t=TECLIST.find(x=>x.id===v);VIEWNAME=(v===EMP)
 async function render(){
   $('wkLbl').textContent=rango(WK);
   const ro=SUP&&VIEWEMP&&VIEWEMP!==EMP;
-  // Solo un supervisor (jefe) viendo su propio plan puede crear trabajos. El técnico
-  // NO mete trabajos por su cuenta: trabaja lo que el jefe le asigna en el reparto.
+  // El jefe (SUP) tiene "Crear trabajo" completo. El técnico NO mete preventivos a su antojo,
+  // pero SÍ puede "Reportar avería" (correctivo/reactivo que recibe o encuentra) y hacerlo o
+  // mandarlo al jefe. Así reporta trabajo real sin cargarse preventivos por su cuenta.
   $('btnAdd').style.display=(SUP&&!ro)?'':'none';
+  $('btnReport').style.display=(!SUP&&!ro)?'':'none';
   const who=VIEWEMP||EMP;
   WORKSET=new Set();
   try{ const {data:hor}=await sb.from('horarios').select('fecha').eq('employee_id',who).gte('fecha',WK).lte('fecha',addDays(WK,6));
@@ -676,6 +679,51 @@ window.saveTrabajo=async()=>{
   else { rec.estado='programado'; rec.semana_programada=addDays(WK,7); } // otra semana
   const {error}=await sb.from('mtto_tickets').insert(rec);
   if(error)return toast(error.message,false); closeModal(); toast(cuando==='ya'?'Creado e iniciado ⏱️':'Trabajo creado ✓'); render();
+};
+
+// Reportar avería (correctivo/reactivo que el técnico recibe o encuentra). Puede hacerlo él
+// mismo o mandarlo a la bolsa del jefe (sin asignar). NO crea preventivos.
+window.reportarAveria=async()=>{
+  const {data:ubis}=await sb.from('mtto_ubicaciones').select('id,nombre').eq('property_id',PROPID).eq('activo',true).order('orden');
+  modal(`<h3>🛠️ Reportar avería</h3>
+    <p style="color:var(--ink2);font-size:12.5px;margin:0 0 8px">Algo descompuesto que recibiste o encontraste. Lo puedes empezar tú o mandarlo al jefe para que lo asigne.</p>
+    <label>¿Qué está fallando?</label><input id="avTit" placeholder="Ej. Fuga en la llave del baño 210">
+    <label>Detalle (opcional)</label><textarea id="avDesc" rows="2" placeholder="Dónde exactamente, desde cuándo, qué se ve"></textarea>
+    <div class="row2"><div><label>Tipo</label><select id="avClas"><option value="correctivo">Correctivo</option><option value="reactivo">Reactivo (urgente)</option></select></div>
+      <div><label>Min estimados</label><input id="avMin" type="number" min="1" value="45"></div></div>
+    <label>Área / habitación</label><select id="avUbic"><option value="">(sin área)</option>${(ubis||[]).map(u=>`<option value="${u.id}">${esc(u.nombre)}</option>`).join('')}</select>
+    <label>¿Qué haces con él?</label><select id="avAcc">
+      <option value="ya">▶️ Empezarlo ahora</option>
+      <option value="hoy">📅 Ponerlo en mi plan de hoy</option>
+      <option value="jefe">📨 Mandarlo al jefe (sin asignar)</option></select>
+    <label>Foto (opcional)</label><input type="file" id="avFoto" accept="image/*" capture="environment">
+    <button class="btn sm" id="avSend" style="margin-top:12px;width:100%" onclick="saveAveria()">Enviar reporte</button>`);
+};
+window.saveAveria=async()=>{
+  const tit=$('avTit').value.trim(); if(!tit)return toast('Escribe qué está fallando',false);
+  const clas=$('avClas').value, acc=$('avAcc').value;
+  const desc=($('avDesc')&&$('avDesc').value.trim())||tit;
+  const btn=$('avSend'); if(btn){btn.disabled=true;btn.textContent='Enviando…';}
+  try{
+    let fotos=[];
+    const ff=$('avFoto')&&$('avFoto').files[0];
+    if(ff){ const blob=await resize(ff); const path='mtto/reporte-'+Date.now()+'-'+Math.random().toString(36).slice(2,7)+'.jpg';
+      const {error:ue}=await sb.storage.from('buzon').upload(path,blob,{contentType:'image/jpeg',upsert:false});
+      if(!ue) fotos=[sb.storage.from('buzon').getPublicUrl(path).data.publicUrl]; }
+    const base={titulo:tit,descripcion:desc,clasificacion:clas};
+    const of=guessOficio(base);
+    const rec={property_id:PROPID,origen:'manual',clasificacion:clas,ubicacion_id:$('avUbic').value||null,
+      titulo:tit.slice(0,80),descripcion:desc,minutos_estimados:parseInt($('avMin').value)||45,
+      oficio:of,recomendacion:RECO[of]||RECO.general,riesgo_nota:guessRiesgo(base),fotos:fotos,
+      prioridad:clas==='reactivo'?1:3,
+      reportado_por:ME.id,reportado_por_nombre:EMPNAME||ME.email,reportado_at:new Date().toISOString(),eloy_completo:true};
+    if(acc==='ya'){ rec.asignado_a=EMP; rec.asignado_nombre=EMPNAME; rec.estado='en_proceso'; rec.iniciado_at=new Date().toISOString(); rec.dia_programado=hoyMX(); rec.semana_programada=WK; }
+    else if(acc==='hoy'){ rec.asignado_a=EMP; rec.asignado_nombre=EMPNAME; rec.estado='programado'; rec.dia_programado=hoyMX(); rec.semana_programada=WK; }
+    else { rec.asignado_a=null; rec.estado='nuevo'; }  // a la bolsa del jefe
+    const {error}=await sb.from('mtto_tickets').insert(rec);
+    if(error)throw error;
+    closeModal(); toast(acc==='jefe'?'Reporte enviado al jefe ✅':(acc==='ya'?'Avería iniciada ⏱️':'En tu plan de hoy ✅')); render();
+  }catch(e){ toast('No se pudo enviar: '+(e.message||e),false); if(btn){btn.disabled=false;btn.textContent='Enviar reporte';} }
 };
 
 async function resize(file){
