@@ -797,12 +797,78 @@ function simReparto(S,monto){
  const pBase=(S.pctPart!=null)?S.pctPart-(S.pctSub||0):0;
  return {pct:pBase+monto/VALREF, post:VALREF, acc:null, tot:null};
 }
-// La misma gráfica se muestra en el Resumen, sin simulador, para que el socio la vea al entrar.
-let VALESP=null;
-function espejoValor(){
- const esp=document.getElementById('res-valor'); if(!esp||!VALESP) return;
- esp.innerHTML=`<div class="chartbox" style="margin-top:14px">${VALESP.cab}${VALESP.svg}${VALESP.pie}
-  <p class="cap" style="margin:6px 0 0;color:var(--muted)">El simulador para probar cuánto aportar está en tu ficha de socio.</p></div>`;
+
+/* ── Resumen: la evolución de TODA la sociedad ────────────────────────────────
+   No es la inversión de un socio: es el capital social reconocido acta por acta
+   (azul) y la valuación de la sociedad en cada etapa (verde). Misma gramática de
+   colores que la gráfica personal, pero con los totales. */
+async function renderValorSociedad(){
+ const box=document.getElementById('res-valor'); if(!box) return;
+ const D=DATA[SOC]; let G=null;
+ try{ G=await gobLoad(SOC); }catch(e){ box.innerHTML=''; return; }
+ const A={}; (G.actas||[]).forEach(a=>A[a.codigo]=a);
+ const tot={};
+ (G.movs||[]).filter(m=>m.concepto==='saldo').forEach(m=>{ tot[m.acta_codigo]=(tot[m.acta_codigo]||0)+(+m.saldo_despues||0); });
+ let serie=Object.keys(tot).map(k=>({v:tot[k],cod:k,orden:A[k]?A[k].orden:0,
+   lb:(A[k]&&A[k].fecha)?new Date(A[k].fecha+'T12:00:00').toLocaleDateString('es-MX',{month:'short',year:'2-digit'}).replace('.',''):'proy.',
+   tt:(A[k]?A[k].tipo:k)})).sort((a,b)=>a.orden-b.orden);
+ const capFin=serie.length?serie[serie.length-1].v:0;
+ if(SOC==='hbr'){
+  serie=serie.filter(x=>x.cod!=='ACT-17'&&x.cod!=='ACT-14');
+  const c22=tot['ACT-14']||capFin, c24=tot['ACT-17']||capFin;
+  serie.push({dual:1,inv:c22,val:100000000,lb:'oct 2022',tt:'oct 2022 · entrada de Zeltek · valuación de referencia $100 mdp'});
+  serie.push({dual:1,inv:c24,val:55119909,lb:'2024·dil',tt:'2024 · valuación intermedia del convenio 2022 · $55.1 mdp'});
+  serie.push({dual:1,inv:capFin,val:VALREF,lb:'2026·ref',tt:'2026 · refundación · post-money '+mCorto(VALREF)});
+  serie.push({dual:1,inv:capFin,val:VALFUT,objv:1,lb:EXITY,tt:EXITY+' · objetivo de valuación $60 mdp'});
+ } else {
+  serie=[];
+  (VEHVAL[SOC]||[]).forEach(e=>serie.push({dual:1,inv:capFin,val:valorVehiculo(SOC,e),objv:e.objv,lb:e.lb,tt:e.tt}));
+ }
+ if(serie.length<2){ box.innerHTML=''; return; }
+ const W=760,H=210,PB=26,PT=26;
+ const vals=serie.map(x=>Math.max(x.dual?Math.max(x.inv||0,x.val||0):x.v,0));
+ const max=Math.max.apply(null,vals)*1.16||1, y0=H-PB;
+ const n=serie.length, paso=W/n, w=Math.min(56,paso*0.62);
+ const yOf=v=>y0-(Math.max(0,v)/max)*(y0-PT);
+ const objY=yOf(SOC==='hbr'?VALFUT:(serie[serie.length-1].val||0));
+ let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">`;
+ svg+=`<line x1="0" y1="${objY.toFixed(1)}" x2="${W}" y2="${objY.toFixed(1)}" stroke="#137A56" stroke-width="1" stroke-dasharray="4 4" opacity=".5"></line>`;
+ svg+=`<text x="4" y="${(objY-5).toFixed(1)}" font-size="9.5" fill="#137A56">objetivo ${EXITY} · ${mCorto(SOC==='hbr'?VALFUT:(serie[serie.length-1].val||0))}</text>`;
+ serie.forEach((x,i)=>{
+  const bx=i*paso+(paso-w)/2;
+  const tit=gobEsc(x.tt||'')+(x.dual?` — capital social ${money(x.inv)} · valuación ${money(x.val)}`:` — capital social ${money(x.v)}`);
+  svg+=`<g><title>${tit}</title>`;
+  if(x.dual){
+   const yI=yOf(x.inv), yV=yOf(x.val), azulDetras=x.inv>x.val;
+   const rect=(y,c,ins)=>`<rect x="${(bx+ins).toFixed(1)}" y="${y.toFixed(1)}" width="${(w-ins*2).toFixed(1)}" height="${Math.max(3,y0-y).toFixed(1)}" rx="2.5" fill="${c}"></rect>`;
+   svg+= azulDetras ? rect(yI,'#AECBEA',0)+rect(yV,'#137A56',5) : rect(yV,'#137A56',5)+rect(yI,'#AECBEA',0);
+   const juntas=Math.abs(yI-yV)<13, cima=Math.min(yI,yV);
+   svg+=`<text x="${(bx+w/2).toFixed(1)}" y="${((juntas?cima-16:yV-5)).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#137A56">${mCorto(x.val)}</text>`;
+   svg+=`<text x="${(bx+w/2).toFixed(1)}" y="${((juntas?cima-5:yI-5)).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#274B6B">${mCorto(x.inv)}</text>`;
+  } else {
+   const y=yOf(x.v);
+   svg+=`<rect x="${bx.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(3,y0-y).toFixed(1)}" rx="2.5" fill="#5B8FD1"></rect>`;
+   svg+=`<text x="${(bx+w/2).toFixed(1)}" y="${(y-5).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#274B6B">${mCorto(x.v)}</text>`;
+  }
+  svg+=`<text x="${(bx+w/2).toFixed(1)}" y="${(y0+15).toFixed(1)}" text-anchor="middle" font-size="10.5" fill="#6B6459">${gobEsc(x.lb)}</text></g>`;
+ });
+ svg+='</svg>';
+ const nSoc=(D.socios||[]).filter(s=>!s.nuevo&&!s.tesoreria).length;
+ box.innerHTML=`<div class="chartbox" style="margin-top:14px">
+  <h4>La sociedad en el tiempo</h4>
+  <p class="cap">Capital social <b>reconocido en actas</b> (azul) frente a la <b>valuación de la sociedad</b> en cada etapa (verde). Es el total de ${gobEsc(D.etiqueta||D.nombre||'')}, no la participación de ningún socio: lo que cada quien tiene dentro está en <b>Mi inversión</b>.</p>
+  ${svg}
+  <p class="cap" style="margin:6px 0 0">
+   <span style="display:inline-block;width:9px;height:9px;background:#5B8FD1;border-radius:2px"></span> capital por asamblea &nbsp;
+   <span style="display:inline-block;width:9px;height:9px;background:#AECBEA;border-radius:2px"></span> capital social total &nbsp;
+   <span style="display:inline-block;width:9px;height:9px;background:#137A56;border-radius:2px"></span> valuación de la sociedad
+  </p>
+  <div class="cards" style="margin-top:10px">
+   <div class="kpi"><div class="lb">Capital reconocido hoy</div><div class="v" style="font-size:1.05rem">${money(capFin)}</div><div class="s">última asamblea firmada</div></div>
+   <div class="kpi"><div class="lb">Socios vigentes</div><div class="v">${nSoc}</div></div>
+   <div class="kpi"><div class="lb">Valuación de la ronda</div><div class="v" style="font-size:1.05rem">${mCorto(SOC==='hbr'?VALREF:(HBRSHARE[SOC]||0)*VALREF)}</div><div class="s">post-money 2026</div></div>
+  </div>
+ </div>`;
 }
 function pintaValor(x){
  const box=document.getElementById('p-valor'); if(!box||!VALSIM) return;
@@ -934,7 +1000,7 @@ function pintaValor(x){
   </p>
  `;
  box.innerHTML=`<div class="chartbox">${cab}${control}<div id="valor-svg">${svg}</div>${pie}</div>`;
- VALESP={cab:cab,svg:svg,pie:pie}; espejoValor();
+
  const rg=document.getElementById('sim-rango'), nm=document.getElementById('sim-monto');
  if(rg) rg.oninput=()=>{ if(+rg.value<pagado) rg.value=pagado; if(nm) nm.value=rg.value; pintaValor(+rg.value); };
  if(nm) nm.onchange=()=>{ const v=Math.max(pagado,Math.min(+nm.value||0,+rg.max)); nm.value=v; if(rg) rg.value=v; pintaValor(v); };
@@ -1894,7 +1960,7 @@ function renderResumen(D){
     <div class="kpi"><div class="lb">Total acciones</div><div class="v" style="font-size:1.15rem">${totalRow?totalRow[1]:'—'}</div></div>
     <div class="kpi"><div class="lb">Próxima asamblea</div><div class="v" style="font-size:1rem">${D.prox}</div></div>
    </div><div id="res-valor"></div>${funnels}`;
-  espejoValor();
+  renderValorSociedad();
   return;
  }
  const M=METAHBR;
@@ -1909,7 +1975,7 @@ function renderResumen(D){
   <div id="res-detail" data-open="" style="display:none;margin-top:10px;padding:12px 14px;background:#faf7f0;border:1px solid var(--rule2,#e6ddcb);border-radius:10px"></div>
   <div id="res-valor"></div>
   ${funnels}`;
- espejoValor();
+ renderValorSociedad();
 }
 function renderAll(){
  const D=DATA[SOC];
