@@ -326,6 +326,7 @@ async function boot(){
   USER=session.user; $("#login").style.display="none"; $("#app").style.display="block";
   $("#who").textContent=USER.email;
   await resolveProps();
+  await cargarOficios();
   TECS=(await sb.from("employees").select("id,nombre,nombre_display,property_id").ilike("puesto","%mantenimiento%")).data||[];
   $("#secnav").innerHTML=VIEWS.map(v=>`<button data-k="${v.k}" onclick="go('${v.k}')">${v.t}</button>`).join("");
   renderPropWrap(); go(CUR);
@@ -1253,8 +1254,18 @@ async function saveSubs(){
 /* PROGRAMACIÓN — reparto semanal estilo Ama de Llaves */
 let PROG_WK=mondayOf(new Date());
 let PROG_STATE=null;
-const OFICIOS=[['albanileria','🧱 Albañilería'],['carpinteria','🪵 Carpintería'],['electricidad','⚡ Electricidad'],['plomeria','🚿 Plomería'],['pintura','🎨 Pintura'],['climatizacion','❄️ Climatización'],['gas_calderas','🔥 Gas/Calderas'],['cerrajeria','🔑 Cerrajería'],['herreria','🔩 Herrería'],['jardineria','🌿 Jardinería'],['limpieza_profunda','🧽 Limpieza profunda'],['electronica_it','🖥️ Electrónica/IT'],['general','🧰 General']];
+// OFICIOS/OF_MIN se cargan de la tabla mtto_oficios en boot(); estos son el respaldo por si falla la carga.
+let OFICIOS=[['albanileria','🧱 Albañilería'],['carpinteria','🪵 Carpintería'],['electricidad','⚡ Electricidad'],['plomeria','🚿 Plomería'],['pintura','🎨 Pintura'],['climatizacion','❄️ Climatización'],['gas_calderas','🔥 Gas/Calderas'],['cerrajeria','🔑 Cerrajería'],['herreria','🔩 Herrería'],['jardineria','🌿 Jardinería'],['limpieza_profunda','🧽 Limpieza profunda'],['electronica_it','🖥️ Electrónica/IT'],['general','🧰 General']];
 function ofNombre(c){const o=OFICIOS.find(x=>x[0]===c);return o?o[1]:c;}
+async function cargarOficios(){
+  try{
+    const {data}=await sb.from('mtto_oficios').select('codigo,nombre,icono,min_base,orden,activo').eq('activo',true).order('orden');
+    if(data&&data.length){
+      OFICIOS=data.map(o=>[o.codigo,((o.icono?o.icono+' ':'')+o.nombre)]);
+      OF_MIN={}; data.forEach(o=>{OF_MIN[o.codigo]=(o.min_base!=null?o.min_base:60);});
+    }
+  }catch(_){}
+}
 const MESABR=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
 function fmtRange(mon){const d=new Date(mon+'T00:00:00'),e=new Date(d);e.setDate(e.getDate()+6);
   return d.getDate()+' '+MESABR[d.getMonth()]+' – '+e.getDate()+' '+MESABR[e.getMonth()];}
@@ -1263,7 +1274,7 @@ function weekOpts(cur){const base=mondayOf(new Date()),today=base,wl=[];
   if(!wl.includes(cur))wl.push(cur); wl.sort();
   return wl.map(w=>`<option value="${w}" ${w===cur?'selected':''}>${w===today?'Esta semana · ':''}${fmtRange(w)}</option>`).join('');}
 function shiftWk(n){const d=new Date(PROG_WK+'T00:00:00');d.setDate(d.getDate()+n*7);PROG_WK=d.toISOString().slice(0,10);renderProg();}
-const OF_MIN={albanileria:180,carpinteria:120,electricidad:60,plomeria:90,pintura:240,climatizacion:90,gas_calderas:120,cerrajeria:45,herreria:120,jardineria:60,limpieza_profunda:360,electronica_it:60,general:60};
+let OF_MIN={albanileria:180,carpinteria:120,electricidad:60,plomeria:90,pintura:240,climatizacion:90,gas_calderas:120,cerrajeria:45,herreria:120,jardineria:60,limpieza_profunda:360,electronica_it:60,general:60};
 function guessOficio(r){ if(r.oficio)return r.oficio; const t=((r.titulo||'')+' '+(r.descripcion||'')).toLowerCase();
   if(/pint|barniz/.test(t))return 'pintura';
   if(/caldera|boiler|calent|\bgas\b/.test(t))return 'gas_calderas';
@@ -1821,10 +1832,49 @@ async function renderConfig(){
   if(CFG_SUB==='oficios')return cfgOficios();
   return cfgAreas();
 }
-function cfgOficios(){
-  $('#cfgBody').innerHTML=`<div class="muted" style="font-size:13px;margin:0 0 12px;max-width:560px">Oficios (competencias) del equipo de mantenimiento. Cada preventivo, ticket y técnico se etiqueta con uno de estos; el reparto y el calendario los usan para filtrar y estimar.</div>
-    <div class="card"><div class="scroll"><table><thead><tr><th>Oficio</th><th class="num">min base</th></tr></thead><tbody>${OFICIOS.map(o=>`<tr><td style="font-size:16px">${o[1]}</td><td class="num muted">${OF_MIN[o[0]]||'—'} min</td></tr>`).join('')}</tbody></table></div></div>`;
+async function cfgOficios(){
+  const {data:rows}=await sb.from('mtto_oficios').select('codigo,nombre,icono,min_base,orden,activo').order('orden');
+  const list=rows||[];
+  $('#cfgBody').innerHTML=`<div class="muted" style="font-size:13px;margin:0 0 12px;max-width:600px">Oficios (competencias) del equipo de mantenimiento. Cada preventivo, ticket y técnico se etiqueta con uno; el reparto y el calendario los usan para filtrar y estimar. Los que agregues aquí quedan disponibles en todas las sedes.</div>
+    <div class="card"><div class="pad">
+      <b style="font-size:13px">Agregar oficio nuevo</b>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:8px">
+        <div style="width:64px"><label style="font-size:11px" class="muted">Icono</label><input id="ofIco" maxlength="4" placeholder="🔧" style="text-align:center"></div>
+        <div style="flex:1;min-width:180px"><label style="font-size:11px" class="muted">Nombre del oficio</label><input id="ofNom" placeholder="Ej. Impermeabilización" maxlength="40"></div>
+        <div style="width:110px"><label style="font-size:11px" class="muted">Min base</label><input id="ofMin" type="number" min="5" step="5" value="60"></div>
+        <button class="btn sm" id="ofAdd" onclick="addOficio()">＋ Agregar</button>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:6px">El código se genera solo a partir del nombre. Se usa en todas las propiedades.</div>
+    </div></div>
+    <div class="card"><div class="scroll"><table><thead><tr><th></th><th>Oficio</th><th>código</th><th class="num">min base</th><th></th></tr></thead><tbody>${
+      list.map(o=>`<tr style="${o.activo?'':'opacity:.45'}">
+        <td style="font-size:18px">${esc(o.icono||'🔧')}</td>
+        <td>${esc(o.nombre)}</td>
+        <td class="muted" style="font-family:ui-monospace,monospace;font-size:12px">${esc(o.codigo)}</td>
+        <td class="num muted">${o.min_base!=null?o.min_base+' min':'—'}</td>
+        <td class="num">${o.codigo==='general'?'':`<button class="btn ghost sm" style="padding:3px 8px" onclick="toggleOficio('${esc(o.codigo)}',${o.activo?1:0})">${o.activo?'Ocultar':'Activar'}</button>`}</td>
+      </tr>`).join('')}</tbody></table></div></div>`;
 }
+function slugOficio(s){return (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,32);}
+window.addOficio=async function(){
+  const nom=($('#ofNom').value||'').trim();
+  if(!nom){return toast('Escribe el nombre del oficio.');}
+  const cod=slugOficio(nom);
+  if(!cod){return toast('Nombre inválido.');}
+  if(OFICIOS.some(o=>o[0]===cod)){return toast('Ya existe un oficio con ese nombre.');}
+  const ico=($('#ofIco').value||'').trim()||'🔧';
+  const min=parseInt($('#ofMin').value)||60;
+  $('#ofAdd').disabled=true;
+  const {error}=await sb.from('mtto_oficios').insert({codigo:cod,nombre:nom,icono:ico,min_base:min,orden:500,activo:true});
+  $('#ofAdd').disabled=false;
+  if(error)return toast('No se pudo: '+error.message);
+  await cargarOficios(); toast('Oficio agregado: '+ico+' '+nom); cfgOficios();
+};
+window.toggleOficio=async function(cod,act){
+  const {error}=await sb.from('mtto_oficios').update({activo:!act}).eq('codigo',cod);
+  if(error)return toast('No se pudo: '+error.message);
+  await cargarOficios(); cfgOficios();
+};
 async function cfgAreas(){
   const [{data:ubis},{data:cats}]=await Promise.all([
     sb.from('mtto_ubicaciones').select('id,nombre,tipo,activo,orden').eq('property_id',PROP.id).order('orden'),
