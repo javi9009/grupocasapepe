@@ -86,6 +86,10 @@ button,select,input,textarea{font-family:inherit}
 .cama .marcas{margin-top:8px}
 .cama .marcas button{padding:8px 3px;font-size:16px}
 .cama .marcas button .et{font-size:9px}
+.appbar .sync{background:none;border:none;color:#cdbf9c;font-size:18px;cursor:pointer;padding:2px 6px;line-height:1}
+.appbar .sync[disabled]{opacity:.4}
+.appbar .sync.gira{animation:cpgira 1s linear infinite}
+@keyframes cpgira{to{transform:rotate(360deg)}}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(24px + var(--safe-b));background:#16130f;color:#f4ecdd;
   padding:11px 17px;border-radius:99px;font-size:13.5px;opacity:0;pointer-events:none;transition:.25s;z-index:40;max-width:88%;text-align:center}
 .toast.on{opacity:1}
@@ -113,6 +117,7 @@ function cpVolverApp(){
     <option value="febfbef6-7fd1-4b45-84d9-13533e8dcb72">Puebla</option>
   </select>
   <span class="d" id="hoy"></span>
+  <button class="sync" id="sync" title="Volver a leer Cloudbeds" aria-label="Actualizar">&#8635;</button>
 </div>
 
 <div class="wrap" id="wrap"><div class="ph">Cargando…</div></div>
@@ -140,6 +145,35 @@ const ABIERTOS=new Set();   // dormitorios con el detalle de camas desplegado
 $('hoy').textContent=new Date(FECHA+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'});
 function toast(t){const e=$('tst');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2400);}
 const horaMX=()=>Number(new Intl.DateTimeFormat('en-GB',{timeZone:'America/Mexico_City',hour:'2-digit',hour12:false}).format(new Date()));
+
+/* Vuelve a leer Cloudbeds ahora mismo. Antes el estatus del día se escribía una
+   sola vez, en la corrida de las 2am: si por la mañana movían a un huésped de
+   cuarto o entraba uno nuevo, por la tarde el audit seguía enseñando las
+   llegadas de la madrugada. No pisa el trabajo hecho: lo que alguien limpió o
+   marcó hoy se respeta, solo se refrescan llegadas, salidas y ocupación. */
+let SYNCANDO=false;
+async function sincronizar(silencioso){
+  if(SYNCANDO||!PROP) return;
+  SYNCANDO=true;
+  const b=$('sync'); if(b){ b.disabled=true; b.classList.add('gira'); }
+  try{
+    const {data:{session}}=await sb.auth.getSession();
+    const tok=session?session.access_token:SB_KEY;
+    const r=await fetch(SB_URL+'/functions/v1/hk-dia',{method:'POST',
+      headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:'Bearer '+tok},
+      body:JSON.stringify({prop:PROP,fecha:FECHA,accion:'sync'})});
+    const d=await r.json().catch(()=>null);
+    if(!d||d.ok===false) throw new Error((d&&d.error)||'sin respuesta');
+    await cargar();
+    if(!silencioso) toast('Listo · '+(d.guardadas||0)+' habitaciones al día');
+  }catch(e){
+    if(!silencioso) toast('No se pudo actualizar. Revisa tu señal.');
+  }finally{
+    SYNCANDO=false;
+    const b2=$('sync'); if(b2){ b2.disabled=false; b2.classList.remove('gira'); }
+  }
+}
+{ const b=$('sync'); if(b) b.onclick=()=>sincronizar(false); }
 
 // Si el token está caducado o a punto, se renueva antes de pedir nada. Si la
 // renovación falla (token ya usado, sesión vieja), se cierra y se vuelve a entrar:
@@ -192,6 +226,9 @@ async function arranca(){
     }
   }
   await cargar();
+  // Abierto ya entrada la mañana se refresca solo: es justo cuando front mueve
+  // huéspedes de cuarto, y el audit tiene que ver lo de ahora, no lo de las 2am.
+  if(horaMX()>=10) sincronizar(true);
 }
 
 async function cargar(){
