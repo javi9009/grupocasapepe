@@ -123,9 +123,16 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
  </div>
 
  <div class="sect" id="cla">
-  <div class="hi">Cláusulas disponibles</div>
-  <div class="mini">Redacción base de la que se arma cada acuerdo. Se edita en la base de datos, no aquí.</div>
-  <div id="claList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+  <div class="hi">Machote de cláusulas</div>
+  <div class="mini">La redacción de la que se arma cada acuerdo. Lo que edites aquí se guarda y se aplica a la siguiente asamblea que generes.</div>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:12px 0">
+   <button class="btn ghost sm" id="tActa" onclick="setTipoCla('acta')">Acta de asamblea</button>
+   <button class="btn ghost sm" id="tPacto" onclick="setTipoCla('pacto')">Pacto de socios</button>
+   <button class="btn ghost sm" onclick="nuevaClausula()">＋ Nueva cláusula</button>
+   <button class="btn ghost sm" onclick="machote()">Ver machote completo</button>
+   <span class="mini" id="claFlag"></span>
+  </div>
+  <div id="claList"><div class="note">Cargando…</div></div>
  </div>
 </div>
 
@@ -374,7 +381,8 @@ function drawRows(k){
  const D=ROWDEF[k]||{ph:['','','']};
  box.innerHTML=(SEL[k]||[]).map((r,i)=>{
   if(k==='cons'){
-   const L=nombresPersona(), lib=r.n&&!L.includes(r.n);
+   const L=nombresPersona().slice(); if(r.n&&r.n!=='__libre'&&!L.includes(r.n)) L.push(r.n);
+   const lib=(r.n==='__libre');
    const ops=L.map(p=>`<option ${p===r.n?'selected':''}>${esc(p)}</option>`).join('');
    return `<div class="rowx"><select onchange="setRow('cons',${i},'n',this.value)"><option value="">— elige socio —</option>${ops}<option value="__libre" ${lib?'selected':''}>otra persona…</option></select><input placeholder="Cargo" value="${esc(r.a)}" oninput="setRow('cons',${i},'a',this.value)"><input placeholder="Suplente" value="${esc(r.b)}" oninput="setRow('cons',${i},'b',this.value)"><button class="x" onclick="rmRow('cons',${i})">✕</button></div>`+(lib||r.n==='__libre'?`<div class="rowx" style="grid-template-columns:1fr 28px;margin-top:-2px"><input placeholder="Nombre completo del consejero externo" value="${esc(r.n==='__libre'?'':r.n)}" oninput="setRow('cons',${i},'n',this.value)"><span></span></div>`:'');
   }
@@ -407,21 +415,15 @@ async function traerResultados(){
  const msg=document.getElementById('f-res-msg'); msg.textContent='Consultando…';
  const anio=+(document.getElementById('f-res-anio').value)||new Date().getFullYear();
  try{
-  // PostgREST corta en 1000 filas: se pide por tramos de meses.
-  const tramos=await Promise.all([[1,4],[5,8],[9,12]].map(t=>
-   api('fin_pl?select=mes,loc,cuenta,real&anio=eq.'+anio+'&mes=gte.'+t[0]+'&mes=lte.'+t[1]+'&limit=1000')));
-  const rows=[].concat(...tramos.map(x=>Array.isArray(x)?x:[]));
-  if(!rows.length){ msg.textContent='No hay cifras cargadas para '+anio+' en el Reporte a Socios.'; return; }
-  const cuentas=[...new Set(rows.map(r=>r.cuenta))];
-  const hoja=new Set(cuentas.filter(c=>!cuentas.some(o=>o!==c&&o.indexOf(c+'-')===0)));
-  const L=rows.filter(r=>hoja.has(r.cuenta));
-  const meses=[...new Set(L.map(r=>r.mes))].sort((a,b)=>a-b), ult=meses[meses.length-1];
-  const g=p=>L.filter(r=>String(r.cuenta).indexOf(p)===0).reduce((a,r)=>a+(+r.real||0),0);
-  const ing=g('400'), cos=g('500'), gas=g('600'), otr=g('950');
+  const rows=await api('gob_v_resultados?select=mes,loc,grupo,monto&anio=eq.'+anio+'&limit=1000');
+  if(!Array.isArray(rows)||!rows.length){ msg.textContent='No hay cifras cargadas para '+anio+' en el Reporte a Socios.'; return; }
+  const meses=[...new Set(rows.map(r=>r.mes))].sort((a,b)=>a-b), ult=meses[meses.length-1];
+  const g=k=>rows.filter(r=>r.grupo===k).reduce((a,r)=>a+(+r.monto||0),0);
+  const ing=g('ingresos'), cos=g('costo'), gas=g('gastos'), otr=g('otros');
   const res=ing-cos-gas+otr;
-  const porLoc={}; L.forEach(r=>{const k=r.loc||'—'; const p=String(r.cuenta).slice(0,3);
-   porLoc[k]=porLoc[k]||{i:0,e:0}; if(p==='400'||p==='950') porLoc[k].i+=(+r.real||0); else porLoc[k].e+=(+r.real||0);});
-  msg.textContent='✓ '+meses.length+' meses · '+L.length+' renglones.';
+  const porLoc={}; rows.forEach(r=>{const k=r.loc||'—'; porLoc[k]=porLoc[k]||{i:0,e:0};
+   if(r.grupo==='ingresos'||r.grupo==='otros') porLoc[k].i+=(+r.monto||0); else porLoc[k].e+=(+r.monto||0);});
+  msg.textContent='✓ '+meses.length+' meses cargados.';
   document.getElementById('f-res-txt').value=
    'Ingresos de enero a '+MESES[ult-1]+' de '+anio+': '+money(ing)+'.\n'+
    'Costo directo: '+money(cos)+'.\n'+
@@ -736,16 +738,76 @@ async function enviarFirma(id){
 }
 async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede deshacer.'))return; await del('gob_asamblea_borradores?id=eq.'+id); cargaBorradores(); }
 
-function pintaClausulas(){
- const box=document.getElementById('claList');
- const ids=Object.keys(CLAU).sort((a,b)=>(CLAU[a].orden||0)-(CLAU[b].orden||0));
- if(!ids.length){ box.innerHTML='<div class="note">No se pudieron cargar las cláusulas.</div>'; return; }
- box.innerHTML=ids.map(i=>{const c=CLAU[i];
-  return `<div class="box"><div style="font-weight:700">${esc(c.titulo)}</div>
-   <div class="mini">${esc(c.id)} · ${esc(c.categoria||'')}${c.fundamento?' · '+esc(c.fundamento):''}</div>
-   <details style="margin-top:6px"><summary style="cursor:pointer;font-size:.84rem">Ver redacción base</summary>
-   <div class="doc" style="margin-top:6px;font-size:.82rem">${esc(c.texto_base||'')}</div></details></div>`;
- }).join('');
+let TIPOCLA='acta', CLAALL=[];
+function setTipoCla(t){ TIPOCLA=t; pintaClausulas(); }
+function claFlag(m){ const f=document.getElementById('claFlag'); if(f){ f.textContent=m||'guardado ✓'; setTimeout(()=>f.textContent='',1800);} }
+async function pintaClausulas(){
+ const box=document.getElementById('claList'); if(!box)return;
+ document.getElementById('tActa').classList.toggle('on',TIPOCLA==='acta');
+ document.getElementById('tPacto').classList.toggle('on',TIPOCLA==='pacto');
+ document.getElementById('tActa').style.background=TIPOCLA==='acta'?'var(--accent)':'#fff';
+ document.getElementById('tActa').style.color=TIPOCLA==='acta'?'#fff':'var(--accent)';
+ document.getElementById('tPacto').style.background=TIPOCLA==='pacto'?'var(--accent)':'#fff';
+ document.getElementById('tPacto').style.color=TIPOCLA==='pacto'?'#fff':'var(--accent)';
+ if(!CLAALL.length){ box.innerHTML='<div class="note">Cargando…</div>';
+  try{ CLAALL=await api('gob_clausulas?select=*&order=tipo,orden'); }catch(e){ CLAALL=[]; } }
+ const rows=CLAALL.filter(c=>c.tipo===TIPOCLA).sort((a,b)=>(a.orden||0)-(b.orden||0));
+ if(!rows.length){ box.innerHTML='<div class="note">No hay cláusulas de este tipo.</div>'; return; }
+ let h='<div class="note">Van en el orden en que aparecen en el documento. Lo que está entre <b>{{LLAVES}}</b> se sustituye con los datos del formulario al generar la asamblea: si lo borras, ese dato deja de rellenarse solo. Las cláusulas sin <b>incluir</b> no entran en el machote ni en el acta.</div>';
+ rows.forEach((c,ix)=>{
+  const vars=Array.isArray(c.variables)?c.variables:[];
+  h+=`<div class="box" data-id="${esc(c.id)}">
+   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span class="chip q">${ix+1}</span><span class="mini">${esc(c.id)} · ${esc(c.categoria||'—')}</span>
+    <input class="cl-tit" style="flex:1 1 220px;font-weight:600" value="${esc(c.titulo||'')}">
+    <span class="chip ${c.reusabilidad==='boilerplate'?'warn':'ok'}">${c.reusabilidad==='boilerplate'?'boilerplate':'datos'}</span>
+   </div>
+   ${c.fundamento?`<div class="mini" style="margin-top:4px">${esc(c.fundamento)}</div>`:''}
+   <label class="f" style="margin-top:8px">Redacción (verbatim, con marcadores)</label>
+   <textarea class="cl-tx" style="min-height:190px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(c.texto_base||'')}</textarea>
+   ${vars.length?`<div class="mini" style="margin-top:5px">Marcadores: ${vars.map(v=>'<code>{{'+esc(v)+'}}</code>').join(' · ')}</div>`:''}
+   <label class="f" style="margin-top:8px">Nota interna (notario, correcciones pendientes)</label>
+   <textarea class="cl-nt" style="min-height:52px">${esc(c.notas||'')}</textarea>
+   <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <label style="display:flex;gap:6px;align-items:center;font-size:.82rem"><input type="checkbox" class="cl-inc" ${c.activa?'checked':''} style="width:16px;height:16px;accent-color:var(--accent)"> incluir en el machote</label>
+    <button class="btn sm" onclick="guardaClausula('${esc(c.id)}',this)">Guardar</button>
+    <span class="mini">orden ${c.orden||0}</span>
+   </div></div>`;
+ });
+ box.innerHTML=h;
 }
+async function guardaClausula(id,btn){
+ const el=btn.closest('.box'); if(!el)return;
+ const c=CLAALL.find(x=>x.id===id)||{};
+ const tx=el.querySelector('.cl-tx').value;
+ const faltan=(Array.isArray(c.variables)?c.variables:[]).filter(v=>tx.indexOf('{{'+v+'}}')<0);
+ if(faltan.length && !confirm('Quitaste '+faltan.map(v=>'{{'+v+'}}').join(', ')+'. Esos datos ya no se rellenarán solos al generar la asamblea. ¿Guardar igual?')) return;
+ const patch={titulo:el.querySelector('.cl-tit').value,texto_base:tx,notas:el.querySelector('.cl-nt').value,activa:el.querySelector('.cl-inc').checked,updated_at:new Date().toISOString()};
+ try{
+  await post('gob_clausulas?id=eq.'+encodeURIComponent(id),patch,'PATCH');
+  Object.assign(c,patch); if(CLAU[id]) Object.assign(CLAU[id],patch);
+  claFlag('guardada ✓');
+ }catch(e){ claFlag('no se pudo guardar'); }
+}
+async function nuevaClausula(){
+ const cat=prompt('Categoría (p. ej. ampliacion_capital, inicio, cierre):'); if(cat===null)return;
+ const tit=prompt('Título de la cláusula:'); if(tit===null)return;
+ const ord=Math.max(0,...CLAALL.filter(c=>c.tipo===TIPOCLA).map(c=>+c.orden||0))+10;
+ try{
+  const r=await post('gob_clausulas',{id:TIPOCLA+'-'+Date.now().toString(36),tipo:TIPOCLA,categoria:cat||'otra',orden:ord,
+   titulo:tit||'(sin título)',texto_base:'',variables:[],reusabilidad:'datos',activa:true});
+  if(r&&r[0]) CLAALL.push(r[0]);
+  pintaClausulas(); claFlag('creada ✓');
+ }catch(e){ claFlag('no se pudo crear'); }
+}
+function machote(){
+ const rows=CLAALL.filter(c=>c.tipo===TIPOCLA&&c.activa).sort((a,b)=>(a.orden||0)-(b.orden||0));
+ if(!rows.length){ alert('No hay cláusulas marcadas como incluidas.'); return; }
+ const txt=rows.map(c=>{ const el=document.querySelector('.box[data-id="'+(window.CSS&&CSS.escape?CSS.escape(c.id):c.id)+'"] .cl-tx'); return (el?el.value:c.texto_base); }).join('\n\n');
+ const w=window.open('','_blank'); if(!w){ alert(txt); return; }
+ w.document.write('<!doctype html><meta charset="utf-8"><title>Machote '+esc(TIPOCLA)+'</title><style>body{font-family:Georgia,serif;max-width:780px;margin:40px auto;padding:0 24px;line-height:1.7;white-space:pre-wrap;font-size:13px}</style>'+esc(txt));
+ w.document.close();
+}
+
 </script>
 </body></html>
