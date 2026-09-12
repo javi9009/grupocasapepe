@@ -90,6 +90,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
     <div><label class="f">Presidente</label><select id="b-pres"></select></div>
     <div><label class="f">Secretario y Escrutador</label><select id="b-secr"></select></div>
    </div>
+   <div id="b-cargos"></div>
    <div class="note" style="margin-top:10px"><b>Socios y cuadro accionarial al inicio.</b> Se toma del libro de la sociedad; es la lista de asistencia de la que parte el acta.</div>
    <div class="tscroll" id="b-cuadro"></div>
   </div>
@@ -128,6 +129,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
  </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 <script>
 const SB='https://rehophywchakfapivsbh.supabase.co';
 const KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlaG9waHl3Y2hha2ZhcGl2c2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTU3MDgsImV4cCI6MjA5Njk3MTcwOH0.kntapjLdn0jUr62pre6uqFaf2RPfun6-DujIkshVd8Y';
@@ -148,7 +150,7 @@ const SOCIEDADES={
  pontigu:{nombre:'El Pontigu, S.A. de C.V.', corto:'El Pontigu'},
  struchture:{nombre:'Struchture Inmoconstrucciones, S. de R.L. de C.V.', corto:'Struchture'}
 };
-let SOC='hbr', TIT=[], CUA=[], ACTAS=[], CLAU={}, EMPL=[], SEL={}, BORR=[];
+let SOC='hbr', TIT=[], CUA=[], ACTAS=[], CLAU={}, EMPL=[], SEL={}, BORR=[], CONSEJO=[];
 
 /* ── Catálogo de acuerdos que se pueden meter en el orden del día ─────────── */
 const FACULTADES=[
@@ -175,9 +177,10 @@ const ACUERDOS=[
    <label class="f" style="margin-top:8px">Resumen que se leerá en la asamblea</label><textarea id="f-res-txt" placeholder="Ingresos, resultado de operación, deuda…"></textarea>`},
  {k:'consejo', cid:'acta-08', t:'Cambios en el Consejo de Administración',
   d:'Quién sale, quién entra y cómo queda integrado el órgano.',
-  form:()=>`<label class="f">Consejo saliente (quiénes estaban)</label><textarea id="f-cons-sal" style="min-height:60px" placeholder="Administrador Único: … / Consejeros: …"></textarea>
-   <label class="f" style="margin-top:8px">Nuevos consejeros</label><div id="f-cons-rows"></div>
-   <button class="btn ghost sm" onclick="addRow('cons')">+ Consejero</button>`},
+  form:()=>`<label class="f">Órgano de administración actual</label><textarea id="f-cons-sal" style="min-height:56px"></textarea>
+   <label class="f" style="margin-top:8px">Consejo que se designa</label><div id="f-cons-rows"></div>
+   <button class="btn ghost sm" onclick="addRow('cons')">+ Consejero</button>
+   <div class="mini" id="f-cons-nota" style="margin-top:6px"></div>`},
  {k:'cap', cid:'acta-10', t:'Aumento de capital',
   d:'Monto, acciones que se emiten, serie y quién suscribe.',
   form:()=>`<div class="grid"><div><label class="f">Monto del aumento</label><input id="f-cap-monto" type="number" step="0.01" placeholder="4670000"></div>
@@ -244,14 +247,15 @@ async function carga(){
  document.getElementById('hiSub').textContent=C.nombre;
  document.getElementById('prevSub').textContent=C.nombre;
  try{
-  const [tit,cua,act,cla]=await Promise.all([
+  const [tit,cua,act,cla,cons]=await Promise.all([
    api('gob_titulares?select=*&sociedad=eq.'+SOC+'&order=orden'),
    api('gob_v_cuadre?select=*&sociedad=eq.'+SOC),
    api('gob_actas?select=*&sociedad=eq.'+SOC+'&order=orden'),
-   api('gob_clausulas?select=*&tipo=eq.acta&activa=eq.true')
+   api('gob_clausulas?select=*&tipo=eq.acta&activa=eq.true'),
+   api('gob_consejo?select=*&sociedad=eq.'+SOC+'&order=orden')
   ]);
   TIT=(tit||[]).filter(t=>t.vigente!==false); CUA=cua||[]; ACTAS=act||[];
-  CLAU={}; (cla||[]).forEach(c=>CLAU[c.id]=c);
+  CLAU={}; (cla||[]).forEach(c=>CLAU[c.id]=c); CONSEJO=cons||[];
  }catch(e){}
  if(!EMPL.length){ try{ EMPL=await api('v_empleados_publico?select=nombre,puesto'); }catch(e){ EMPL=[]; } }
  pintaPersonas(); pintaCuadro(); pintaActas();
@@ -261,10 +265,38 @@ function personas(){
  const e=(EMPL||[]).map(x=>({n:x.nombre+(x.puesto?' — '+x.puesto:''), g:'Colaborador'}));
  return s.concat(e);
 }
+function nombresPersona(){
+ const out=[]; TIT.forEach(t=>{const n=(t.persona&&!/^Fundador|^Vehículo/i.test(t.persona))?t.persona:t.razon_social; if(!out.includes(n))out.push(n);});
+ return out;
+}
 function pintaPersonas(){
- const ops=TIT.map(t=>`<option>${esc(t.persona&&t.persona!=='Fundador'&&t.persona!=='Fundadora'?t.persona:t.razon_social)}</option>`).join('');
- ['b-pres','b-secr'].forEach(id=>{const el=document.getElementById(id); if(el){const v=el.value; el.innerHTML=ops; if(v)el.value=v;}});
- const d=document.getElementById('f-del-quien'); if(d) d.innerHTML=ops;
+ const L=nombresPersona();
+ const P=document.getElementById('b-pres'), S=document.getElementById('b-secr');
+ if(P){ const v=P.value; P.innerHTML=L.map(n=>`<option>${esc(n)}</option>`).join(''); if(v&&L.includes(v))P.value=v; P.onchange=filtraSecretario; }
+ if(S){ S.onchange=filtraPresidente; }
+ filtraSecretario();
+ const d=document.getElementById('f-del-quien'); if(d){const v=d.value; d.innerHTML=L.map(n=>`<option>${esc(n)}</option>`).join(''); if(v&&L.includes(v))d.value=v;}
+}
+/* El Presidente y el Secretario y Escrutador no pueden ser la misma persona:
+   cada lista excluye a quien ya está designado en la otra. */
+function filtraSecretario(){
+ const P=document.getElementById('b-pres'), S=document.getElementById('b-secr'); if(!P||!S)return;
+ const L=nombresPersona().filter(n=>n!==P.value), v=S.value;
+ S.innerHTML=L.map(n=>`<option>${esc(n)}</option>`).join('');
+ S.value=(v&&L.includes(v))?v:(L[0]||'');
+ avisoCargos();
+}
+function filtraPresidente(){
+ const P=document.getElementById('b-pres'), S=document.getElementById('b-secr'); if(!P||!S)return;
+ const L=nombresPersona().filter(n=>n!==S.value), v=P.value;
+ P.innerHTML=L.map(n=>`<option>${esc(n)}</option>`).join('');
+ P.value=(v&&L.includes(v))?v:(L[0]||'');
+ avisoCargos();
+}
+function avisoCargos(){
+ const P=document.getElementById('b-pres'), S=document.getElementById('b-secr'), w=document.getElementById('b-cargos');
+ if(!w)return;
+ w.innerHTML=(!S||!S.value)?'<div class="note b">Esta sociedad solo tiene un accionista persona en el listado: hace falta otra persona para actuar como Secretario y Escrutador.</div>':'';
 }
 function pintaCuadro(){
  const tot=TIT.reduce((a,t)=>a+ +(t.acciones||0),0);
@@ -300,7 +332,18 @@ function toggleAc(k,ev){
 }
 function iniForm(k){
  if(k==='cons') return;
- if(k==='consejo'){ SEL.cons=SEL.cons||[]; if(!SEL.cons.length){addRow('cons');addRow('cons');} else drawRows('cons'); }
+ if(k==='consejo'){
+  const vig=CONSEJO.filter(c=>c.estado==='vigente'), prev=CONSEJO.filter(c=>c.estado==='previsto');
+  const sal=document.getElementById('f-cons-sal'), nota=document.getElementById('f-cons-nota');
+  if(sal&&!sal.value) sal.value = vig.length
+   ? 'El Consejo de Administración se encontraba integrado por: '+vig.map(c=>c.nombre+(c.cargo?' ('+c.cargo+')':'')).join('; ')+'.'
+   : 'La Sociedad no cuenta con Consejo de Administración: la administración ha recaído en un Administrador Único. Se adopta la figura de Consejo de Administración y se designa a sus miembros.';
+  if(!SEL.cons||!SEL.cons.length){
+   SEL.cons = prev.length ? prev.map(c=>({n:c.nombre,a:c.cargo||'Consejero Propietario',b:c.suplente||''})) : [{n:'',a:'',b:''},{n:'',a:'',b:''}];
+  }
+  if(nota) nota.textContent = vig.length ? '' : (prev.length? 'Precargado con el consejo previsto de esta sociedad. Cuando quede designado en acta, se leerá el vigente.' : 'Esta sociedad no tiene consejo cargado todavía.');
+  drawRows('cons');
+ }
  if(k==='cap'){ SEL.cap=SEL.cap||[]; if(!SEL.cap.length) addRow('cap'); else drawRows('cap'); }
  if(k==='afac'){ SEL.afac=SEL.afac||[]; if(!SEL.afac.length) addRow('afac'); else drawRows('afac'); }
  if(k==='dil'){ SEL.dil=SEL.dil||[]; if(!SEL.dil.length) addRow('dil'); else drawRows('dil'); }
@@ -330,6 +373,11 @@ function drawRows(k){
  const box=document.getElementById('f-'+k+'-rows'); if(!box)return;
  const D=ROWDEF[k]||{ph:['','','']};
  box.innerHTML=(SEL[k]||[]).map((r,i)=>{
+  if(k==='cons'){
+   const L=nombresPersona(), lib=r.n&&!L.includes(r.n);
+   const ops=L.map(p=>`<option ${p===r.n?'selected':''}>${esc(p)}</option>`).join('');
+   return `<div class="rowx"><select onchange="setRow('cons',${i},'n',this.value)"><option value="">— elige socio —</option>${ops}<option value="__libre" ${lib?'selected':''}>otra persona…</option></select><input placeholder="Cargo" value="${esc(r.a)}" oninput="setRow('cons',${i},'a',this.value)"><input placeholder="Suplente" value="${esc(r.b)}" oninput="setRow('cons',${i},'b',this.value)"><button class="x" onclick="rmRow('cons',${i})">✕</button></div>`+(lib||r.n==='__libre'?`<div class="rowx" style="grid-template-columns:1fr 28px;margin-top:-2px"><input placeholder="Nombre completo del consejero externo" value="${esc(r.n==='__libre'?'':r.n)}" oninput="setRow('cons',${i},'n',this.value)"><span></span></div>`:'');
+  }
   if(k==='pod'&&!r.ext){
    const ops=personas().map(p=>`<option ${p.n===r.n?'selected':''}>${esc(p.n)}</option>`).join('');
    return `<div class="rowx"><select onchange="setRow('pod',${i},'n',this.value)"><option value="">— elige socio o colaborador —</option>${ops}</select><input placeholder="RFC (opcional)" value="${esc(r.a)}" oninput="setRow('pod',${i},'a',this.value)"><input placeholder="Cargo" value="${esc(r.b)}" oninput="setRow('pod',${i},'b',this.value)"><button class="x" onclick="rmRow('pod',${i})">✕</button></div>`;
@@ -350,23 +398,41 @@ function drawCuadro(){ const box=document.getElementById('f-cuadro-rows'); if(!b
  totCuadro();
 }
 
+/* Las cuentas de fin_pl vienen codificadas y con padres e hijos mezclados
+   (400-03 y 400-03-01). Si se suman todas se cuenta dos veces: solo se suman
+   las HOJAS — las que no tienen ninguna cuenta colgando debajo.
+   Grupos: 400 ingresos · 500 costo directo · 600 gastos · 950 otros ingresos. */
+const LOCNOM={cdmx:'Casa Pepe CDMX',pue:'Casa Pepe Puebla',corp:'Corporativo',sinc:'Sincrético',sayu:'Sayulita'};
 async function traerResultados(){
  const msg=document.getElementById('f-res-msg'); msg.textContent='Consultando…';
- const anio=document.getElementById('f-res-anio').value||new Date().getFullYear();
+ const anio=+(document.getElementById('f-res-anio').value)||new Date().getFullYear();
  try{
-  const rows=await api('fin_pl?select=mes,cuenta,real&anio=eq.'+anio+'&limit=1000');
-  if(!Array.isArray(rows)||!rows.length){ msg.textContent='Sin cifras cargadas para '+anio+'.'; return; }
-  const meses=[...new Set(rows.map(r=>r.mes))].sort((a,b)=>a-b);
-  const suma=f=>rows.filter(r=>f.test(String(r.cuenta||''))).reduce((a,r)=>a+(+r.real||0),0);
-  const ing=suma(/ingres|ventas/i), gas=suma(/gasto|costo/i);
-  msg.textContent='✓ '+meses.length+' meses cargados.';
+  // PostgREST corta en 1000 filas: se pide por tramos de meses.
+  const tramos=await Promise.all([[1,4],[5,8],[9,12]].map(t=>
+   api('fin_pl?select=mes,loc,cuenta,real&anio=eq.'+anio+'&mes=gte.'+t[0]+'&mes=lte.'+t[1]+'&limit=1000')));
+  const rows=[].concat(...tramos.map(x=>Array.isArray(x)?x:[]));
+  if(!rows.length){ msg.textContent='No hay cifras cargadas para '+anio+' en el Reporte a Socios.'; return; }
+  const cuentas=[...new Set(rows.map(r=>r.cuenta))];
+  const hoja=new Set(cuentas.filter(c=>!cuentas.some(o=>o!==c&&o.indexOf(c+'-')===0)));
+  const L=rows.filter(r=>hoja.has(r.cuenta));
+  const meses=[...new Set(L.map(r=>r.mes))].sort((a,b)=>a-b), ult=meses[meses.length-1];
+  const g=p=>L.filter(r=>String(r.cuenta).indexOf(p)===0).reduce((a,r)=>a+(+r.real||0),0);
+  const ing=g('400'), cos=g('500'), gas=g('600'), otr=g('950');
+  const res=ing-cos-gas+otr;
+  const porLoc={}; L.forEach(r=>{const k=r.loc||'—'; const p=String(r.cuenta).slice(0,3);
+   porLoc[k]=porLoc[k]||{i:0,e:0}; if(p==='400'||p==='950') porLoc[k].i+=(+r.real||0); else porLoc[k].e+=(+r.real||0);});
+  msg.textContent='✓ '+meses.length+' meses · '+L.length+' renglones.';
   document.getElementById('f-res-txt').value=
-   'Ingresos acumulados de enero a '+MESES[meses[meses.length-1]-1]+' de '+anio+': '+money(ing)+'.\n'+
-   'Costos y gastos del mismo periodo: '+money(Math.abs(gas))+'.\n'+
-   'Resultado: '+money(ing-Math.abs(gas))+'.\n'+
-   '(Cifras preliminares tomadas del Reporte a Socios — revísalas antes de la asamblea.)';
-  const c=document.getElementById('f-res-corte'); if(c&&!c.value){ const m=meses[meses.length-1]; c.value=anio+'-'+String(m).padStart(2,'0')+'-'+new Date(anio,m,0).getDate(); }
- }catch(e){ msg.textContent='No se pudieron traer las cifras.'; }
+   'Ingresos de enero a '+MESES[ult-1]+' de '+anio+': '+money(ing)+'.\n'+
+   'Costo directo: '+money(cos)+'.\n'+
+   'Gastos de operación: '+money(gas)+'.\n'+
+   (otr?'Otros ingresos: '+money(otr)+'.\n':'')+
+   'Resultado del periodo: '+money(res)+'.\n\n'+
+   'Por unidad de negocio:\n'+
+   Object.keys(porLoc).sort().map(k=>'  · '+(LOCNOM[k]||k)+': ingresos '+money(porLoc[k].i)+', egresos '+money(porLoc[k].e)+', resultado '+money(porLoc[k].i-porLoc[k].e)).join('\n')+
+   '\n\n(Cifras preliminares no auditadas, tomadas del Reporte a Socios al cierre de '+MESES[ult-1]+'.)';
+  const c=document.getElementById('f-res-corte'); if(c&&!c.value) c.value=anio+'-'+String(ult).padStart(2,'0')+'-'+new Date(anio,ult,0).getDate();
+ }catch(e){ msg.textContent='No se pudieron traer las cifras: '+(e.message||'error'); }
 }
 
 /* ── Construcción del orden del día y del acta ────────────────────────────── */
@@ -392,6 +458,39 @@ function tituloPunto(a){
  return a.t+'.';
 }
 function ordenDia(){ return seleccionados().filter(a=>a.k!=='firmas'&&a.k!=='asistencia').map(tituloPunto); }
+/* La MINUTA es el documento que se manda con la convocatoria: qué se va a tratar
+   y qué se propone acordar en cada punto. Va a "Convocada" para que los socios la lean. */
+function minuta(){
+ const B=base(), C=SOCIEDADES[SOC], g=id=>{const e=document.getElementById(id);return e?e.value:'';};
+ const od=ordenDia(), totAcc=TIT.reduce((a,t)=>a+ +(t.acciones||0),0);
+ const P=[];
+ P.push(C.nombre.toUpperCase()+'\nMINUTA DE LA ASAMBLEA GENERAL '+B.tipo.toUpperCase()+' DE ACCIONISTAS\n'+fechaLarga(B.fecha));
+ P.push('CONVOCATORIA.- Se convoca a los accionistas de '+C.nombre+' a la Asamblea General '+B.tipo+' de Accionistas que se celebrará el '+fechaLarga(B.fecha)+' a las '+B.hora+' horas, en '+B.ciudad+', en el '+B.lugar+'. Los accionistas fueron '+B.conv+'.');
+ P.push('PRESIDENCIA.- Presidirá la asamblea '+B.presidente+' y actuará como Secretario y Escrutador '+B.secretario+'.');
+ P.push('ACCIONISTAS CONVOCADOS ('+nA(totAcc)+' acciones)\n'+TIT.map(t=>'  · '+t.razon_social+' — '+nA(t.acciones)+' acciones — '+(totAcc?pct((+t.acciones||0)/totAcc):'—')).join('\n'));
+ P.push('ORDEN DEL DÍA\n'+od.map((t,i)=>(i+1)+'. '+t).join('\n'));
+ P.push('PROPUESTA DE ACUERDOS POR PUNTO');
+ seleccionados().filter(a=>a.k!=='firmas'&&a.k!=='asistencia').forEach((a,i)=>{
+  P.push((i+1)+'. '+tituloPunto(a)+'\n   Se propone: '+propuesta(a)+'\n   Acuerdo tomado: ______________________________________________');
+ });
+ P.push('Los accionistas que no puedan asistir podrán hacerse representar por apoderado mediante carta poder simple suscrita ante dos testigos, en términos del artículo 192 de la Ley General de Sociedades Mercantiles.');
+ return P.join('\n\n');
+}
+function propuesta(a){
+ const g=id=>{const e=document.getElementById(id);return e?e.value:'';};
+ if(a.k==='ef') return 'aprobar el informe del Consejo y los estados financieros de los ejercicios '+(g('f-ef-anios')||'—')+'.';
+ if(a.k==='res') return 'aprobar el informe de resultados del ejercicio '+g('f-res-anio')+' con cifras al '+fechaLarga(g('f-res-corte'))+'.';
+ if(a.k==='consejo') return 'designar como consejeros a '+((SEL.cons||[]).filter(r=>r.n).map(r=>r.n+(r.a?' ('+r.a+')':'')).join(', ')||'—')+'.';
+ if(a.k==='cap') return 'aumentar el capital en '+money(g('f-cap-monto'))+' emitiendo '+nA(g('f-cap-acc'))+' acciones Serie "'+(g('f-cap-serie')||'B')+'", suscritas por '+((SEL.cap||[]).filter(r=>r.n).map(r=>r.n+' ('+money(r.a)+')').join(', ')||'—')+'.';
+ if(a.k==='afac') return 'capitalizar '+money((SEL.afac||[]).reduce((x,r)=>x+(+r.a||0),0))+' de aportaciones ya entregadas, emitiendo '+nA((SEL.afac||[]).reduce((x,r)=>x+(+r.b||0),0))+' acciones.';
+ if(a.k==='dil') return 'cancelar '+nA((SEL.dil||[]).reduce((x,r)=>x+(+r.b||0),0))+' acciones por '+money((SEL.dil||[]).reduce((x,r)=>x+(+r.a||0),0))+' no exhibidos.';
+ if(a.k==='cuadro'){ const rows=(SEL.cuadro||[]).filter(r=>r.n), tt=rows.reduce((x,r)=>x+(+r.acc||0),0);
+  return 'dejar el capital en '+nA(tt)+' acciones, repartidas así: '+rows.map(r=>r.n+' '+(tt?pct(r.acc/tt):'')).join(', ')+'.'; }
+ if(a.k==='pacto') return 'aprobar el '+(g('f-pacto-n')||'Pacto de Socios')+(g('f-pacto-ant')?' y cancelar el anterior de fecha '+g('f-pacto-ant'):'')+'.';
+ if(a.k==='poderes') return 'otorgar poderes a '+((SEL.pod||[]).filter(r=>r.n).map(r=>r.n).join(', ')||'—')+'.';
+ if(a.k==='delegado') return 'designar a '+(g('f-del-quien')||'—')+' como delegado para protocolizar el acta.';
+ return 'lo que la asamblea resuelva.';
+}
 function tablaTxt(rows,cols){ return rows.map(r=>'  · '+cols.map(c=>r[c]).filter(Boolean).join(' — ')).join('\n'); }
 function fill(id,vars){
  let t=(CLAU[id]&&CLAU[id].texto_base)||'';
@@ -480,8 +579,9 @@ async function generar(){
  const B=base(), sel=seleccionados(), msg=document.getElementById('genMsg'), btn=document.getElementById('btnGen');
  if(!sel.length){ msg.textContent='Marca al menos un acuerdo.'; return; }
  if(!B.fecha){ msg.textContent='Falta la fecha.'; return; }
+ if(!document.getElementById('b-secr').value){ msg.textContent='Falta el Secretario y Escrutador: no puede ser la misma persona que preside.'; btn.disabled=false; return; }
  btn.disabled=true; msg.textContent='Generando…';
- const C=SOCIEDADES[SOC], od=ordenDia(), md=acta();
+ const C=SOCIEDADES[SOC], od=ordenDia(), md=acta(), mn=minuta();
  try{
   const rows=await post('gob_asamblea_borradores',{
    sociedad:SOC, titulo:'Asamblea General '+B.tipo+' · '+fechaLarga(B.fecha),
@@ -493,62 +593,147 @@ async function generar(){
          cuadro_inicial:TIT.map(t=>({clave:t.clave,nombre:t.razon_social,rfc:t.rfc,acciones:+t.acciones||0})),
          datos:SEL},
    puntos:sel.map(a=>({k:a.k,clausula:a.cid,titulo:a.t})),
-   orden_dia:od, minuta_md:md
+   orden_dia:od, minuta_md:mn, acta_md:md,
+   firmantes:TIT.map(t=>({nombre:t.razon_social,persona:t.persona||'',email:'',firmado:false,fecha:null}))
   });
-  const id=rows&&rows[0]&&rows[0].id;
-  msg.innerHTML='✓ Borrador guardado en <b>Asambleas previstas</b>.';
+  msg.innerHTML='✓ Generados los dos documentos. Están en <b>Asambleas previstas</b>.';
   document.getElementById('preview').innerHTML=
    '<div class="box"><h4>Orden del día</h4><ol style="margin:8px 0 0 18px;padding:0">'+od.map(t=>'<li style="margin:4px 0">'+esc(t)+'</li>').join('')+'</ol></div>'+
-   '<div class="box"><h4>Borrador del acta</h4><div class="mini">Editable desde Asambleas previstas.</div><div class="doc" style="margin-top:8px">'+esc(md)+'</div></div>';
+   '<div class="box"><h4>Minuta — para la convocatoria</h4><div class="doc" style="margin-top:8px">'+esc(mn)+'</div></div>'+
+   '<div class="box"><h4>Acta de la asamblea</h4><div class="doc" style="margin-top:8px">'+esc(md)+'</div></div>';
  }catch(e){ msg.textContent='No se pudo guardar: '+(e.message||'error'); }
  btn.disabled=false;
 }
 
+/* ── PDF y subida al expediente de la sociedad ────────────────────────────── */
+function hacerPDF(titulo,texto){
+ const {jsPDF}=window.jspdf, d=new jsPDF({unit:'pt',format:'letter'});
+ const M=64, W=612-M*2; let y=M;
+ d.setFont('times','bold'); d.setFontSize(11);
+ String(titulo).split('\n').forEach(l=>{ d.text(l,306,y,{align:'center'}); y+=15; });
+ y+=8; d.setFont('times','normal'); d.setFontSize(10.5);
+ String(texto).split('\n').forEach(raw=>{
+  const line=raw.replace(/\s+$/,'');
+  if(!line){ y+=8; return; }
+  const bold=/^[A-ZÁÉÍÓÚÑ0-9 ".,ºª—·()]+$/.test(line.trim())&&line.trim().length<70;
+  d.setFont('times',bold?'bold':'normal');
+  d.splitTextToSize(line,W).forEach(seg=>{
+   if(y>792-M){ d.addPage(); y=M; }
+   d.text(seg,M,y); y+=14;
+  });
+ });
+ const n=d.internal.getNumberOfPages();
+ for(let i=1;i<=n;i++){ d.setPage(i); d.setFont('times','normal'); d.setFontSize(8); d.setTextColor(130); d.text(i+' / '+n,306,792-30,{align:'center'}); }
+ return d.output('blob');
+}
+async function subirPDF(blob,path){
+ const r=await fetch(SB+'/storage/v1/object/socios-docs/'+encodeURI(path),{method:'POST',headers:Object.assign({},H,{'x-upsert':'true','Content-Type':'application/pdf'}),body:blob});
+ if(!r.ok) throw new Error(await r.text());
+ return path;
+}
+async function abrirPDF(path,btn){
+ const t=btn?btn.textContent:''; if(btn){btn.disabled=true;btn.textContent='Abriendo…';}
+ let u=null;
+ try{ const r=await fetch(SB+'/storage/v1/object/sign/socios-docs/'+encodeURI(path),{method:'POST',headers:Object.assign({},H,{'Content-Type':'application/json'}),body:JSON.stringify({expiresIn:3600})});
+  if(r.ok){ const j=await r.json(); u=SB+'/storage/v1'+j.signedURL; } }catch(e){}
+ if(btn){btn.disabled=false;btn.textContent=t;}
+ if(u) window.open(u,'_blank','noopener'); else alert('No se pudo abrir el PDF.');
+}
+
 /* ── Asambleas previstas ──────────────────────────────────────────────────── */
-const EST={borrador:['q','Borrador'],convocada:['warn','Convocada'],celebrada:['ok','Celebrada'],descartada:['bad','Descartada']};
+const EST={borrador:['q','Borrador'],convocada:['warn','Convocada'],celebrada:['ok','Celebrada'],en_firma:['warn','En firma'],firmada:['ok','Firmada'],descartada:['bad','Descartada']};
+const DSMAP={en_cola:'En cola de envío por DocuSign…',sent:'Enviado · esperando firmas',delivered:'Entregado · esperando firmas',completed:'Firmado por todos ✓',voided:'Anulado'};
 async function cargaBorradores(){
  const box=document.getElementById('prevList');
  try{ BORR=await api('gob_asamblea_borradores?select=*&sociedad=eq.'+SOC+'&order=created_at.desc'); }catch(e){ BORR=[]; }
- if(!BORR.length){ box.innerHTML='<div class="note">No hay asambleas en borrador para esta sociedad. Genera una desde la pestaña anterior.</div>'; return; }
+ if(!BORR.length){ box.innerHTML='<div class="note">No hay asambleas previstas para esta sociedad. Genera una desde la pestaña anterior.</div>'; return; }
  box.innerHTML=BORR.map(b=>{
   const E=EST[b.estado]||['q',b.estado];
   return `<div class="box"><div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
    <div style="flex:1 1 220px"><div style="font-weight:700">${esc(b.titulo||'Asamblea')}</div>
-    <div class="mini">${esc(fechaLarga(b.fecha))} · ${esc(b.hora||'')} h · ${esc(b.ciudad||'')} · ${(b.orden_dia||[]).length} puntos</div></div>
+    <div class="mini">${esc(fechaLarga(b.fecha))} · ${esc(b.hora||'')} h · ${esc(b.ciudad||'')} · ${(b.orden_dia||[]).length} puntos · preside ${esc(b.presidente||'—')}, secretario ${esc(b.secretario||'—')}</div></div>
    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
     <span class="chip ${E[0]}">${E[1]}</span>
-    <select class="btn ghost sm" style="width:auto;padding:5px 8px" onchange="setEstado('${b.id}',this.value)">
-     ${Object.keys(EST).map(k=>`<option value="${k}" ${b.estado===k?'selected':''}>${EST[k][1]}</option>`).join('')}
-    </select>
-    <button class="btn ghost sm" onclick="editar('${b.id}')">Editar minuta</button>
     <button class="btn bad sm" onclick="borrar('${b.id}')">Eliminar</button>
    </div></div>
    <details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600">Orden del día</summary>
     <ol style="margin:8px 0 0 18px;padding:0">${(b.orden_dia||[]).map(t=>'<li style="margin:3px 0">'+esc(t)+'</li>').join('')}</ol></details>
-   <div id="ed-${b.id}"></div></div>`;
+
+   <div style="margin-top:12px;border-top:1px solid var(--rule);padding-top:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+     <b>1 · Minuta</b><span class="mini">va a <b>Convocada</b> para que los socios la consulten</span>
+     ${b.minuta_pdf?`<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF('${esc(b.minuta_pdf)}',this)">Abrir PDF</button>`:'<span class="chip q">sin publicar</span>'}
+     <button class="btn ghost sm" onclick="abreDoc('${b.id}','minuta')">Editar minuta</button>
+    </div><div id="ed-${b.id}-minuta"></div>
+   </div>
+
+   <div style="margin-top:12px;border-top:1px solid var(--rule);padding-top:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+     <b>2 · Acta de la asamblea</b><span class="mini">va a <b>Celebrada</b> y de ahí a firma</span>
+     ${b.acta_pdf?`<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF('${esc(b.acta_pdf)}',this)">Abrir PDF</button>`:'<span class="chip q">sin publicar</span>'}
+     <button class="btn ghost sm" onclick="abreDoc('${b.id}','acta')">Editar acta</button>
+     ${b.acta_pdf?`<button class="btn sm" onclick="enviarFirma('${b.id}')" ${b.docusign_status?'disabled':''}>Enviar a firma (DocuSign)</button>`:''}
+    </div>
+    ${b.docusign_status?`<div class="mini" style="margin-top:6px;color:${b.docusign_status==='completed'?'var(--ok)':'var(--muted)'}">DocuSign: ${esc(DSMAP[b.docusign_status]||b.docusign_status)} · ${(b.firmantes||[]).length} firmantes</div>`:''}
+    <div id="ed-${b.id}-acta"></div>
+   </div></div>`;
  }).join('');
 }
-function editar(id){
- const b=BORR.find(x=>x.id===id), el=document.getElementById('ed-'+id);
+const DOC={minuta:{campo:'minuta_md',pdf:'minuta_pdf',at:'minuta_at',estado:'convocada',
+   btn:'Guardar minuta y publicar como Convocada',
+   nota:'Al guardar se genera el PDF, se archiva en el expediente de la sociedad y la asamblea pasa a <b>Convocada</b>.'},
+ acta:{campo:'acta_md',pdf:'acta_pdf',at:'acta_at',estado:'celebrada',
+   btn:'Guardar asamblea y pasar a Celebrada',
+   nota:'Al guardar se genera el PDF del acta, se archiva y la asamblea pasa a <b>Celebrada</b>, lista para enviarse a firma.'}};
+function abreDoc(id,tipo){
+ const b=BORR.find(x=>x.id===id), el=document.getElementById('ed-'+id+'-'+tipo), D=DOC[tipo];
  if(el.innerHTML){ el.innerHTML=''; return; }
- el.innerHTML=`<div style="margin-top:10px"><label class="f">Minuta — edítala a mano si hace falta</label>
-  <textarea id="mt-${id}" style="min-height:340px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(b.minuta_md||'')}</textarea>
-  <div style="margin-top:8px;display:flex;gap:8px;align-items:center"><button class="btn sm" onclick="guardarMinuta('${id}')">Guardar minuta</button>
-  <button class="btn ghost sm" onclick="imprimir('${id}')">Ver / imprimir</button><span class="mini" id="ms-${id}"></span></div></div>`;
+ el.innerHTML=`<div style="margin-top:8px"><div class="note">${D.nota}</div>
+  <textarea id="mt-${id}-${tipo}" style="min-height:340px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(b[D.campo]||'')}</textarea>
+  <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+   <button class="btn sm" onclick="guardarDoc('${id}','${tipo}')">${D.btn}</button>
+   <button class="btn ghost sm" onclick="soloGuardar('${id}','${tipo}')">Guardar sin publicar</button>
+   <span class="mini" id="ms-${id}-${tipo}"></span></div></div>`;
 }
-async function guardarMinuta(id){
- const t=document.getElementById('mt-'+id).value, s=document.getElementById('ms-'+id);
+async function soloGuardar(id,tipo){
+ const D=DOC[tipo], t=document.getElementById('mt-'+id+'-'+tipo).value, s=document.getElementById('ms-'+id+'-'+tipo);
  s.textContent='Guardando…';
- try{ await post('gob_asamblea_borradores?id=eq.'+id,{minuta_md:t,updated_at:new Date().toISOString()},'PATCH');
-  const b=BORR.find(x=>x.id===id); if(b)b.minuta_md=t; s.textContent='guardado ✓'; setTimeout(()=>s.textContent='',1500);
+ const p={}; p[D.campo]=t; p.updated_at=new Date().toISOString();
+ try{ await post('gob_asamblea_borradores?id=eq.'+id,p,'PATCH'); const b=BORR.find(x=>x.id===id); if(b)b[D.campo]=t;
+  s.textContent='guardado ✓'; setTimeout(()=>s.textContent='',1500);
  }catch(e){ s.textContent='no se pudo guardar'; }
 }
-function imprimir(id){
- const b=BORR.find(x=>x.id===id); const w=window.open('','_blank');
- w.document.write('<!doctype html><meta charset="utf-8"><title>'+esc(b.titulo||'Acta')+'</title><style>body{font-family:Georgia,serif;max-width:760px;margin:40px auto;padding:0 24px;line-height:1.7;white-space:pre-wrap;font-size:13px}</style>'+esc(b.minuta_md||''));
- w.document.close();
+async function guardarDoc(id,tipo){
+ const D=DOC[tipo], b=BORR.find(x=>x.id===id);
+ const t=document.getElementById('mt-'+id+'-'+tipo).value, s=document.getElementById('ms-'+id+'-'+tipo);
+ if(!window.jspdf){ s.textContent='No cargó el generador de PDF; recarga la página.'; return; }
+ s.textContent='Generando PDF…';
+ try{
+  const tit=(SOCIEDADES[SOC].nombre+'\n'+(tipo==='minuta'?'MINUTA · ':'ACTA · ')+(b.titulo||'')).toUpperCase();
+  const blob=hacerPDF(tit,t);
+  const path='asambleas/'+SOC+'/'+id+'/'+tipo+'-'+Date.now()+'.pdf';
+  await subirPDF(blob,path);
+  const p={estado:D.estado,updated_at:new Date().toISOString()};
+  p[D.campo]=t; p[D.pdf]=path; p[D.at]=new Date().toISOString();
+  await post('gob_asamblea_borradores?id=eq.'+id,p,'PATCH');
+  s.textContent='✓ PDF publicado.';
+  cargaBorradores();
+ }catch(e){ s.textContent='No se pudo publicar: '+(e.message||'error'); }
 }
-async function setEstado(id,v){ try{ await post('gob_asamblea_borradores?id=eq.'+id,{estado:v,updated_at:new Date().toISOString()},'PATCH'); const b=BORR.find(x=>x.id===id); if(b)b.estado=v; cargaBorradores(); }catch(e){} }
+async function enviarFirma(id){
+ const b=BORR.find(x=>x.id===id), fs=(b.firmantes||[]);
+ if(!confirm('Se enviará el acta por DocuSign a '+fs.length+' firmantes para su firma electrónica. ¿Continuar?')) return;
+ try{
+  const m=await post('gob_minutas?on_conflict=sociedad,asamblea_key',{
+   sociedad:SOC, asamblea_key:'gen:'+id, titulo:b.titulo, fecha_celebracion:b.fecha, hora:b.hora,
+   orden_dia:b.orden_dia, acuerdos:(b.orden_dia||[]).map(t=>({punto:t,acuerdo:''})),
+   firmantes:fs, estado:'en_firma', enviar_ok:true, docusign_status:'en_cola', doc_url:b.acta_pdf
+  });
+  await post('gob_asamblea_borradores?id=eq.'+id,{estado:'en_firma',docusign_status:'en_cola',minuta_id:(m&&m[0]&&m[0].id)||null,updated_at:new Date().toISOString()},'PATCH');
+  alert('Acta en cola. DocuSign enviará las solicitudes de firma en unos minutos y el estado se actualizará aquí.');
+  cargaBorradores();
+ }catch(e){ alert('No se pudo poner en cola: '+(e.message||'error')); }
+}
 async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede deshacer.'))return; await del('gob_asamblea_borradores?id=eq.'+id); cargaBorradores(); }
 
 function pintaClausulas(){
