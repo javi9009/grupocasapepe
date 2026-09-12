@@ -123,9 +123,16 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
  </div>
 
  <div class="sect" id="cla">
-  <div class="hi">Cláusulas disponibles</div>
-  <div class="mini">Redacción base de la que se arma cada acuerdo. Se edita en la base de datos, no aquí.</div>
-  <div id="claList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+  <div class="hi">Machote de cláusulas</div>
+  <div class="mini">La redacción de la que se arma cada acuerdo. Lo que edites aquí se guarda y se aplica a la siguiente asamblea que generes.</div>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:12px 0">
+   <button class="btn ghost sm" id="tActa" onclick="setTipoCla('acta')">Acta de asamblea</button>
+   <button class="btn ghost sm" id="tPacto" onclick="setTipoCla('pacto')">Pacto de socios</button>
+   <button class="btn ghost sm" onclick="nuevaClausula()">＋ Nueva cláusula</button>
+   <button class="btn ghost sm" onclick="machote()">Ver machote completo</button>
+   <span class="mini" id="claFlag"></span>
+  </div>
+  <div id="claList"><div class="note">Cargando…</div></div>
  </div>
 </div>
 
@@ -731,43 +738,76 @@ async function enviarFirma(id){
 }
 async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede deshacer.'))return; await del('gob_asamblea_borradores?id=eq.'+id); cargaBorradores(); }
 
-function pintaClausulas(){
- const box=document.getElementById('claList');
- const ids=Object.keys(CLAU).sort((a,b)=>(CLAU[a].orden||0)-(CLAU[b].orden||0));
- if(!ids.length){ box.innerHTML='<div class="note">No se pudieron cargar las cláusulas.</div>'; return; }
- box.innerHTML='<div class="note">La redacción de aquí es la que usa el generador. Lo que edites se guarda en la base y se aplica a la siguiente asamblea que generes. Lo que va entre <b>{{LLAVES}}</b> se sustituye con los datos del formulario: no lo borres si quieres que se rellene solo.</div>'+
- ids.map(i=>{const c=CLAU[i];
+let TIPOCLA='acta', CLAALL=[];
+function setTipoCla(t){ TIPOCLA=t; pintaClausulas(); }
+function claFlag(m){ const f=document.getElementById('claFlag'); if(f){ f.textContent=m||'guardado ✓'; setTimeout(()=>f.textContent='',1800);} }
+async function pintaClausulas(){
+ const box=document.getElementById('claList'); if(!box)return;
+ document.getElementById('tActa').classList.toggle('on',TIPOCLA==='acta');
+ document.getElementById('tPacto').classList.toggle('on',TIPOCLA==='pacto');
+ document.getElementById('tActa').style.background=TIPOCLA==='acta'?'var(--accent)':'#fff';
+ document.getElementById('tActa').style.color=TIPOCLA==='acta'?'#fff':'var(--accent)';
+ document.getElementById('tPacto').style.background=TIPOCLA==='pacto'?'var(--accent)':'#fff';
+ document.getElementById('tPacto').style.color=TIPOCLA==='pacto'?'#fff':'var(--accent)';
+ if(!CLAALL.length){ box.innerHTML='<div class="note">Cargando…</div>';
+  try{ CLAALL=await api('gob_clausulas?select=*&order=tipo,orden'); }catch(e){ CLAALL=[]; } }
+ const rows=CLAALL.filter(c=>c.tipo===TIPOCLA).sort((a,b)=>(a.orden||0)-(b.orden||0));
+ if(!rows.length){ box.innerHTML='<div class="note">No hay cláusulas de este tipo.</div>'; return; }
+ let h='<div class="note">Lo que va entre <b>{{LLAVES}}</b> se sustituye con los datos del formulario al generar la asamblea: si lo borras, ese dato deja de rellenarse solo. Las cláusulas sin <b>incluir</b> no entran en el machote ni en el acta.</div>', cat=null;
+ rows.forEach(c=>{
+  if(c.categoria!==cat){ cat=c.categoria; h+='<h2 class="s">'+esc(cat||'otras')+'</h2>'; }
   const vars=Array.isArray(c.variables)?c.variables:[];
-  return `<div class="box"><div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-   <div style="flex:1 1 240px"><div style="font-weight:700">${esc(c.titulo)}</div>
-    <div class="mini">${esc(c.id)} · ${esc(c.categoria||'')}${c.fundamento?' · '+esc(c.fundamento):''}</div></div>
-   <button class="btn ghost sm" onclick="editaClausula('${esc(c.id)}')">Editar</button></div>
-   ${vars.length?`<div class="mini" style="margin-top:5px">Variables: ${vars.map(v=>'<code>{{'+esc(v)+'}}</code>').join(' · ')}</div>`:''}
-   <div id="cl-${esc(c.id)}"><details style="margin-top:6px"><summary style="cursor:pointer;font-size:.84rem">Ver redacción base</summary>
-   <div class="doc" style="margin-top:6px;font-size:.82rem">${esc(c.texto_base||'')}</div></details></div></div>`;
- }).join('');
+  h+=`<div class="box" data-id="${esc(c.id)}">
+   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span class="chip q">${esc(c.id)}</span>
+    <input class="cl-tit" style="flex:1 1 220px;font-weight:600" value="${esc(c.titulo||'')}">
+    <span class="chip ${c.reusabilidad==='boilerplate'?'warn':'ok'}">${c.reusabilidad==='boilerplate'?'boilerplate':'datos'}</span>
+   </div>
+   ${c.fundamento?`<div class="mini" style="margin-top:4px">${esc(c.fundamento)}</div>`:''}
+   <label class="f" style="margin-top:8px">Redacción (verbatim, con marcadores)</label>
+   <textarea class="cl-tx" style="min-height:190px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(c.texto_base||'')}</textarea>
+   ${vars.length?`<div class="mini" style="margin-top:5px">Marcadores: ${vars.map(v=>'<code>{{'+esc(v)+'}}</code>').join(' · ')}</div>`:''}
+   <label class="f" style="margin-top:8px">Nota interna (notario, correcciones pendientes)</label>
+   <textarea class="cl-nt" style="min-height:52px">${esc(c.notas||'')}</textarea>
+   <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <label style="display:flex;gap:6px;align-items:center;font-size:.82rem"><input type="checkbox" class="cl-inc" ${c.activa?'checked':''} style="width:16px;height:16px;accent-color:var(--accent)"> incluir en el machote</label>
+    <button class="btn sm" onclick="guardaClausula('${esc(c.id)}',this)">Guardar</button>
+    <span class="mini">categoría ${esc(c.categoria||'—')} · orden ${c.orden||0}</span>
+   </div></div>`;
+ });
+ box.innerHTML=h;
 }
-function editaClausula(id){
- const c=CLAU[id], el=document.getElementById('cl-'+id); if(!c||!el)return;
- el.innerHTML=`<div style="margin-top:8px">
-  <label class="f">Título</label><input id="clt-${esc(id)}" value="${esc(c.titulo||'')}">
-  <label class="f" style="margin-top:6px">Redacción</label>
-  <textarea id="clx-${esc(id)}" style="min-height:220px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(c.texto_base||'')}</textarea>
-  <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-   <button class="btn sm" onclick="guardaClausula('${esc(id)}')">Guardar cláusula</button>
-   <button class="btn ghost sm" onclick="pintaClausulas()">Cancelar</button>
-   <span class="mini" id="cls-${esc(id)}"></span></div></div>`;
-}
-async function guardaClausula(id){
- const t=document.getElementById('clt-'+id).value, x=document.getElementById('clx-'+id).value, s=document.getElementById('cls-'+id);
- const faltan=((CLAU[id].variables)||[]).filter(v=>x.indexOf('{{'+v+'}}')<0);
- if(faltan.length && !confirm('Quitaste '+faltan.map(v=>'{{'+v+'}}').join(', ')+'. Esos datos ya no se rellenarán solos. ¿Guardar igual?')) return;
- s.textContent='Guardando…';
+async function guardaClausula(id,btn){
+ const el=btn.closest('.box'); if(!el)return;
+ const c=CLAALL.find(x=>x.id===id)||{};
+ const tx=el.querySelector('.cl-tx').value;
+ const faltan=(Array.isArray(c.variables)?c.variables:[]).filter(v=>tx.indexOf('{{'+v+'}}')<0);
+ if(faltan.length && !confirm('Quitaste '+faltan.map(v=>'{{'+v+'}}').join(', ')+'. Esos datos ya no se rellenarán solos al generar la asamblea. ¿Guardar igual?')) return;
+ const patch={titulo:el.querySelector('.cl-tit').value,texto_base:tx,notas:el.querySelector('.cl-nt').value,activa:el.querySelector('.cl-inc').checked,updated_at:new Date().toISOString()};
  try{
-  await post('gob_clausulas?id=eq.'+encodeURIComponent(id),{titulo:t,texto_base:x,updated_at:new Date().toISOString()},'PATCH');
-  CLAU[id].titulo=t; CLAU[id].texto_base=x;
-  s.textContent='guardado ✓'; setTimeout(pintaClausulas,900);
- }catch(e){ s.textContent='no se pudo guardar'; }
+  await post('gob_clausulas?id=eq.'+encodeURIComponent(id),patch,'PATCH');
+  Object.assign(c,patch); if(CLAU[id]) Object.assign(CLAU[id],patch);
+  claFlag('guardada ✓');
+ }catch(e){ claFlag('no se pudo guardar'); }
+}
+async function nuevaClausula(){
+ const cat=prompt('Categoría (p. ej. ampliacion_capital, inicio, cierre):'); if(cat===null)return;
+ const tit=prompt('Título de la cláusula:'); if(tit===null)return;
+ const ord=Math.max(0,...CLAALL.filter(c=>c.tipo===TIPOCLA).map(c=>+c.orden||0))+10;
+ try{
+  const r=await post('gob_clausulas',{id:TIPOCLA+'-'+Date.now().toString(36),tipo:TIPOCLA,categoria:cat||'otra',orden:ord,
+   titulo:tit||'(sin título)',texto_base:'',variables:[],reusabilidad:'datos',activa:true});
+  if(r&&r[0]) CLAALL.push(r[0]);
+  pintaClausulas(); claFlag('creada ✓');
+ }catch(e){ claFlag('no se pudo crear'); }
+}
+function machote(){
+ const rows=CLAALL.filter(c=>c.tipo===TIPOCLA&&c.activa).sort((a,b)=>(a.orden||0)-(b.orden||0));
+ if(!rows.length){ alert('No hay cláusulas marcadas como incluidas.'); return; }
+ const txt=rows.map(c=>{ const el=document.querySelector('.box[data-id="'+(window.CSS&&CSS.escape?CSS.escape(c.id):c.id)+'"] .cl-tx'); return (el?el.value:c.texto_base); }).join('\n\n');
+ const w=window.open('','_blank'); if(!w){ alert(txt); return; }
+ w.document.write('<!doctype html><meta charset="utf-8"><title>Machote '+esc(TIPOCLA)+'</title><style>body{font-family:Georgia,serif;max-width:780px;margin:40px auto;padding:0 24px;line-height:1.7;white-space:pre-wrap;font-size:13px}</style>'+esc(txt));
+ w.document.close();
 }
 
 </script>
