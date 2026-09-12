@@ -239,7 +239,9 @@ window.setVer=v=>{VIEWEMP=v;const t=TECLIST.find(x=>x.id===v);VIEWNAME=(v===EMP)
 async function render(){
   $('wkLbl').textContent=rango(WK);
   const ro=SUP&&VIEWEMP&&VIEWEMP!==EMP;
-  $('btnAdd').style.display=ro?'none':'';
+  // Solo un supervisor (jefe) viendo su propio plan puede crear trabajos. El técnico
+  // NO mete trabajos por su cuenta: trabaja lo que el jefe le asigna en el reparto.
+  $('btnAdd').style.display=(SUP&&!ro)?'':'none';
   const who=VIEWEMP||EMP;
   WORKSET=new Set();
   try{ const {data:hor}=await sb.from('horarios').select('fecha').eq('employee_id',who).gte('fecha',WK).lte('fecha',addDays(WK,6));
@@ -267,14 +269,9 @@ async function render(){
       .in('estado',['nuevo','validado','programado','en_proceso','pausado','resuelto']).order('reportado_at',{ascending:false});
     HOY=(hy||[]).filter(t=>t.reportado_at&&new Date(t.reportado_at).toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'})===today);
   }
-  // entrantes: reactivos sin dueño de mi propiedad (para tomar) — solo mi plan
+  // El técnico ya NO se auto-asigna reactivos sin dueño: los reparte el jefe.
+  // (La campanita 🔔 de HOY sigue avisando de urgencias del día para no perder nada.)
   ENTR=[];
-  if(!ro && PROPID){
-    const {data:en}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)')
-      .eq('property_id',PROPID).is('asignado_a',null).eq('clasificacion','reactivo')
-      .in('estado',['nuevo','validado','programado']).order('reportado_at',{ascending:false});
-    ENTR=(en||[]).filter(t=>!HOY.some(h=>h.id===t.id)); // los de hoy ya salen en la campanita
-  }
   paint();
   scheduleTimer();
 }
@@ -292,9 +289,11 @@ async function ensureRutinas(){
   const doMedi=!mediOwner || mediOwner===EMP, doBrief=!briefOwner || briefOwner===EMP;
   // Guardia de "ya existe" robusto: por (persona, día, tipo) y solo activos — NO depende de la semana,
   // así aunque una rutina se quede sin semana no se duplica.
+  // Cuenta CUALQUIER ticket de esa rutina/día que NO esté cancelado (incluye cerrados/hechos),
+  // si no, al cerrarse la lectura del día el guardia dejaba de verlo y creaba otro → duplicados.
   const existe=async(clave,ds)=>{ const {data}=await sb.from('mtto_tickets').select('id,estado')
       .eq('asignado_a',EMP).eq('origen','rutina').eq('dia_programado',ds).eq('metadata->>rutina',clave)
-      .in('estado',['nuevo','validado','programado','en_proceso']).limit(1);
+      .neq('estado','cancelado').limit(1);
     return (data&&data[0])||null; };
   // --- LECTURA: se asigna a la semana y se DESDOBLA por cada día que toca ---
   if(doMedi) for(let d=0;d<7;d++){ const ds=addDays(WK,d);
@@ -456,8 +455,8 @@ function card(t,ro){
   const info=`<button class="btn ghost sm" onclick="verInfo('${t.id}')">＋ info</button>`;
   let acts='',extra='';
   if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado${t.reportado_por?' · espera cierre':''}</span>`; acts=info; }
-  else if(t.estado==='en_proceso'){ acts=`<button class="btn sm" style="flex:1" onclick="terminar('${t.id}')">📸 Terminar</button><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>${info}`; }
-  else if(t.estado==='pausado'){ acts=`<button class="btn sm" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button><button class="btn ghost sm" onclick="terminar('${t.id}')">📸 Terminar</button>${info}`; }
+  else if(t.estado==='en_proceso'){ acts=`<label class="btn sm" style="flex:1;text-align:center;cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>${info}`; }
+  else if(t.estado==='pausado'){ acts=`<button class="btn sm" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button><label class="btn ghost sm" style="cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label>${info}`; }
   else if(rut==='medidores'){ // rutina diaria: se cierra sola al subir la lectura del día
     acts=`<a class="btn sm" style="flex:1;text-align:center;text-decoration:none" href="/m/lecturas.html">📷 Tomar lecturas</a>${info}`;
     extra=`<div class="note">Sube una foto por medidor (agua, luz, gas). Al registrar la lectura del día, esta tarea se marca sola.</div>`;
@@ -587,6 +586,7 @@ window.enviarCompra=async id=>{
 window.terminar=id=>{ curId=id; curAction='terminar'; $('picker').value=''; $('picker').click(); };
 $('picker').onchange=async()=>{
   const f=$('picker').files[0]; if(!f||!curId)return; const id=curId;
+  try{ $('picker').value=''; }catch(_){}  // permitir volver a elegir la misma foto la próxima vez
   toast('Subiendo foto…');
   try{
     const blob=await resize(f);
