@@ -757,10 +757,11 @@ async function cargaBorradores(){
      ${b.acta_pdf?`<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF('${esc(b.acta_pdf)}',this)">Abrir PDF</button>`:'<span class="chip q">sin publicar</span>'}
      <button class="btn ghost sm" onclick="abreDoc('${b.id}','acta')">Editar acta</button>
      ${b.acta_pdf?`<button class="btn sm" onclick="abreEnvio('${b.id}','acta')">✉️ Enviar acta a socios</button>`:''}
+     <button class="btn ghost sm" onclick="verPoderes('${b.id}')">📄 Cartas poder</button>
      ${b.acta_pdf?`<button class="btn sm" onclick="enviarFirma('${b.id}')" ${b.docusign_status?'disabled':''}>Enviar a firma (DocuSign)</button>`:''}
     </div><div id="env-${b.id}-acta"></div>
     ${b.docusign_status?`<div class="mini" style="margin-top:6px;color:${b.docusign_status==='completed'?'var(--ok)':'var(--muted)'}">DocuSign: ${esc(DSMAP[b.docusign_status]||b.docusign_status)} · ${(b.firmantes||[]).length} firmantes</div>`:''}
-    <div id="ed-${b.id}-acta"></div>
+    <div id="ed-${b.id}-acta"></div><div id="pod-${b.id}"></div>
    </div></div>`;
  }).join('');
 }
@@ -818,6 +819,37 @@ async function enviarFirma(id){
   alert('Acta en cola. DocuSign enviará las solicitudes de firma en unos minutos y el estado se actualizará aquí.');
   cargaBorradores();
  }catch(e){ alert('No se pudo poner en cola: '+(e.message||'error')); }
+}
+/* ── Cartas poder de la asamblea ──────────────────────────────────────────
+   Van anexas a la etapa Celebrada: son el soporte de quién representó a quién
+   en el acta. Se firman con firma simple (art. 192 LGSM), no por DocuSign. */
+async function verPoderes(id){
+ const el=document.getElementById('pod-'+id);
+ if(el.innerHTML){ el.innerHTML=''; return; }
+ el.innerHTML='<div class="note" style="margin-top:8px">Cargando cartas poder…</div>';
+ let ps=[],fs=[];
+ try{
+  ps=await api('gob_poderes?select=*&sociedad=eq.'+SOC+'&order=created_at.desc')||[];
+  if(ps.length){
+   const ids=ps.map(p=>'"'+p.id+'"').join(',');
+   fs=await api('gob_firmas?select=documento_id,rol,nombre,firmado_at&documento_tipo=eq.poder&documento_id=in.('+ids+')&order=orden')||[];
+  }
+ }catch(e){ el.innerHTML='<div class="note">No se pudieron cargar.</div>'; return; }
+ if(!ps.length){ el.innerHTML='<div class="note" style="margin-top:8px">Ningún socio ha otorgado carta poder para esta asamblea. Cuando alguien lo haga desde su portal, aparecerá aquí como anexo del acta.</div>'; return; }
+ const porDoc={}; fs.forEach(f=>{ (porDoc[f.documento_id]=porDoc[f.documento_id]||[]).push(f); });
+ el.innerHTML='<div class="box" style="margin-top:8px">'
+  +'<div class="note">Anexo del acta: representaciones otorgadas por carta poder simple ante dos testigos (art. 192 LGSM). Cuentan para el quórum a nombre del apoderado.</div>'
+  +ps.map(p=>{
+    const f=porDoc[p.id]||[], hechas=f.filter(x=>x.firmado_at).length;
+    const listo=f.length&&hechas===f.length;
+    return `<div style="border-top:1px solid var(--rule);padding:9px 0;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1 1 240px"><b>${esc(p.otorgante_nombre||'')}</b> <span class="mini">representado por</span> <b>${esc(p.apoderado_nombre||'')}</b>
+        <div class="mini">Testigos: ${esc(p.testigo1_nombre||'—')} y ${esc(p.testigo2_nombre||'—')}</div>
+        <div class="mini">${f.map(x=>esc(x.nombre)+(x.firmado_at?' ✓':' · pendiente')).join(' · ')||'sin firmas registradas'}</div></div>
+      <span class="chip ${listo?'ok':'warn'}">${listo?'firmada por los '+f.length:hechas+' de '+f.length+' firmas'}</span>
+    </div>`;
+   }).join('')
+  +'</div>';
 }
 async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede deshacer.'))return; await del('gob_asamblea_borradores?id=eq.'+id); cargaBorradores(); }
 
