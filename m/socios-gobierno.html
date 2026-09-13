@@ -615,25 +615,55 @@ const GOB_TIT_SOC={
 const GOB_TIT=GOB_TIT_SOC.hbr;
 const MATLBL={folio:["ok","folio"],linea_banco:["warn","línea banco"],especie:["nd","especie"],sin_respaldo:["warn","sin línea de banco"]};
 let GOB_CACHE=null, GOB_CACHE_SOC=null;
+// Las peticiones a la base van firmadas con el token de la SESION del socio, no con la
+// llave publica del sitio: asi Postgres sabe quien pregunta y las tablas de gobierno
+// pueden quedar cerradas a usuarios con sesion en vez de abiertas a cualquiera.
+function gobTok(){
+ try{
+  for(var i=0;i<localStorage.length;i++){
+   var k=localStorage.key(i);
+   if(k&&/^sb-.*-auth-token$/.test(k)){
+    var raw=localStorage.getItem(k)||''; if(!raw) continue;
+    // supabase-js guarda la sesion en JSON plano; algunas versiones la guardan en base64
+    if(raw.indexOf('base64-')===0){ try{ raw=atob(raw.slice(7)); }catch(e){ continue; } }
+    var v=null; try{ v=JSON.parse(raw); }catch(e){ continue; } if(!v) continue;
+    var ses=v.currentSession||v, t=ses.access_token, exp=ses.expires_at;
+    if(t&&(!exp||exp*1000>Date.now()+15000)) return t;
+   }
+  }
+ }catch(e){}
+ return null;
+}
+function gobAuth(){ return {apikey:GOB_KEY, Authorization:'Bearer '+(gobTok()||GOB_KEY)}; }
+function gobSinSesion(){
+ if(document.getElementById('gob-401')) return;
+ var d=document.createElement('div'); d.id='gob-401';
+ d.style.cssText='position:fixed;left:0;right:0;top:0;z-index:99999;background:#9E3B2E;color:#fff;padding:10px 16px;font:600 13px/1.4 system-ui;text-align:center';
+ d.innerHTML='Tu sesión caducó o no se pudo leer. Los datos de gobierno solo se muestran con sesión iniciada — vuelve a entrar al panel y recarga.';
+ document.body.appendChild(d);
+}
 function gobApi(path){
- return fetch(GOB_SB+'/rest/v1/'+path,{headers:{apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY}}).then(r=>r.json());
+ return fetch(GOB_SB+'/rest/v1/'+path,{headers:gobAuth()}).then(function(r){
+  if(r.status===401||r.status===403) gobSinSesion();
+  return r.json();
+ });
 }
 // ── Subida de documentos por los socios ──────────────────────────────────────
 // Bucket privado 'socios-docs'. Se lee siempre con URL firmada de 1 hora; nunca
 // se expone una URL pública del comprobante.
 const SOCBUCKET='socios-docs';
-const GOB_H={apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY};
+// GOB_H se sustituye por gobAuth() en cada llamada, para que el token vaya fresco
 function gobPost(table,body){
- return fetch(GOB_SB+'/rest/v1/'+table,{method:'POST',headers:Object.assign({},GOB_H,{'Content-Type':'application/json',Prefer:'return=representation'}),body:JSON.stringify(body)})
+ return fetch(GOB_SB+'/rest/v1/'+table,{method:'POST',headers:Object.assign({},gobAuth(),{'Content-Type':'application/json',Prefer:'return=representation'}),body:JSON.stringify(body)})
   .then(async r=>{ if(!r.ok) throw new Error(await r.text()); return r.json(); });
 }
 function gobUpload(file,path){
- return fetch(GOB_SB+'/storage/v1/object/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},GOB_H,{'x-upsert':'true','Content-Type':file.type||'application/octet-stream'}),body:file})
+ return fetch(GOB_SB+'/storage/v1/object/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},gobAuth(),{'x-upsert':'true','Content-Type':file.type||'application/octet-stream'}),body:file})
   .then(async r=>{ if(!r.ok) throw new Error(await r.text()); return true; });
 }
 async function gobSigned(path){
  try{
-  const r=await fetch(GOB_SB+'/storage/v1/object/sign/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},GOB_H,{'Content-Type':'application/json'}),body:JSON.stringify({expiresIn:3600})});
+  const r=await fetch(GOB_SB+'/storage/v1/object/sign/'+SOCBUCKET+'/'+encodeURI(path),{method:'POST',headers:Object.assign({},gobAuth(),{'Content-Type':'application/json'}),body:JSON.stringify({expiresIn:3600})});
   if(!r.ok) return null; const j=await r.json(); return GOB_SB+'/storage/v1'+j.signedURL;
  }catch(e){ return null; }
 }
@@ -1570,7 +1600,7 @@ window.pipeSetFecha=pipeSetFecha; window.pipeGenConv=pipeGenConv; window.convCop
 // ===== Seguimiento de minuta / acta (Supabase gob_minutas) =====
 const MIN_CACHE={};
 function minutaAsmKey(key,ai){ const asm=PIPE[key]&&PIPE[key].asambleas[ai]; return 'pipe:'+key+':'+ai+':'+((asm&&asm.tit)||''); }
-function minutaApi(method,path,body){ return fetch(GOB_SB+'/rest/v1/'+path,{method:method,headers:{apikey:GOB_KEY,Authorization:'Bearer '+GOB_KEY,'Content-Type':'application/json','Prefer':'return=representation,resolution=merge-duplicates'},body:body?JSON.stringify(body):undefined}).then(r=>r.json()); }
+function minutaApi(method,path,body){ return fetch(GOB_SB+'/rest/v1/'+path,{method:method,headers:Object.assign({},gobAuth(),{'Content-Type':'application/json','Prefer':'return=representation,resolution=merge-duplicates'}),body:body?JSON.stringify(body):undefined}).then(r=>r.json()); }
 function minutaFetch(key,ai){ const ak=minutaAsmKey(key,ai); return minutaApi('GET','gob_minutas?select=*&sociedad=eq.'+encodeURIComponent(SOC)+'&asamblea_key=eq.'+encodeURIComponent(ak)).then(rows=>{ const r=(rows&&rows[0])||null; if(r)MIN_CACHE[ak]=r; return r; }); }
 function minutaUpsert(key,ai,patch){ const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const ak=minutaAsmKey(key,ai); const body=Object.assign({sociedad:SOC,asamblea_key:ak,titulo:(asm&&asm.tit)||''},patch); return minutaApi('POST','gob_minutas?on_conflict=sociedad,asamblea_key',body).then(rows=>{ const r=(rows&&rows[0])||null; if(r)MIN_CACHE[ak]=r; return r; }); }
 function minutaFirmantesInit(){ return convRecipients().map(r=>({nombre:r.n,email:r.email,firmado:false,fecha:null})); }

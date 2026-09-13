@@ -172,6 +172,9 @@
   .reca .ppie{display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--muted);border-top:1px solid #2a2014;padding-top:8px;margin-top:2px}
   .reca .ppie b{color:var(--txt);font-variant-numeric:tabular-nums}
   .reca .ppie .mal b{color:var(--red)}
+  .clegend{display:flex;gap:14px;justify-content:center;margin-top:6px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+  .clegend span{display:flex;align-items:center;gap:5px}
+  .clegend i{width:14px;height:3px;border-radius:2px;display:inline-block}
 </style>
 </head>
 <body>
@@ -210,6 +213,11 @@
   async function rpc2(sede){
     var r=await fetch(U+'/rest/v1/rpc/panel_incidencias_rh_fase2',{method:'POST',headers:H(),body:JSON.stringify({p_sede:sede})});
     if(!r.ok) throw new Error('rpc2 '+r.status);
+    return await r.json();
+  }
+  async function rpc3(sede){
+    var r=await fetch(U+'/rest/v1/rpc/panel_negocio',{method:'POST',headers:H(),body:JSON.stringify({p_sede:sede})});
+    if(!r.ok) throw new Error('rpc3 '+r.status);
     return await r.json();
   }
   var money=function(n){ n=+n||0; return '$'+Math.round(n).toLocaleString('es-MX'); };
@@ -409,16 +417,9 @@
     var p=f.pace||{}; if(!p.aplica) return '';
     var occ=p.ocupacion||{}, dia=p.dia||{}, ec=(dia&&dia.en_casa)||{};
     var paceHref=(SEDE==='puebla')?'https://casapeperevenue.netlify.app/puebla/':'https://casapeperevenue.netlify.app/';
-    var h='<div class="card full">'+head('📈 Pace & forecast','forecast del mes y ocupación de hoy',mlink(paceHref,true));
+    var h='<div class="card full">'+head('📈 Pace & forecast','forecast del mes',mlink(paceHref,true));
     h+='<div class="mini">'+mesBlock(p.mes_actual,'Mes actual')+mesBlock(p.mes_prox,'Mes próximo')+'</div>';
-    h+='<div class="occ">'+
-       '<div class="o"><div class="n">'+(occ.general!=null?occ.general+'%':'—')+'</div><div class="l">Ocup. gral</div></div>'+
-       '<div class="o"><div class="n">'+(occ.dorm!=null?occ.dorm+'%':'—')+'</div><div class="l">Dorms</div></div>'+
-       '<div class="o"><div class="n">'+(occ.privadas!=null?occ.privadas+'%':'—')+'</div><div class="l">Privadas</div></div>'+
-       '<div class="o"><div class="n">'+(dia.llegadas!=null?dia.llegadas:'—')+'</div><div class="l">Llegadas hoy</div></div>'+
-       '<div class="o"><div class="n">'+(dia.salidas!=null?dia.salidas:'—')+'</div><div class="l">Salidas hoy</div></div>'+
-       '<div class="o"><div class="n">'+(ec.total!=null?ec.total:'—')+'</div><div class="l">En casa</div></div>'+
-       '</div></div>'; return h;
+    h+='</div>'; return h;
   }
   function cardReputacion(f){
     var r=f.reputacion||{}; if(!r.aplica) return '';
@@ -748,6 +749,69 @@ var RECA=(function(){
   return { render: render };
 })();
 
+  // etiqueta corta de fecha "12 sep"
+  var MESAB=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  function dlab(f){ if(!f) return ''; var p=String(f).slice(0,10).split('-'); return (+p[2])+' '+(MESAB[(+p[1])-1]||''); }
+  // gráfica de líneas (Total/Dorm/Privada) sobre la serie de ocupación
+  function lineChart(serie){
+    if(!serie||!serie.length) return '<div class="empty">Sin serie de ocupación.</div>';
+    var W=580,H=210,pl=34,pr=12,pt=16,pb=26, pw=W-pl-pr, ph=H-pt-pb;
+    var vals=[]; serie.forEach(function(s){ ['total','dorm','priv'].forEach(function(k){ if(s[k]!=null) vals.push(+s[k]); }); });
+    var ymax=Math.max(70, Math.ceil(Math.max.apply(null,vals.concat([0]))/10)*10);
+    var n=serie.length;
+    var X=function(i){ return pl + (n<=1?0:i/(n-1)*pw); };
+    var Y=function(v){ return pt + ph - (Math.max(0,Math.min(ymax,v))/ymax)*ph; };
+    var svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" style="max-width:100%">';
+    // gridlines 0/mid/max
+    [0, Math.round(ymax/2), ymax].forEach(function(g){ var y=Y(g);
+      svg+='<line x1="'+pl+'" y1="'+y.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+y.toFixed(1)+'" stroke="#2a2115" stroke-width="1"/>';
+      svg+='<text x="'+(pl-6)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" fill="#a99a82" font-size="9">'+g+'%</text>'; });
+    // x labels (cada 2)
+    serie.forEach(function(s,i){ if(i%2!==0 && i!==n-1) return; svg+='<text x="'+X(i).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="#a99a82" font-size="8.5">'+esc(dlab(s.fecha))+'</text>'; });
+    var series=[['total','#f3ead9','Total'],['dorm','#3aa88f','Dorm'],['priv','var(--orange)','Privada']];
+    series.forEach(function(se){ var k=se[0],col=se[1];
+      var pts=serie.map(function(s,i){ return s[k]==null?null:(X(i).toFixed(1)+','+Y(+s[k]).toFixed(1)); }).filter(Boolean);
+      if(pts.length) svg+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      serie.forEach(function(s,i){ if(s[k]==null) return; svg+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(+s[k]).toFixed(1)+'" r="2.4" fill="'+col+'"><title>'+esc(dlab(s.fecha)+' · '+se[2]+' '+s[k]+'%')+'</title></circle>'; });
+    });
+    svg+='</svg>';
+    var leg='<div class="clegend">'+series.map(function(se){ return '<span><i style="background:'+se[1]+'"></i>'+se[2]+'</span>'; }).join('')+'</div>';
+    return '<div style="overflow-x:auto">'+svg+'</div>'+leg;
+  }
+  function cardReporteDia(n){
+    var r=(n&&n.reporte)||{}; if(!r.aplica) return '';
+    var occ=r.occ||{};
+    var h='<div class="card full">'+head('📋 Reporte del día','resumen operativo de hoy · '+esc(dlab(r.fecha)),'');
+    h+='<div class="occ">'+
+       '<div class="o"><div class="n">'+(r.en_casa!=null?esc(r.en_casa):'—')+'</div><div class="l">En casa</div></div>'+
+       '<div class="o"><div class="n">'+(r.llegadas!=null?esc(r.llegadas):'—')+'</div><div class="l">Llegadas</div></div>'+
+       '<div class="o"><div class="n">'+(r.salidas!=null?esc(r.salidas):'—')+'</div><div class="l">Salidas</div></div>'+
+       '<div class="o"><div class="n">'+(r.desayunos!=null?esc(r.desayunos):'—')+'</div><div class="l">Desayunos</div></div>'+
+       '</div>';
+    h+='<div class="occ" style="margin-top:8px">'+
+       '<div class="o"><div class="n" style="color:var(--green)">'+(occ.general!=null?occ.general+'%':'—')+'</div><div class="l">Occ general</div></div>'+
+       '<div class="o"><div class="n" style="color:var(--green)">'+(occ.dorm!=null?occ.dorm+'%':'—')+'</div><div class="l">Dorm</div></div>'+
+       '<div class="o"><div class="n" style="color:var(--green)">'+(occ.privadas!=null?occ.privadas+'%':'—')+'</div><div class="l">Privadas</div></div>'+
+       '</div>';
+    var dl=r.desayunos_lista||[];
+    if(dl.length){ var rows=dl.map(function(x){ return {info:'<b>'+esc(typeof x==='string'?x:(x.nombre||x.huesped||x.cuarto||JSON.stringify(x)))+'</b>'+((x&&x.cuarto&&x.nombre)?' <span class="f">'+esc(x.cuarto)+'</span>':'')}; });
+      h+='<div class="listwrap"><div class="lh">Desayunos · '+dl.length+'</div>'+rowsList(rows,6)+'</div>'; }
+    var bb=r.bb_no_detectado; if(bb && bb!=='null' && (Array.isArray(bb)?bb.length:true)){
+      h+='<div class="punta"><span>⚠️ Desayuno B&B no detectado en Cloudbeds</span></div>'; }
+    h+='</div>'; return h;
+  }
+  function cardOcupacion(n){
+    var o=(n&&n.ocupacion)||{}; if(!o.aplica) return '';
+    var hoy=o.hoy||{};
+    var h='<div class="card full">'+head('📊 Hoy · ocupación y ventas','ocupación de hoy y próximos días',mlink((SEDE==='puebla')?'https://casapeperevenue.netlify.app/puebla/':'https://casapeperevenue.netlify.app/',true));
+    h+='<div class="mini">'+
+       '<div class="mb"><div class="mt">Ocupación de hoy</div><div class="mv">'+(hoy.total!=null?hoy.total+'%':'—')+'</div><div class="mut" style="font-size:11px">Priv '+(hoy.priv!=null?hoy.priv+'%':'—')+' · Dorm '+(hoy.dorm!=null?hoy.dorm+'%':'—')+'</div></div>'+
+       '<div class="mb"><div class="mt">Ventas de hoy (cuartos, a tarifa)</div><div class="mv">'+money(hoy.ventas_total)+'</div><div class="mut" style="font-size:11px">Priv '+money(hoy.ventas_priv)+' · Dorm '+money(hoy.ventas_dorm)+'</div></div>'+
+       '</div>';
+    h+='<div class="csub" style="margin:12px 0 2px">Ocupación próximos días</div>'+lineChart(o.serie||[]);
+    h+='</div>'; return h;
+  }
+
   function section(title, cards){ var inner=cards.filter(Boolean).join(''); return inner?'<div class="sec"><div class="sech">'+title+'</div><div class="grid">'+inner+'</div></div>':''; }
 
   // Aprobar/Rechazar una asistencia con el MISMO flujo que Incidencias (resolver_asistencia):
@@ -783,11 +847,13 @@ var RECA=(function(){
     var d, f=null;
     try{ d=await rpc(SEDE); }catch(e){ $('root').innerHTML='<div class="gate">No se pudo cargar. Inicia sesión de nuevo o revisa tu conexión.</div>'; return; }
     if(d && d.error){ $('root').innerHTML='<div class="gate">'+esc(d.error)+'</div>'; return; }
+    var n=null;
     try{ f=await rpc2(SEDE); if(f && f.error) f=null; }catch(e){ f=null; }
+    try{ n=await rpc3(SEDE); if(n && (n.error||n.aplica===false)) n=null; }catch(e){ n=null; }
     var html='';
     html+=section('👥 Personas', [cardLlegadas(d,f),cardDocs(d,f),cardVac(d,f), f&&cardRecamaristas(f), f&&cardMtto(f)]);
     html+=section('💬 Huésped', [ f&&cardReputacion(f) ]);
-    html+=section('📊 Negocio', [ f&&cardPace(f), f&&cardTours(f), cardTickets(d,f)]);
+    html+=section('📊 Negocio', [ n&&cardReporteDia(n), n&&cardOcupacion(n), f&&cardPace(f), f&&cardTours(f), cardTickets(d,f)]);
     $('root').innerHTML= html || '<div class="empty">Sin datos</div>';
     wire();
     try{ if(f&&f.recamaristas&&f.recamaristas.aplica) RECA.render(SEDE); }catch(_){}
