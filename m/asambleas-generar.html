@@ -55,6 +55,16 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .doc{background:#fff;border:1px solid var(--rule);border-radius:12px;padding:22px 26px;font-family:Georgia,"Times New Roman",serif;font-size:.9rem;line-height:1.7;white-space:pre-wrap}
 .bl{border-left:3px solid var(--accent);padding-left:10px}
 @media(max-width:640px){.rowx{grid-template-columns:1fr 1fr 28px}.wrap{padding:12px 12px 80px}}
+/* Editor del correo de convocatoria */
+.edbar{display:flex;flex-wrap:wrap;gap:4px;padding:7px;border:1px solid var(--rule,#e6ddcb);border-bottom:0;border-radius:8px 8px 0 0;background:var(--surface-2,#f7f5ef)}
+.edbar button{border:1px solid transparent;background:#fff;border-radius:6px;padding:4px 9px;font:inherit;font-size:.82rem;cursor:pointer;line-height:1.3}
+.edbar button:hover{border-color:var(--accent);color:var(--accent)}
+.edbar button.var{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;background:#eef1f8;color:#1E2761}
+.edbar .sep{width:1px;background:var(--rule,#e6ddcb);margin:2px 4px}
+.edbox{min-height:170px;max-height:420px;overflow:auto;border:1px solid var(--rule,#e6ddcb);border-radius:0 0 8px 8px;padding:12px 14px;background:#fff;font-size:.9rem;line-height:1.6}
+.edbox:focus{outline:2px solid var(--accent);outline-offset:-2px}
+.edbox ul,.edbox ol{margin:6px 0 6px 20px;padding:0}
+.edbox p{margin:0 0 9px}
 </style></head><body>
 
 <div class="bar">
@@ -757,10 +767,11 @@ async function cargaBorradores(){
      ${b.acta_pdf?`<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF('${esc(b.acta_pdf)}',this)">Abrir PDF</button>`:'<span class="chip q">sin publicar</span>'}
      <button class="btn ghost sm" onclick="abreDoc('${b.id}','acta')">Editar acta</button>
      ${b.acta_pdf?`<button class="btn sm" onclick="abreEnvio('${b.id}','acta')">✉️ Enviar acta a socios</button>`:''}
+     <button class="btn ghost sm" onclick="verPoderes('${b.id}')">📄 Cartas poder</button>
      ${b.acta_pdf?`<button class="btn sm" onclick="enviarFirma('${b.id}')" ${b.docusign_status?'disabled':''}>Enviar a firma (DocuSign)</button>`:''}
     </div><div id="env-${b.id}-acta"></div>
     ${b.docusign_status?`<div class="mini" style="margin-top:6px;color:${b.docusign_status==='completed'?'var(--ok)':'var(--muted)'}">DocuSign: ${esc(DSMAP[b.docusign_status]||b.docusign_status)} · ${(b.firmantes||[]).length} firmantes</div>`:''}
-    <div id="ed-${b.id}-acta"></div>
+    <div id="ed-${b.id}-acta"></div><div id="pod-${b.id}"></div>
    </div></div>`;
  }).join('');
 }
@@ -819,6 +830,37 @@ async function enviarFirma(id){
   cargaBorradores();
  }catch(e){ alert('No se pudo poner en cola: '+(e.message||'error')); }
 }
+/* ── Cartas poder de la asamblea ──────────────────────────────────────────
+   Van anexas a la etapa Celebrada: son el soporte de quién representó a quién
+   en el acta. Se firman con firma simple (art. 192 LGSM), no por DocuSign. */
+async function verPoderes(id){
+ const el=document.getElementById('pod-'+id);
+ if(el.innerHTML){ el.innerHTML=''; return; }
+ el.innerHTML='<div class="note" style="margin-top:8px">Cargando cartas poder…</div>';
+ let ps=[],fs=[];
+ try{
+  ps=await api('gob_poderes?select=*&sociedad=eq.'+SOC+'&order=created_at.desc')||[];
+  if(ps.length){
+   const ids=ps.map(p=>'"'+p.id+'"').join(',');
+   fs=await api('gob_firmas?select=documento_id,rol,nombre,firmado_at&documento_tipo=eq.poder&documento_id=in.('+ids+')&order=orden')||[];
+  }
+ }catch(e){ el.innerHTML='<div class="note">No se pudieron cargar.</div>'; return; }
+ if(!ps.length){ el.innerHTML='<div class="note" style="margin-top:8px">Ningún socio ha otorgado carta poder para esta asamblea. Cuando alguien lo haga desde su portal, aparecerá aquí como anexo del acta.</div>'; return; }
+ const porDoc={}; fs.forEach(f=>{ (porDoc[f.documento_id]=porDoc[f.documento_id]||[]).push(f); });
+ el.innerHTML='<div class="box" style="margin-top:8px">'
+  +'<div class="note">Anexo del acta: representaciones otorgadas por carta poder simple ante dos testigos (art. 192 LGSM). Cuentan para el quórum a nombre del apoderado.</div>'
+  +ps.map(p=>{
+    const f=porDoc[p.id]||[], hechas=f.filter(x=>x.firmado_at).length;
+    const listo=f.length&&hechas===f.length;
+    return `<div style="border-top:1px solid var(--rule);padding:9px 0;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1 1 240px"><b>${esc(p.otorgante_nombre||'')}</b> <span class="mini">representado por</span> <b>${esc(p.apoderado_nombre||'')}</b>
+        <div class="mini">Testigos: ${esc(p.testigo1_nombre||'—')} y ${esc(p.testigo2_nombre||'—')}</div>
+        <div class="mini">${f.map(x=>esc(x.nombre)+(x.firmado_at?' ✓':' · pendiente')).join(' · ')||'sin firmas registradas'}</div></div>
+      <span class="chip ${listo?'ok':'warn'}">${listo?'firmada por los '+f.length:hechas+' de '+f.length+' firmas'}</span>
+    </div>`;
+   }).join('')
+  +'</div>';
+}
 async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede deshacer.'))return; await del('gob_asamblea_borradores?id=eq.'+id); cargaBorradores(); }
 
 /* ── Envío a socios ───────────────────────────────────────────────────────
@@ -826,6 +868,9 @@ async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede de
    agrupar en CCO. Las direcciones de CC/CCO reciben una sola constancia con
    la lista de convocados y sin enlaces. */
 const SITE='https://grupocasapepe.netlify.app';
+// Sala fija de cada asamblea: se crea una vez en el calendario y se reutiliza,
+// para que todos entren por el mismo sitio.
+const MEET_DEF={hbr:'https://meet.google.com/odj-mnpf-eqx'};
 // Cada punto del orden del día con el sitio del panel donde el socio puede
 // ampliarlo. Editable en el propio formulario antes de enviar.
 const LINKS_DEF={
@@ -841,7 +886,22 @@ const LINKS_DEF={
  struchture:[['Aportaciones y cuadre', SITE+'/?ir=Vehículo Struchture&sub=soc=struchture%26tab=apo'],
       ['Libro de socios', SITE+'/?ir=Vehículo Struchture&sub=soc=struchture%26tab=lib'],
       ['Asambleas del vehículo', SITE+'/?ir=Vehículo Struchture&sub=soc=struchture%26tab=asm']]
-};function linksTexto(soc){ return (LINKS_DEF[soc]||LINKS_DEF.hbr).map(function(x){return x[0]+' | '+x[1];}).join('\n'); }
+};// Empareja cada punto del orden del día con el sitio del panel que lo amplía.
+function urlPunto(t,soc){
+ const x=String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+ const V=soc==='hbr'?'':'&sub=soc='+soc;
+ const gob=(tab)=>SITE+'/?ir='+(soc==='hbr'?'Hostal Boutique':(soc==='pontigu'?'Vehículo El Pontigu':'Vehículo Struchture'))+'&sub=soc='+soc+'%26tab='+tab;
+ if(/resultado|estados financieros|balance/.test(x)) return SITE+'/?ir=Resultados&sub=egresos';
+ if(/declarac|cierre fiscal|sat/.test(x))            return gob('decl');
+ if(/pacto/.test(x))                                  return SITE+'/?ir=Reporte a socios&sub=corp';
+ if(/aumento|ampliacion de capital|suscrip|afac/.test(x)) return SITE+'/?ir=Reporte a socios&sub=resumen';
+ if(/aportacion|reconocimiento|cuadre/.test(x))       return gob('apo');
+ if(/dilucion|refundacion|retrospectiva/.test(x))     return SITE+'/?ir=Retrospectiva';
+ if(/consejo|comisario|poder|delegad/.test(x))        return gob('lib');
+ if(/deuda/.test(x))                                  return SITE+'/?ir=Deuda';
+ return '';
+}
+function linksTexto(soc){ return (LINKS_DEF[soc]||LINKS_DEF.hbr).map(function(x){return x[0]+' | '+x[1];}).join('\n'); }
 function linksParse(t){ return String(t||'').split('\n').map(function(l){
   var i=l.indexOf('|'); if(i<0) return null;
   var e=l.slice(0,i).trim(), u=l.slice(i+1).trim();
@@ -904,16 +964,40 @@ function abreEnvio(id,tipo){
    </div>
    <label class="f" style="margin-top:10px">Asunto</label>
    <input id="as-${id}-${tipo}" value="${esc(E.asunto(b))}">
-   <label class="f" style="margin-top:10px">Para saber más — un enlace por línea, con el formato <code>Etiqueta | https://…</code></label>
-   <textarea id="lk-${id}-${tipo}" style="min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:.78rem">${esc(linksTexto(SOC))}</textarea>
-   <div class="mini">Van al final del correo. El socio necesita sesión para abrirlos; si entra por su enlace personal, ya la tiene.</div>
-   <label class="f" style="margin-top:8px">Cuerpo del correo (HTML sencillo; el saludo, el bloque de acceso y la firma se añaden solos)</label>
-   <textarea id="cu-${id}-${tipo}" style="min-height:150px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem">${esc(E.cuerpo(b))}</textarea>
+   <label class="f" style="margin-top:12px">Orden del día · enlace de cada punto</label>
+   <div class="mini" style="margin-bottom:6px">Cada punto va en el correo con su enlace al lado, para que el socio lo amplíe antes de la asamblea. Deja el campo vacío si un punto no lleva enlace.</div>
+   <div id="od-${id}-${tipo}">${(b.orden_dia||[]).map((t,i)=>`
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:center;margin-bottom:6px">
+      <div style="font-size:.82rem;padding:6px 0"><b>${i+1}.</b> ${esc(t)}</div>
+      <input class="od-url" data-pt="${esc(t)}" value="${esc(urlPunto(t,SOC))}" placeholder="sin enlace" style="font-size:.76rem">
+     </div>`).join('')||'<div class="mini">Esta asamblea no tiene puntos cargados.</div>'}</div>
+   <label class="f" style="margin-top:12px">Cuerpo del correo</label>
+   <div class="edbar" id="eb-${id}-${tipo}">
+    <button type="button" onclick="fmt('bold')" title="Negrita"><b>B</b></button>
+    <button type="button" onclick="fmt('italic')" title="Cursiva"><i>I</i></button>
+    <button type="button" onclick="fmt('underline')" title="Subrayado"><u>U</u></button>
+    <span class="sep"></span>
+    <button type="button" onclick="fmt('insertUnorderedList')" title="Viñetas">• lista</button>
+    <button type="button" onclick="fmt('insertOrderedList')" title="Numerada">1. lista</button>
+    <button type="button" onclick="ponEnlace()" title="Enlace">🔗</button>
+    <span class="sep"></span>
+    ${'👋 ✅ ❌ 📅 📄 💰 🏛️ ⚠️ 👉 🙏'.split(' ').map(e=>`<button type="button" onclick="pon('${e}')">${e}</button>`).join('')}
+    <span class="sep"></span>
+    <span class="mini" style="align-self:center">Campos:</span>
+    ${[['{{socio}}','nombre del socio'],['{{asamblea}}','título'],['{{fecha}}','fecha'],['{{hora}}','hora'],['{{lugar}}','lugar'],['{{sociedad}}','sociedad'],['{{meet}}','enlace de Meet']]
+      .map(v=>`<button type="button" class="var" title="${v[1]}" onclick="pon('${v[0]}')">${v[0]}</button>`).join('')}
+    <span class="sep"></span>
+    <button type="button" onclick="fmt('removeFormat')" title="Quitar formato">Aa</button>
+   </div>
+   <div id="cu-${id}-${tipo}" class="edbox" contenteditable="true">${E.cuerpo(b)}</div>
+   <div class="mini">El saludo, el bloque de fecha, el de acceso y la firma se añaden solos. Los campos entre llaves se sustituyen al enviar: <b>{{socio}}</b> cambia por el nombre de cada destinatario.</div>
    ${tipo==='convocatoria'?`<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <span class="mini">Duración prevista para el calendario:</span>
     <select id="dur-${id}-${tipo}" style="width:auto;padding:5px 8px"><option value="1">1 h</option><option value="2" selected>2 h</option><option value="3">3 h</option><option value="4">4 h</option></select>
     <span class="mini">El correo lleva botón de Google Calendar y un <b>.ics</b> adjunto para Outlook y Apple.</span>
-   </div>`:''}
+   </div>
+   <div style="margin-top:8px"><label class="f">Enlace de videoconferencia (Meet) — el mismo para todos</label>
+    <input id="meet-${id}-${tipo}" value="${esc(MEET_DEF[SOC]||'')}" placeholder="https://meet.google.com/…"></div>`:''}
    <label style="display:flex;gap:7px;align-items:center;margin-top:10px;font-size:.85rem">
     <input type="checkbox" id="pr-${id}-${tipo}" checked style="width:16px;height:16px;accent-color:var(--accent)">
     <span><b>Modo prueba</b> — todo se manda a tu correo, con el nombre del socio en el asunto. Nadie más lo recibe y no se crean pendientes.</span></label>
@@ -926,6 +1010,13 @@ function abreEnvio(id,tipo){
   histEnvios(id,tipo);
  });
 }
+/* Editor sencillo: execCommand está obsoleto pero es lo que funciona igual en
+   todos los navegadores sin meter una librería de 200 KB para escribir un correo. */
+let EDFOCO=null;
+document.addEventListener('focusin',e=>{ if(e.target.classList&&e.target.classList.contains('edbox')) EDFOCO=e.target; });
+function fmt(cmd){ if(EDFOCO)EDFOCO.focus(); try{ document.execCommand(cmd,false,null); }catch(e){} }
+function pon(txt){ if(EDFOCO)EDFOCO.focus(); try{ document.execCommand('insertText',false,txt); }catch(e){} }
+function ponEnlace(){ const u=prompt('Dirección del enlace (https://…)'); if(!u)return; if(EDFOCO)EDFOCO.focus(); try{ document.execCommand('createLink',false,u); }catch(e){} }
 function marcaTodos(id,tipo,v){ document.querySelectorAll('#dst-'+id+'-'+tipo+' .dst').forEach(c=>c.checked=v); }
 async function histEnvios(id,tipo){
  const box=document.getElementById('hist-'+id+'-'+tipo); if(!box)return;
@@ -960,7 +1051,7 @@ async function mandarCorreo(id,tipo,btn){
    body:JSON.stringify({
     tipo, sociedad:SOC, borrador_id:id, titulo:b.titulo,
     asunto:document.getElementById('as-'+id+'-'+tipo).value,
-    cuerpo_html:document.getElementById('cu-'+id+'-'+tipo).value,
+    cuerpo_html:(document.getElementById('cu-'+id+'-'+tipo)||{}).innerHTML||'',
     socios:sel.map(p=>({socio_id:p.socio_id,nombre:p.nombre,email:p.email,modo:'to'})),
     cc:(document.getElementById('cc-'+id+'-'+tipo).value||'').split(',').map(s=>s.trim()).filter(Boolean),
     cco:(document.getElementById('cco-'+id+'-'+tipo).value||'').split(',').map(s=>s.trim()).filter(Boolean),
@@ -968,8 +1059,11 @@ async function mandarCorreo(id,tipo,btn){
     // Para el botón "Añadir a mi calendario" y el .ics adjunto
     evento:{titulo:b.titulo||'Asamblea', fecha:b.fecha, hora:b.hora||'10:00',
             fechaLarga:fechaLarga(b.fecha), lugar:b.lugar||'', ciudad:b.ciudad||'',
-            horas:+(document.getElementById('dur-'+id+'-'+tipo)||{value:2}).value||2},
-    enlaces: linksParse((document.getElementById('lk-'+id+'-'+tipo)||{}).value),
+            horas:+(document.getElementById('dur-'+id+'-'+tipo)||{value:2}).value||2,
+            meet:((document.getElementById('meet-'+id+'-'+tipo)||{}).value||'').trim()},
+    enlaces: [...document.querySelectorAll('#od-'+id+'-'+tipo+' .od-url')]
+              .map(i=>({etiqueta:i.dataset.pt,url:(i.value||'').trim()}))
+              .filter(x=>/^https?:\/\//.test(x.url)),
     prueba, prueba_to:null
    })});
   const j=await r.json();
