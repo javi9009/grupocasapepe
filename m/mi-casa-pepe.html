@@ -159,24 +159,46 @@ window.addCalendar=function(){
 
 /* ── Pendientes (gob_notificaciones + carta poder) ─────── */
 async function cargarPendientes(){
- const box=$('#pend-body'); if(!EMAIL){ box.textContent='Inicia sesión para ver tus pendientes.'; return; }
+ const box=$('#pend-body'), abox=$('#asm-asist');
+ if(!EMAIL){ box.textContent='Inicia sesión para ver tus pendientes.'; if(abox)abox.innerHTML=''; return; }
  let nn=[],pp=[];
  try{ const r=await sb.from('gob_notificaciones').select('*').eq('socio_email',EMAIL); nn=r.data||[]; }catch(e){}
  try{ const r=await sb.from('gob_poderes').select('*').eq('estado','en_firma'); pp=(r.data||[]).filter(p=>[p.apoderado_email,p.testigo1_email,p.testigo2_email].map(x=>(x||'').toLowerCase()).includes(EMAIL)); }catch(e){}
  NOTIFS=nn;
+ // Asistencia → se muestra en el bloque de la asamblea (arriba), no en pendientes
+ const asist=nn.find(n=>n.tipo==='asistencia');
+ if(abox) abox.innerHTML=renderAsist(asist);
  const deriv=pp.map(p=>({id:'poder:'+p.id,tipo:'poder_firmar',_p:p,estado:'pendiente',titulo:'Carta poder por firmar',detalle:'Fuiste designado '+((p.apoderado_email||'').toLowerCase()===EMAIL?'apoderado':'testigo')+' en la carta poder de '+(p.otorgante_nombre||'un socio')+'. DocuSign te enviará la solicitud.'}));
- const all=nn.concat(deriv);
- if(!all.length){ box.innerHTML='<div class="notif done"><b>Sin pendientes.</b><div class="d">Cuando haya algo que responder, aparecerá aquí.</div></div>'; return; }
+ const items=nn.filter(n=>n.tipo!=='asistencia').filter(n=>{
+   if(n.tipo==='firmar_doc') return STAGE>=2;        // oculto hasta la firma
+   if(n.tipo==='descargar_titulo') return STAGE>=4;  // oculto hasta emitir títulos
+   return true;
+ }).concat(deriv);
+ if(!items.length){ box.innerHTML='<div class="notif done"><b>Sin pendientes por ahora.</b><div class="d">Cuando haya algo que responder, aparecerá aquí.</div></div>'; return; }
  const ord={pendiente:0,en_proceso:1,resuelta:2,descartada:3};
- all.sort((a,b)=>(ord[a.estado]-ord[b.estado])||0);
- box.innerHTML=all.map(cardNotif).join('');
+ items.sort((a,b)=>(ord[a.estado]-ord[b.estado])||0);
+ box.innerHTML=items.map(cardNotif).join('');
 }
+function renderAsist(n){
+ if(!n) return '<div class="hint">La confirmación de asistencia aparecerá al enviarse la convocatoria.</div>';
+ const R=n.respuesta||{};
+ if(n.estado==='resuelta'||n.estado==='en_proceso'){
+  const t=R.asistencia==='si'?'Asistirás ✓':R.asistencia==='no'?'No asistes':R.asistencia==='poder'?'Otorgaste carta poder ✓':'Registrado';
+  return '<div style="font-weight:600;color:var(--ok)">'+t+' · <a href="#" onclick="asistReset(\''+n.id+'\');return false" style="color:var(--muted);font-weight:400">cambiar</a></div>';
+ }
+ return '<div class="lbl">¿Asistirás a la asamblea?</div><div class="row">'
+  +'<button class="btn sm" onclick="asist(\''+n.id+'\',\'si\')">Asistiré</button>'
+  +'<button class="btn ghost sm" onclick="asist(\''+n.id+'\',\'no\')">No asistiré</button>'
+  +'<button class="btn ghost sm" onclick="poderModal(\''+n.id+'\')">No asistiré, otorgo carta poder</button>'
+  +'</div>';
+}
+window.asistReset=async function(id){ await sb.from('gob_notificaciones').update({estado:'pendiente',respuesta:{},resolved_at:null,updated_at:new Date().toISOString()}).eq('id',id); cargarPendientes(); };
 function cardNotif(n){
  const done=(n.estado==='resuelta'||n.estado==='descartada'); const R=n.respuesta||{};
  let acc='';
  if(done){ const t=R.asistencia==='si'?'Confirmó asistencia':R.asistencia==='no'?'No asiste':R.asistencia==='poder'?'Dio carta poder':R.opcion?('Eligió '+R.opcion):'Resuelta'; acc='<span style="color:var(--ok);font-weight:600;font-size:.82rem">✓ '+t+'</span>'; }
  else if(n.tipo==='asistencia'){ acc='<button class="btn sm" onclick="asist(\''+n.id+'\',\'si\')">Asistiré</button><button class="btn ghost sm" onclick="asist(\''+n.id+'\',\'no\')">No asistiré</button><button class="btn ghost sm" onclick="poderModal(\''+n.id+'\')">✍️ Dar carta poder</button>'; }
- else if(n.tipo==='elegir_opcion'){ acc=['S1','S2','C1','C2'].map(o=>'<button class="btn ghost sm" onclick="elegir(\''+n.id+'\',\''+o+'\')">'+o+'</button>').join('')+'<span class="hint">S1 fiscal · S2 largo plazo · C1 mantener · C2 refundar</span>'; }
+ else if(n.tipo==='elegir_opcion'){ acc='<a class="btn sm" href="/m/socios-gobierno.html">Elegir en Mi inversión →</a><span class="hint">S1 fiscal · S2 largo plazo · C1 mantener · C2 refundar</span>'; }
  else if(n.tipo==='firmar_doc'){ acc='<button class="btn sm" onclick="firmar(\''+n.id+'\')">🖊️ Firmar por DocuSign</button>'; }
  else if(n.tipo==='descargar_titulo'){ acc='<a class="btn sm" href="/m/socios-gobierno.html" >📜 Ver / descargar título</a>'; }
  else if(n.tipo==='poder_firmar'){ acc='<span class="hint">DocuSign te enviará la solicitud a tu correo.</span>'; }
