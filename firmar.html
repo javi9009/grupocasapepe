@@ -1,0 +1,125 @@
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Firmar carta poder · Casa Pepe</title>
+<style>
+:root{--bg:#f4f1ea;--card:#fff;--ink:#2a2118;--soft:#5f5e5a;--muted:#8e8c85;--line:#e6dcc8;--accent:#1E2761;--gold:#b9852b;--ok:#1d9e75;--bad:#b03434}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.6}
+header{background:#16130f;color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px}
+header b{color:#C9A227}
+.wrap{max-width:760px;margin:0 auto;padding:16px 14px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+h1{font-size:19px;margin:0 0 4px}
+.mini{font-size:13px;color:var(--muted)}
+.doc{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fffdf8;max-height:340px;overflow:auto;font-size:13.5px;white-space:pre-wrap;font-family:Georgia,serif}
+.pad-wrap{border:2px dashed #c9bfa6;border-radius:12px;background:#fffdf8;position:relative;margin-top:10px}
+canvas{display:block;width:100%;height:190px;touch-action:none;border-radius:12px}
+.pad-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bcae8c;font-size:14px;pointer-events:none}
+.btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:13px 22px;font-size:15px;font-weight:700;cursor:pointer}
+.btn[disabled]{opacity:.5;cursor:default}
+.btn.line{background:#fff;color:var(--soft);border:1px solid var(--line);font-weight:600}
+.msg{font-size:14px;font-weight:600;margin-top:10px}
+.msg.ok{color:var(--ok)} .msg.err{color:var(--bad)}
+.lista{list-style:none;padding:0;margin:8px 0 0}
+.lista li{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #f2eee4;font-size:14px}
+.lista li:last-child{border:0}
+.chip{font-size:11px;padding:2px 8px;border-radius:20px;background:#f2eee4;color:var(--soft);white-space:nowrap}
+.chip.ok{background:#e8f5ee;color:#136c4e}
+.aviso{background:#fdf3d6;border:1px solid #d9a441;border-radius:10px;padding:12px 14px;font-size:13.5px}
+</style></head>
+<body>
+<header><span class="ttl">Casa <b>Pepe</b></span><span class="mini" style="color:#cdbf9c">Firma de documentos</span></header>
+<div class="wrap" id="app"><div class="card"><div class="mini">Cargando el documento…</div></div></div>
+
+<script>
+const FN='https://rehophywchakfapivsbh.supabase.co/functions/v1/firma';
+const TOK=new URLSearchParams(location.search).get('f')||'';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let GEO={lat:null,lng:null}, pad=null, ctx=null, hasInk=false;
+
+function pantalla(h){ $('app').innerHTML=h; }
+function error(m){ pantalla('<div class="card"><h1>No podemos abrir este documento</h1><p>'+esc(m)+'</p><p class="mini">Si crees que es un error, escríbele a javi@casapepe.mx.</p></div>'); }
+
+async function cargar(){
+ if(!TOK) return error('El enlace está incompleto. Ábrelo de nuevo desde tu correo.');
+ let d;
+ try{ const r=await fetch(FN+'?f='+encodeURIComponent(TOK)); d=await r.json(); if(d.error) return error(d.error); }
+ catch(e){ return error('No se pudo contactar con el servidor. Revisa tu conexión.'); }
+
+ const yaFirme=!!d.firmante.firmado_at;
+ const pendientes=(d.firmantes||[]).filter(x=>!x.firmado_at).length;
+
+ pantalla(
+  '<div class="card">'
+  +'<h1>'+esc(d.doc.titulo)+'</h1>'
+  +'<div class="mini">'+esc(d.doc.otorgante||'')+' otorga su representación a <b>'+esc(d.doc.apoderado||'')+'</b></div>'
+  +'<div style="margin-top:10px"><b>'+esc(d.firmante.nombre)+'</b> <span class="chip">'+esc(d.firmante.papel)+'</span></div>'
+  +'</div>'
+  +'<div class="card"><div class="mini" style="margin-bottom:8px">Lee el documento completo antes de firmar.</div>'
+  +'<div class="doc">'+(d.doc.html||'<i>El documento no tiene contenido.</i>')+'</div></div>'
+  +(yaFirme
+    ? '<div class="card"><div class="aviso"><b>Ya firmaste este documento</b> el '+new Date(d.firmante.firmado_at).toLocaleString('es-MX')+'. No hace falta que hagas nada más.</div></div>'
+    : '<div class="card">'
+      +'<b>Tu firma</b><div class="mini">Dibújala con el dedo o el ratón. Queda registrada con la fecha, el dispositivo y —si lo autorizas— tu ubicación.</div>'
+      +'<div class="pad-wrap"><canvas id="pad"></canvas><div class="pad-hint" id="padHint">Firma aquí</div></div>'
+      +'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
+      +'<button class="btn line" onclick="limpiar()">Borrar</button>'
+      +'<button class="btn" id="btnFirmar" onclick="firmar()">Firmar el documento</button></div>'
+      +'<div class="mini" id="geo" style="margin-top:8px"></div>'
+      +'<div class="msg" id="msg"></div></div>')
+  +'<div class="card"><b>Estado de las firmas</b><ul class="lista">'
+  +(d.firmantes||[]).map(x=>'<li><span style="flex:1">'+esc(x.nombre)+' <span class="mini">· '+esc(x.rol)+'</span></span>'
+    +'<span class="chip'+(x.firmado_at?' ok':'')+'">'+(x.firmado_at?'firmado':'pendiente')+'</span></li>').join('')
+  +'</ul><div class="mini" style="margin-top:8px">'+(pendientes?('Faltan '+pendientes+' firma'+(pendientes>1?'s':'')+' para que la carta poder quede completa.'):'Documento firmado por todos.')+'</div></div>'
+ );
+ if(!yaFirme){ initPad(); pedirGeo(); }
+}
+
+function initPad(){
+ pad=$('pad'); if(!pad) return;
+ const r=pad.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+ pad.width=r.width*dpr; pad.height=r.height*dpr;
+ ctx=pad.getContext('2d'); ctx.scale(dpr,dpr);
+ ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#16130f';
+ let dibujando=false;
+ const pos=e=>{ const b=pad.getBoundingClientRect(); const t=(e.touches&&e.touches[0])||e; return {x:t.clientX-b.left,y:t.clientY-b.top}; };
+ const ini=e=>{ e.preventDefault(); dibujando=true; hasInk=true; $('padHint').style.display='none'; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+ const mov=e=>{ if(!dibujando)return; e.preventDefault(); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); };
+ const fin=()=>{ dibujando=false; };
+ pad.onpointerdown=ini; pad.onpointermove=mov; pad.onpointerup=fin; pad.onpointerleave=fin;
+ pad.ontouchstart=ini; pad.ontouchmove=mov; pad.ontouchend=fin;
+}
+function limpiar(){ if(!ctx)return; ctx.clearRect(0,0,pad.width,pad.height); hasInk=false; $('padHint').style.display='flex'; }
+
+function pedirGeo(){
+ const g=$('geo'); if(!g) return;
+ if(!navigator.geolocation){ g.textContent='Ubicación no disponible en este dispositivo.'; return; }
+ g.textContent='Ubicación: pidiendo permiso…';
+ navigator.geolocation.getCurrentPosition(
+  p=>{ GEO.lat=+p.coords.latitude.toFixed(6); GEO.lng=+p.coords.longitude.toFixed(6); g.textContent='Ubicación registrada.'; },
+  ()=>{ g.textContent='Sin ubicación: la firma se registra igual, sin coordenadas.'; },
+  {enableHighAccuracy:false,timeout:8000,maximumAge:60000});
+}
+
+async function firmar(){
+ const m=$('msg'), b=$('btnFirmar');
+ m.className='msg'; m.textContent='';
+ if(!hasInk){ m.className='msg err'; m.textContent='Dibuja tu firma antes de continuar.'; return; }
+ b.disabled=true; m.textContent='Guardando tu firma…';
+ try{
+  const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({f:TOK,png:pad.toDataURL('image/png'),lat:GEO.lat,lng:GEO.lng})});
+  const d=await r.json();
+  if(d.error){ m.className='msg err'; m.textContent=d.error; b.disabled=false; return; }
+  m.className='msg ok';
+  m.textContent=d.completo?'✓ Firmado. La carta poder queda completa.':('✓ Firmado. Faltan '+d.faltan+' firma'+(d.faltan>1?'s':'')+'.');
+  setTimeout(cargar,1400);
+ }catch(e){ m.className='msg err'; m.textContent='No se pudo guardar. Inténtalo de nuevo.'; b.disabled=false; }
+}
+window.limpiar=limpiar; window.firmar=firmar;
+cargar();
+</script>
+</body></html>
