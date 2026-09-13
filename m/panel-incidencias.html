@@ -175,6 +175,10 @@
   .clegend{display:flex;gap:14px;justify-content:center;margin-top:6px;font-size:11px;color:var(--muted);flex-wrap:wrap}
   .clegend span{display:flex;align-items:center;gap:5px}
   .clegend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .perbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .perb{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:5px 13px;cursor:pointer;font:inherit;font-size:12px;font-weight:700}
+  .perb.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 </style>
 </head>
 <body>
@@ -220,6 +224,11 @@
     if(!r.ok) throw new Error('rpc3 '+r.status);
     return await r.json();
   }
+  async function rpcA(sede, periodo){
+    var r=await fetch(U+'/rest/v1/rpc/panel_asistencia',{method:'POST',headers:H(),body:JSON.stringify({p_sede:sede,p_periodo:periodo})});
+    if(!r.ok) throw new Error('rpcA '+r.status);
+    return await r.json();
+  }
   var money=function(n){ n=+n||0; return '$'+Math.round(n).toLocaleString('es-MX'); };
   var pctf=function(n){ return (n==null?'—':(Math.round(n*10)/10)+'%'); };
   function saludColor(s){ s=(s||'').toLowerCase(); if(s.indexOf('sobre')>=0||s.indexOf('línea')>=0||s.indexOf('linea')>=0) return 'var(--green)'; if(s.indexOf('leve')>=0) return 'var(--gold)'; if(s.indexOf('atras')>=0) return 'var(--red)'; return 'var(--gray)'; }
@@ -240,19 +249,22 @@
   function mlink(href, ext){ return '<a class="mlk" href="'+href+'"'+(ext?' target="_blank" rel="noopener"':'')+'>ver módulo '+(ext?'↗':'→')+'</a>'; }
   function head(title, csub, link){ return '<div class="ch2"><h2>'+title+'</h2>'+(link||'')+'</div><div class="csub">'+csub+'</div>'; }
   // listado de asistencia: retrasos + salidas antes + validaciones, tope 4 con "+ ver más" y botón aprobar
-  function attList(items){
-    if(!items || !items.length) return '<div class="empty">Sin retrasos ni salidas por revisar 🎉</div>';
+  function attList(items, ro){
+    if(!items || !items.length) return '<div class="empty">Nada por revisar en el periodo 🎉</div>';
     var CAP=4;
     var rows=items.map(function(x,i){
       var badge,mtxt='',mcls='';
       if(x.tipo==='retraso'){ badge='<span class="tg tg-r">retraso</span>'; mtxt='+'+x.min+"'"; mcls=x.min>=60?'hi':(x.min>=20?'mid':''); }
+      else if(x.tipo==='extra'){ badge='<span class="tg tg-s">horas extra</span>'; mtxt='+'+x.min+"'"; mcls='mid'; }
       else if(x.tipo==='salida'){ badge='<span class="tg tg-s">salió antes</span>'; mtxt='−'+x.min+"'"; mcls='mid'; }
       else { badge='<span class="tg tg-v">por validar</span>'; }
       var msg=x.msg?'<div class="amsg">'+esc(x.msg)+'</div>':'';
-      var act=x.pend
-        ?'<button class="apb up" data-res="'+esc(x.id)+'" data-acc="hora" title="Aprobar · justificar (no cuenta en nómina)">👍</button>'+
-         '<button class="apb dn" data-res="'+esc(x.id)+'" data-acc="falta" title="Rechazar">👎</button>'
-        :'<span class="okchip">'+(x.est==='rechazado'||x.est==='falta'?'👎':'👍')+' '+esc(x.est||'ok')+'</span>';
+      var act=ro
+        ? (x.est?'<span class="okchip">'+(x.est==='rechazado'||x.est==='falta'?'👎':'👍')+' '+esc(x.est)+'</span>':'')
+        : (x.pend
+          ?'<button class="apb up" data-res="'+esc(x.id)+'" data-acc="hora" title="Aprobar · justificar (no cuenta en nómina)">👍</button>'+
+           '<button class="apb dn" data-res="'+esc(x.id)+'" data-acc="falta" title="Rechazar">👎</button>'
+          :'<span class="okchip">'+(x.est==='rechazado'||x.est==='falta'?'👎':'👍')+' '+esc(x.est||'ok')+'</span>');
       return '<div class="arow'+(i>=CAP?' hide extra':'')+'">'+
         '<div class="ainfo">'+badge+' <b>'+esc(x.nombre)+'</b> <span class="f">'+esc(x.fecha)+'</span>'+
         (mtxt?' <span class="min '+mcls+'">'+mtxt+'</span>':'')+msg+'</div>'+
@@ -288,24 +300,55 @@
     return row+sub;
   }).join('')+'</div>'; }
 
-  function cardLlegadas(d,f){
-    var lg=d.llegadas||{};
-    var segs=[{v:lg.a_tiempo,color:'var(--green)',lbl:'A tiempo'},{v:lg.retrasos,color:'var(--gold)',lbl:'Retrasos'},{v:lg.faltas,color:'var(--red)',lbl:'Faltas'}];
-    var h='<div class="card">'+head('🕘 Llegadas · 15 días','registros de checada del personal',mlink('/m/incidencias.html',false));
-    h+=gauge(segs,(lg.total||0),'llegadas');
-    var lgP=d.llegadas_gente||[];
-    function pRowsL(filt, metric){ return lgP.filter(filt).map(function(p){ return {info:'<b>'+esc(p.nombre)+'</b> <span class="f">'+metric(p)+'</span>', act:pepe360(p.id)}; }); }
-    h+=legendG([
-      {color:'var(--green)',lbl:'A tiempo',v:lg.a_tiempo||0, people:pRowsL(function(p){return p.at>0;}, function(p){return p.at+' a tiempo';})},
-      {color:'var(--gold)',lbl:'Retrasos',v:lg.retrasos||0, people:pRowsL(function(p){return p.ret>0;}, function(p){return p.ret+' retraso'+(p.ret===1?'':'s');})},
-      {color:'var(--red)',lbl:'Faltas',v:lg.faltas||0, people:pRowsL(function(p){return p.fal>0;}, function(p){return p.fal+' falta'+(p.fal===1?'':'s');})}
-    ]);
-    h+='<div class="listwrap"><div class="lh">Retrasos y salidas · por revisar</div>';
-    if(f && f.asistencias){ h+=attList(f.asistencias); }
-    else { var lista=lg.lista||[]; if(lista.length){ h+='<table class="rtbl"><tbody>'; lista.forEach(function(x){ var m=+x.min||0; var cls=m>=60?'hi':(m>=20?'mid':''); h+='<tr><td>'+esc(x.nombre)+'</td><td class="f">'+esc(x.fecha)+'</td><td class="min '+cls+'">+'+m+"'</td></tr>"; }); h+='</tbody></table>'; } else h+='<div class="empty">Sin retrasos en el periodo 🎉</div>'; }
-    h+='</div></div>';
-    return h;
+  // Bloque Asistencia: Llegadas + Salidas con filtro de periodo compartido
+  var PERS=[['hoy','Hoy'],['semana','Esta semana'],['quincena','Esta quincena'],['mes','Este mes'],['mes_pasado','Mes pasado']];
+  function cardAsis(){
+    var bar='<div class="perbar">'+PERS.map(function(p){ return '<button class="perb'+(p[0]===ASIS.periodo?' on':'')+'" data-per="'+p[0]+'">'+p[1]+'</button>'; }).join('')+'</div>';
+    return '<div style="grid-column:1/-1">'+bar+'<div class="grid2"><div id="asisLleg" class="card"><div class="load" style="padding:24px">Cargando…</div></div><div id="asisSal" class="card"></div></div></div>';
   }
+  var ASIS=(function(){
+    var periodo='quincena';
+    function plabel(){ return ({hoy:'hoy',semana:'esta semana',quincena:'esta quincena',mes:'este mes',mes_pasado:'mes pasado'}[periodo]||periodo); }
+    function grp(g, filt, metric){ return (g||[]).filter(filt).map(function(p){ return {info:'<b>'+esc(p.nombre)+'</b> <span class="f">'+metric(p)+'</span>', act:pepe360(p.id)}; }); }
+    function renderLleg(L){
+      var segs=[{v:L.a_tiempo,color:'var(--green)',lbl:'A tiempo'},{v:L.retrasos,color:'var(--gold)',lbl:'Retrasos'},{v:L.faltas,color:'var(--red)',lbl:'Faltas'}];
+      var tot=(+L.a_tiempo||0)+(+L.retrasos||0)+(+L.faltas||0);
+      var h=head('🕘 Llegadas','registros de checada · '+plabel(),mlink('/m/incidencias.html',false));
+      h+=gauge(segs,tot,'llegadas');
+      h+=legendG([
+        {color:'var(--green)',lbl:'A tiempo',v:L.a_tiempo||0, people:grp(L.gente,function(p){return p.at>0;}, function(p){return p.at+' a tiempo';})},
+        {color:'var(--gold)',lbl:'Retrasos',v:L.retrasos||0, people:grp(L.gente,function(p){return p.ret>0;}, function(p){return p.ret+' retraso'+(p.ret===1?'':'s');})},
+        {color:'var(--red)',lbl:'Faltas',v:L.faltas||0, people:grp(L.gente,function(p){return p.fal>0;}, function(p){return p.fal+' falta'+(p.fal===1?'':'s');})}
+      ]);
+      h+='<div class="listwrap"><div class="lh">Retrasos y validaciones</div>'+attList(L.lista||[],false)+'</div>';
+      return h;
+    }
+    function renderSal(S){
+      var segs=[{v:S.a_tiempo,color:'var(--green)',lbl:'En su hora'},{v:S.extra,color:'var(--gold)',lbl:'Horas extra'},{v:S.antes,color:'var(--orange)',lbl:'Salió antes'}];
+      var tot=(+S.a_tiempo||0)+(+S.extra||0)+(+S.antes||0);
+      var h=head('🚪 Salidas','salidas tardías y anticipadas · '+plabel(),mlink('/m/incidencias.html',false));
+      h+=gauge(segs,tot,'salidas');
+      h+=legendG([
+        {color:'var(--green)',lbl:'En su hora',v:S.a_tiempo||0, people:grp(S.gente,function(p){return p.at>0;}, function(p){return p.at+' en hora';})},
+        {color:'var(--gold)',lbl:'Horas extra',v:S.extra||0, people:grp(S.gente,function(p){return p.ext>0;}, function(p){return p.ext+' con horas extra';})},
+        {color:'var(--orange)',lbl:'Salió antes',v:S.antes||0, people:grp(S.gente,function(p){return p.ant>0;}, function(p){return p.ant+' salió antes';})}
+      ]);
+      h+='<div class="listwrap"><div class="lh">Salidas tardías / horas extra</div>'+attList(S.lista||[],true)+'</div>';
+      return h;
+    }
+    async function render(sede, per){
+      if(per) periodo=per;
+      if(!$('asisLleg')) return;
+      document.querySelectorAll('.perb').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-per')===periodo); });
+      $('asisLleg').innerHTML='<div class="load" style="padding:24px">Cargando…</div>'; if($('asisSal')) $('asisSal').innerHTML='';
+      var r; try{ r=await rpcA(sede, periodo); }catch(e){ $('asisLleg').innerHTML='<div class="empty">No se pudo cargar.</div>'; return; }
+      if(!r || r.error){ $('asisLleg').innerHTML='<div class="empty">'+esc((r&&r.error)||'Sin datos')+'</div>'; return; }
+      $('asisLleg').innerHTML=renderLleg(r.llegadas||{});
+      if($('asisSal')) $('asisSal').innerHTML=renderSal(r.salidas||{});
+      wire();
+    }
+    return { render: render, get periodo(){ return periodo; } };
+  })();
   function cardDocs(d,f){
     var x=d.documentacion||{};
     var segs=[{v:x.verde,color:'var(--green)',lbl:'Contrato completo'},{v:x.morado,color:'var(--purple)',lbl:'Planta sin contrato'},{v:x.naranja,color:'var(--orange)',lbl:'Prueba con contrato'},{v:x.amarillo,color:'var(--gold)',lbl:'Prueba por vencer'},{v:x.azul,color:'var(--blue)',lbl:'Solicitud de contrato'}];
@@ -840,6 +883,7 @@ var RECA=(function(){
       var g=document.getElementById(l.getAttribute('data-grp')); if(!g) return;
       var open=g.hidden; g.hidden=!open; var x=l.querySelector('.gx'); if(x) x.textContent=open?'−':'+';
     }; });
+    document.querySelectorAll('.perb').forEach(function(b){ b.onclick=function(){ ASIS.render(SEDE, b.getAttribute('data-per')); }; });
   }
 
   async function load(){
@@ -851,11 +895,12 @@ var RECA=(function(){
     try{ f=await rpc2(SEDE); if(f && f.error) f=null; }catch(e){ f=null; }
     try{ n=await rpc3(SEDE); if(n && (n.error||n.aplica===false)) n=null; }catch(e){ n=null; }
     var html='';
-    html+=section('👥 Personas', [cardLlegadas(d,f),cardDocs(d,f),cardVac(d,f), f&&cardRecamaristas(f), f&&cardMtto(f)]);
+    html+=section('👥 Personas', [cardAsis(),cardDocs(d,f),cardVac(d,f), f&&cardRecamaristas(f), f&&cardMtto(f)]);
     html+=section('💬 Huésped', [ f&&cardReputacion(f) ]);
     html+=section('📊 Negocio', [ n&&cardReporteDia(n), n&&cardOcupacion(n), f&&cardPace(f), f&&cardTours(f), cardTickets(d,f)]);
     $('root').innerHTML= html || '<div class="empty">Sin datos</div>';
     wire();
+    try{ ASIS.render(SEDE); }catch(_){}
     try{ if(f&&f.recamaristas&&f.recamaristas.aplica) RECA.render(SEDE); }catch(_){}
     try{ $('hsub').textContent='operación al día · '+({cdmx:'CDMX',puebla:'Puebla',virreyes:'Virreyes',sincretico:'Sincrético'}[SEDE]||SEDE); }catch(_){}
   }
