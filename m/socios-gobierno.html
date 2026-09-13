@@ -838,7 +838,16 @@ async function gobLoad(soc){
  ]);
  const pg={}; (pag||[]).forEach(x=>{ if(x.estatus==='pagado') pg[x.compromiso_id]=(pg[x.compromiso_id]||0)+ +x.monto; });
  (ref||[]).forEach(r=>r.pagado=pg[r.id]||0);
- GOB_CACHE={ap:ap||[],cu:cu||[],movs:movs||[],actas:actas||[],tit:tit||[],ref:ref||[],pagos:pag||[],soc:S};
+ // El Pontigu y Struchture son a su vez accionistas de HBR. Lo que un socio del
+ // vehículo necesita poder verificar es que el dinero SALIÓ del vehículo hacia
+ // HBR: ese es el rastro bancario. Las aportaciones internas de cada socio son
+ // importes de libro y se muestran aparte, sin fingir que están bancarizadas.
+ let aHbr=[];
+ if(S==='pontigu'||S==='struchture'){
+  const t=(S==='pontigu')?'PONTIGU':'Struchture';
+  try{ aHbr=await gobApi('gob_aportaciones?select=*&sociedad=eq.hbr&titular=eq.'+encodeURIComponent(t)+'&order=fecha_operacion.asc.nullslast')||[]; }catch(_){ aHbr=[]; }
+ }
+ GOB_CACHE={ap:ap||[],cu:cu||[],movs:movs||[],actas:actas||[],tit:tit||[],ref:ref||[],pagos:pag||[],aHbr:(aHbr||[]),soc:S};
  GOB_CACHE_SOC=S;
  return GOB_CACHE;
 }
@@ -1450,10 +1459,37 @@ function apoCuadre(D){
   <h2 class="s">Socios que ya salieron</h2>
   <div class="tscroll"><table>${head}<tbody>${out.map(fila).join('')}</tbody></table></div>`;
 }
+// Rastro bancario del vehículo hacia HBR: es lo que permite a un socio de
+// El Pontigu o de Struchture comprobar que su dinero llegó al proyecto.
+function apoSalidaHbr(D){
+ const r=(D.aHbr||[]); if(!r.length) return '';
+ const nom=D.soc==='pontigu'?'El Pontigu':'Struchture';
+ const cash=r.filter(x=>x.materialidad!=='especie');
+ const esp=r.filter(x=>x.materialidad==='especie');
+ const tc=cash.reduce((t,x)=>t+ +x.monto,0), te=esp.reduce((t,x)=>t+ +x.monto,0);
+ let i=0;
+ return `<div class="box" style="border-color:var(--ok);margin-bottom:14px">
+  <h3 style="margin:0 0 4px">Aportaciones de ${nom} a Hostal Boutique República de Uruguay</h3>
+  <div class="note">Este es el rastro que acredita que el dinero <b>salió de ${nom}</b> y se exhibió en HBR: ${cash.length} depósitos por ${money(tc)}${te?` más ${money(te)} en especie`:''}. Es el movimiento entre las dos sociedades, no el de cada socio con el vehículo.</div>
+  <div class="tscroll"><table><thead><tr><th class="n">#</th><th>Fecha</th><th class="n">Importe</th><th>Materialidad</th><th>Cuenta</th><th>Folio / CVE de rastreo</th><th>Concepto</th></tr></thead><tbody>`+
+  cash.map(m=>{const L=MATLBL[m.materialidad]||['nd',m.materialidad];i++;
+   return `<tr><td class="n">${i}</td><td style="white-space:nowrap">${gobFecha(m.fecha_operacion)}</td>
+    <td class="n">${money(+m.monto)}</td><td><span class="chip ${L[0]}">${L[1]}</span></td>
+    <td style="font-size:.72rem">${gobEsc(m.cuenta||'—')}</td>
+    <td class="mono">${gobEsc(m.clave_rastreo||m.referencia||'—')}</td>
+    <td style="font-size:.73rem;color:var(--muted);max-width:300px;word-break:break-word">${gobEsc(m.concepto||'—')}</td></tr>`;}).join('')+
+  `<tr><td></td><td><b>Total depositado</b></td><td class="n"><b>${money(tc)}</b></td><td colspan="4"></td></tr>`+
+  (te?`<tr><td></td><td>Aportación en especie</td><td class="n">${money(te)}</td><td colspan="4">contrato de guante · sin transferencia bancaria</td></tr>
+   <tr><td></td><td><b>Total exhibido en HBR</b></td><td class="n"><b>${money(tc+te)}</b></td><td colspan="4"></td></tr>`:'')+
+  `</tbody></table></div></div>`;
+}
 function apoMovs(D){
  const rows=D.ap.slice().sort((a,b)=>(a.titular===b.titular)?String(a.fecha_operacion||'').localeCompare(String(b.fecha_operacion||'')):a.titular.localeCompare(b.titular));
  const tot=rows.reduce((t,a)=>t+ +a.monto,0);
- return `<div class="note">${rows.length} movimientos · ${money(tot)}. Cada renglón es una línea del estado de cuenta.</div>
+ const sinSoporte=rows.filter(a=>!a.clave_rastreo&&!a.referencia).length;
+ const aviso=(D.soc!=='hbr'&&sinSoporte)?`<div class="note" style="border-left:3px solid var(--warn);padding-left:9px">De estos ${rows.length} renglones, <b>${sinSoporte} no tienen folio ni clave de rastreo</b>: son los importes reconocidos en el libro de socios del vehículo. Las aportaciones se recibieron en la cuenta personal de Javier Puente y no se conserva el comprobante bancario de cada una. Lo que sí está documentado es la salida del vehículo hacia HBR, en la tabla de arriba.</div>`:'';
+ return apoSalidaHbr(D)+
+  `<div class="note">${rows.length} movimientos · ${money(tot)}. Cada renglón es una línea del estado de cuenta.</div>${aviso}
   <div class="tscroll"><table><thead><tr><th>Titular</th><th>Fecha</th><th class="n">Importe</th><th>Materialidad</th><th>Folio / CVE de rastreo</th><th>Concepto</th></tr></thead><tbody>`+
   rows.map(m=>{const L=MATLBL[m.materialidad]||['nd',m.materialidad];
    return `<tr><td>${gobEsc(m.titular)}</td><td style="white-space:nowrap">${gobFecha(m.fecha_operacion)}</td>
