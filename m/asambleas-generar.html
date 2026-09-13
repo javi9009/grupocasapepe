@@ -828,10 +828,17 @@ async function borrar(id){ if(!confirm('¿Eliminar este borrador? No se puede de
 let PADRON={};
 async function padron(soc){
  if(PADRON[soc]) return PADRON[soc];
- let rows=[];
- try{ rows=await api('gob_titulares?select=clave,razon_social,vigente,orden,socios(id,nombre,email)&sociedad=eq.'+soc+'&order=orden'); }catch(e){ rows=[]; }
- PADRON[soc]=(rows||[]).filter(r=>r.vigente!==false&&r.socios&&r.socios.email)
-  .map(r=>({clave:r.clave,socio_id:r.socios.id,nombre:r.socios.nombre||r.razon_social,email:r.socios.email}));
+ // El padrón sale de `socios`, no de `gob_titulares`: a una asamblea hay que
+ // convocar también a quien todavía no es titular pero suscribe en la ronda
+ // (Juan José y Luis Javier Cué). Los titulares vigentes se marcan aparte.
+ let socs=[], tits=[];
+ try{ const r=await Promise.all([
+   api('socios?select=id,nombre,email,sociedades&activo=is.true&order=nombre'),
+   api('gob_titulares?select=clave,socio_id,vigente&sociedad=eq.'+soc)
+ ]); socs=r[0]||[]; tits=r[1]||[]; }catch(e){ socs=[]; tits=[]; }
+ const vig={}; (tits||[]).forEach(t=>{ if(t.socio_id&&t.vigente!==false) vig[t.socio_id]=t.clave; });
+ PADRON[soc]=(socs||[]).filter(x=>x.email&&String(x.sociedades||'').split(',').map(y=>y.trim()).indexOf(soc)>=0)
+  .map(x=>({socio_id:x.id,nombre:x.nombre,email:x.email,clave:vig[x.id]||null,titular:!!vig[x.id]}));
  return PADRON[soc];
 }
 const ENV={
@@ -854,14 +861,14 @@ function abreEnvio(id,tipo){
  const b=BORR.find(x=>x.id===id), E=ENV[tipo];
  el.innerHTML='<div class="note" style="margin-top:8px">Cargando padrón de socios…</div>';
  padron(SOC).then(ps=>{
-  if(!ps.length){ el.innerHTML='<div class="note" style="margin-top:8px">Ningún titular vigente de esta sociedad tiene correo en su ficha. Cárgalos antes de enviar.</div>'; return; }
+  if(!ps.length){ el.innerHTML='<div class="note" style="margin-top:8px">Ningún socio de esta sociedad tiene correo en su ficha. Cárgalos antes de enviar.</div>'; return; }
   el.innerHTML=`<div class="box" style="margin-top:8px;border-color:var(--accent)">
    <div class="note">${E.enciende}<br>Cada socio recibe <b>su propio correo</b> con <b>su enlace personal</b> (3 usos). Por eso los socios no se agrupan en CCO: las copias de abajo reciben una constancia aparte, sin enlaces.</div>
-   <label class="f" style="margin-top:10px">Destinatarios · ${ps.length} titulares vigentes con correo</label>
+   <label class="f" style="margin-top:10px">Destinatarios · ${ps.length} con correo (${ps.filter(x=>x.titular).length} titulares vigentes, ${ps.filter(x=>!x.titular).length} que suscriben en la ronda)</label>
    <div id="dst-${id}-${tipo}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px">
     ${ps.map((p,i)=>`<label style="display:flex;gap:7px;align-items:center;font-size:.82rem;background:var(--surface-2,#f7f5ef);padding:6px 9px;border-radius:7px">
       <input type="checkbox" class="dst" data-i="${i}" checked style="width:16px;height:16px;accent-color:var(--accent)">
-      <span style="flex:1;min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(p.nombre)}</b>
+      <span style="flex:1;min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(p.nombre)}${p.titular?'':' <span class="chip warn" style="font-weight:400">suscriptor</span>'}</b>
       <span class="mini" style="overflow:hidden;text-overflow:ellipsis;display:block">${esc(p.email)}</span></span></label>`).join('')}
    </div>
    <div style="display:flex;gap:8px;margin-top:6px">
