@@ -156,6 +156,7 @@ iframe{width:100%;height:calc(100vh - 220px);min-height:460px;border:1px solid v
 
   <div class="sect" id="soc">
    <div class="note" id="soc-aviso"></div>
+   <div id="p-notifs" style="margin:10px 0"></div>
    <div id="socGrid" class="cards" style="margin:10px 0"></div>
    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin:8px 0">
     <div id="p-datos" style="flex:1 1 300px;min-width:280px"></div>
@@ -421,6 +422,7 @@ function renderSoc(){
  if(av) av.innerHTML=mio
   ? 'Esta es <b>tu inversión</b>: participación, aportaciones, títulos, documentos y opciones de salida. De los demás socios solo verás lo que consta en el Libro de Registro de Acciones.'
   : '<b>Ficha pública de '+gobEsc(s.n)+'.</b> De los demás socios se muestra únicamente lo que consta en el <b>Libro de Registro de Acciones</b>, que cualquier accionista tiene derecho a consultar (arts. 128 y 129 LGSM): nombre, serie, acciones, porcentaje y estado de exhibición. Su contacto, su RFC, sus documentos, sus depósitos y sus decisiones de salida son privados y no se muestran.';
+ try{ renderNotifs(s); }catch(e){}
  $('#p-datos').innerHTML = mio
   ? `<h2 class="s">Mis datos</h2><table class="kvt"><tbody>`+
     `<tr><th>ID de socio</th><td>${SOCID[(s.email||'').toLowerCase()]||'—'}</td></tr>`+
@@ -488,6 +490,153 @@ function guardarDecision(){
  const parts=[];if(SELOPT>=0)parts.push('opción '+(SELOPT+1));if(d.precio&&d.vig)parts.push('oferta '+d.precio+' vig. '+d.vig);
  $('#dec-msg').textContent=parts.length?('Guardado: '+parts.join(' · ')+'. (Se sincroniza a Supabase al conectar.)'):'Elige una opción o registra una oferta.';
 }
+
+/* ══ Centro de notificaciones / pendientes por responder del socio ══════════ */
+let NOTIF_CACHE=[], PODER_CACHE=[], NOTIF_EMAIL='';
+function notifApi(method,path,body){
+ return fetch(GOB_SB+'/rest/v1/'+path,{method:method,headers:Object.assign({},gobAuth(),{'Content-Type':'application/json','Prefer':'return=representation'}),body:body?JSON.stringify(body):undefined}).then(r=>r.ok?r.json():r.text().then(t=>Promise.reject(t)));
+}
+function socLista(){ return (DATA[SOC]&&DATA[SOC].socios||[]).filter(x=>!x.tesoreria); }
+function renderNotifs(s){
+ const box=document.getElementById('p-notifs'); if(!box) return;
+ const em=((s&&s.email)||'').toLowerCase(); NOTIF_EMAIL=em;
+ if(!em){ box.innerHTML=''; return; }
+ box.innerHTML='<div style="font-size:.8rem;color:var(--muted)">Cargando pendientes…</div>';
+ const q1='gob_notificaciones?select=*&sociedad=eq.'+encodeURIComponent(SOC)+'&socio_email=eq.'+encodeURIComponent(em);
+ const q2='gob_poderes?select=*&estado=eq.en_firma';
+ Promise.all([notifApi('GET',q1).catch(_=>[]),notifApi('GET',q2).catch(_=>[])]).then(([nn,pp])=>{
+  NOTIF_CACHE=Array.isArray(nn)?nn:[];
+  // poderes donde ESTE socio es apoderado o testigo → "firmar poder" derivado (RLS ya filtra a los suyos)
+  PODER_CACHE=(Array.isArray(pp)?pp:[]).filter(p=>[p.apoderado_email,p.testigo1_email,p.testigo2_email].map(x=>(x||'').toLowerCase()).includes(em));
+  paintNotifs(box,em);
+ }).catch(_=>{ box.innerHTML='<div class="note notew">No se pudieron cargar los pendientes.</div>'; });
+}
+function notifIcon(t){ return {asistencia:'🗳️',elegir_opcion:'🔀',poder_firmar:'✍️',firmar_doc:'🖊️',descargar_titulo:'📜',otro:'🔔'}[t]||'🔔'; }
+function paintNotifs(box,em){
+ const ord={pendiente:0,en_proceso:1,resuelta:2,descartada:3};
+ const derivadas=PODER_CACHE.map(p=>({id:'poder:'+p.id,tipo:'poder_firmar',_poder:p,estado:'pendiente',prioridad:'alta',
+   titulo:'Carta poder por firmar',
+   detalle:'Fuiste designado '+((p.apoderado_email||'').toLowerCase()===em?'apoderado':'testigo')+' en la carta poder de '+(p.otorgante_nombre||p.otorgante_email||'un socio')+((p.asamblea_key)?' para la asamblea vinculada':'')+'. Recibirás la solicitud de firma por DocuSign.'}));
+ const all=NOTIF_CACHE.concat(derivadas).sort((a,b)=>(ord[a.estado]-ord[b.estado])||0);
+ const pend=all.filter(n=>n.estado==='pendiente'||n.estado==='en_proceso');
+ if(!all.length){ box.innerHTML='<div class="note" style="border-left:3px solid var(--ok,#137A56)"><b>Sin pendientes.</b> Cuando haya una asamblea, un poder o un documento que requiera tu respuesta, aparecerá aquí.</div>'; return; }
+ let h='<div style="border:1px solid var(--rule,#e6ddcb);border-radius:12px;overflow:hidden;background:#fff">';
+ h+='<div style="background:'+(pend.length?'#8a1f1f':'#137A56')+';color:#fff;padding:9px 14px;font-weight:700;font-size:.92rem;display:flex;align-items:center;gap:8px">🔔 Pendientes por responder en mi inversión'+(pend.length?' <span style="background:#fff;color:#8a1f1f;border-radius:20px;padding:1px 9px;font-size:.78rem">'+pend.length+'</span>':' <span style="opacity:.85;font-weight:500;font-size:.8rem">· al día</span>')+'</div>';
+ h+='<div style="padding:8px 10px;display:flex;flex-direction:column;gap:8px">';
+ all.forEach(n=>{ h+=notifCard(n,em); });
+ h+='</div></div>';
+ box.innerHTML=h;
+}
+function notifCard(n,em){
+ const done=(n.estado==='resuelta'||n.estado==='descartada');
+ const pcol={alta:'#8a1f1f',media:'#b8860b',baja:'#6b7280'}[n.prioridad||'media'];
+ let acc='';
+ const R=n.ref||{}, RE=n.respuesta||{};
+ if(!done){
+  if(n.tipo==='asistencia'){
+   acc='<button class="btn sm" onclick="notifAsistencia(\''+n.id+'\',\'si\')">Asistiré</button>'
+      +'<button class="btn ghost sm" onclick="notifAsistencia(\''+n.id+'\',\'no\')">No asistiré</button>'
+      +'<button class="btn ghost sm" onclick="poderModal(\''+n.id+'\')">✍️ Dar carta poder</button>';
+  } else if(n.tipo==='elegir_opcion'){
+   acc=['S1','S2','C1','C2'].map(o=>'<button class="btn ghost sm" onclick="notifElegir(\''+n.id+'\',\''+o+'\')">'+o+'</button>').join('')
+      +'<span style="font-size:.72rem;color:var(--muted)">S1 fiscal · S2 largo plazo · C1 mantener · C2 refundar</span>';
+  } else if(n.tipo==='poder_firmar'){
+   const p=n._poder||{};
+   acc=(p.doc_html?'<button class="btn ghost sm" onclick="poderVerDoc(\''+p.id+'\')">Ver documento</button>':'')
+      +'<span style="font-size:.72rem;color:var(--muted)">DocuSign: '+({en_cola:'en cola de envío…',sent:'enviado · revisa tu correo',delivered:'entregado · revisa tu correo',completed:'firmado ✓'}[p.docusign_status]||'preparando envío')+'</span>';
+  } else if(n.tipo==='firmar_doc'){
+   acc=(R.url?'<a class="btn sm" href="'+R.url+'" target="_blank" rel="noopener" style="text-decoration:none">🖊️ Firmar por DocuSign</a>':'<button class="btn sm" onclick="notifFirmarDoc(\''+n.id+'\')">🖊️ Firmar por DocuSign</button>')
+      +'<button class="btn ghost sm" onclick="notifResolver(\''+n.id+'\',{visto:true},\'en_proceso\')">Marcar en proceso</button>';
+  } else if(n.tipo==='descargar_titulo'){
+   acc=(R.url?'<a class="btn sm" href="'+R.url+'" target="_blank" rel="noopener" style="text-decoration:none">📜 Descargar título</a>':'<button class="btn sm" onclick="notifDescargarTitulo(\''+n.id+'\')">📜 Ver / descargar título</button>');
+  } else {
+   acc='<button class="btn ghost sm" onclick="notifResolver(\''+n.id+'\',{visto:true},\'resuelta\')">Marcar resuelta</button>';
+  }
+ } else {
+  const et=RE.asistencia==='si'?'Confirmó asistencia':RE.asistencia==='no'?'No asiste':RE.asistencia==='poder'?'Dio carta poder':RE.opcion?('Eligió '+RE.opcion):'Resuelta';
+  acc='<span style="font-size:.75rem;color:var(--ok,#137A56);font-weight:600">✓ '+et+'</span>';
+ }
+ return '<div style="border:1px solid var(--rule,#e6ddcb);border-left:4px solid '+(done?'#cfe0d4':pcol)+';border-radius:9px;padding:9px 11px;'+(done?'opacity:.72;':'')+'background:'+(done?'#f7f5ef':'#fff')+'">'
+  +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:1.05rem">'+notifIcon(n.tipo)+'</span><b style="font-size:.9rem">'+gobEsc(n.titulo)+'</b>'+(!done&&n.prioridad==='alta'?'<span style="background:#f6e0e0;color:#8a1f1f;border-radius:20px;padding:1px 8px;font-size:.68rem;font-weight:700">acción requerida</span>':'')+'</div>'
+  +(n.detalle?'<div style="font-size:.82rem;color:var(--ink2,#555);margin:4px 0 0;line-height:1.5">'+gobEsc(n.detalle)+'</div>':'')
+  +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">'+acc+'</div>'
+  +'</div>';
+}
+function notifResolver(id,respuesta,estado){
+ if(String(id).indexOf('poder:')===0) return;
+ const body={estado:estado||'resuelta',respuesta:respuesta||{},updated_at:new Date().toISOString()};
+ if((estado||'resuelta')==='resuelta') body.resolved_at=new Date().toISOString();
+ return notifApi('PATCH','gob_notificaciones?id=eq.'+encodeURIComponent(id),body).then(()=>{ const s=DATA[SOC].socios[PIDX]; renderNotifs(s); }).catch(e=>alert('No se pudo guardar: '+e));
+}
+function notifAsistencia(id,val){ return notifResolver(id,{asistencia:val},'resuelta'); }
+function notifElegir(id,op){
+ // marca la notificación y refleja la elección en el bloque de Opciones de salida
+ const map={S1:0,S2:1,C1:2,C2:3}; if(map[op]!=null){ try{ SELOPT=map[op]; const d={opt:SELOPT,precio:$('#of-precio').value||'',vig:$('#of-vig').value||'',notas:$('#of-notas').value||'',ts:Date.now()}; localStorage.setItem(decKey(),JSON.stringify(d)); }catch(e){} }
+ return notifResolver(id,{opcion:op},'resuelta');
+}
+function notifFirmarDoc(id){ alert('En cuanto la asamblea esté lista para firma, DocuSign te enviará la solicitud a tu correo. Te avisamos aquí cuando cambie el estado.'); return notifResolver(id,{visto:true},'en_proceso'); }
+function notifDescargarTitulo(id){ const n=NOTIF_CACHE.find(x=>x.id===id); const R=(n&&n.ref)||{}; if(R.url){ window.open(R.url,'_blank'); return; } try{ verTitulo(PIDX,'vig'); }catch(e){} }
+function poderVerDoc(pid){ const p=PODER_CACHE.find(x=>x.id===pid); if(!p||!p.doc_html)return; const w=window.open('','_blank'); if(w){ w.document.write(p.doc_html); w.document.close(); } }
+window.renderNotifs=renderNotifs; window.notifAsistencia=notifAsistencia; window.notifElegir=notifElegir; window.notifResolver=notifResolver; window.notifFirmarDoc=notifFirmarDoc; window.notifDescargarTitulo=notifDescargarTitulo; window.poderVerDoc=poderVerDoc;
+
+/* ── Carta poder simple para la asamblea (apoderado + 2 testigos) → DocuSign ── */
+function poderTexto(o){
+ const soc=DATA[SOC].nombre||SOC;
+ return 'CARTA PODER\n\n'+
+  'El(la) suscrito(a) '+o.otorgante_nombre+', en mi carácter de accionista de '+soc+', por medio del presente instrumento otorgo PODER ESPECIAL en favor de '+o.apoderado_nombre+' para que, en mi nombre y representación, asista, participe, delibere y VOTE en todos los puntos del orden del día de la Asamblea General de Accionistas de '+soc+((o.asamblea_tit)?' («'+o.asamblea_tit+'»)':'')+', con las más amplias facultades para representar mi participación accionaria en dicha asamblea.\n\n'+
+  'El presente poder se otorga en términos del artículo 192 de la Ley General de Sociedades Mercantiles, mediante carta poder simple firmada ante dos testigos, y se limita exclusivamente a la asamblea antes referida.\n\n'+
+  'Otorgante: '+o.otorgante_nombre+'   ('+o.otorgante_email+')\n'+
+  'Apoderado: '+o.apoderado_nombre+'   ('+(o.apoderado_email||'')+')\n\n'+
+  'Testigo 1: '+o.testigo1_nombre+'   ('+(o.testigo1_email||'')+')\n'+
+  'Testigo 2: '+o.testigo2_nombre+'   ('+(o.testigo2_email||'')+')\n\n'+
+  'Fecha: ______________________          Firma del otorgante: ______________________';
+}
+function poderDocHtml(o){ return '<html><head><meta charset="utf-8"><title>Carta poder</title></head><body style="font-family:Georgia,serif;max-width:640px;margin:40px auto;line-height:1.6;color:#222"><pre style="white-space:pre-wrap;font-family:Georgia,serif;font-size:15px">'+gobEsc(poderTexto(o))+'</pre></body></html>'; }
+function poderModal(notifId){
+ const s=DATA[SOC].socios[PIDX]; const otEmail=(s.email||'').toLowerCase();
+ const otros=socLista().filter(x=>x.n!==s.n);
+ const optSoc=x=>'<option value="'+gobEsc(x.n)+'|'+gobEsc((x.email||''))+'">'+gobEsc(x.n)+(x.email?'':' (sin correo)')+'</option>';
+ const old=document.getElementById('poder-modal'); if(old)old.remove();
+ const H='<div id="poder-modal" onclick="if(event.target.id===\'poder-modal\')this.remove()" style="position:fixed;inset:0;background:rgba(20,15,8,.55);display:flex;align-items:flex-start;justify-content:center;z-index:99999;padding:24px;overflow:auto">'
+  +'<div style="background:#fffdf6;max-width:560px;width:100%;border:2px solid var(--accent);border-radius:12px;padding:24px 26px;box-shadow:0 24px 70px rgba(0,0,0,.35)">'
+  +'<h3 style="margin:0 0 4px">Carta poder para la asamblea</h3>'
+  +'<div style="font-size:.82rem;color:var(--muted);margin-bottom:14px">Otorgas tu representación y voto a otro socio para esta asamblea. Se firma por DocuSign entre tú, el apoderado y dos testigos (art. 192 LGSM).</div>'
+  +'<input type="hidden" id="poder-notif" value="'+gobEsc(notifId||'')+'">'
+  +'<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:6px 0 3px">Otorgante</div>'
+  +'<div style="font-size:.9rem;font-weight:600">'+gobEsc(s.n)+' <span style="color:var(--faint);font-weight:400">'+gobEsc(otEmail||'sin correo')+'</span></div>'
+  +'<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:12px 0 3px">Apoderado (a quién das el poder)</div>'
+  +'<select id="poder-apo" style="width:100%;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"><option value="">— Elige un socio —</option>'+otros.map(optSoc).join('')+'</select>'
+  +'<div class="grid2" style="margin-top:12px"><div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Testigo 1 · nombre</div><input id="poder-t1n" style="width:100%;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"></div><div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Testigo 1 · correo</div><input id="poder-t1e" type="email" style="width:100%;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"></div></div>'
+  +'<div class="grid2" style="margin-top:10px"><div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Testigo 2 · nombre</div><input id="poder-t2n" style="width:100%;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"></div><div><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Testigo 2 · correo</div><input id="poder-t2e" type="email" style="width:100%;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"></div></div>'
+  +'<div id="poder-msg" style="font-size:.8rem;color:var(--muted);margin-top:12px"></div>'
+  +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" onclick="poderGuardarEnviar()">Generar y enviar por DocuSign</button><button class="btn ghost" onclick="document.getElementById(\'poder-modal\').remove()">Cancelar</button></div>'
+  +'</div></div>';
+ document.body.insertAdjacentHTML('beforeend',H);
+}
+function poderGuardarEnviar(){
+ const s=DATA[SOC].socios[PIDX]; const notifId=($('#poder-notif')||{}).value||'';
+ const apo=($('#poder-apo')||{}).value||''; const [apoN,apoE]=apo.split('|');
+ const t1n=($('#poder-t1n')||{}).value||'',t1e=($('#poder-t1e')||{}).value||'';
+ const t2n=($('#poder-t2n')||{}).value||'',t2e=($('#poder-t2e')||{}).value||'';
+ const msg=document.getElementById('poder-msg');
+ if(!apoN){ msg.textContent='Elige al apoderado.'; return; }
+ if(!t1n||!t2n){ msg.textContent='Faltan los dos testigos.'; return; }
+ // asamblea vinculada (si la hay) desde el pipeline de refundación
+ const asmKey=(typeof minutaAsmKey==='function')?minutaAsmKey(SOC==='hbr'?'hbr':SOC,3):null;
+ const o={otorgante_nombre:s.n,otorgante_email:(s.email||'').toLowerCase(),apoderado_nombre:apoN,apoderado_email:(apoE||'').toLowerCase(),testigo1_nombre:t1n,testigo1_email:t1e.toLowerCase(),testigo2_nombre:t2n,testigo2_email:t2e.toLowerCase(),asamblea_tit:'Saneamiento y Refundación + Pacto de Socios'};
+ if(!confirm('Se generará la carta poder y se enviará por DocuSign para firma a:\n· '+apoN+' (apoderado)\n· '+t1n+' (testigo)\n· '+t2n+' (testigo)\n\n¿Continuar?')) return;
+ msg.textContent='Generando y encolando envío…';
+ const row={sociedad:SOC,asamblea_key:asmKey,otorgante_email:o.otorgante_email,otorgante_nombre:o.otorgante_nombre,apoderado_nombre:apoN,apoderado_email:o.apoderado_email,testigo1_nombre:t1n,testigo1_email:o.testigo1_email,testigo2_nombre:t2n,testigo2_email:o.testigo2_email,doc_html:poderDocHtml(o),estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'};
+ notifApi('POST','gob_poderes',row).then(r=>{
+  const pid=(r&&r[0]&&r[0].id)||null;
+  dispararDocusign();
+  const upd=notifId?notifResolver(notifId,{asistencia:'poder',poder_id:pid},'en_proceso'):Promise.resolve();
+  return Promise.resolve(upd).then(()=>{ msg.textContent='✓ Carta poder generada y enviada por DocuSign para firma.'; setTimeout(()=>{ const m=document.getElementById('poder-modal'); if(m)m.remove(); renderNotifs(DATA[SOC].socios[PIDX]); },900); });
+ }).catch(e=>{ msg.textContent='No se pudo guardar: '+e; });
+}
+// Dispara la edge function que envía los sobres DocuSign en cola (cartas poder y actas)
+function dispararDocusign(){ try{ fetch(GOB_SB+'/functions/v1/poderes-docusign',{method:'POST',headers:{apikey:GOB_KEY,'Content-Type':'application/json'},body:'{}'}).catch(function(){}); }catch(e){} }
+window.dispararDocusign=dispararDocusign; window.poderModal=poderModal; window.poderGuardarEnviar=poderGuardarEnviar;
 function renderTit(){
  const D=DATA[SOC];
  // En El Pontigu y Struchture la asamblea vigente está firmada pero NO protocolizada:
@@ -1637,7 +1786,7 @@ function minutaSaveDraft(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const
 function minutaActaTexto(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const soc=DATA[SOC].nombre||''; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); let t='ACTA DE ASAMBLEA GENERAL DE SOCIOS\n'+soc+'\n'+((asm&&asm.tit)?asm.tit+'\n':'')+'\n'; t+='Orden del dia y acuerdos:\n'; acu.forEach((a,i)=>{ t+=(i+1)+'. '+a.punto+'\n   Acuerdo: '+(vals[i]||a.acuerdo||'-')+'\n'; }); t+='\nFirmas: '+(Array.isArray(m&&m.firmantes)?m.firmantes.map(x=>x.nombre+(x.firmado?' (firmado)':'')).join('; '):'-'); return t; }
 function minutaVerActa(key,ai){ const el=document.getElementById('min-acta-'+key+'-'+ai); if(el)el.innerHTML='<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:3px">Acta (vista de lectura)</div><textarea readonly style="width:100%;min-height:200px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+gobEsc(minutaActaTexto(key,ai))+'</textarea>'; }
 function minutaMailto(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const asm=PIPE[key]&&PIPE[key].asambleas[ai]; const fs=Array.isArray(m&&m.firmantes)?m.firmantes:[]; const to=fs.map(x=>encodeURIComponent(x.email)).join(','); const subj=encodeURIComponent('Acta para firma - '+((asm&&asm.tit)||'')); const body=encodeURIComponent(minutaActaTexto(key,ai)+'\n\nPor favor revisar y firmar.'); window.location.href='mailto:'+to+'?subject='+subj+'&body='+body; return false; }
-function minutaEnviarFirma(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); const nuevos=acu.map((a,i)=>({punto:a.punto,acuerdo:vals[i]})); const fs=(Array.isArray(m&&m.firmantes)&&m.firmantes.length)?m.firmantes:minutaFirmantesInit(); if(!confirm('Se enviará el acta por DocuSign a '+fs.length+' firmantes para su firma electrónica. ¿Continuar?'))return; return minutaUpsert(key,ai,{acuerdos:nuevos,firmantes:fs,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'}).then(r=>{ minutaRender(key,ai,r); alert('Acta en cola. DocuSign enviará las solicitudes de firma a los '+fs.length+' socios en unos minutos; el estado de firmas se actualizará solo aquí.'); }); }
+function minutaEnviarFirma(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; const acu=Array.isArray(m&&m.acuerdos)?m.acuerdos:[]; const vals=minutaReadAc(key,ai,acu.length); const nuevos=acu.map((a,i)=>({punto:a.punto,acuerdo:vals[i]})); const fs=(Array.isArray(m&&m.firmantes)&&m.firmantes.length)?m.firmantes:minutaFirmantesInit(); if(!confirm('Se enviará el acta por DocuSign a '+fs.length+' firmantes para su firma electrónica. ¿Continuar?'))return; return minutaUpsert(key,ai,{acuerdos:nuevos,firmantes:fs,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'}).then(r=>{ try{dispararDocusign();}catch(e){} minutaRender(key,ai,r); alert('Acta enviada por DocuSign a los '+fs.length+' firmantes; el estado de firmas se actualizará aquí.'); }); }
 function minutaToggleFirma(key,ai,idx){ const m=MIN_CACHE[minutaAsmKey(key,ai)]; if(!m)return; const fs=Array.isArray(m.firmantes)?m.firmantes.slice():[]; if(!fs[idx])return; const nowFirmado=!fs[idx].firmado; fs[idx]=Object.assign({},fs[idx],{firmado:nowFirmado,fecha:nowFirmado?fmtFechaCorta(new Date().toISOString().slice(0,10)):null}); const allF=fs.every(x=>x.firmado); return minutaUpsert(key,ai,{firmantes:fs,estado:allF?'firmada':'en_firma'}).then(r=>minutaRender(key,ai,r)); }
 window.minutaOpen=minutaOpen; window.minutaGenerar=minutaGenerar; window.minutaSaveDraft=minutaSaveDraft; window.minutaVerActa=minutaVerActa; window.minutaEnviarFirma=minutaEnviarFirma; window.minutaToggleFirma=minutaToggleFirma; window.minutaMailto=minutaMailto;
 // Ver la minuta/convocatoria GENERADA que quedó vinculada a esta asamblea (gob_minutas.textos.convocatoria_md)
