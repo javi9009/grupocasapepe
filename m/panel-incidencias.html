@@ -179,6 +179,27 @@
   .perb{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:5px 13px;cursor:pointer;font:inherit;font-size:12px;font-weight:700}
   .perb.on{background:var(--gold);color:#1a1206;border-color:var(--gold)}
   .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+
+  .ptabs{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 12px}
+  .ptab{background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:9px;padding:6px 11px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;display:flex;flex-direction:column;gap:1px;line-height:1.2;text-align:left}
+  .ptab.on{border-color:var(--gold);background:#2a2115}
+  .ptab b{color:var(--txt);font-size:12.5px}
+  .ptab.ev{flex-direction:row;align-items:center}
+  .phead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;margin-bottom:8px}
+  .phead .f{color:var(--muted);font-size:11.5px}
+  .pdot{width:9px;height:9px;border-radius:3px;flex:none}
+  .preason{color:var(--muted);font-size:11px;font-style:italic;flex-basis:100%}
+  .pstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin-top:4px}
+  .pst{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  .psl{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+  .psv{font-size:16px;font-weight:800;margin-top:3px}
+  .dpx{font-size:10.5px;color:var(--muted)}
+  .ptbl-w{overflow-x:auto}
+  .ptbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+  .ptbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);padding:0 8px 5px 0;border-bottom:1px solid var(--line);font-weight:800}
+  .ptbl th.r,.ptbl td.r{text-align:right}
+  .ptbl td{padding:6px 8px 6px 0;border-bottom:1px solid #2a2014;font-variant-numeric:tabular-nums}
+  .ptbl tr:last-child td{border-bottom:0}
 </style>
 </head>
 <body>
@@ -227,6 +248,11 @@
   async function rpcA(sede, periodo){
     var r=await fetch(U+'/rest/v1/rpc/panel_asistencia',{method:'POST',headers:H(),body:JSON.stringify({p_sede:sede,p_periodo:periodo})});
     if(!r.ok) throw new Error('rpcA '+r.status);
+    return await r.json();
+  }
+  async function rpcP(sede){
+    var r=await fetch(U+'/rest/v1/rpc/panel_pace',{method:'POST',headers:H(),body:JSON.stringify({p_sede:sede})});
+    if(!r.ok) throw new Error('rpcP '+r.status);
     return await r.json();
   }
   var money=function(n){ n=+n||0; return '$'+Math.round(n).toLocaleString('es-MX'); };
@@ -855,6 +881,90 @@ var RECA=(function(){
     h+='</div>'; return h;
   }
 
+// ===== PACE: Pace mensual vs AA + Pace por evento (datos de panel_revenue_cache) =====
+var PACE=(function(){
+  var FY=null, YR=null, GEN='', mSel=0, eSel=0;
+  var MB=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  function mkey(m){ return m.year+'-'+String(m.midx+1).padStart(2,'0'); }
+  function mlab(m){ return (MB[m.midx]||'').replace(/^./,function(c){return c.toUpperCase();})+' '+String(m.year).slice(2); }
+  function ppTxt(v){ return (v>0?'+':'')+(Math.round(v*10)/10)+'pp'; }
+  function ppCol(v){ if(v==null) return 'var(--muted)'; if(v>=3) return 'var(--green)'; if(v<=-3) return 'var(--red)'; return 'var(--gold2)'; }
+  function dp(o){ return 'D +'+(o&&o.dorm_n!=null?o.dorm_n:0)+'n / P +'+(o&&o.priv_n!=null?o.priv_n:0)+'n'; }
+  function accelTable(accel, withAA){
+    if(!accel||!accel.length) return '';
+    var h='<div class="ptbl-w"><table class="ptbl"><thead><tr><th>Ventana</th><th class="r">Este año</th>'+(withAA?'<th class="r">Año pasado</th>':'')+'</tr></thead><tbody>';
+    accel.forEach(function(w){
+      var ty=w.ty||{}, aa=w.aa||null;
+      h+='<tr><td>'+esc(w.label)+'</td><td class="r"><b>'+money(ty.rev)+'</b> <span class="dpx">'+dp(ty)+'</span></td>'+
+        (withAA?('<td class="r">'+(aa?('<b>'+money(aa.rev)+'</b> <span class="dpx">'+dp(aa)+'</span>'):'—')+'</td>'):'')+'</tr>';
+    });
+    h+='</tbody></table></div>';
+    return h;
+  }
+  function renderAA(){
+    if(!FY||!FY.months||!FY.months.length){ return '<div class="empty">Sin forecast cargado.</div>'; }
+    var months=FY.months, bm=(YR&&YR.by_month)||{};
+    var tabs='<div class="ptabs">'+months.map(function(m,i){
+      var b=bm[mkey(m)], pp=b?b.delta_pp:null;
+      return '<button class="ptab'+(i===mSel?' on':'')+'" data-m="'+i+'"><b>'+esc(mlab(m))+'</b><span style="color:'+ppCol(pp)+'">'+(pp==null?'sin data':ppTxt(pp))+'</span></button>';
+    }).join('')+'</div>';
+    var m=months[mSel]||months[0], b=bm[mkey(m)];
+    var body;
+    if(!b){ body='<div class="empty">'+esc(mlab(m))+' — sin comparación vs Año Anterior todavía.</div>'; }
+    else{
+      var stat=function(l,v,c){ return '<div class="pst"><div class="psl">'+l+'</div><div class="psv"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>'; };
+      body='<div class="phead"><span class="pdot" style="background:'+ppCol(b.delta_pp)+'"></span><b>'+esc(mlab(m))+' — '+ppTxt(b.delta_pp)+' vs AA</b>'+
+        (b.reason?'<span class="preason">'+esc(b.reason)+'</span>':'')+'</div>';
+      body+='<div class="pstats">'+
+        stat('Libros HOY',money(b.libros_hoy))+
+        stat('Libros AA al día equiv',money(b.libros_aa))+
+        stat('Rev AA cierre',money(b.rev_aa))+
+        stat('Pace actual',(b.pace_actual_pct!=null?b.pace_actual_pct+'%':'—'))+
+        stat('Pace AA equiv',(b.pace_aa_pct!=null?b.pace_aa_pct+'%':'—'))+'</div>';
+      body+='<div class="csub" style="margin:10px 0 2px">Acelerador / desacelerador · cuánto entró en cada ventana de 7 días (n = room-nights)</div>';
+      body+=accelTable(b.pace_detail&&b.pace_detail.accel, true);
+    }
+    return tabs+body;
+  }
+  function renderEv(){
+    var ev=(YR&&YR.event_windows)||[];
+    if(!ev.length){ return '<div class="empty">Sin eventos cargados.</div>'; }
+    if(eSel>=ev.length) eSel=0;
+    var tabs='<div class="ptabs">'+ev.map(function(e,i){
+      return '<button class="ptab ev'+(i===eSel?' on':'')+'" data-e="'+i+'">'+esc(e.label)+'</button>';
+    }).join('')+'</div>';
+    var e=ev[eSel], p=e.pace||{}, bt=p.booked_today||{};
+    var rango=(e.start||'')+' → '+(e.end||'');
+    var body='<div class="phead"><b>'+esc(e.label)+'</b> <span class="f">'+esc(rango)+'</span>';
+    if(e.note) body+='<span class="preason">'+esc(e.note)+'</span>';
+    body+='</div>';
+    body+='<div class="pstats"><div class="pst"><div class="psl">Libros HOY (este año)</div><div class="psv">'+money(bt.rev)+'</div><div class="dpx">'+dp(bt)+'</div></div>';
+    if(e.compare_aa && p.booked_aa){ var ba=p.booked_aa; body+='<div class="pst"><div class="psl">Libros AA equiv</div><div class="psv">'+money(ba.rev)+'</div><div class="dpx">'+dp(ba)+'</div></div>'; }
+    body+='</div>';
+    body+='<div class="csub" style="margin:10px 0 2px">Acelerador · cuánto entró en cada ventana de 7 días</div>';
+    body+=accelTable(p.accel, !!e.compare_aa);
+    return tabs+body;
+  }
+  function paint(){
+    if($('paceAA')) $('paceAA').innerHTML=head('📊 Pace mensual vs Año Anterior','campana estratégica · toca un mes para su detalle'+(GEN?' · corte '+esc(GEN):''),mlink((SEDE==='puebla')?'https://casapeperevenue.netlify.app/puebla/':'https://casapeperevenue.netlify.app/',true))+renderAA();
+    if($('paceEv')) $('paceEv').innerHTML=head('🎟️ Pace por evento','demanda por evento · split Dormitorios / Privadas',mlink((SEDE==='puebla')?'https://casapeperevenue.netlify.app/puebla/':'https://casapeperevenue.netlify.app/',true))+renderEv();
+    document.querySelectorAll('#paceAA .ptab[data-m]').forEach(function(b){ b.onclick=function(){ mSel=+b.getAttribute('data-m'); paint(); }; });
+    document.querySelectorAll('#paceEv .ptab[data-e]').forEach(function(b){ b.onclick=function(){ eSel=+b.getAttribute('data-e'); paint(); }; });
+  }
+  async function render(sede){
+    if(!$('paceAA')) return;
+    $('paceAA').innerHTML='<div class="load" style="padding:24px">Cargando…</div>'; if($('paceEv')) $('paceEv').innerHTML='';
+    var r; try{ r=await rpcP(sede); }catch(e){ $('paceAA').innerHTML='<div class="empty">No se pudo cargar el pace.</div>'; return; }
+    if(!r || r.error || r.aplica===false){ $('paceAA').innerHTML='<div class="empty">'+esc((r&&r.error)||'Sin pace para esta sede')+'</div>'; if($('paceEv'))$('paceEv').innerHTML=''; return; }
+    FY=r.fy; YR=r.yr; GEN=r.gen||''; mSel=0; eSel=0;
+    paint();
+  }
+  return { render: render };
+})();
+function cardPace2(){
+  return '<div style="grid-column:1/-1"><div class="grid2"><div id="paceAA" class="card"><div class="load" style="padding:24px">Cargando…</div></div><div id="paceEv" class="card"></div></div></div>';
+}
+
   function section(title, cards){ var inner=cards.filter(Boolean).join(''); return inner?'<div class="sec"><div class="sech">'+title+'</div><div class="grid">'+inner+'</div></div>':''; }
 
   // Aprobar/Rechazar una asistencia con el MISMO flujo que Incidencias (resolver_asistencia):
@@ -897,10 +1007,11 @@ var RECA=(function(){
     var html='';
     html+=section('👥 Personas', [cardAsis(),cardDocs(d,f),cardVac(d,f), f&&cardRecamaristas(f), f&&cardMtto(f)]);
     html+=section('💬 Huésped', [ f&&cardReputacion(f) ]);
-    html+=section('📊 Negocio', [ n&&cardReporteDia(n), n&&cardOcupacion(n), f&&cardPace(f), f&&cardTours(f), cardTickets(d,f)]);
+    html+=section('📊 Negocio', [ n&&cardReporteDia(n), n&&cardOcupacion(n), ((SEDE==='cdmx'||SEDE==='puebla')?cardPace2():''), f&&cardPace(f), f&&cardTours(f), cardTickets(d,f)]);
     $('root').innerHTML= html || '<div class="empty">Sin datos</div>';
     wire();
     try{ ASIS.render(SEDE); }catch(_){}
+    try{ PACE.render(SEDE); }catch(_){}
     try{ if(f&&f.recamaristas&&f.recamaristas.aplica) RECA.render(SEDE); }catch(_){}
     try{ $('hsub').textContent='operación al día · '+({cdmx:'CDMX',puebla:'Puebla',virreyes:'Virreyes',sincretico:'Sincrético'}[SEDE]||SEDE); }catch(_){}
   }
