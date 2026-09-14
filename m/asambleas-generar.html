@@ -853,7 +853,49 @@ async function eminEnviar(id){
  alert('✓ Minuta enviada. «Convocada» en verde en el funnel y socios notificados.');
  cargaEditarMinuta();
 }
-function cargaEditarAsamblea(){ const b=document.getElementById('easmList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): editar el acta final, enviar a firma, y el listado de firmas por socio con «recordar firmar».</div>'; }
+async function cargaEditarAsamblea(){
+ const box=document.getElementById('easmList'); if(!box)return; box.innerHTML='<div class="note">Cargando…</div>';
+ let rows=[]; try{ rows=await gmFetch(); }catch(e){}
+ GM_CACHE={}; (rows||[]).forEach(m=>GM_CACHE[m.id]=m);
+ if(!Array.isArray(rows)||!rows.length){ box.innerHTML='<div class="note">No hay asambleas. Genera una en «Generar asamblea».</div>'; return; }
+ box.innerHTML=rows.map(m=>{ const tx=m.textos||{}; const acta=tx.acta_final||tx.acta_generada_md||'';
+  const enFirma=!!(tx.acta_enviada||m.estado==='en_firma'||m.estado==='firmada'||m.docusign_status==='en_cola'||m.docusign_status==='sent'||tx.etapa==='celebrada'||tx.etapa==='firmada');
+  const fs=Array.isArray(m.firmantes)?m.firmantes:[]; let firmasHtml='';
+  if(fs.length){ const firm=fs.filter(x=>x.firmado).length;
+   firmasHtml='<div class="mini" style="margin-top:8px;font-weight:600">Firmas ('+firm+'/'+fs.length+')</div>'
+    +fs.map((x,i)=>'<label style="display:flex;align-items:center;gap:8px;font-size:.82rem;margin:2px 0"><input type="checkbox" '+(x.firmado?'checked':'')+' onclick="easmToggleFirma(\''+m.id+'\','+i+')"> '+esc(x.nombre||'')+' <span class="mini">'+esc(x.email||'')+'</span>'+(x.firmado?(' · <span style="color:var(--ok,#1D6B4A)">firmó '+esc(x.fecha||'')+'</span>'):(' · <a href="#" onclick="easmRecordar(\''+m.id+'\','+i+');return false" style="color:var(--accent,#137A56)">recordar firmar</a>'))+'</label>').join(''); }
+  return '<div class="box" style="margin-bottom:10px"><div style="font-weight:700">'+esc(m.titulo||'')+' <span class="mini">'+(tx.etapa==='firmada'?'· firmada':(enFirma?'· en firma (bloqueada)':'· borrador de acta'))+'</span></div>'
+   +(acta?('<textarea id="easm-t-'+m.id+'" '+(enFirma?'readonly':'')+' style="width:100%;min-height:200px;margin-top:6px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+esc(acta)+'</textarea>'):'<div class="mini" style="margin-top:6px">Sin acta generada. Genérala en «Generar asamblea».</div>')
+   +'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'
+   +(enFirma?'<span class="mini" style="color:var(--ok,#1D6B4A);font-weight:600">✓ Enviada a firma · «Celebrada» (verde)</span>':(acta?('<button class="btn ghost sm" onclick="easmGuardar(\''+m.id+'\')">Guardar acta</button><button class="btn sm" onclick="easmEnviarFirma(\''+m.id+'\')">🖊️ Enviar a firma</button>'):''))
+   +'</div>'+firmasHtml+'</div>';
+ }).join('');
+}
+function easmGuardar(id){ const t=(document.getElementById('easm-t-'+id)||{}).value||''; const m=GM_CACHE[id]||{}; gmPatch(id,{textos:Object.assign({},m.textos||{},{acta_final:t})}).then(()=>cargaEditarAsamblea()); }
+async function easmEnviarFirma(id){
+ if(!confirm('Al enviar a firma, el acta queda BLOQUEADA, pasa a «Celebrada» y se envía a firma electrónica a los socios. ¿Continuar?'))return;
+ const t=(document.getElementById('easm-t-'+id)||{}).value||''; const m=GM_CACHE[id]||{};
+ const fs=(SOCIOS_MAIL[SOC]||[]).map(s=>({nombre:s[0],email:s[1],firmado:false,fecha:null}));
+ await gmPatch(id,{textos:Object.assign({},m.textos||{},{acta_final:t,acta_enviada:true,etapa:'celebrada'}),firmantes:fs,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'});
+ try{ fetch(SB+'/functions/v1/poderes-docusign',{method:'POST',headers:Object.assign({},H_(),{'Content-Type':'application/json'}),body:'{}'}); }catch(e){}
+ await notificarSocios('firmar_doc','Acta de asamblea lista para firma','Recibirás la solicitud de firma electrónica en tu correo.');
+ alert('✓ Acta enviada a firma. «Celebrada» en verde y socios notificados.');
+ cargaEditarAsamblea();
+}
+async function easmToggleFirma(id,idx){
+ const m=GM_CACHE[id]||{}; const fs=Array.isArray(m.firmantes)?m.firmantes.slice():[]; if(!fs[idx])return;
+ const now=!fs[idx].firmado; fs[idx]=Object.assign({},fs[idx],{firmado:now,fecha:now?new Date().toLocaleDateString('es-MX'):null});
+ const all=fs.length&&fs.every(x=>x.firmado);
+ const patch={firmantes:fs}; if(all){ patch.estado='firmada'; patch.textos=Object.assign({},m.textos||{},{etapa:'firmada'}); }
+ await gmPatch(id,patch);
+ if(all){ await notificarSocios('otro','Acta firmada por todos','La asamblea quedó firmada; sigue la protocolización ante notario.'); alert('✓ Todos firmaron. «Firmada» en verde y socios notificados.'); }
+ cargaEditarAsamblea();
+}
+async function easmRecordar(id,idx){
+ const m=GM_CACHE[id]||{}; const fs=Array.isArray(m.firmantes)?m.firmantes:[]; const f=fs[idx]; if(!f)return;
+ try{ await post('gob_notificaciones',{sociedad:SOC,socio_email:(f.email||'').toLowerCase(),tipo:'firmar_doc',titulo:'Recordatorio: firma pendiente del acta',detalle:'Por favor firma el acta de la asamblea; revisa tu correo.',prioridad:'alta'}); alert('Recordatorio enviado a '+(f.nombre||f.email)+'.'); }catch(e){ alert('No se pudo: '+(e.message||e)); }
+}
+window.easmGuardar=easmGuardar; window.easmEnviarFirma=easmEnviarFirma; window.easmToggleFirma=easmToggleFirma; window.easmRecordar=easmRecordar;
 function cargaProtocolizacion(){ const b=document.getElementById('protList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): enviar el acta firmada al notario y subir la protocolización.</div>'; }
 function cargaEmitirTitulos(){ const b=document.getElementById('etitList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): emitir y firmar los títulos, notificar a los socios y habilitar descargas.</div>'; }
 window.cargaEditarMinuta=cargaEditarMinuta; window.eminGuardar=eminGuardar; window.eminEnviar=eminEnviar;
