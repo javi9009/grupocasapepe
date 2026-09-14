@@ -457,9 +457,17 @@ function card(t,ro){
   else if(t.estado==='pausado'){ const pd=t.pausado_at?(Date.now()-new Date(t.pausado_at).getTime())/60000:0; timer=`<div class="timer pau">⏸ En pausa · ${fmtDur(pd)} detenida${t.pausa_motivo?` · ${esc(t.pausa_motivo)}`:''}<br>trabajado hasta ahora: ${fmtDur(workedMin(t))}</div>`; }
   const info=`<button class="btn ghost sm" onclick="verInfo('${t.id}')">＋ info</button>`;
   let acts='',extra='';
+  // El briefing es una junta: se cierra directo, sin foto. Los demás trabajos sí piden foto.
+  const brief=(rut==='briefing');
+  const termCtrl=brief
+    ? `<button class="btn sm" style="flex:1" onclick="terminarSimple('${t.id}')">✅ Terminar</button>`
+    : `<label class="btn sm" style="flex:1;text-align:center;cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label>`;
+  const termGhost=brief
+    ? `<button class="btn ghost sm" onclick="terminarSimple('${t.id}')">✅ Terminar</button>`
+    : `<label class="btn ghost sm" style="cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label>`;
   if(t.estado==='resuelto'){ extra=`<span class="state">✅ Terminado${t.reportado_por?' · espera cierre':''}</span>`; acts=info; }
-  else if(t.estado==='en_proceso'){ acts=`<label class="btn sm" style="flex:1;text-align:center;cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label><button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>${info}`; }
-  else if(t.estado==='pausado'){ acts=`<button class="btn sm" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button><label class="btn ghost sm" style="cursor:pointer" for="picker" onclick="curId='${t.id}';curAction='terminar'">📸 Terminar</label>${info}`; }
+  else if(t.estado==='en_proceso'){ acts=`${termCtrl}<button class="btn warn sm" onclick="pausar('${t.id}')">⏸ Pausar</button>${info}`; }
+  else if(t.estado==='pausado'){ acts=`<button class="btn sm" style="flex:1" onclick="reanudar('${t.id}')">▶️ Reanudar</button>${termGhost}${info}`; }
   else if(rut==='medidores'){ // rutina diaria: se cierra sola al subir la lectura del día
     acts=`<a class="btn sm" style="flex:1;text-align:center;text-decoration:none" href="/m/lecturas.html">📷 Tomar lecturas</a>${info}`;
     extra=`<div class="note">Sube una foto por medidor (agua, luz, gas). Al registrar la lectura del día, esta tarea se marca sola.</div>`;
@@ -601,6 +609,18 @@ $('picker').onchange=async()=>{
       <label>Comentario (opcional)</label><textarea id="tCom" rows="3" placeholder="Cómo quedó, qué usaste, pendientes…"></textarea>
       <button class="btn sm" style="margin-top:12px;width:100%" onclick="doTerminar('${id}','${esc(foto)}')">✅ Marcar terminado</button>`);
   }catch(e){ toast('No se pudo subir: '+(e.message||e),false); curId=null; }
+};
+window.terminarSimple=async(id)=>{
+  const {data:t}=await sb.from('mtto_tickets').select('*').eq('id',id).single(); if(!t)return;
+  const now=new Date(); let acc=t.minutos_acumulados||0; if(t.iniciado_at)acc+=Math.max(0,(now-new Date(t.iniciado_at))/60000);
+  if(acc===0) acc=t.minutos_estimados||0;
+  const mins=Math.round(acc)||null; const reportado=t.reportado_por;
+  const patch={resuelto_at:now.toISOString(),minutos_reales:mins,pausado_at:null,iniciado_at:null};
+  if(reportado){ patch.estado='resuelto'; } else { patch.estado='cerrado'; patch.cerrado_at=now.toISOString(); patch.cerrado_por=ME.id; patch.cerrado_por_nombre=ME.email; }
+  const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error)return toast(error.message,false);
+  if(t.metadata&&t.metadata.prev_plan_id){ await sb.from('mtto_preventivo_plan').update({estado:'hecho',fecha_realizada:hoyMX()}).eq('id',t.metadata.prev_plan_id); }
+  try{ await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins}); }catch(_){}
+  toast('Terminado ✅'); render();
 };
 window.doTerminar=async(id,foto)=>{
   const com=$('tCom')?$('tCom').value.trim():'';

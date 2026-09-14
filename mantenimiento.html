@@ -1789,16 +1789,35 @@ async function autoAsignarSemana(){
 async function lanzarAsignacion(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; const notifs=[];
   // Sin límite de % para lanzar: se puede lanzar la asignación con las horas que sea.
-  for(const t of board){ const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id); if(!mine.length)continue;
+  // 1) MATERIALIZA los preventivos del plan de la semana en TICKETS del técnico (si aún no existen).
+  //    Antes solo eran filas de plan y NO aparecían en Soy Pepe > Mis trabajos.
+  const pbt=PROG_STATE.planWkByTec||{}; const matCount={}, matMin={};
+  for(const tecId of Object.keys(pbt)){
+    for(const p of (pbt[tecId]||[])){
+      if(p.ticket_id) continue;
+      const nom=planNom(p); const lugar=p.ubic?p.ubic.nombre:'';
+      const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
+        preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
+        oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
+        metadata:{prev_plan_id:p.id}}).select('id').single();
+      if(!error && ins){ p.ticket_id=ins.id; matCount[tecId]=(matCount[tecId]||0)+1; matMin[tecId]=(matMin[tecId]||0)+(p.minutos_estimados||0);
+        await sb.from('mtto_preventivo_plan').update({estado:'programado',ticket_id:ins.id}).eq('id',p.id); }
+    }
+  }
+  // 2) Notifica a cada técnico con trabajos (tickets ya en semana + preventivos recién materializados)
+  for(const t of board){
+    const mine=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id);
+    const total=mine.length+(matCount[t.id]||0);
+    if(!total)continue;
     const {data:el}=await sb.from('empleado_login').select('user_id').eq('employee_id',t.id).maybeSingle();
-    const h=(mine.reduce((s,r)=>s+(r.minutos_estimados||0),0)/60).toFixed(1);
+    const h=((mine.reduce((s,r)=>s+(r.minutos_estimados||0),0)+(matMin[t.id]||0))/60).toFixed(1);
     notifs.push({employee_id:t.id,user_id:el?el.user_id:null,titulo:'🔧 Tu plan de mantenimiento · semana '+PROG_WK,
-      cuerpo:mine.length+' trabajos ('+h+' h). Ábrelo para iniciar y terminar cada uno.',icono:'🔧',
+      cuerpo:total+' trabajos ('+h+' h). Ábrelo para iniciar y terminar cada uno.',icono:'🔧',
       accion:{url:'/m/mis-mtto.html?wk='+PROG_WK,tipo:'mtto_plan',semana:PROG_WK},leido:false}); }
   if(!notifs.length)return toast('No hay trabajos asignados esta semana');
   const {error}=await sb.from('notificaciones').insert(notifs);
   if(error)return toast(error.message);
-  toast('Asignación lanzada a '+notifs.length+' técnico(s)');
+  toast('Asignación lanzada a '+notifs.length+' técnico(s)'); renderProg();
 }
 async function autoPrevAssign(){
   if(!PROG_STATE)return;
