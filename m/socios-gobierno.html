@@ -2021,6 +2021,37 @@ function pipeStep(key,ai,i){
  var bx=document.getElementById('pbox-'+key+'-'+ai+'-'+i); if(bx)bx.style.outline='2px solid #2f7d4f';
 }
 window.pipeStep=pipeStep;
+/* ── Overlay de estado real desde gob_minutas (fuente de verdad del status) ──
+   Si no se pueden leer los datos, se cae de forma segura a lo estático (nada se rompe).
+   Las asambleas «gestionadas» (las que se llevan desde el cockpit) toman su etapa de la BBDD
+   y, si su registro fue borrado/cancelado, su tarjeta desaparece del funnel del socio. */
+let GMIN=null, GMIN_SOC=null, GMIN_LOADING=false;
+async function loadGMIN(){ try{ const r=await gobApi('gob_minutas?select=id,asamblea_key,titulo,estado,textos&sociedad=eq.'+encodeURIComponent(SOC)); GMIN=Array.isArray(r)?r:null; }catch(e){ GMIN=null; } GMIN_SOC=SOC; }
+const MNG={
+ hbr:[{tit:'zeltek',key:'zeltek'},{tit:'descanser',key:'descanser'},{tit:'diluci',key:'diluci'},{tit:'saneamiento',key:'saneamiento'}],
+ pontigu:[{tit:'reposici',key:'reposici'}],
+ struchture:[{tit:'reposici',key:'reposici'}]
+};
+function gmNorm(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+const GM_ETAPA={convocada:0,celebrada:1,firmada:2,protocolizada:3,titulos:4};
+function gminState(key,asm){
+ if(asm&&asm.custom) return {pasos:null,hidden:false};        // asambleas creadas por el socio: sin overlay
+ if(!Array.isArray(GMIN)) return {pasos:null,hidden:false};   // sin datos → estático
+ const tags=MNG[key]; if(!tags) return {pasos:null,hidden:false};
+ const nt=gmNorm(asm.tit);
+ const tag=tags.find(x=>nt.indexOf(x.tit)>=0);
+ if(!tag) return {pasos:null,hidden:false};                    // no es gestionada → estática
+ const row=GMIN.find(r=>gmNorm(r.asamblea_key).indexOf(tag.key)>=0 && r.estado!=='cancelada');
+ if(!row) return {pasos:null,hidden:true};                     // gestionada pero borrada → se oculta
+ const etapa=(row.textos&&row.textos.etapa)||null;
+ const li=(etapa!=null&&GM_ETAPA[etapa]!=null)?GM_ETAPA[etapa]:-1;
+ const pasos=asm.pasos.map((p,i)=>{ const q=Object.assign({},p);
+   if(i<=li){ q.ok=true; q.curr=false; delete q.estado; }
+   else if(i===li+1){ q.ok=false; q.curr=true; delete q.estado; }
+   else { q.ok=false; q.curr=false; q.estado='pend'; }
+   return q; });
+ return {pasos,hidden:false};
+}
 function renderPipe(key){
  const P=PIPE[key];if(!P)return'';
  const cols={done:"#cfe0d4",curr:"#e9e2cf",pend:"#eee7db"};
@@ -2029,11 +2060,14 @@ function renderPipe(key){
  html+=`<div style="margin:8px 0"><button class="btn sm" onclick="pipeNewForm('${key}')">＋ Crear asamblea</button><div id="pipe-newform" style="display:none;margin-top:8px;padding:10px 12px;background:#fff;border:1px solid var(--rule,#e6ddcb);border-radius:10px"><div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:4px">Nueva asamblea</div><input id="pipe-new-tit" placeholder="Título de la asamblea (p. ej. Aprobación de resultados 2026)" style="width:100%;max-width:480px;padding:6px 8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit"><div style="margin-top:6px"><button class="btn sm" onclick="crearAsamblea('${key}')">Crear</button><span style="font-size:.72rem;color:var(--faint);margin-left:8px">Nace en Convocada, sin fecha hasta que envíes la convocatoria.</span></div></div></div>`;
  const _base=P.asambleas, _all=_base.concat(getPipeExtra(key));
  _all.forEach((asm,ai)=>{
+  const _ov=gminState(key,asm);
+  if(_ov.hidden) return;                    // asamblea gestionada borrada → fuera del funnel
+  const _PS=_ov.pasos||asm.pasos;           // pasos con la etapa real de la BBDD (o los estáticos)
   html+=`<div class="ev ${asm.warn?'warn':''}" style="margin-top:12px"><div class="card"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3 style="margin:0">${asm.tit}</h3>${asm.base?'<span class="chip prot">última protocolizada</span>':''}${asm.custom?`<button class="btn ghost sm" style="margin-left:auto" onclick="borrarAsambleaExtra('${key}',${ai-_base.length})">Eliminar</button>`:''}</div>`;
   // stepper (cada cajita abre su detalle abajo)
   html+=`<div style="display:flex;gap:4px;margin:10px 0 2px;flex-wrap:wrap">`;
-  asm.pasos.forEach((p,i)=>{
-   const st=pasoEstado(asm.pasos,i);
+  _PS.forEach((p,i)=>{
+   const st=pasoEstado(_PS,i);
    html+=`<div id="pbox-${key}-${ai}-${i}" onclick="pipeStep('${key}',${ai},${i})" style="flex:1 1 90px;min-width:90px;background:${stepBg(p.k,st,p)};border-radius:8px;padding:6px 8px;text-align:center;cursor:pointer;transition:outline .1s">
      <div style="width:18px;height:18px;border-radius:50%;background:${stepDot(p.k,st,p)};color:#fff;font-size:.7rem;line-height:18px;margin:0 auto 3px">${st==='done'?'✓':(i+1)}</div>
      <div style="font-size:.72rem;font-weight:600;color:${(p.bad&&st!=='done')?'#b3261e':'#123'}">${PASO_LB[p.k]}</div>
@@ -2334,6 +2368,8 @@ async function renderDecla(D){
  box.innerHTML=cards+DECLA_FORM(D);
 }
 function renderResumen(D){
+ // Carga el estado real de las asambleas (una vez por sociedad) y re-renderiza con el overlay.
+ if(GMIN_SOC!==SOC && !GMIN_LOADING){ GMIN_LOADING=true; loadGMIN().then(()=>{ GMIN_LOADING=false; try{ renderResumen(D); }catch(e){} }); }
  const nSoc=D.socios.filter(s=>!s.nuevo).length;
  const totalRow=(D.tenencia.rows||[]).find(r=>/total/i.test(r[0]));
  const funnels=PIPE[SOC]?renderPipe(SOC):renderFunnel(SOC);
