@@ -611,22 +611,50 @@ $('picker').onchange=async()=>{
   }catch(e){ toast('No se pudo subir: '+(e.message||e),false); curId=null; }
 };
 // Terminar robusto: abre un cuadro (siempre, sin depender de la cámara). La foto es OPCIONAL
-// y si falla no impide cerrar. Reemplaza el flujo viejo que abría la cámara primero y se trababa.
+// (botón "＋ Foto") y si falla NO impide cerrar. El botón siempre se re-activa si algo falla.
 window.terminarModal=(id)=>{ curId=id;
   modal(`<h3>Terminar trabajo</h3>
-    <label>Foto (opcional)</label>
-    <input type="file" id="tFoto" accept="image/*" capture="environment" style="width:100%">
-    <label style="margin-top:8px">Comentario (opcional)</label>
+    <div style="display:flex;gap:8px;align-items:center;margin:4px 0 10px">
+      <button type="button" class="btn ghost sm" onclick="document.getElementById('tFoto').click()">＋ Foto</button>
+      <span id="tFotoMsg" class="muted" style="font-size:12.5px">Foto opcional</span>
+    </div>
+    <input type="file" id="tFoto" accept="image/*" capture="environment" style="display:none" onchange="window._termFotoSel()">
+    <img id="tFotoPrev" alt="" style="display:none;max-width:100%;border-radius:10px;margin:0 0 10px">
+    <label>Comentario (opcional)</label>
     <textarea id="tCom" rows="3" placeholder="Cómo quedó, qué usaste, pendientes…"></textarea>
     <button class="btn sm" id="tDone" style="margin-top:12px;width:100%" onclick="subirYterminar('${id}')">✅ Marcar terminado</button>`);
 };
+window._termFotoSel=()=>{ const f=$('tFoto')&&$('tFoto').files[0]; if(!f)return;
+  const m=$('tFotoMsg'); if(m)m.textContent='Foto lista ✓';
+  try{ const p=$('tFotoPrev'); if(p){ p.src=URL.createObjectURL(f); p.style.display='block'; } }catch(_){} };
 window.subirYterminar=async(id)=>{
   const btn=$('tDone'); if(btn){btn.disabled=true;btn.textContent='Guardando…';}
-  let foto=null; const ff=$('tFoto')&&$('tFoto').files[0];
-  if(ff){ try{ const blob=await resize(ff); const path='mtto/resuelto-'+Date.now()+'-'+id.slice(0,8)+'.jpg';
-    const {error:ue}=await sb.storage.from('buzon').upload(path,blob,{contentType:'image/jpeg',upsert:false});
-    if(!ue) foto=sb.storage.from('buzon').getPublicUrl(path).data.publicUrl; }catch(_){ /* la foto no debe impedir cerrar */ } }
-  await doTerminar(id, foto);   // doTerminar cierra el ticket, cierra el modal y refresca
+  try{
+    let foto=null; const ff=$('tFoto')&&$('tFoto').files[0];
+    if(ff){ try{ const blob=await resize(ff); const path='mtto/resuelto-'+Date.now()+'-'+id.slice(0,8)+'.jpg';
+      const {error:ue}=await sb.storage.from('buzon').upload(path,blob,{contentType:'image/jpeg',upsert:false});
+      if(!ue) foto=sb.storage.from('buzon').getPublicUrl(path).data.publicUrl; }catch(_){ /* la foto no debe impedir cerrar */ } }
+    const com=$('tCom')?$('tCom').value.trim():'';
+    const {data:t,error:se}=await sb.from('mtto_tickets').select('*').eq('id',id).single();
+    if(se||!t) throw (se||new Error('No se encontró el trabajo'));
+    const now=new Date(); let acc=t.minutos_acumulados||0; if(t.iniciado_at)acc+=Math.max(0,(now-new Date(t.iniciado_at))/60000);
+    if(acc===0) acc=t.minutos_estimados||0;
+    const mins=Math.round(acc)||null; const reportado=t.reportado_por;
+    const patch={resuelto_at:now.toISOString(),minutos_reales:mins,comentario_cierre:com||null,pausado_at:null,iniciado_at:null};
+    if(foto) patch.foto_resuelto_url=foto;
+    if(reportado){ patch.estado='resuelto'; } else { patch.estado='cerrado'; patch.cerrado_at=now.toISOString(); patch.cerrado_por=ME.id; patch.cerrado_por_nombre=ME.email; }
+    const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error) throw error;
+    // efectos secundarios: no deben impedir el cierre
+    try{
+      if(t.preventivo_catalogo_id){ await sb.from('mtto_preventivos_catalogo').update({ultimo_realizado:hoyMX()}).eq('id',t.preventivo_catalogo_id);
+        await sb.from('mtto_preventivo_log').insert({catalogo_id:t.preventivo_catalogo_id,property_id:t.property_id,fecha:hoyMX(),por_id:ME.id,por_nombre:ME.email,minutos_reales:mins,evidencia_url:foto,nota:com||null}); }
+      if(t.origen==='mto_profundo'){ await sb.from('mtto_profundo_plan').update({estado:'hecho',fecha_realizada:hoyMX(),ultimo_realizado:hoyMX()}).eq('ticket_id',id); }
+      if(t.metadata&&t.metadata.prev_plan_id){ await sb.from('mtto_preventivo_plan').update({estado:'hecho',fecha_realizada:hoyMX()}).eq('id',t.metadata.prev_plan_id); }
+      await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins,comentario:com});
+      if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Tu reporte fue atendido',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda, mira la foto y confírmalo.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
+    }catch(_){}
+    closeModal(); toast('Terminado ✅'+(mins?' · '+fmtDur(mins):'')); render();
+  }catch(e){ if(btn){btn.disabled=false;btn.textContent='✅ Marcar terminado';} toast('No se pudo terminar: '+(e.message||e),false); }
 };
 window.terminarSimple=async(id)=>{
   const {data:t}=await sb.from('mtto_tickets').select('*').eq('id',id).single(); if(!t)return;
