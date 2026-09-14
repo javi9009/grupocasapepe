@@ -90,6 +90,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 <div class="secnav"><div class="secnav-in">
  <button data-s="gen" aria-selected="true">＋ Generar asamblea</button>
  <button data-s="cicl">Asambleas</button>
+ <button data-s="seg">Seguimiento</button>
  <button data-s="cla">Cláusulas</button>
 </div></div>
 
@@ -140,6 +141,13 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
   <div class="hi">Asambleas</div>
   <div class="mini">Cada asamblea avanza por sus etapas <b>1 Convocada → 2 Celebrada → 3 Firmada → 4 Protocolizada → 5 Títulos</b>. La acción de cada etapa está dentro de la tarjeta; al completarla se pone en verde y se refleja en «Mi Casa, Pepe». Puedes tener varias asambleas a la vez, cada una en su etapa. «Eliminar» borra la asamblea y todo lo asociado.</div>
   <div id="ciclList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+ </div>
+
+ <div class="sect" id="seg">
+  <div class="hi">Seguimiento de la convocatoria</div>
+  <div class="mini">Quién ya <b>entró</b> con su liga (magic link), desde <b>qué zona/IP</b>, y qué <b>respondió</b>: asistencia, opción de salida (S1 fiscal · S2 largo plazo · C1 mantener · C2 refundar) y si <b>ofreció recomprar/vender</b> sus acciones. Se actualiza en vivo desde la base.</div>
+  <div id="segResumen" style="margin-top:12px"></div>
+  <div id="segList" style="margin-top:12px"><div class="note">Cargando…</div></div>
  </div>
 
  <div class="sect" id="cla">
@@ -295,6 +303,7 @@ document.querySelectorAll('.secnav button').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('.sect').forEach(x=>x.classList.toggle('on',x.id===b.dataset.s));
  if(b.dataset.s==='cla') pintaClausulas();
  if(b.dataset.s==='cicl') cargaCiclo();
+ if(b.dataset.s==='seg') cargaSeguimiento();
 });
 if(window.self!==window.top){ const v=document.getElementById('volver'); if(v)v.style.display='none'; }
 (function(){ const h=location.hash.match(/soc=(\w+)/); if(h) SOC=h[1];
@@ -306,7 +315,7 @@ if(window.self!==window.top){ const v=document.getElementById('volver'); if(v)v.
 async function setSoc(s){ SOC=s; location.hash='soc='+s; SEL={}; document.getElementById('preview').innerHTML=''; pintaAcuerdos(); await carga();
  // Recarga la pestaña activa para la nueva sociedad
  const act=document.querySelector('.secnav button[aria-selected="true"]'); const sc=act&&act.dataset.s;
- if(sc==='cicl') cargaCiclo(); else if(sc==='cla') pintaClausulas();
+ if(sc==='cicl') cargaCiclo(); else if(sc==='seg') cargaSeguimiento(); else if(sc==='cla') pintaClausulas();
 }
 
 async function carga(){
@@ -841,6 +850,90 @@ async function notificarSocios(tipo,titulo,detalle){ const list=SOCIOS_MAIL[SOC]
 /* ═══ Ciclo de vida unificado: una tarjeta por asamblea con la caja de etapas 1→5 ═══ */
 const ETAPAS=[['Convocada','convocada'],['Celebrada','celebrada'],['Firmada','firmada'],['Protocolizada','protocolizada'],['Títulos','titulos']];
 const ETNUM={convocada:1,celebrada:2,firmada:3,protocolizada:4,titulos:5};
+/* ── Seguimiento de la convocatoria ───────────────────────────────────────── */
+// Ligas conocidas para marcar accesos especiales. Llena la IP pública de Miyana
+// (la ves en la columna IP en cuanto alguien entre desde ahí) y quedará en rojo.
+const WATCH_IPS = { 'Miyana · Polanco': [ /* '187.xxx.xxx.xxx' */ ] };
+const OPT_LABEL = {S1:'Salida 1 · fiscal', S2:'Salida 2 · largo plazo', C1:'Continuar 1 · mantener', C2:'Continuar 2 · refundar'};
+const OPT_COL   = {S1:'#b45309', S2:'#8a1f1f', C1:'#137A56', C2:'#1d4ed8'};
+const ASI_LABEL = {si:'Asistirá', no:'No asiste', poder:'Dio carta poder'};
+
+function segZona(a){
+ if(!a || !a.last_used_at) return '<span style="color:var(--muted)">—</span>';
+ const geo=[a.ciudad,a.region,a.pais].filter(Boolean).join(', ')||'—';
+ const ip=a.last_ip||''; const g=geo.toLowerCase();
+ let miyana=false; try{ Object.values(WATCH_IPS).forEach(l=>{ if(ip && l.indexOf(ip)>=0) miyana=true; }); }catch(e){}
+ const hint = /polanco|miguel hidalgo/.test(g);
+ let badge='';
+ if(miyana) badge=' <span style="background:#8a1f1f;color:#fff;border-radius:6px;padding:1px 7px;font-size:.7rem;font-weight:700">⚠️ MIYANA · POLANCO</span>';
+ else if(hint) badge=' <span style="background:#b45309;color:#fff;border-radius:6px;padding:1px 7px;font-size:.7rem">¿Polanco?</span>';
+ return esc(geo)+(ip?' · <code style="font-size:.72rem;color:var(--ink2)">'+esc(ip)+'</code>':'')+badge;
+}
+function segChip(txt,col){ return '<span style="background:'+col+';color:#fff;border-radius:20px;padding:2px 9px;font-size:.74rem;font-weight:600;white-space:nowrap">'+esc(txt)+'</span>'; }
+
+async function cargaSeguimiento(){
+ const host=document.getElementById('segList'), res=document.getElementById('segResumen');
+ host.innerHTML='<div class="note">Cargando…</div>'; if(res) res.innerHTML='';
+ try{
+  const [envs,notis,ofs]=await Promise.all([
+   api('gob_envios?select=id,tipo,asunto,enviado_at,destinatarios&sociedad=eq.'+SOC+'&order=enviado_at.desc'),
+   api('gob_notificaciones?select=socio_email,tipo,respuesta,estado,updated_at&sociedad=eq.'+SOC),
+   api('gob_ofertas?select=*&sociedad=eq.'+SOC+'&order=created_at.desc')
+  ]);
+  const E=Array.isArray(envs)?envs:[], N=Array.isArray(notis)?notis:[], O=Array.isArray(ofs)?ofs:[];
+  // Accesos (magic links) ligados a los envíos de esta sociedad
+  let A=[]; const ids=E.map(e=>e.id).filter(Boolean);
+  if(ids.length){
+   const inl='('+ids.map(x=>'"'+x+'"').join(',')+')';
+   const acc=await api('gob_accesos?select=email,socio_id,envio_id,usos,last_used_at,last_ip,ciudad,region,pais&envio_id=in.'+inl+'&order=last_used_at.desc.nullslast');
+   A=Array.isArray(acc)?acc:[];
+  }
+  // Roster de convocados: emails de las notificaciones
+  const emails=[...new Set(N.map(n=>(n.socio_email||'').toLowerCase()).filter(Boolean))].sort();
+  const accByMail={}; A.forEach(a=>{ const m=(a.email||'').toLowerCase(); if(!m) return; if(!accByMail[m] || (a.last_used_at && (!accByMail[m].last_used_at || a.last_used_at>accByMail[m].last_used_at))) accByMail[m]=a; });
+  const notiByMail={}; N.forEach(n=>{ const m=(n.socio_email||'').toLowerCase(); (notiByMail[m]=notiByMail[m]||{})[n.tipo]=n; });
+  const ofByMail={}; O.forEach(o=>{ const m=(o.socio_email||'').toLowerCase(); if(!ofByMail[m]) ofByMail[m]=o; });
+
+  // Resumen
+  const nEnv=E.filter(e=>e.tipo==='convocatoria').reduce((s,e)=>s+(Array.isArray(e.destinatarios)?e.destinatarios.length:0),0);
+  const entraron=emails.filter(m=>accByMail[m] && accByMail[m].last_used_at).length;
+  const conOpc=emails.filter(m=>{ const e=notiByMail[m]&&notiByMail[m].elegir_opcion; return e && e.respuesta && e.respuesta.opcion; }).length;
+  const conAsi=emails.filter(m=>{ const e=notiByMail[m]&&notiByMail[m].asistencia; return e && e.respuesta && e.respuesta.asistencia; }).length;
+  const nOf=O.length;
+  const ult=E[0]?(' · último envío '+fechaLarga(E[0].enviado_at)):'';
+  if(res) res.innerHTML='<div class="box" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'
+    +'<div><div style="font-size:1.5rem;font-weight:800">'+emails.length+'</div><div class="mini">convocados</div></div>'
+    +'<div><div style="font-size:1.5rem;font-weight:800;color:#137A56">'+entraron+'</div><div class="mini">ya entraron</div></div>'
+    +'<div><div style="font-size:1.5rem;font-weight:800">'+conAsi+'</div><div class="mini">marcaron asistencia</div></div>'
+    +'<div><div style="font-size:1.5rem;font-weight:800">'+conOpc+'</div><div class="mini">eligieron opción</div></div>'
+    +'<div><div style="font-size:1.5rem;font-weight:800;color:#8a1f1f">'+nOf+'</div><div class="mini">ofertas de recompra</div></div>'
+    +'<div class="mini" style="margin-left:auto">'+E.filter(e=>e.tipo==='convocatoria').length+' envíos de convocatoria'+ult+'</div></div>';
+
+  if(!emails.length){ host.innerHTML='<div class="note">Aún no hay convocados para '+esc(SOCIEDADES[SOC].corto)+'. Envía la convocatoria desde «Asambleas».</div>'; return; }
+
+  let h='<div class="tscroll"><table><thead><tr>'
+    +'<th>Socio</th><th>¿Entró?</th><th>Zona / IP</th><th>Asistencia</th><th>Opción de salida</th><th>Oferta de recompra</th></tr></thead><tbody>';
+  emails.forEach(m=>{
+   const a=accByMail[m], nb=notiByMail[m]||{}, of=ofByMail[m];
+   const entro = a&&a.last_used_at
+     ? '<span style="color:#137A56;font-weight:700">✓</span> <span class="mini">'+fechaLarga(a.last_used_at)+' · '+(a.usos||1)+' uso'+((a.usos||1)>1?'s':'')+'</span>'
+     : '<span style="color:var(--muted)">—</span>';
+   const asi = (nb.asistencia&&nb.asistencia.respuesta&&nb.asistencia.respuesta.asistencia)
+     ? segChip(ASI_LABEL[nb.asistencia.respuesta.asistencia]||nb.asistencia.respuesta.asistencia, nb.asistencia.respuesta.asistencia==='no'?'#8a1f1f':(nb.asistencia.respuesta.asistencia==='poder'?'#1d4ed8':'#137A56'))
+     : '<span style="color:var(--muted)">pendiente</span>';
+   const op = (nb.elegir_opcion&&nb.elegir_opcion.respuesta&&nb.elegir_opcion.respuesta.opcion);
+   const opc = op ? segChip((OPT_LABEL[op]||op), OPT_COL[op]||'#555') : '<span style="color:var(--muted)">pendiente</span>';
+   const ofc = of
+     ? '<b>'+(of.precio?money(of.precio):'—')+'</b>'+(of.vigencia?' <span class="mini">vig. '+fechaLarga(of.vigencia)+'</span>':'')+(of.estado?' '+segChip(of.estado,'#6b7280'):'')
+     : '<span style="color:var(--muted)">—</span>';
+   h+='<tr><td style="font-weight:600">'+esc(m)+'</td><td>'+entro+'</td><td>'+segZona(a)+'</td><td>'+asi+'</td><td>'+opc+'</td><td>'+ofc+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="mini" style="margin-top:8px">La detección de <b>Miyana · Polanco</b> es exacta solo con su IP pública: cuando veas que alguien entró desde ahí, pásame la IP de la columna y la dejo fija en rojo. La pista «¿Polanco?» sale de la geolocalización de la IP (nivel ciudad/colonia, aproximada).</div>';
+  host.innerHTML=h;
+ }catch(e){ host.innerHTML='<div class="note" style="border-left:3px solid #8a1f1f">No se pudo cargar el seguimiento: '+esc(e.message||e)+'</div>'; }
+}
+
 async function cargaCiclo(){
  const box=document.getElementById('ciclList'); if(!box)return; box.innerHTML='<div class="note">Cargando…</div>';
  let rows=[]; try{ rows=await gmFetch(); }catch(e){}
