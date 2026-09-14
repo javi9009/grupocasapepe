@@ -79,7 +79,11 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 
 <div class="secnav"><div class="secnav-in">
  <button data-s="gen" aria-selected="true">Generar asamblea</button>
- <button data-s="prev">Asambleas previstas</button>
+ <button data-s="emin">Editar minuta</button>
+ <button data-s="easm">Editar asamblea</button>
+ <button data-s="prot">Protocolización</button>
+ <button data-s="etit">Emitir títulos</button>
+ <button data-s="prev">Borradores</button>
  <button data-s="cla">Cláusulas</button>
 </div></div>
 
@@ -124,6 +128,27 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
    </div>
    <div id="preview" style="margin-top:12px"></div>
   </div>
+ </div>
+
+ <div class="sect" id="emin">
+  <div class="hi">Editar minuta</div>
+  <div class="mini">Elige la minuta, edítala y envíala a los socios. Al enviarse se bloquea y aparece en el funnel de Mi Casa Pepe como «Convocada» (verde).</div>
+  <div id="eminList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+ </div>
+ <div class="sect" id="easm">
+  <div class="hi">Editar asamblea creada</div>
+  <div class="mini">Edita el acta y envíala a firma. Al enviarse se bloquea y pasa a «Celebrada». Aquí ves el listado de firmas por socio y puedes recordar a los pendientes.</div>
+  <div id="easmList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+ </div>
+ <div class="sect" id="prot">
+  <div class="hi">Enviar protocolización</div>
+  <div class="mini">Cuando todos firmen, envía el acta al notario y, al volver protocolizada, súbela aquí para marcar «Protocolizada».</div>
+  <div id="protList" style="margin-top:12px"><div class="note">Cargando…</div></div>
+ </div>
+ <div class="sect" id="etit">
+  <div class="hi">Emitir títulos</div>
+  <div class="mini">Con la asamblea protocolizada, emite los títulos de los socios, notifícalos y fírmalos con tu firma.</div>
+  <div id="etitList" style="margin-top:12px"><div class="note">Cargando…</div></div>
  </div>
 
  <div class="sect" id="prev">
@@ -282,6 +307,10 @@ document.querySelectorAll('.secnav button').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('.sect').forEach(x=>x.classList.toggle('on',x.id===b.dataset.s));
  if(b.dataset.s==='prev') cargaBorradores();
  if(b.dataset.s==='cla') pintaClausulas();
+ if(b.dataset.s==='emin') cargaEditarMinuta();
+ if(b.dataset.s==='easm') cargaEditarAsamblea();
+ if(b.dataset.s==='prot') cargaProtocolizacion();
+ if(b.dataset.s==='etit') cargaEmitirTitulos();
 });
 if(window.self!==window.top){ const v=document.getElementById('volver'); if(v)v.style.display='none'; }
 (function(){ const h=location.hash.match(/soc=(\w+)/); if(h) SOC=h[1];
@@ -795,6 +824,40 @@ async function abrirPDF(path,btn){
 /* ── Asambleas previstas ──────────────────────────────────────────────────── */
 const EST={borrador:['q','Borrador'],convocada:['warn','Convocada'],celebrada:['ok','Celebrada'],en_firma:['warn','En firma'],firmada:['ok','Firmada'],descartada:['bad','Descartada']};
 const DSMAP={en_cola:'En cola de envío por DocuSign…',sent:'Enviado · esperando firmas',delivered:'Entregado · esperando firmas',completed:'Firmado por todos ✓',voided:'Anulado'};
+/* ══ Cockpit del ciclo de vida (admin) ══════════════════════════════ */
+const SOCIOS_MAIL={hbr:[['Javier Puente García','javi@casapepe.mx'],['Jorge Ignacio Sastre','jordisastre@nyxhotels.com'],['Aldo Gelover Escamilla','aldo@casapepe.mx'],['Joaquín Canals','joaquin.canals@gmail.com'],['Estanislao Masiá','estanis@casapepe.mx'],['Juan José Cué de la Fuente','jjcue@yahoo.com'],['Luis Javier Cué de la Fuente','ljcue@elmuraldelospoblanos.com']]};
+let GM_CACHE={};
+function gmFetch(){ return fetch(SB+'/rest/v1/gob_minutas?select=*&sociedad=eq.'+encodeURIComponent(SOC)+'&asamblea_key=like.pipe:*&order=updated_at.desc',{headers:H_()}).then(r=>r.json()); }
+function gmPatch(id,body){ return post('gob_minutas?id=eq.'+encodeURIComponent(id),Object.assign({updated_at:new Date().toISOString()},body),'PATCH'); }
+async function notificarSocios(tipo,titulo,detalle){ const list=SOCIOS_MAIL[SOC]||[]; for(const s of list){ try{ await post('gob_notificaciones',{sociedad:SOC,socio_email:s[1],tipo:tipo||'otro',titulo:titulo,detalle:detalle||'',prioridad:'media'}); }catch(e){} } }
+async function cargaEditarMinuta(){
+ const box=document.getElementById('eminList'); if(!box)return; box.innerHTML='<div class="note">Cargando…</div>';
+ let rows=[]; try{ rows=await gmFetch(); }catch(e){}
+ GM_CACHE={}; (rows||[]).forEach(m=>GM_CACHE[m.id]=m);
+ if(!Array.isArray(rows)||!rows.length){ box.innerHTML='<div class="note">No hay asambleas. Genera una en «Generar asamblea».</div>'; return; }
+ box.innerHTML=rows.map(m=>{ const tx=m.textos||{}; const enviada=!!tx.minuta_enviada; const md=tx.convocatoria_md||'';
+  return '<div class="box" style="margin-bottom:10px"><div style="font-weight:700">'+esc(m.titulo||'')+' <span class="mini">'+(enviada?('· enviada '+(tx.minuta_enviada_at||'')):'· borrador')+'</span></div>'
+   +(md?('<textarea id="emin-t-'+m.id+'" '+(enviada?'readonly':'')+' style="width:100%;min-height:180px;margin-top:6px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+esc(md)+'</textarea>'):'<div class="mini" style="margin-top:6px">Sin minuta vinculada. Genérala en «Generar asamblea».</div>')
+   +'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'
+   +(enviada?'<span class="mini" style="color:var(--ok,#1D6B4A);font-weight:600">✓ Enviada · bloqueada · Convocada (verde) en el funnel</span>':(md?('<button class="btn ghost sm" onclick="eminGuardar(\''+m.id+'\')">Guardar</button><button class="btn sm" onclick="eminEnviar(\''+m.id+'\')">📧 Enviar a socios</button>'):''))
+   +'</div></div>';
+ }).join('');
+}
+function eminGuardar(id){ const t=(document.getElementById('emin-t-'+id)||{}).value||''; const m=GM_CACHE[id]||{}; gmPatch(id,{textos:Object.assign({},m.textos||{},{convocatoria_md:t})}).then(()=>cargaEditarMinuta()); }
+async function eminEnviar(id){
+ if(!confirm('Al enviar la minuta a los socios queda BLOQUEADA (ya no editable) y aparece como «Convocada» en Mi Casa Pepe. ¿Continuar?'))return;
+ const t=(document.getElementById('emin-t-'+id)||{}).value||''; const m=GM_CACHE[id]||{};
+ const hoy=new Date().toLocaleDateString('es-MX');
+ await gmPatch(id,{textos:Object.assign({},m.textos||{},{convocatoria_md:t,minuta_enviada:true,minuta_enviada_at:hoy,etapa:'convocada'})});
+ await notificarSocios('otro','Convocatoria de asamblea enviada','Ya puedes consultar la minuta y confirmar tu asistencia en Mi Casa, Pepe.');
+ alert('✓ Minuta enviada. «Convocada» en verde en el funnel y socios notificados.');
+ cargaEditarMinuta();
+}
+function cargaEditarAsamblea(){ const b=document.getElementById('easmList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): editar el acta final, enviar a firma, y el listado de firmas por socio con «recordar firmar».</div>'; }
+function cargaProtocolizacion(){ const b=document.getElementById('protList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): enviar el acta firmada al notario y subir la protocolización.</div>'; }
+function cargaEmitirTitulos(){ const b=document.getElementById('etitList'); if(b)b.innerHTML='<div class="note">En construcción (siguiente entrega): emitir y firmar los títulos, notificar a los socios y habilitar descargas.</div>'; }
+window.cargaEditarMinuta=cargaEditarMinuta; window.eminGuardar=eminGuardar; window.eminEnviar=eminEnviar;
+window.cargaEditarAsamblea=cargaEditarAsamblea; window.cargaProtocolizacion=cargaProtocolizacion; window.cargaEmitirTitulos=cargaEmitirTitulos;
 async function cargaBorradores(){
  const box=document.getElementById('prevList');
  try{ BORR=await api('gob_asamblea_borradores?select=*&sociedad=eq.'+SOC+'&order=created_at.desc'); }catch(e){ BORR=[]; }
