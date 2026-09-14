@@ -1911,6 +1911,51 @@ function pipeVerActa(key,ai){
  }).catch(_=>alert('No se pudo cargar el acta vinculada.'));
 }
 window.pipeVerActa=pipeVerActa;
+// ── Fase A · Celebrada: editar acta final, enviar a firma, video y resumen ──
+function celebMsg(key,ai,t){ const e=document.getElementById('celeb-msg-'+key+'-'+ai); if(e)e.textContent=t; }
+function celebTx(key,ai){ const m=MIN_CACHE[minutaAsmKey(key,ai)]||{}; return Object.assign({},m.textos||{}); }
+function celebPanel(key,ai){
+ const box=document.getElementById('celeb-panel-'+key+'-'+ai); if(!box)return;
+ if(box.style.display==='block'){ box.style.display='none'; return; }
+ box.style.display='block'; box.innerHTML='<div class="acu">Cargando…</div>';
+ minutaFetch(key,ai).then(m=>{
+  const tx=(m&&m.textos)||{}; const acta=tx.acta_final||tx.acta_generada_md||''; const video=tx.video_url||''; const resumen=tx.resumen_acuerdos||'';
+  box.innerHTML='<div style="border:1px solid var(--rule,#e6ddcb);border-radius:10px;padding:10px 12px;background:#fff">'
+   +'<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600">Acta final (editable)</div>'
+   +'<textarea id="celeb-acta-'+key+'-'+ai+'" style="width:100%;min-height:220px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+gobEsc(acta)+'</textarea>'
+   +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" onclick="celebGuardarActa(\''+key+'\','+ai+')">Guardar acta final</button><button class="btn sm" onclick="celebEnviarFirma(\''+key+'\','+ai+')">🖊️ Enviar a firma vía DocuSign</button></div>'
+   +'<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-top:12px">Grabación de la asamblea</div>'
+   +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px"><input id="celeb-video-'+key+'-'+ai+'" value="'+gobEsc(video)+'" placeholder="Link del video (Drive/YouTube…)" style="flex:1 1 220px;padding:7px;border:1px solid var(--rule,#e6ddcb);border-radius:8px"><button class="btn ghost sm" onclick="celebGuardarVideo(\''+key+'\','+ai+')">Guardar link</button></div>'
+   +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input type="file" id="celeb-file-'+key+'-'+ai+'" accept=".txt,.md,.srt,.vtt" style="font-size:.82rem"><button class="btn ghost sm" onclick="celebResumen(\''+key+'\','+ai+')">📄 Subir transcripción y generar resumen</button></div>'
+   +'<div id="celeb-msg-'+key+'-'+ai+'" class="mini" style="margin-top:6px"></div>'
+   +'<div id="celeb-resumen-'+key+'-'+ai+'">'+(resumen?('<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-top:10px">Resumen de acuerdos</div><div class="acu" style="white-space:pre-wrap">'+gobEsc(resumen)+'</div>'):'')+'</div>'
+   +'</div>';
+ }).catch(_=>{ box.innerHTML='<div class="acu rojo">No se pudo cargar.</div>'; });
+}
+function celebGuardarActa(key,ai){ const t=(document.getElementById('celeb-acta-'+key+'-'+ai)||{}).value||''; const tx=Object.assign(celebTx(key,ai),{acta_final:t}); minutaUpsert(key,ai,{textos:tx}).then(()=>celebMsg(key,ai,'✓ Acta final guardada.')).catch(e=>celebMsg(key,ai,'No se pudo: '+(e.message||e))); }
+function celebGuardarVideo(key,ai){ const v=(document.getElementById('celeb-video-'+key+'-'+ai)||{}).value||''; const tx=Object.assign(celebTx(key,ai),{video_url:v}); minutaUpsert(key,ai,{textos:tx}).then(()=>celebMsg(key,ai,'✓ Link de video guardado.')).catch(e=>celebMsg(key,ai,'No se pudo: '+(e.message||e))); }
+function celebEnviarFirma(key,ai){
+ const m=MIN_CACHE[minutaAsmKey(key,ai)]||{}; const fs=(Array.isArray(m.firmantes)&&m.firmantes.length)?m.firmantes:minutaFirmantesInit();
+ if(!confirm('Se enviará el acta por firma electrónica a '+fs.length+' firmantes. ¿Continuar?'))return;
+ const t=(document.getElementById('celeb-acta-'+key+'-'+ai)||{}).value||''; const tx=Object.assign(celebTx(key,ai),{acta_final:t});
+ minutaUpsert(key,ai,{textos:tx,firmantes:fs,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'}).then(r=>{ try{dispararDocusign();}catch(e){} celebMsg(key,ai,'✓ Acta enviada a firma; el estado se seguirá en «Firmada».'); }).catch(e=>celebMsg(key,ai,'No se pudo: '+(e.message||e)));
+}
+function celebResumen(key,ai){
+ const f=document.getElementById('celeb-file-'+key+'-'+ai); const file=f&&f.files&&f.files[0];
+ if(!file){ celebMsg(key,ai,'Elige un archivo de transcripción (.txt, .srt, .vtt, .md).'); return; }
+ celebMsg(key,ai,'Leyendo y resumiendo…');
+ const rd=new FileReader();
+ rd.onload=function(){ const texto=String(rd.result||'').slice(0,120000);
+  fetch(GOB_SB+'/functions/v1/resumen-acuerdos',{method:'POST',headers:Object.assign({},gobAuth(),{'Content-Type':'application/json'}),body:JSON.stringify({transcripcion:texto})})
+   .then(r=>r.json()).then(j=>{
+    const resumen=(j&&j.resumen)||'';
+    const tx=Object.assign(celebTx(key,ai),{transcripcion:texto,resumen_acuerdos:resumen});
+    return minutaUpsert(key,ai,{textos:tx}).then(()=>{ const box=document.getElementById('celeb-resumen-'+key+'-'+ai); if(box)box.innerHTML='<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-top:10px">Resumen de acuerdos</div><div class="acu" style="white-space:pre-wrap">'+gobEsc(resumen||'(vacío)')+'</div>'; celebMsg(key,ai, resumen?'✓ Resumen generado y guardado.':'Transcripción guardada; el resumen requiere la clave del modelo (ver handoff).'); });
+   }).catch(e=>celebMsg(key,ai,'Transcripción guardada; no se pudo resumir: '+(e.message||e)));
+ };
+ rd.readAsText(file);
+}
+window.celebPanel=celebPanel; window.celebGuardarActa=celebGuardarActa; window.celebGuardarVideo=celebGuardarVideo; window.celebEnviarFirma=celebEnviarFirma; window.celebResumen=celebResumen;
 function fmtFechaCorta(iso){ try{ const d=new Date(iso+'T00:00:00'); const m=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; return d.getDate()+'-'+m[d.getMonth()]+'-'+d.getFullYear(); }catch(_){ return iso; } }
 function pipeDispFecha(key,ai,p){ if(p.k==='conv'){ const sv=getPipeConv(key,ai); return sv.fecha?fmtFechaCorta(sv.fecha):''; } return p.fecha||''; }
 function pipeExtraKey(key){ return 'pipeextra:'+SOC+':'+key; }
@@ -1939,7 +1984,7 @@ function pasoDetHTML(p,pkey,pai){
   }
  } else if(p.k==="celeb"){
   if(p.quorum)h+=`<div class="acu"><b>Quórum:</b> ${p.quorum}</div>`;
-  if(p.generada)h+=`<div style="margin:6px 0"><button class="btn sm" onclick="pipeVerActa('${pkey}',${pai})">📄 Ver acta generada (vinculada)</button></div>`;
+  if(p.generada)h+=`<div style="margin:6px 0"><button class="btn sm" onclick="pipeVerActa('${pkey}',${pai})">📄 Ver acta generada</button></div>`;
   {const L=p.docs||(p.doc?[p.doc]:null);
    if(L)h+=`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`+L.map(d=>`<a class="btn ghost sm" href="${d.url}" target="_blank" rel="noopener" style="text-decoration:none">📄 ${d.t} ↗</a>`).join('')+`</div>`;}
   if(p.minuta)h+=`<div style="margin-top:6px;font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Minuta → acuerdos</div>`+p.minuta.map(a=>`<div class="acu ${(a[0]==='Nota'||/⚠/.test(a[1]))?'rojo':''}"><b>${a[0]}:</b> ${a[1]}</div>`).join('');
