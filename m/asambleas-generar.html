@@ -877,13 +877,21 @@ function ciclCard(m,b){
    +'<div class="row">'
    +(b&&b.minuta_pdf?('<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF(\''+esc(b.minuta_pdf)+'\',this)">Abrir PDF</button>'):'<span class="chip q">minuta sin publicar</span>')
    +(b?'<button class="btn ghost sm" onclick="abreDoc(\''+b.id+'\',\'minuta\')">✏️ Editar minuta</button>':'')
-   +(b&&b.minuta_pdf?('<button class="btn sm" onclick="abreEnvio(\''+b.id+'\',\'convocatoria\')">✉️ Asociar info + enviar convocatoria a socios</button>'):'<span class="mini">Publica el PDF desde «Editar minuta» para poder enviar.</span>')
+   +(b?'<button class="btn ghost sm" onclick="abreAsociar(\''+b.id+'\')">🔗 Asociar info a la minuta</button>':'')
+   +(b?'<button class="btn sm" onclick="publicarConvocada(\''+b.id+'\')">📢 Publicar como Convocada</button>':'')
+   +(b&&b.minuta_pdf?('<button class="btn ghost sm" onclick="abreEnvio(\''+b.id+'\',\'convocatoria\')">✉️ Enviar convocatoria a socios</button>'):'<span class="mini">Publica el PDF desde «Editar minuta» para enviar correos.</span>')
    +'</div>'
-   +(b?'<div id="ed-'+b.id+'-minuta"></div><div id="env-'+b.id+'-convocatoria"></div>':'')
+   +'<div class="mini" style="margin-top:4px">«Asociar info» liga cada punto a un link/documento (queda en «Mi Casa, Pepe»). «Publicar como Convocada» la hace visible al socio en verde, sin enviar. «Enviar convocatoria» además manda el correo con enlace personal.</div>'
+   +(b?'<div id="ed-'+b.id+'-minuta"></div><div id="aso-'+b.id+'"></div><div id="env-'+b.id+'-convocatoria"></div>':'')
    +'</div>';
  }
- else if(cur===2){ // Celebrada: editar acta + enviar a firma
+ else if(cur===2){ // Celebrada: (opcional) enviar convocatoria pendiente + editar acta + enviar a firma
+  const yaEnv=!!(tx.minuta_enviada);
   panel='<div class="stagebox"><div class="stlbl">Etapa 2 · Celebrar y enviar a firma</div>'
+   +(b?('<div class="mini" style="margin-bottom:8px;border-bottom:1px dashed var(--rule);padding-bottom:8px">'
+      +(yaEnv?'✓ Convocatoria enviada a los socios.'
+        :('Convocada (visible en «Mi Casa, Pepe»). Aún no envías el correo. '+(b.minuta_pdf?'<button class="btn ghost sm" onclick="abreEnvio(\''+b.id+'\',\'convocatoria\')">✉️ Enviar convocatoria a socios</button>':'<span class="mini">Publica el PDF en «Editar minuta» para enviarlo.</span>')))
+      +'<div id="env-'+b.id+'-convocatoria"></div></div>'):'')
    +(acta?('<textarea id="easm-t-'+m.id+'" style="width:100%;min-height:200px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+esc(acta)+'</textarea>'
      +'<div class="row" style="margin-top:8px"><button class="btn ghost sm" onclick="easmGuardar(\''+m.id+'\')">Guardar acta</button><button class="btn sm" onclick="easmEnviarFirma(\''+m.id+'\')">🖊️ Enviar a firma</button></div>')
      :'<div class="mini">Sin acta generada. Genérala en «＋ Generar asamblea» (o edítala en la minuta).</div>')
@@ -1213,7 +1221,7 @@ async function odUpload(input){
  }catch(e){ if(inp) inp.value=''; alert('No se pudo subir el archivo: '+(e.message||e)); }
 }
 window.odSel=odSel; window.odFile=odFile; window.odUpload=odUpload;
-// Guarda los enlaces por punto en la asamblea del pipeline (gob_minutas.textos.od_links) → los pinta "Mi Casa, Pepe".
+// Guarda los enlaces por punto en LA MISMA asamblea que editas (gob_minutas.textos.od_links) → los pinta "Mi Casa, Pepe".
 async function guardarEnlacesOD(id,tipo){
  const box=document.getElementById('od-'+id+'-'+tipo), msg=document.getElementById('odsave-'+id+'-'+tipo);
  if(!box)return;
@@ -1221,17 +1229,48 @@ async function guardarEnlacesOD(id,tipo){
  box.querySelectorAll('.od-url').forEach(function(inp){ var pt=inp.getAttribute('data-pt')||''; var u=(inp.value||'').trim(); if(pt&&u&&u!=='subiendo…') byPoint[pt]={url:u}; });
  if(msg)msg.textContent='Guardando…';
  try{
-  var base=SB+'/rest/v1/gob_minutas?select=id,textos,asamblea_key,updated_at&sociedad=eq.'+encodeURIComponent(SOC);
-  var rows=await fetch(base+'&asamblea_key=ilike.*aneamiento*&limit=1',{headers:H_()}).then(function(r){return r.json();});
-  if(!Array.isArray(rows)||!rows.length){ rows=await fetch(base+'&asamblea_key=like.pipe:*&order=updated_at.desc&limit=1',{headers:H_()}).then(function(r){return r.json();}); }
-  var rec=(Array.isArray(rows)&&rows[0])||null;
-  if(!rec){ if(msg)msg.textContent='No encontré la asamblea del pipeline para vincular los enlaces.'; return; }
+  var b=BORR.find(function(x){return x.id===id;});
+  var aid=b&&b.asamblea_id, rec=null;
+  if(aid){ var rr=await api('gob_minutas?select=id,textos&id=eq.'+aid); rec=(rr&&rr[0])||null; }
+  if(!rec){ // fallback legado: última del pipeline de la sociedad
+   var base=SB+'/rest/v1/gob_minutas?select=id,textos,asamblea_key,updated_at&sociedad=eq.'+encodeURIComponent(SOC);
+   var rows=await fetch(base+'&asamblea_key=like.pipe:*&order=updated_at.desc&limit=1',{headers:H_()}).then(function(r){return r.json();});
+   rec=(Array.isArray(rows)&&rows[0])||null;
+  }
+  if(!rec){ if(msg)msg.textContent='No encontré la asamblea para vincular los enlaces.'; return; }
   var textos=Object.assign({},rec.textos||{},{od_links:byPoint});
   await post('gob_minutas?id=eq.'+rec.id,{textos:textos,updated_at:new Date().toISOString()},'PATCH');
-  if(msg)msg.textContent='✓ Enlaces guardados · se verán en Mi Casa Pepe ('+Object.keys(byPoint).length+' puntos).';
+  if(msg)msg.textContent='✓ Guardado · se verá en Mi Casa Pepe ('+Object.keys(byPoint).length+' puntos).';
  }catch(e){ if(msg)msg.textContent='No se pudo: '+(e.message||e); }
 }
 window.guardarEnlacesOD=guardarEnlacesOD;
+// Paso propio en la etapa 1: asociar info por punto SIN enviar (queda para revisión en «Mi Casa, Pepe»).
+async function abreAsociar(id){
+ const el=document.getElementById('aso-'+id); if(!el)return;
+ if(el.innerHTML){ el.innerHTML=''; return; }
+ const b=BORR.find(x=>x.id===id); el.innerHTML='<div class="note" style="margin-top:8px">Cargando…</div>';
+ let od_links={};
+ try{ if(b&&b.asamblea_id){ const r=await api('gob_minutas?select=textos&id=eq.'+b.asamblea_id); od_links=(r&&r[0]&&r[0].textos&&r[0].textos.od_links)||{}; } }catch(e){}
+ const rows=((b&&b.orden_dia)||[]).map((t,i)=>{ const _cur=(od_links[t]&&od_links[t].url)||urlPunto(t,SOC); return '<div style="border-bottom:1px dashed var(--rule,#e6ddcb);padding-bottom:8px;margin-bottom:8px"><div style="font-size:.82rem"><b>'+(i+1)+'.</b> '+esc(t)+'</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:5px"><select class="od-sel" onchange="odSel(this)" style="font-size:.76rem;flex:1 1 230px;padding:6px;border:1px solid var(--rule,#e6ddcb);border-radius:8px"><option value="">— Módulo del dashboard… —</option>'+modOptions(_cur)+'</select><input class="od-url" data-pt="'+esc(t)+'" value="'+esc(_cur)+'" placeholder="…o pega un link / Drive" style="font-size:.76rem;flex:1 1 200px"><button type="button" class="btn ghost sm" onclick="odFile(this)">📎 archivo</button><input type="file" class="od-file" style="display:none" onchange="odUpload(this)"></div></div>'; }).join('')||'<div class="mini">Esta asamblea no tiene puntos cargados.</div>';
+ el.innerHTML='<div class="box" style="margin-top:8px;border-color:var(--accent)">'
+  +'<div class="note">Asocia a cada punto del orden del día un <b>módulo</b> del panel, un <b>link</b> (Drive u otro) o un <b>archivo</b>. Se guarda para que el socio lo vea en <b>«Mi Casa, Pepe»</b> — sin enviar nada todavía.</div>'
+  +'<div id="od-'+id+'-asoc" style="margin-top:8px">'+rows+'</div>'
+  +'<div style="margin-top:2px"><button type="button" class="btn sm" onclick="guardarEnlacesOD(\''+id+'\',\'asoc\')">💾 Guardar en «Mi Casa, Pepe»</button> <span class="mini" id="odsave-'+id+'-asoc"></span></div>'
+  +'</div>';
+}
+window.abreAsociar=abreAsociar;
+// Publica la asamblea como «Convocada»: verde en el funnel y visible en «Mi Casa, Pepe» para revisión, SIN enviar correos.
+async function publicarConvocada(id){
+ const b=BORR.find(x=>x.id===id);
+ if(!b||!b.asamblea_id){ alert('Esta asamblea no tiene registro para publicar.'); return; }
+ if(!confirm('Publicar como «Convocada»: aparece en «Mi Casa, Pepe» con la etapa Convocada en verde para que los socios revisen la minuta y el orden del día.\n\nTodavía NO se envían correos ni se piden confirmaciones (eso es «Enviar convocatoria»). ¿Continuar?'))return;
+ try{ let m=GM_CACHE[b.asamblea_id]; if(!m){ const rr=await api('gob_minutas?select=*&id=eq.'+b.asamblea_id); m=(rr&&rr[0])||{}; }
+   await gmPatch(b.asamblea_id,{estado:'convocada',textos:Object.assign({},m.textos||{},{etapa:'convocada',convocada_publicada:true,convocada_publicada_at:new Date().toLocaleDateString('es-MX')})});
+   alert('✓ Publicada como Convocada · visible en «Mi Casa, Pepe» para revisión.');
+ }catch(e){ alert('No se pudo: '+(e.message||e)); }
+ cargaCiclo();
+}
+window.publicarConvocada=publicarConvocada;
 function linksTexto(soc){ return (LINKS_DEF[soc]||LINKS_DEF.hbr).map(function(x){return x[0]+' | '+x[1];}).join('\n'); }
 function linksParse(t){ return String(t||'').split('\n').map(function(l){
   var i=l.indexOf('|'); if(i<0) return null;
