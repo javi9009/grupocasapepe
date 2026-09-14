@@ -484,11 +484,44 @@ function renderSoc(){
  }
 }
 function pickOpt(i){SELOPT=i;$('#opts').querySelectorAll('.opt').forEach((el,j)=>el.classList.toggle('sel',j===i));}
-function guardarDecision(){
+async function guardarDecision(){
+ const s=DATA[SOC].socios[PIDX];
+ const email=((s&&s.email)||'').toLowerCase();
  const d={opt:SELOPT,precio:$('#of-precio').value,vig:$('#of-vig').value,notas:$('#of-notas').value,ts:Date.now()};
  try{localStorage.setItem(decKey(),JSON.stringify(d))}catch(e){}
- const parts=[];if(SELOPT>=0)parts.push('opción '+(SELOPT+1));if(d.precio&&d.vig)parts.push('oferta '+d.precio+' vig. '+d.vig);
- $('#dec-msg').textContent=parts.length?('Guardado: '+parts.join(' · ')+'. (Se sincroniza a Supabase al conectar.)'):'Elige una opción o registra una oferta.';
+ const msg=$('#dec-msg');
+ if(SELOPT<0 && !(d.precio&&d.vig)){ if(msg)msg.textContent='Elige una opción o registra una oferta.'; return; }
+ // La decisión que se registra en la asamblea es SIEMPRE la tuya (la RLS exige que el
+ // correo de la sesión coincida). Si estás viendo la ficha de otro socio, solo queda local.
+ if(!(typeof esMiFicha==='function' && esMiFicha(s)) || !email){
+  if(msg)msg.textContent='Guardado local. Solo tu propia ficha se registra en la asamblea.'; return;
+ }
+ const OPTC=['S1','S2','C1','C2'];
+ if(msg)msg.textContent='Registrando…';
+ try{
+  const tasks=[];
+  // 1) Opción de salida → notificación "elegir_opcion" del socio (llega a Seguimiento)
+  if(SELOPT>=0 && OPTC[SELOPT]){
+   const op=OPTC[SELOPT];
+   const cand=(NOTIF_CACHE||[]).filter(n=>n.tipo==='elegir_opcion');
+   const noti=cand.find(n=>n.estado==='pendiente'||n.estado==='en_proceso')||cand[0];
+   if(noti){ tasks.push(notifApi('PATCH','gob_notificaciones?id=eq.'+encodeURIComponent(noti.id),{estado:'resuelta',respuesta:{opcion:op},resolved_at:new Date().toISOString(),updated_at:new Date().toISOString()})); }
+   else { tasks.push(notifApi('POST','gob_notificaciones',{sociedad:SOC,socio_email:email,tipo:'elegir_opcion',titulo:'Opción de salida',estado:'resuelta',respuesta:{opcion:op},resolved_at:new Date().toISOString()})); }
+  }
+  // 2) Oferta de recompra → gob_ofertas (upsert por socio+sociedad; llega a Seguimiento)
+  if(d.precio && d.vig){
+   const precioNum=parseFloat(String(d.precio).replace(/[^0-9.]/g,''))||null;
+   const body={sociedad:SOC,socio_email:email,socio_nombre:(s&&s.n)||null,opcion:(SELOPT>=0?OPTC[SELOPT]:null),precio:precioNum,vigencia:d.vig,notas:d.notas||null,estado:'abierta',updated_at:new Date().toISOString()};
+   tasks.push(
+    notifApi('GET','gob_ofertas?select=id&sociedad=eq.'+encodeURIComponent(SOC)+'&socio_email=eq.'+encodeURIComponent(email))
+    .then(rows=>{ const ex=Array.isArray(rows)&&rows[0]; return ex ? notifApi('PATCH','gob_ofertas?id=eq.'+encodeURIComponent(ex.id),body) : notifApi('POST','gob_ofertas',Object.assign({created_at:new Date().toISOString()},body)); })
+   );
+  }
+  await Promise.all(tasks);
+  const parts=[];if(SELOPT>=0)parts.push('opción '+OPTC[SELOPT]);if(d.precio&&d.vig)parts.push('oferta '+d.precio+' vig. '+d.vig);
+  if(msg)msg.textContent='Registrado ✓ '+parts.join(' · ');
+  try{ renderNotifs(s); }catch(e){}
+ }catch(e){ if(msg)msg.textContent='No se pudo registrar: '+(e&&e.message||e); }
 }
 
 /* ══ Centro de notificaciones / pendientes por responder del socio ══════════ */
