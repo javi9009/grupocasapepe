@@ -792,6 +792,14 @@ async function generar(){
    orden_dia:od, minuta_md:mn, acta_md:md,
    firmantes:TIT.map(t=>({nombre:t.razon_social,persona:t.persona||'',email:'',firmado:false,fecha:null}))
   });
+  // Crea el registro PADRE (asamblea_id) y enlaza el borrador → asamblea_id (modelo con cascade).
+  const bid=(rows&&rows[0]&&rows[0].id)||null;
+  try{
+   const akey='pipe:'+SOC+':gen:'+(bid||Date.now());
+   const par=await post('gob_minutas',{sociedad:SOC,asamblea_key:akey,titulo:'Asamblea General '+B.tipo+' · '+fechaLarga(B.fecha),estado:'borrador',orden_dia:od,acuerdos:od.map(t=>({punto:t,acuerdo:''})),textos:{convocatoria_md:mn,acta_generada_md:md,orden_dia_generado:od,borrador_id:bid}});
+   const aid=(par&&par[0]&&par[0].id)||null;
+   if(aid&&bid){ await post('gob_asamblea_borradores?id=eq.'+bid,{asamblea_id:aid,minuta_id:aid},'PATCH'); }
+  }catch(e){}
   msg.innerHTML='✓ Generados los dos documentos. Están en <b>Asambleas previstas</b>.';
   document.getElementById('preview').innerHTML=
    '<div class="box"><h4>Orden del día</h4><ol style="margin:8px 0 0 18px;padding:0">'+od.map(t=>'<li style="margin:4px 0">'+esc(t)+'</li>').join('')+'</ol></div>'+
@@ -847,17 +855,33 @@ function gmPatch(id,body){ return post('gob_minutas?id=eq.'+encodeURIComponent(i
 async function notificarSocios(tipo,titulo,detalle){ const list=SOCIOS_MAIL[SOC]||[]; for(const s of list){ try{ await post('gob_notificaciones',{sociedad:SOC,socio_email:s[1],tipo:tipo||'otro',titulo:titulo,detalle:detalle||'',prioridad:'media'}); }catch(e){} } }
 async function cargaEditarMinuta(){
  const box=document.getElementById('eminList'); if(!box)return; box.innerHTML='<div class="note">Cargando…</div>';
- let rows=[]; try{ rows=await gmFetch(); }catch(e){}
- GM_CACHE={}; (rows||[]).forEach(m=>GM_CACHE[m.id]=m);
- if(!Array.isArray(rows)||!rows.length){ box.innerHTML='<div class="note">No hay asambleas. Genera una en «Generar asamblea».</div>'; return; }
- box.innerHTML=rows.map(m=>{ const tx=m.textos||{}; const enviada=!!tx.minuta_enviada; const md=tx.convocatoria_md||'';
-  return '<div class="box" style="margin-bottom:10px"><div style="font-weight:700">'+esc(m.titulo||'')+' <span class="mini">'+(enviada?('· enviada '+(tx.minuta_enviada_at||'')):'· borrador')+'</span></div>'
-   +(md?('<textarea id="emin-t-'+m.id+'" '+(enviada?'readonly':'')+' style="width:100%;min-height:180px;margin-top:6px;padding:8px;border:1px solid var(--rule,#e6ddcb);border-radius:8px;font:inherit;font-size:.82rem">'+esc(md)+'</textarea>'):'<div class="mini" style="margin-top:6px">Sin minuta vinculada. Genérala en «Generar asamblea».</div>')
+ try{ BORR=await api('gob_asamblea_borradores?select=*&sociedad=eq.'+SOC+'&order=created_at.desc'); }catch(e){ BORR=[]; }
+ if(!BORR.length){ box.innerHTML='<div class="note">No hay asambleas. Genera una en «Generar asamblea».</div>'; return; }
+ box.innerHTML=BORR.map(b=>{ const E=EST[b.estado]||['q',b.estado];
+  return '<div class="box" style="margin-bottom:10px"><div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap"><div style="flex:1 1 220px"><div style="font-weight:700">'+esc(b.titulo||'Asamblea')+'</div><div class="mini">'+esc(fechaLarga(b.fecha))+' · '+(b.orden_dia||[]).length+' puntos</div></div><span class="chip '+E[0]+'">'+E[1]+'</span></div>'
+   +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+   +'<b>Minuta</b><span class="mini">va a «Convocada» para que los socios la consulten</span>'
+   +(b.minuta_pdf?('<span class="chip ok">PDF publicado</span><button class="btn ghost sm" onclick="abrirPDF(\''+esc(b.minuta_pdf)+'\',this)">Abrir PDF</button>'):'<span class="chip q">sin publicar</span>')
+   +'<button class="btn ghost sm" onclick="abreDoc(\''+b.id+'\',\'minuta\')">✏️ Editar minuta</button>'
+   +(b.minuta_pdf?('<button class="btn sm" onclick="abreEnvio(\''+b.id+'\',\'convocatoria\')">✉️ Asociar info + enviar a socios</button>'):'<span class="mini">Publica el PDF desde «Editar minuta» para poder enviar.</span>')
+   +'</div>'
    +'<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">'
-   +(enviada?'<span class="mini" style="color:var(--ok,#1D6B4A);font-weight:600">✓ Enviada · bloqueada · Convocada (verde) en el funnel</span>':(md?('<button class="btn ghost sm" onclick="eminGuardar(\''+m.id+'\')">Guardar</button><button class="btn sm" onclick="eminEnviar(\''+m.id+'\')">📧 Enviar a socios</button>'):''))
-   +'</div></div>';
+   +(b.asamblea_id?('<button class="btn ghost sm" onclick="cancelarAsamblea(\''+b.asamblea_id+'\')">Cancelar asamblea</button><button class="btn bad sm" onclick="eliminarAsamblea(\''+b.asamblea_id+'\')">🗑️ Eliminar asamblea (todo)</button>'):('<button class="btn bad sm" onclick="borrar(\''+b.id+'\')">🗑️ Eliminar borrador</button>'))
+   +'</div>'
+   +'<div id="ed-'+b.id+'-minuta"></div><div id="env-'+b.id+'-convocatoria"></div></div>';
  }).join('');
 }
+async function cancelarAsamblea(aid){
+ if(!confirm('Cancelar la asamblea: desaparece del funnel de los socios en Mi Casa Pepe y se les notifica. ¿Continuar?'))return;
+ try{ await gmPatch(aid,{estado:'cancelada'}); await notificarSocios('otro','Asamblea cancelada','La asamblea prevista fue cancelada; te avisaremos de la próxima.'); alert('Asamblea cancelada · fuera del funnel del socio.'); }catch(e){ alert('No se pudo: '+(e.message||e)); }
+ cargaEditarMinuta();
+}
+async function eliminarAsamblea(aid){
+ if(!confirm('ELIMINAR la asamblea y TODO lo asociado (minuta, acta, notificaciones, firmas, títulos). No se puede deshacer. ¿Continuar?'))return;
+ try{ const r=await fetch(SB+'/rest/v1/gob_minutas?id=eq.'+encodeURIComponent(aid),{method:'DELETE',headers:H_()}); if(!r.ok) throw new Error(await r.text()); alert('Asamblea eliminada con todo lo asociado.'); }catch(e){ alert('No se pudo: '+(e.message||e)); }
+ cargaEditarMinuta();
+}
+window.cancelarAsamblea=cancelarAsamblea; window.eliminarAsamblea=eliminarAsamblea;
 function eminGuardar(id){ const t=(document.getElementById('emin-t-'+id)||{}).value||''; const m=GM_CACHE[id]||{}; gmPatch(id,{textos:Object.assign({},m.textos||{},{convocatoria_md:t})}).then(()=>cargaEditarMinuta()); }
 async function eminEnviar(id){
  if(!confirm('Al enviar la minuta a los socios queda BLOQUEADA (ya no editable) y aparece como «Convocada» en Mi Casa Pepe. ¿Continuar?'))return;
