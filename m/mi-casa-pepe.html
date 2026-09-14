@@ -105,7 +105,13 @@ const SOCIOS=[
  {n:'Juan José Cué de la Fuente', e:'jjcue@yahoo.com'},
  {n:'Luis Javier Cué de la Fuente', e:'ljcue@elmuraldelospoblanos.com'}
 ];
-const socName=e=>{const s=SOCIOS.find(x=>x.e===(e||'').toLowerCase());return (s&&s.n)||e||'';};
+// Nombre de la sociedad para etiquetas (por clave).
+const SOCNAME={hbr:'Hostal Boutique Rep. de Uruguay',pontigu:'El Pontigu, S.A. de C.V.',struchture:'Struchture Inmoconstrucciones, S. de R.L. de C.V.'};
+// Padrón dinámico de la sociedad de la asamblea activa (se llena al cargar); si falla, usa el estático.
+let SOC_PADRON=[];
+// Si dirección cargó el padrón completo (≥2), úsalo; si no, para HBR cae al estático; para otras sociedades, lo que haya.
+const padronSoc=()=>{ if(SOC_PADRON.length>=2) return SOC_PADRON; if(((ASM&&ASM.sociedad)||'hbr')==='hbr') return SOCIOS; return SOC_PADRON; };
+const socName=e=>{const k=(e||'').toLowerCase();const s=padronSoc().find(x=>x.e===k)||SOCIOS.find(x=>x.e===k);return (s&&s.n)||e||'';};
 // Enlace por defecto de cada punto del orden del día (respaldo si no se configuró explícitamente).
 const SITEURL='https://grupocasapepe.netlify.app';
 function linkPunto(t){
@@ -140,8 +146,11 @@ init();
 /* ── Próxima asamblea ─────────────────────────────────── */
 async function cargarAsamblea(){
  try{
-  // Próxima asamblea activa de la sociedad: la más reciente NO cancelada que ya se convocó (o la refundación).
-  const {data}=await sb.from('gob_minutas').select('*').eq('sociedad','hbr').neq('estado','cancelada').order('updated_at',{ascending:false}).limit(20);
+  // Sociedades del socio (por su ficha); si no hay, cae a HBR.
+  let SOCS=['hbr'];
+  try{ const rs=await sb.from('socios').select('sociedades').eq('email',EMAIL).limit(1); const ss=(rs.data&&rs.data[0]&&rs.data[0].sociedades)||''; const arr=String(ss).split(',').map(x=>x.trim()).filter(Boolean); if(arr.length) SOCS=arr; }catch(e){}
+  // Próxima asamblea activa de cualquiera de sus sociedades: la más reciente NO cancelada ya convocada.
+  const {data}=await sb.from('gob_minutas').select('*').in('sociedad',SOCS).neq('estado','cancelada').order('updated_at',{ascending:false}).limit(30);
   const list=(data||[]).filter(m=>!(m.textos&&m.textos.historica));   // las históricas no son «la próxima»
   const hoy=new Date().toISOString().slice(0,10);
   // El socio ve la asamblea SOLO cuando ya se generó/envió la convocatoria (etapa Convocada o superior).
@@ -150,10 +159,12 @@ async function cargarAsamblea(){
   ASM = fut[0] || conv[0] || null;
   if(ASM&&ASM.asamblea_key) CUR_ASM_KEY=ASM.asamblea_key;
   if(ASM){ const f=ASM.fecha_celebracion||(ASM.textos&&ASM.textos.fecha)||null; if(f){ CUR_FECHA=String(f).length<=10?(f+'T10:00:00'):f; } }
+  // Padrón de la sociedad de esta asamblea (para el nombre y el selector de carta poder).
+  if(ASM&&ASM.sociedad){ try{ const rp=await sb.from('socios').select('nombre,email').eq('activo',true).ilike('sociedades','%'+ASM.sociedad+'%'); SOC_PADRON=(rp.data||[]).map(x=>({n:x.nombre,e:(x.email||'').toLowerCase()})).filter(x=>x.e); }catch(e){} }
  }catch(e){ ASM=null; }
  if(!ASM || ASM.estado==='cancelada'){ $('#asm-sub').textContent='No hay una próxima asamblea por ahora.'; $('#asm-funnel').innerHTML=''; $('#asm-conv').innerHTML=''; return; }
  const tit = ASM ? (ASM.titulo||'Asamblea') : 'Asamblea';
- $('#asm-sub').innerHTML = 'Hostal Boutique Rep. de Uruguay · <b>'+esc(tit)+'</b> · '+new Date(CUR_FECHA).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+' · 10:00 h';
+ $('#asm-sub').innerHTML = esc(SOCNAME[ASM&&ASM.sociedad]||SOCNAME.hbr)+' · <b>'+esc(tit)+'</b> · '+new Date(CUR_FECHA).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+' · 10:00 h';
  // funnel
  const estado=(ASM&&ASM.estado)||'borrador';
  const steps=[['Convocada','conv'],['Celebrada','celeb'],['Firmada','firma'],['Protocolizada','prot'],['Títulos emitidos','tit']];
@@ -202,7 +213,7 @@ window.addCalendar=function(){
  const start=CUR_FECHA.replace(/[-:]/g,'').replace('.000','');
  const end=new Date(new Date(CUR_FECHA).getTime()+2*3600*1000).toISOString().slice(0,19).replace(/[-:]/g,'');
  const title=encodeURIComponent('Asamblea · '+((ASM&&ASM.titulo)||'Casa Pepe'));
- const det=encodeURIComponent('Asamblea de socios de Hostal Boutique Rep. de Uruguay. Revisa tus pendientes en Mi Casa, Pepe.');
+ const det=encodeURIComponent('Asamblea de socios de '+((ASM&&SOCNAME[ASM.sociedad])||SOCNAME.hbr)+'. Revisa tus pendientes en Mi Casa, Pepe.');
  const url='https://calendar.google.com/calendar/render?action=TEMPLATE&text='+title+'&dates='+start+'/'+end+'&details='+det;
  window.open(url,'_blank');
 };
@@ -268,7 +279,7 @@ window.resolver=resolver;
 /* Carta poder */
 window.poderModal=function(notifId){
  const yoN=socName(EMAIL)||EMAIL;
- const opts='<option value="">— Elige un socio —</option>'+SOCIOS.filter(s=>s.e!==EMAIL).map(s=>'<option value="'+esc(s.e)+'">'+esc(s.n)+'</option>').join('');
+ const opts='<option value="">— Elige un socio —</option>'+padronSoc().filter(s=>s.e!==EMAIL).map(s=>'<option value="'+esc(s.e)+'">'+esc(s.n)+'</option>').join('');
  const old=document.getElementById('pm'); if(old)old.remove();
  const H='<div class="modalbg" id="pm" onclick="if(event.target.id===\'pm\')this.remove()"><div class="modal">'
   +'<h2 style="margin:0 0 4px">Carta poder para la asamblea</h2>'
@@ -297,7 +308,7 @@ window.poderEnviar=async function(){
  const fecha=new Date(ASM_FECHA).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'});
  const doc='<html><body style="font-family:Georgia,serif;max-width:640px;margin:36px auto;line-height:1.6"><pre style="white-space:pre-wrap;font-family:Georgia,serif">CARTA PODER\n\nEl(la) suscrito(a) '+yoN+', accionista de Hostal Boutique República de Uruguay, S.A. de C.V., por no poder asistir personalmente, otorga PODER ESPECIAL, amplio y suficiente, en favor de '+apoN+' para que en su nombre y representación ASISTA, DELIBERE, VOTE y TOME TODAS LAS DECISIONES que correspondan, expresamente en la Asamblea de Accionistas «'+tit+'» a celebrarse el '+fecha+'.\n\nEste poder es especial y se limita exclusivamente a dicha asamblea, en términos del artículo 192 de la Ley General de Sociedades Mercantiles, y se firma ante dos testigos.\n\nOtorgante (ausente): '+yoN+'\nApoderado: '+apoN+'\nTestigo 1: '+t1N+'\nTestigo 2: '+t2N+'\n\nFirma del otorgante: ______________________</pre></body></html>';
  try{
-  await sb.from('gob_poderes').insert({sociedad:'hbr',asamblea_key:CUR_ASM_KEY,asamblea_id:(ASM&&ASM.id)||null,otorgante_email:EMAIL,otorgante_nombre:yoN,apoderado_nombre:apoN,apoderado_email:apoE.toLowerCase(),testigo1_nombre:t1N,testigo1_email:t1E.toLowerCase(),testigo2_nombre:t2N,testigo2_email:t2E.toLowerCase(),doc_html:doc,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'});
+  await sb.from('gob_poderes').insert({sociedad:(ASM&&ASM.sociedad)||'hbr',asamblea_key:CUR_ASM_KEY,asamblea_id:(ASM&&ASM.id)||null,otorgante_email:EMAIL,otorgante_nombre:yoN,apoderado_nombre:apoN,apoderado_email:apoE.toLowerCase(),testigo1_nombre:t1N,testigo1_email:t1E.toLowerCase(),testigo2_nombre:t2N,testigo2_email:t2E.toLowerCase(),doc_html:doc,estado:'en_firma',enviar_ok:true,docusign_status:'en_cola'});
   fetch(SB_U+'/functions/v1/poderes-docusign',{method:'POST',headers:{apikey:SB_K,'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
   if(notifId) await resolver(notifId,{asistencia:'poder'},'en_proceso');
   msg.textContent='✓ Carta poder generada y enviada para firma.';
