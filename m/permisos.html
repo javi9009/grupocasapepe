@@ -145,6 +145,22 @@ function render(){
   });
   const dl=$('grpList'); dl.innerHTML=[...new Set(ROWS.map(r=>r.grupo).filter(Boolean))].map(g=>'<option value="'+g.replace(/"/g,'&quot;')+'">').join('');
 }
+/* Refresca el aspecto de UNA fila tras guardar: color, etiqueta de estatus y
+   la fecha en claro. Evita tener que reconstruir la tabla entera. */
+function pintaFila(tr,r){
+  const bad=esVencido(r);
+  tr.className=bad?'vencido':'';
+  const tags={vigente:'<span class="tag vig">Vigente</span>',en_tramite:'<span class="tag tram">En trámite</span>',vencido:'<span class="tag ven">VENCIDO</span>'};
+  const sel=tr.querySelector('select[data-f=estatus]');
+  if(sel){ sel.value=r.estatus||''; const d=sel.parentElement.querySelector('div'); if(d) d.innerHTML=tags[r.estatus]||'<span class="tag nd">—</span>'; }
+  const inp=tr.querySelector('input[data-f=vigencia]');
+  if(inp){
+    if(document.activeElement!==inp) inp.value=r.vigencia||'';
+    const lbl=inp.parentElement.querySelector('div');
+    if(lbl){ lbl.textContent=r.vigencia?fmt(r.vigencia):''; lbl.style.color=bad?'var(--bad)':'var(--muted)'; }
+  }
+}
+
 function fila(r){
   const tr=document.createElement('tr'); tr.dataset.id=r.id;
   const bad=esVencido(r); if(bad)tr.className='vencido';
@@ -162,13 +178,29 @@ function fila(r){
   tr.querySelectorAll('input[data-f],select[data-f]').forEach(i=>{
     i.addEventListener('wheel',()=>i.blur());
     i.onchange=async()=>{ const f=i.dataset.f; let v=i.value; if(v==='')v=null;
+      const eraVencido=esVencido(r);
+      const patch={[f]:v,updated_at:new Date().toISOString()};
+      // Si le pones una vigencia de hoy en adelante a algo marcado «vencido»,
+      // deja de estarlo. Sin esto la fila se queda roja para siempre: esVencido()
+      // mira el estatus ANTES que la fecha y nunca llega a comparar.
+      if(f==='vigencia' && v && r.estatus==='vencido'){
+        const d=fdate(v); if(d && d>=hoy) patch.estatus='vigente';
+      }
       try{
-        const res=await fetch(SB+'/permisos?id=eq.'+r.id,{method:'PATCH',headers:{...H,Prefer:'return=representation'},body:JSON.stringify({[f]:v,updated_at:new Date().toISOString()})});
-        const j=res.ok?await res.json():[];
-        if(!res.ok||!j.length){ status('⚠ NO se guardó (¿sesión expirada?) — recarga e inténtalo','err'); return; }
-        r[f]=v; status('✓ guardado','ok');
-        const nb=esVencido(r); tr.className=nb?'vencido':''; render(); // re-render sólo tras cambio confirmado
-      }catch(e){ status('⚠ NO se guardó','err'); }
+        const res=await fetch(SB+'/permisos?id=eq.'+r.id,{method:'PATCH',headers:{...H,Prefer:'return=representation'},body:JSON.stringify(patch)});
+        const txt=await res.text(); let j=[]; try{ j=txt?JSON.parse(txt):[]; }catch(_){}
+        if(!res.ok){ status('⚠ NO se guardó — '+String(txt||res.status).slice(0,150),'err'); return; }
+        // PostgREST devuelve 200 con lista vacía cuando una política RLS impide
+        // el UPDATE: parece que guardó y no guardó nada.
+        if(!j.length){ status('⚠ NO se guardó: el servidor no actualizó ninguna fila (revisa permisos sobre «permisos»)','err'); return; }
+        Object.assign(r, patch);
+        status('✓ guardado','ok');
+        pintaFila(tr,r);
+        // Sólo reconstruimos la tabla si cambió el estado vencido/al día, que es
+        // lo único que afecta al aviso de arriba. Antes se hacía en cada cambio
+        // y se llevaba por delante el campo que estabas editando.
+        if(eraVencido!==esVencido(r)) render();
+      }catch(e){ status('⚠ NO se guardó — '+(e&&e.message?e.message:'error de red'),'err'); }
     };
   });
   const td=tr.querySelector('.docs');
