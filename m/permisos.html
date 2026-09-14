@@ -71,9 +71,9 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--ru
   <select id="n_cat"><option value="permiso">Permiso (vence / se renueva)</option><option value="documentacion">Documentación de la propiedad (no vence)</option></select>
   <label>Nombre</label><input id="n_nom" placeholder="p. ej. Licencia de funcionamiento">
   <label>Grupo</label><input id="n_grp" list="grpList" placeholder="p. ej. Protección Civil"><datalist id="grpList"></datalist>
-  <label>Responsable</label><input id="n_resp">
+  <label>Responsable</label><select id="n_resp"></select>
   <label>Renovación</label>
-  <select id="n_ren"><option>Anual</option><option>Cada año</option><option>Cada 2 años</option><option>2 años</option><option>3 años</option><option>Cada 5 años</option><option>Única</option><option>Otro</option></select>
+  <select id="n_ren"></select>
   <label>Fecha de inicio</label><input id="n_ini" placeholder="texto libre (p. ej. 01 oct 2025)">
   <label>Vigencia (vence el)</label><input id="n_vig" type="date">
   <label>Costo</label><input id="n_costo" placeholder="$ 0.00">
@@ -93,6 +93,38 @@ async function sb(p,o){const r=await fetch(SB+p,{headers:H,...o});if(!r.ok){thro
 
 const UBIS=[['cdmx','CDMX'],['puebla','Puebla']];
 let UBI='cdmx', ROWS=[], PERM_UBIS=null;
+
+/* Catálogo único de periodos de renovación. Antes el desplegable del alta
+   tenía 'Anual' y 'Cada año' por separado, y '2 años' y 'Cada 2 años': se
+   guardaban textos distintos para lo mismo. Y no había forma de decir que
+   algo no se renueva. */
+const RENOVACIONES=['Sin renovación','Anual','Semestral','Trimestral','Mensual',
+                    'Cada 2 años','Cada 3 años','Cada 5 años','Única vez','Por evento'];
+
+/* Responsables: la plantilla activa, más lo que ya estuviera escrito en la
+   tabla para no perder valores viejos. Si employees no se puede leer, nos
+   quedamos con los que ya hay. */
+let RESPONSABLES=[];
+async function cargarResponsables(){
+  let gente=[];
+  try{
+    const r=await sb('/employees?select=nombre,nombre_display&order=nombre');
+    gente=(r||[]).map(e=>(e.nombre_display||e.nombre||'').trim()).filter(Boolean);
+  }catch(e){ /* sin permiso de lectura: seguimos con lo que haya en la tabla */ }
+  const enUso=ROWS.map(r=>(r.responsable||'').trim()).filter(Boolean);
+  RESPONSABLES=[...new Set([...gente,...enUso])].sort((a,b)=>a.localeCompare(b,'es'));
+}
+
+/* <select> con las opciones dadas. Si el valor guardado no está en la lista
+   (un texto viejo, una persona que ya no está) se añade para no borrarlo al
+   tocar otra cosa de la fila. */
+function opciones(lista, valor, vacio){
+  const v=valor||'';
+  const todas=v && !lista.includes(v) ? [v,...lista] : lista;
+  return '<option value="">'+vacio+'</option>'+
+    todas.map(o=>'<option value="'+o.replace(/"/g,'&quot;')+'"'+(o===v?' selected':'')+'>'+o+'</option>').join('');
+}
+
 const hoy=new Date();hoy.setHours(0,0,0,0);
 function fdate(s){if(!s)return null;const d=new Date(s+'T00:00:00');return isNaN(d)?null:d;}
 function esVencido(r){ if(r.estatus==='vencido')return true; const d=fdate(r.vigencia); return !!(d&&d<hoy); }
@@ -118,6 +150,7 @@ async function load(){
   status('cargando…');
   try{ ROWS=await sb('/permisos?select=*&ubicacion=eq.'+UBI+'&order=grupo,nombre')||[]; status('',''); }
   catch(e){ status('⚠ no se pudo cargar','err'); ROWS=[]; }
+  await cargarResponsables();
   render();
 }
 function render(){
@@ -167,8 +200,8 @@ function fila(r){
   const tags={vigente:'<span class="tag vig">Vigente</span>',en_tramite:'<span class="tag tram">En trámite</span>',vencido:'<span class="tag ven">VENCIDO</span>'};
   tr.innerHTML=
    '<td><b>'+esc(r.nombre)+'</b>'+(r.observaciones?'<div style="font-size:11px;color:var(--muted)">'+esc(r.observaciones)+'</div>':'')+(bad&&r.categoria==='permiso'?'<div class="venc-note">⚠ Vencido — renovar y subir documento</div>':'')+'</td>'+
-   '<td class="hidemov"><input data-f="responsable" value="'+esca(r.responsable)+'"></td>'+
-   '<td><input data-f="renovacion" value="'+esca(r.renovacion)+'" style="max-width:95px"></td>'+
+   '<td class="hidemov"><select data-f="responsable">'+opciones(RESPONSABLES,r.responsable,'— sin asignar —')+'</select></td>'+
+   '<td><select data-f="renovacion" style="max-width:130px">'+opciones(RENOVACIONES,r.renovacion,'—')+'</select></td>'+
    '<td class="hidemov"><input data-f="fecha_inicio" value="'+esca(r.fecha_inicio)+'" style="max-width:110px"></td>'+
    '<td><input type="date" data-f="vigencia" value="'+(r.vigencia||'')+'" style="max-width:130px">'+(r.vigencia?'<div style="font-size:11px;color:'+(bad?'var(--bad)':'var(--muted)')+'">'+fmt(r.vigencia)+'</div>':'')+'</td>'+
    '<td class="hidemov"><input data-f="costo" value="'+esca(r.costo)+'" style="max-width:100px"></td>'+
@@ -237,7 +270,11 @@ function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g
 function esca(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 
 /* ---------- alta ---------- */
-$('bNuevo').onclick=()=>$('dlg').showModal();
+$('bNuevo').onclick=()=>{
+  $('n_resp').innerHTML=opciones(RESPONSABLES,'','— sin asignar —');
+  $('n_ren').innerHTML=opciones(RENOVACIONES,'Anual','—');
+  $('dlg').showModal();
+};
 $('n_cancel').onclick=()=>$('dlg').close();
 $('n_save').onclick=async()=>{
   const nom=$('n_nom').value.trim(); if(!nom){alert('Escribe el nombre.');return;}
