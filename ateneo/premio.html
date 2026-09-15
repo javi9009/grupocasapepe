@@ -46,6 +46,9 @@ canvas{width:100%;height:190px;background:#fffdf8;border:1.5px dashed #b9ab96;bo
 .ok{color:var(--green);font-weight:700}
 .lista{list-style:none;padding:0;margin:10px 0 0;font-size:14.5px}
 .lista li{padding:5px 0;border-top:1px solid var(--line)}
+.tipo{font:inherit;font-size:14px;font-weight:700;cursor:pointer;padding:10px 16px;border-radius:10px;
+  border:1.5px solid var(--line);background:var(--pnl2);color:var(--mut)}
+.tipo.sel{border-color:var(--gold);color:var(--gold);background:#241f19}
 .aviso{background:#221d19;border-left:3px solid var(--gold);border-radius:0 10px 10px 0;padding:13px 15px;margin:14px 0}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff6;border-top-color:#fff;
  border-radius:50%;animation:g .7s linear infinite;vertical-align:-2px}
@@ -80,10 +83,21 @@ canvas{width:100%;height:190px;background:#fffdf8;border:1.5px dashed #b9ab96;bo
       <div class="grid g2" style="margin-top:14px">
         <div><label>Nombre completo del titular</label><input type="text" id="f-titular" autocomplete="name"></div>
         <div><label>RFC o identificación fiscal <span style="opacity:.6">(opcional)</span></label><input type="text" id="f-rfc" autocomplete="off"></div>
+        <div style="grid-column:1/-1">
+          <label>¿Dónde está la cuenta?</label>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+            <button type="button" class="tipo sel" id="t-mx"  onclick="tipoCuenta('mx')">🇲🇽 En México</button>
+            <button type="button" class="tipo"     id="t-int" onclick="tipoCuenta('int')">🌎 En el extranjero</button>
+          </div>
+        </div>
         <div><label>Banco</label><input type="text" id="f-banco" placeholder="BBVA, Banorte, Santander…"></div>
-        <div><label>CLABE interbancaria (18 dígitos)</label><input type="text" id="f-clabe" inputmode="numeric" maxlength="22" placeholder="000000000000000000"></div>
+        <div id="w-clabe"><label>CLABE interbancaria (18 dígitos)</label><input type="text" id="f-clabe" inputmode="numeric" maxlength="22" placeholder="000000000000000000"></div>
+        <div id="w-iban" hidden><label>IBAN o número de cuenta</label><input type="text" id="f-iban" autocomplete="off" placeholder="GB29 NWBK 6016 1331 9268 19"></div>
+        <div id="w-swift" hidden><label>SWIFT / BIC</label><input type="text" id="f-swift" autocomplete="off" maxlength="14" placeholder="REVOGB21"></div>
+        <div id="w-pais" hidden><label>País del banco</label><input type="text" id="f-pais" autocomplete="country-name" placeholder="Reino Unido"></div>
         <div><label>Correo para la confirmación del pago</label><input type="email" id="f-correo" inputmode="email" autocomplete="email"></div>
       </div>
+      <p class="mini" id="m-int" hidden style="margin-top:12px">La transferencia internacional puede tardar unos días más y el banco intermediario suele cobrar una comisión, que sale del monto.</p>
     </div>
 
     <div class="card" id="c-dev" hidden>
@@ -200,6 +214,20 @@ function preparaLienzo(){
 }
 function limpiar(){ const c=$('lienzo'); ctx.clearRect(0,0,c.width,c.height); trazos=0; }
 
+/* ---------- tipo de cuenta ---------- */
+let TIPO_CUENTA='mx';
+function tipoCuenta(t){
+  TIPO_CUENTA = t==='int' ? 'int' : 'mx';
+  const mx = TIPO_CUENTA==='mx';
+  $('t-mx').classList.toggle('sel', mx);
+  $('t-int').classList.toggle('sel', !mx);
+  $('w-clabe').hidden = !mx;
+  $('w-iban').hidden  =  mx;
+  $('w-swift').hidden =  mx;
+  $('w-pais').hidden  =  mx;
+  $('m-int').hidden   =  mx;
+}
+
 /* ---------- enviar ---------- */
 async function firmar(){
   const e=$('err'); e.textContent='';
@@ -210,29 +238,49 @@ async function firmar(){
   const body={f:TOK,nombre,png:$('lienzo').toDataURL('image/png')};
 
   if(D.firmante.rol==='empresa'){
-    const clabe=$('f-clabe').value.replace(/\D/g,'');
     if($('f-titular').value.trim().length<4){ e.textContent='Falta el nombre del titular de la cuenta.'; return }
     if(!$('f-banco').value.trim()){ e.textContent='Falta el banco.'; return }
-    if(clabe.length!==18){ e.textContent='La CLABE son 18 dígitos.'; return }
+    let clabe, swift='', pais='';
+    if(TIPO_CUENTA==='mx'){
+      clabe=$('f-clabe').value.replace(/\D/g,'');
+      if(clabe.length!==18){ e.textContent='La CLABE son 18 dígitos.'; return }
+    }else{
+      clabe=$('f-iban').value.replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+      swift=$('f-swift').value.replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+      pais=$('f-pais').value.trim();
+      if(clabe.length<8||clabe.length>34){ e.textContent='El IBAN o número de cuenta va entre 8 y 34 letras o números.'; return }
+      if(swift.length!==8&&swift.length!==11){ e.textContent='El SWIFT/BIC son 8 u 11 letras o números.'; return }
+      if(pais.length<3){ e.textContent='Falta el país del banco.'; return }
+    }
     const dm=$('f-devmail').value.trim();
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(dm)){ e.textContent='Falta el correo del desarrollador.'; return }
     if($('f-devnom').value.trim().length<3){ e.textContent='Falta el nombre del desarrollador.'; return }
     Object.assign(body,{
       titular:$('f-titular').value.trim(), rfc:$('f-rfc').value.trim(),
       banco:$('f-banco').value.trim(), clabe,
+      cuenta_tipo:TIPO_CUENTA, swift, banco_pais:pais,
       correo_confirmacion:$('f-correo').value.trim(),
       dev_nombre:$('f-devnom').value.trim(), dev_email:dm
     });
   }
 
-  await new Promise(res=>{
-    if(!navigator.geolocation) return res();
-    navigator.geolocation.getCurrentPosition(
-      p=>{body.lat=p.coords.latitude;body.lng=p.coords.longitude;res()},
-      ()=>res(), {timeout:4000,maximumAge:600000});
-  });
-
+  // el botón responde ANTES de nada: si no, parece que no hiciste clic
   const b=$('b-firmar'); b.disabled=true; b.innerHTML='<span class="spin"></span> Firmando…';
+
+  // la ubicación es opcional y nunca debe bloquear la firma: si el navegador
+  // deja el permiso colgado, seguimos igual a los 4 segundos
+  await new Promise(res=>{
+    let listo=false;
+    const seguir=()=>{ if(!listo){ listo=true; res(); } };
+    const reloj=setTimeout(seguir,4000);
+    if(!navigator.geolocation){ clearTimeout(reloj); return seguir(); }
+    try{
+      navigator.geolocation.getCurrentPosition(
+        p=>{ body.lat=p.coords.latitude; body.lng=p.coords.longitude; clearTimeout(reloj); seguir(); },
+        ()=>{ clearTimeout(reloj); seguir(); },
+        {timeout:4000,maximumAge:600000});
+    }catch(_){ clearTimeout(reloj); seguir(); }
+  });
   try{
     const r=await fetch(FN,{method:'POST',headers:H,body:JSON.stringify(body)});
     const d=await r.json();
