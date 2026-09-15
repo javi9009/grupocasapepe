@@ -39,6 +39,28 @@ input{font:inherit;font-size:13.5px;border:1.5px solid var(--line);border-radius
 .res{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;font-size:12px;font-weight:700}
 details summary{cursor:pointer;font-size:13.5px;color:var(--mut)}
 code{background:#f1ece3;padding:1px 5px;border-radius:5px;font-size:12.5px}
+.tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.tab{font:inherit;font-size:14px;font-weight:600;cursor:pointer;border:1.5px solid var(--line);background:#fff;
+ color:var(--mut);border-radius:99px;padding:8px 16px}
+.tab.on{background:var(--ink);border-color:var(--ink);color:#fff}
+textarea{width:100%;font:inherit;font-size:13.5px;line-height:1.55;border:1.5px solid var(--line);
+ border-radius:8px;padding:10px 12px;min-height:130px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace}
+textarea:focus,input:focus{border-color:var(--gold);outline:none}
+.sec{border-top:1px solid var(--line);padding:14px 0}
+.sec:first-of-type{border-top:0}
+.clave{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:700}
+.back{position:fixed;inset:0;background:rgba(20,17,15,.55);display:grid;place-items:center;padding:18px;z-index:50}
+.modal{background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:88vh;display:flex;flex-direction:column}
+.mhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.mhead h2{margin:0;flex:1}
+.mbody{overflow:auto;padding:20px 24px}
+.mbody h1{font-size:21px} .mbody h2{font-size:16px;margin:22px 0 6px;color:var(--gold)}
+.mbody table.ficha{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+.mbody table.ficha th{text-align:left;color:var(--mut);font-weight:600;padding:6px 10px 6px 0;width:40%;vertical-align:top}
+.mbody table.ficha td{padding:6px 0;vertical-align:top}
+.mbody .pend{color:var(--clay);font-style:italic}
+.mbody .sub{color:var(--mut)} .mbody .mini{color:var(--mut);font-size:13px}
+.x{font:inherit;font-size:20px;line-height:1;cursor:pointer;border:0;background:none;color:var(--mut);padding:4px 8px}
 </style>
 </head>
 <body>
@@ -46,7 +68,13 @@ code{background:#f1ece3;padding:1px 5px;border-radius:5px;font-size:12.5px}
 <p class="sub">Convenio de entrega · aportación de Casa Pepe de USD 500 por equipo, el 50% que corresponde a la empresa.
 Se paga cuando han firmado la empresa <b>y</b> el equipo de desarrollo.</p>
 
+<div class="tabs">
+  <button class="tab on" id="tb-equipos" onclick="ve('equipos')">Equipos</button>
+  <button class="tab" id="tb-texto" onclick="ve('texto')">Leer y editar el convenio</button>
+</div>
+
 <div id="panel"><p class="vacio">Cargando…</p></div>
+<div id="modal"></div>
 
 <script>
 const SBU='https://rehophywchakfapivsbh.supabase.co';
@@ -88,13 +116,21 @@ const ETAPA=c=>{
   return ['','Sin mandar'];
 };
 
-let DATOS=[];
+let DATOS=[], TEXTO=[], TAB='equipos';
+
+function ve(t){
+  TAB=t;
+  $('tb-equipos').className='tab'+(t==='equipos'?' on':'');
+  $('tb-texto').className='tab'+(t==='texto'?' on':'');
+  t==='texto'?pintaTexto():pinta();
+}
 
 async function carga(){
-  const d=await rpc('premio_lista');
+  const [d,t]=await Promise.all([rpc('premio_lista'),rpc('premio_plantilla_lista')]);
   if(!Array.isArray(d)){ $('panel').innerHTML='<p class="vacio">No se pudo cargar. ¿Tienes permiso sobre esta página?</p>'; return }
   if(!d.length){ $('panel').innerHTML='<p class="vacio">Todavía no hay convenios cargados.</p>'; return }
-  DATOS=d; pinta();
+  DATOS=d; TEXTO=Array.isArray(t)?t:[];
+  TAB==='texto'?pintaTexto():pinta();
 }
 
 function pinta(){
@@ -143,10 +179,11 @@ function pinta(){
 
 function acciones(c){
   const id=c.id;
+  const ver='<button class="btn" onclick="verDoc(\''+id+'\')">Leer</button>';
   if(c.estado==='borrador'||c.estado==='en_firma'){
     const hay=!!c.rep_email;
     return (hay?'':'<input type="email" id="m-'+id+'" placeholder="correo de la empresa" style="width:100%;margin-bottom:6px">')
-      +'<button class="btn p" onclick="enviar(\''+id+'\')">'+(c.estado==='borrador'?'Mandar convenio':'Reenviar')+'</button>';
+      +ver+'<button class="btn p" onclick="enviar(\''+id+'\')">'+(c.estado==='borrador'?'Mandar convenio':'Reenviar')+'</button>';
   }
   if(c.estado==='firmado'){
     return '<input id="fix-'+id+'" placeholder="FIX" style="width:78px">'
@@ -154,7 +191,60 @@ function acciones(c){
       +'<br><input id="ref-'+id+'" placeholder="referencia bancaria" style="width:100%;margin:6px 0">'
       +'<button class="btn p" onclick="pagar(\''+id+'\')">Marcar pagado</button>';
   }
-  return '<span class="chk">—</span>';
+  return ver;
+}
+
+/* ---------- leer el convenio de un equipo ---------- */
+async function verDoc(id){
+  const d=await rpc('premio_previo',{p_id:id});
+  if(!d||!d.html){ alert('No se pudo abrir el convenio.'); return }
+  const aviso = d.congelado && d.estado!=='borrador'
+    ? '<p class="mini" style="color:var(--gold);margin:0 0 12px"><b>Éste es el texto congelado</b> que se mandó a firmar. '
+      +'Editar la plantilla ya no lo cambia; sólo afecta a los que todavía no has mandado.</p>'
+    : '<p class="mini" style="margin:0 0 12px">Vista previa con los datos de este equipo. Todavía no se ha mandado nada.</p>';
+  $('modal').innerHTML='<div class="back" onclick="if(event.target===this)cierra()"><div class="modal">'
+    +'<div class="mhead"><h2>'+esc(d.empresa)+'</h2><button class="x" onclick="cierra()">✕</button></div>'
+    +'<div class="mbody">'+aviso+d.html+'</div></div></div>';
+}
+function cierra(){ $('modal').innerHTML=''; }
+
+/* ---------- el texto del convenio, editable ---------- */
+function pintaTexto(){
+  if(!TEXTO.length){ $('panel').innerHTML='<p class="vacio">No se pudo cargar el texto.</p>'; return }
+  let h='<div class="card"><h2>El texto que firman</h2>'
+   +'<p class="chk">Esto es el convenio tal cual, partido en secciones. Edita lo que quieras y guarda: '
+   +'lo que escribas aquí es lo que verán los que todavía no has mandado. Los ya mandados conservan el texto '
+   +'congelado del día que salieron.</p>'
+   +'<p class="chk" style="margin-top:8px">Los huecos se rellenan solos: '
+   +'<code>{{EMPRESA}}</code> <code>{{PROYECTO}}</code> <code>{{REP}}</code> <code>{{DEV}}</code> '
+   +'<code>{{MONTO}}</code> <code>{{PLAZO}}</code> <code>{{FECHAS}}</code> <code>{{EVENTO}}</code> '
+   +'<code>{{BANCO}}</code>. Puedes usar HTML sencillo: <code>&lt;p&gt;</code> <code>&lt;b&gt;</code>.</p></div>';
+
+  h+='<div class="card">';
+  TEXTO.forEach(t=>{
+    h+='<div class="sec"><div class="clave">'+esc(t.clave)+(t.updated_by?' · editado por '+esc(t.updated_by):'')+'</div>'
+     +'<input type="text" id="ti-'+t.clave+'" placeholder="Título de la sección (opcional)" value="'+esc(t.titulo||'')+'" style="width:100%;margin:6px 0">'
+     +'<textarea id="tc-'+t.clave+'">'+esc(t.cuerpo)+'</textarea>'
+     +'<button class="btn p" style="margin-top:8px" onclick="guardaSec(\''+t.clave+'\')">Guardar esta sección</button>'
+     +'<span class="msg" id="ms-'+t.clave+'"></span></div>';
+  });
+  h+='</div>';
+
+  const primero=DATOS.find(c=>c.estado==='borrador')||DATOS[0];
+  if(primero) h+='<div class="card"><h2>Cómo queda</h2><p class="chk">Ábrelo con los datos reales de un equipo '
+   +'antes de mandar nada.</p><button class="btn" onclick="verDoc(\''+primero.id+'\')">Ver con los datos de '
+   +esc(primero.empresa)+'</button></div>';
+
+  $('panel').innerHTML=h;
+}
+
+async function guardaSec(clave){
+  const m=$('ms-'+clave); m.className='msg'; m.textContent=' guardando…';
+  const r=await rpc('premio_plantilla_guardar',{
+    p_clave:clave, p_titulo:$('ti-'+clave).value, p_cuerpo:$('tc-'+clave).value});
+  if(r&&r.error){ m.className='msg e'; m.textContent=' '+r.error; return }
+  m.className='msg k'; m.textContent=' guardado';
+  TEXTO=await rpc('premio_plantilla_lista');
 }
 
 async function enviar(id){
