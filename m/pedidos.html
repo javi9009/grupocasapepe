@@ -47,6 +47,8 @@ tr.grp td{background:var(--surface-2);font-weight:700;font-size:12.5px;letter-sp
 .pill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .vistas{display:flex;gap:6px;margin:0 0 8px}
+.nuevoprod{margin-top:14px;padding:12px;border:1px dashed var(--rule-2);border-radius:12px;font-size:13.5px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.nuevoprod .btn{text-decoration:none}
 .cpfil{display:flex;gap:8px;align-items:center}
 .cpfil input{flex:2 1 180px}
 .cpfil select{flex:1 1 150px}
@@ -129,7 +131,7 @@ const chipEst=e=>{const m=estMeta(e);return `<span class="chip ${m[2]}">${esc(m[
 let USER=null, EMAIL="", PROPS=[], SEDE=null, TAB="funnel";
 let PUEDE_APROBAR=false, PUEDE_EDITAR=false;
 let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[], SOLMTTO=[];
-let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={};
+let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={}, ERRCARGA=[];
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
 
 /* ───────────────── arranque ───────────────── */
@@ -146,7 +148,7 @@ async function boot(){
   try{ props = await cpAcceso.filtra(props, p=>p.nombre); }catch(_){}
   PROPS=props.sort((a,b)=>a.nombre.localeCompare(b.nombre));
   if(!PROPS.length){ $("view").innerHTML='<div class="center">No tienes ninguna sede asignada.</div>'; return; }
-  SEDE=PROPS[0].id;
+  SEDE=(await miSede())||PROPS[0].id;
   pintaSede(); pintaTabs();
 
   const q=new URLSearchParams(location.search);
@@ -161,6 +163,14 @@ async function nivel(pagina){
     const {data}=await sb.rpc("permiso_efectivo",{p_email:EMAIL,p_pagina:pagina});
     return (data||"none");
   }catch(_){ return "none"; }
+}
+// La sede donde trabaja la persona manda sobre el orden alfabético.
+async function miSede(){
+  try{
+    const {data}=await sb.from("employees").select("property_id").ilike("email",EMAIL).maybeSingle();
+    const p=data&&data.property_id;
+    return (p && PROPS.some(x=>x.id===p)) ? p : null;
+  }catch(_){ return null; }
 }
 function pintaSede(){
   if(PROPS.length===1){ $("sedeBox").innerHTML=`<span class="chip c-env">${esc(PROPS[0].nombre)}</span>`; return; }
@@ -200,6 +210,9 @@ async function recargar(){
     sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE)
   ]);
   SUG=sug.data||[]; PEDIDOS=ped.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; PRODS=pro.data||[]; SOLMTTO=sm.data||[]; CATPROV=cp.data||[];
+  // Un error de carga no debe disfrazarse de "no hay catálogo": se guarda para decirlo en pantalla.
+  ERRCARGA=[["productos",pro],["precios",cp],["proveedores",prov],["bodegas",bod],["cuentas",cue]]
+    .filter(([,r])=>r&&r.error).map(([q,r])=>q+": "+(r.error.message||r.error.code||"error"));
   window.__sede=sede;
   render();
 }
@@ -531,6 +544,10 @@ function cpCuerpo(titulo){
     </div>
     <div id="cpCats" class="chips"></div>
     <div id="cpGrid"></div>
+    <div class="nuevoprod">
+      ¿No está en la lista? Cuéntaselo a Don José y él arma la ficha para darlo de alta.
+      <a class="btn sm ghost" href="/m/don-jose.html" target="_top">🛒 Hablar con Don José</a>
+    </div>
     <div id="cpCart"></div>`;
 }
 function cpInit(){ cargaPlantillas(); cpPintaVista(); cpPintaCats(); cpPintaGrid(); cpPintaCart(); }
@@ -615,7 +632,7 @@ function cpPintaGrid(){
   const g=$("cpGrid"); if(!g) return;
   const q=(($("cpBusca")||{}).value||"").trim().toLowerCase();
   const todo=itemsVista();
-  const sede=(PROPS.find(p=>p.id===SEDE)||{}).nombre||"esta sede";
+  const sede=(PROPS.find(p=>p.id===SEDE)||PROPS[0]||{}).nombre||"esta sede";
 
   // Por proveedor solo tiene sentido si el catálogo tiene precios cargados.
   if(VISTA==="proveedor" && todo.length && !todo.some(x=>x.grupo!==SINPROV)){
@@ -628,7 +645,11 @@ function cpPintaGrid(){
   // Sin catálogo cargado en la sede: decirlo, no dejar la pantalla muda.
   if(!todo.length){
     const hay=PRODS.length;
-    g.innerHTML=`<div class="avisos">${hay
+    g.innerHTML=`<div class="avisos">${
+      ERRCARGA.length
+      ? `No se pudo cargar el catálogo de <b>${esc(sede)}</b> (${esc(ERRCARGA.join(" · "))}).
+         Recarga la página; si sigue igual, avísale a administración — no es que no haya productos.`
+      : hay
       ? `El catálogo de <b>${esc(sede)}</b> no tiene productos pedibles de tus áreas (${esc(MISAREAS.join(" · "))}).`
       : `<b>${esc(sede)}</b> todavía no tiene catálogo de compras cargado. Pídeselo a administración o cambia de sede arriba.`}</div>`;
     return;

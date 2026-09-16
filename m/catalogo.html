@@ -17,6 +17,11 @@ body{background:var(--ground);color:var(--ink);margin:0;font:15px/1.5 system-ui,
 .top-in{max-width:1180px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .brand{font-weight:700;font-size:1.15rem}.brand small{display:block;font-weight:400;font-size:.7rem;color:var(--muted)}
 .spacer{margin-left:auto}
+.altacard{border:1px solid var(--rule-2);border-radius:12px;padding:14px;margin-top:12px}
+.altahd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.altagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.altafoto{max-width:220px;border-radius:10px;margin-top:10px;display:block}
+.altabtns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .secnav{position:sticky;top:0;z-index:19;background:var(--ground);border-bottom:1px solid var(--rule)}
 .secnav-in{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto}
 .secnav button{border:0;background:none;font:inherit;padding:12px 14px;color:var(--muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
@@ -99,7 +104,7 @@ const PRESENTACIONES=["pieza","paquete","bolsa","botella","garrafón","caja","bo
 
 let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
 let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={};
-let STOCK=[],CONTEOS=[],CONCIL=[];
+let STOCK=[],CONTEOS=[],CONCIL=[],ALTAS=[];
 let F={area:"",tipo:"",bodega:"",q:"",solo:"todos"};
 
 async function boot(){
@@ -112,8 +117,18 @@ async function boot(){
   try{ props=await cpAcceso.filtra(props,p=>p.nombre); }catch(_){}
   PROPS=props.sort((a,b)=>a.nombre.localeCompare(b.nombre));
   if(!PROPS.length){ $("view").innerHTML='<div class="center">No tienes ninguna sede asignada.</div>'; return; }
-  SEDE=PROPS[0].id;
+  SEDE=(await miSede())||PROPS[0].id;
+  const qt=new URLSearchParams(location.search).get("tab");
+  if(qt) TAB=qt;   // el aviso de Don José entra directo a ?tab=altas
   pintaSede(); pintaTabs(); await recargar();
+}
+// La sede donde trabaja la persona manda sobre el orden alfabético.
+async function miSede(){
+  try{
+    const {data}=await sb.from("employees").select("property_id").ilike("email",EMAIL).maybeSingle();
+    const p=data&&data.property_id;
+    return (p && PROPS.some(x=>x.id===p)) ? p : null;
+  }catch(_){ return null; }
 }
 function pintaSede(){
   if(PROPS.length===1){ $("sedeBox").innerHTML=`<span class="chip c-n">${esc(PROPS[0].nombre)}</span>`; return; }
@@ -122,7 +137,9 @@ function pintaSede(){
   $("selSede").onchange=e=>{SEDE=e.target.value;recargar();};
 }
 function pintaTabs(){
-  const t=[["productos","📦 Productos"],["precios","🏷️ Precios"],["proveedores","🚚 Proveedores"],
+  const pend=ALTAS.filter(a=>a.estado==='nueva'||a.estado==='en_revision').length;
+  const t=[["productos","📦 Productos"],["altas","🆕 Productos nuevos"+(pend?" ("+pend+")":"")],
+           ["precios","🏷️ Precios"],["proveedores","🚚 Proveedores"],
            ["stock","🏬 Stock por bodega"],["conteos","🧮 Conteos"],["concilia","🍽️ Conciliación A&B"]];
   $("tabs").innerHTML=t.map(([k,l])=>`<button aria-selected="${TAB===k}" onclick="irTab('${k}')">${esc(l)}</button>`).join("");
 }
@@ -130,7 +147,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg,stk,cts]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
@@ -138,15 +155,18 @@ async function recargar(){
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
     sb.from("cmp_v_proveedores_config").select("*").order("nombre"),
     sb.from("cmp_v_valor_stock").select("*").eq("property_id",SEDE),
-    sb.from("cmp_conteos").select("*").eq("property_id",SEDE).order("periodo_fin",{ascending:false}).limit(40)
+    sb.from("cmp_conteos").select("*").eq("property_id",SEDE).order("periodo_fin",{ascending:false}).limit(40),
+    sb.from("cmp_altas_producto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}).limit(120)
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[];
+  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   PRODS.forEach(p=>p._sinPrecio=sinPrecio.has(p.id));
+  pintaTabs();
   render();
 }
 function render(){
   if(TAB==="productos")  return vProductos();
+  if(TAB==="altas")      return vAltas();
   if(TAB==="precios")    return vPrecios();
   if(TAB==="proveedores")return vProveedores();
   if(TAB==="stock")      return vStock();
@@ -249,6 +269,136 @@ async function guardaProducto(id){
 
 /* ───────── Precios y presentaciones ───────── */
 let PSEL=null;
+/* ── Productos nuevos que pidieron por el chat de Don José ───────────── */
+const ALTA_EST={nueva:["Por revisar","c-n"],en_revision:["En revisión","c-n"],
+  dada_de_alta:["Dada de alta","c-ok"],rechazada:["Rechazada","c-bad"]};
+function vAltas(){
+  const pend=ALTAS.filter(a=>a.estado==="nueva"||a.estado==="en_revision");
+  const hechas=ALTAS.filter(a=>a.estado!=="nueva"&&a.estado!=="en_revision").slice(0,30);
+  $("view").innerHTML=`
+    <div class="card">
+      <h2>🆕 Productos que pidieron y todavía no existen</h2>
+      <p class="muted small">Llegan del chat con Don José. Revisa la ficha, ajusta lo que haga falta
+        y dale de alta: el producto queda en el catálogo y quien lo pidió recibe aviso para pedirlo.</p>
+      ${pend.length?pend.map(fichaAlta).join(""):'<div class="center muted">Nada pendiente. 👌</div>'}
+    </div>
+    ${hechas.length?`<div class="card"><h2>Ya resueltas</h2>
+      <table class="tbl"><thead><tr><th>Folio</th><th>Producto</th><th>Quién</th><th>Estado</th><th>Cuándo</th></tr></thead>
+      <tbody>${hechas.map(a=>`<tr>
+        <td>${esc(a.folio||"")}</td><td>${esc(a.nombre_propuesto)}</td>
+        <td>${esc(a.solicitante_nombre||a.solicitante_email)}</td>
+        <td><span class="chip ${(ALTA_EST[a.estado]||["",""])[1]}">${(ALTA_EST[a.estado]||[a.estado])[0]}</span></td>
+        <td class="small muted">${a.revisado_at?new Date(a.revisado_at).toLocaleDateString("es-MX"):""}</td>
+      </tr>`).join("")}</tbody></table></div>`:""}`;
+}
+function fichaAlta(a){
+  const d=(k,v)=> v?`<div><b class="small muted">${k}</b><div>${esc(v)}</div></div>`:"";
+  return `<div class="altacard">
+    <div class="altahd">
+      <span class="chip c-n">${esc(a.folio||"")}</span>
+      <b>${esc(a.nombre_propuesto)}</b>
+      ${a.urgencia==="urgente"?'<span class="chip c-bad">Urgente</span>':""}
+      <span class="small muted" style="margin-left:auto">${esc(a.solicitante_nombre||a.solicitante_email)} · ${new Date(a.created_at).toLocaleDateString("es-MX")}</span>
+    </div>
+    <div class="altagrid">
+      ${d("Características",a.caracteristicas)}
+      ${d("Área",a.area)}
+      ${d("Unidad",a.unidad_sugerida)}
+      ${d("Proveedor propuesto",a.proveedor_propuesto)}
+      ${d("Precio estimado",a.precio_estimado!=null?money(a.precio_estimado):"")}
+      ${d("Primer pedido",a.cantidad_primer_pedido!=null?num(a.cantidad_primer_pedido):"")}
+      ${d("Notas",a.notas)}
+      ${a.link_referencia?`<div><b class="small muted">Referencia</b><div><a href="${esc(a.link_referencia)}" target="_blank" rel="noopener">${esc(a.link_referencia.slice(0,70))}</a></div></div>`:""}
+    </div>
+    ${a.foto_url?`<a href="${esc(a.foto_url)}" target="_blank" rel="noopener"><img class="altafoto" src="${esc(a.foto_url)}" alt="foto"></a>`:""}
+    <div class="altabtns">
+      <button class="btn" onclick="abrirAlta('${a.id}')" ${PUEDE?"":"disabled"}>Dar de alta</button>
+      <button class="btn ghost" onclick="rechazarAlta('${a.id}')" ${PUEDE?"":"disabled"}>Rechazar</button>
+    </div>
+  </div>`;
+}
+const AREAS_OK=["A&B","Cuartos","Administración","Mantenimiento","Tours","Tienda"];
+const sinTilde=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+const normArea=a=>AREAS_OK.find(x=>sinTilde(x)===sinTilde(a))||"";
+function abrirAlta(id){
+  const a=ALTAS.find(x=>x.id===id); if(!a) return;
+  const area=normArea(a.area);
+  const uni=a.unidad_sugerida||"pza";
+  modal(`<h3 style="margin:0 0 8px">Dar de alta «${esc(a.nombre_propuesto)}»</h3>
+    <label>Nombre en el catálogo</label><input id="alNom" value="${esc(a.nombre_propuesto)}">
+    <div class="grid2">
+      <div><label>Área</label><select id="alArea">${AREAS_OK.map(x=>`<option ${x===area?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
+      <div><label>Categoría (pasillo)</label><input id="alCat" list="alCatList" value="${esc(a.categoria_sugerida||"")}" placeholder="Ej. Limpieza">
+        <datalist id="alCatList">${[...new Set(PRODS.map(p=>p.categoria).filter(Boolean))].sort().map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+    </div>
+    <div class="grid2">
+      <div><label>Tipo</label><select id="alTipo">${["consumible","blanco","refaccion","herramienta","menaje","activo","uniforme"].map(t=>`<option>${t}</option>`).join("")}</select></div>
+      <div><label>Unidad</label><select id="alUni">${["pza","kg","l","gr","ml"].map(u=>`<option ${u===uni?"selected":""}>${u}</option>`).join("")}</select></div>
+    </div>
+    <div class="grid2">
+      <div><label>Cuenta contable</label><select id="alCta">${optCtaAlta(area)}</select></div>
+      <div><label>Bodega</label><select id="alBod">${optBodAlta(area)}</select></div>
+    </div>
+    <div class="grid2">
+      <div><label>IVA %</label><input id="alIva" type="number" value="16" min="0" max="16" step="8"></div>
+      <div><label>Stock mínimo</label><input id="alMin" type="number" min="0" step="1" placeholder="opcional"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Proveedor (para cargar el precio)</label><select id="alProv"><option value="">— sin precio todavía —</option>${
+        PROVS.filter(p=>p.estado!=="baja").map(p=>`<option value="${p.proveedor_id}" ${a.proveedor_id===p.proveedor_id?"selected":""}>${esc(p.proveedor)}</option>`).join("")}</select></div>
+      <div><label>Precio por unidad</label><input id="alPrec" type="number" min="0" step="0.01" value="${a.precio_estimado!=null?a.precio_estimado:""}"></div>
+    </div>
+    ${a.proveedor_propuesto?`<p class="small muted">Propusieron: <b>${esc(a.proveedor_propuesto)}</b>${a.proveedor_id?"":" — si no está en la lista, primero dalo de alta en Proveedores."}</p>`:""}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13.5px;color:var(--ink)">
+      <input type="checkbox" id="alPedir" style="width:auto" ${a.cantidad_primer_pedido?"checked":""}>
+      Dejar creado el pedido en borrador por ${esc(a.cantidad_primer_pedido||1)} ${esc(a.unidad_sugerida||"pza")}
+    </label>
+    <div class="foot">
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="confirmaAlta('${a.id}')">Crear producto</button>
+    </div>`);
+  $("alArea").onchange=()=>{ $("alCta").innerHTML=optCtaAlta($("alArea").value); $("alBod").innerHTML=optBodAlta($("alArea").value); };
+}
+const optCtaAlta=area=>`<option value="">— elegir —</option>`+CUENTAS.filter(c=>!area||!c.areas||c.areas.includes(area)).map(c=>`<option value="${c.id}">${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("");
+const optBodAlta=area=>`<option value="">— elegir —</option>`+BODEGAS.filter(b=>!area||!b.area||b.area===area).map(b=>`<option value="${b.id}">${esc(b.nombre)}</option>`).join("");
+async function confirmaAlta(id){
+  const nom=($("alNom").value||"").trim(); if(!nom) return toast("Ponle nombre.");
+  if(!$("alCta").value) return toast("Elige la cuenta contable.");
+  if(!$("alBod").value) return toast("Elige la bodega.");
+  const prov=$("alProv").value||null, prec=parseFloat($("alPrec").value);
+  const {error}=await sb.rpc("cmp_alta_a_producto",{
+    p_alta:id, p_email:EMAIL, p_nombre:nom, p_area:$("alArea").value,
+    p_categoria:($("alCat").value||"").trim()||null, p_tipo:$("alTipo").value,
+    p_unidad_base:$("alUni").value, p_unidad_texto:$("alUni").value,
+    p_cuenta:$("alCta").value, p_bodega:$("alBod").value,
+    p_iva:parseFloat($("alIva").value)||0,
+    p_stock_min:parseFloat($("alMin").value)||null,
+    p_proveedor:prov, p_precio:(prov&&!isNaN(prec))?prec:null,
+    p_contenido:1, p_unidad_contenido:$("alUni").value });
+  if(error) return toast(error.message);
+  let msg="Producto creado y aviso enviado a quien lo pidió.";
+  if($("alPedir") && $("alPedir").checked){
+    const {data:folio,error:e2}=await sb.rpc("cmp_alta_a_pedido",{p_alta:id,p_email:EMAIL});
+    msg = e2 ? ("Producto creado, pero el pedido no: "+e2.message)
+             : ("Producto creado y pedido "+folio+" en borrador, listo para mandar a aprobar.");
+  }
+  closeModal(); toast(msg); await recargar();
+}
+async function rechazarAlta(id){
+  const a=ALTAS.find(x=>x.id===id); if(!a) return;
+  modal(`<h3 style="margin:0 0 8px">Rechazar «${esc(a.nombre_propuesto)}»</h3>
+    <label>¿Por qué? (lo va a leer quien lo pidió)</label>
+    <textarea id="alMot" rows="3" placeholder="Ej. Ya existe como «Jabón líquido 1 l», pídelo de ahí."></textarea>
+    <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="confirmaRechazo('${a.id}')">Rechazar</button></div>`);
+}
+async function confirmaRechazo(id){
+  const m=($("alMot").value||"").trim(); if(!m) return toast("Escribe el motivo.");
+  const {error}=await sb.rpc("cmp_alta_rechaza",{p_alta:id,p_email:EMAIL,p_motivo:m});
+  if(error) return toast(error.message);
+  closeModal(); toast("Rechazada y avisada."); await recargar();
+}
+
 function vPrecios(){
   const sinPrecio=PRODS.filter(p=>p.activo&&p._sinPrecio);
   const porArea={}; sinPrecio.forEach(p=>{(porArea[p.area]=porArea[p.area]||[]).push(p);});
