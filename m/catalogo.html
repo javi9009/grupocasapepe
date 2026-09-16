@@ -117,24 +117,32 @@ async function boot(){
   try{ props=await cpAcceso.filtra(props,p=>p.nombre); }catch(_){}
   PROPS=props.sort((a,b)=>a.nombre.localeCompare(b.nombre));
   if(!PROPS.length){ $("view").innerHTML='<div class="center">No tienes ninguna sede asignada.</div>'; return; }
-  SEDE=(await miSede())||PROPS[0].id;
+  SEDE=await sedeInicial();
   const qt=new URLSearchParams(location.search).get("tab");
   if(qt) TAB=qt;   // el aviso de Don José entra directo a ?tab=altas
   pintaSede(); pintaTabs(); await recargar();
 }
-// La sede donde trabaja la persona manda sobre el orden alfabético.
-async function miSede(){
+// Sede de arranque: la última que eligió, o la suya, o la primera que tenga catálogo.
+// (Corporativo y Virreyes no deben ganar solo por orden alfabético.)
+async function sedeInicial(){
+  try{ const g=localStorage.getItem("cp_sede_compras"); if(g && PROPS.some(p=>p.id===g)) return g; }catch(_){}
+  let con=new Set();
+  try{ const {data}=await sb.from("cmp_v_sedes_con_catalogo").select("property_id");
+       con=new Set((data||[]).map(r=>r.property_id)); }catch(_){}
   try{
     const {data}=await sb.from("employees").select("property_id").ilike("email",EMAIL).maybeSingle();
-    const p=data&&data.property_id;
-    return (p && PROPS.some(x=>x.id===p)) ? p : null;
-  }catch(_){ return null; }
+    const mia=data&&data.property_id;
+    if(mia && PROPS.some(p=>p.id===mia) && (!con.size || con.has(mia))) return mia;
+  }catch(_){}
+  const conCat=PROPS.find(p=>con.has(p.id));
+  return (conCat||PROPS[0]).id;
 }
+function recuerdaSede(id){ try{ localStorage.setItem("cp_sede_compras",id); }catch(_){} }
 function pintaSede(){
   if(PROPS.length===1){ $("sedeBox").innerHTML=`<span class="chip c-n">${esc(PROPS[0].nombre)}</span>`; return; }
   $("sedeBox").innerHTML=`<select id="selSede" style="width:auto;min-width:170px">`+
     PROPS.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join("")+`</select>`;
-  $("selSede").onchange=e=>{SEDE=e.target.value;recargar();};
+  $("selSede").onchange=e=>{SEDE=e.target.value;recuerdaSede(SEDE);recargar();};
 }
 function pintaTabs(){
   const pend=ALTAS.filter(a=>a.estado==='nueva'||a.estado==='en_revision').length;
@@ -156,7 +164,8 @@ async function recargar(){
     sb.from("cmp_v_proveedores_config").select("*").order("nombre"),
     sb.from("cmp_v_valor_stock").select("*").eq("property_id",SEDE),
     sb.from("cmp_conteos").select("*").eq("property_id",SEDE).order("periodo_fin",{ascending:false}).limit(40),
-    sb.from("cmp_altas_producto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}).limit(120)
+    // Las solicitudes de producto nuevo son una sola bandeja: Roberto ve las de las tres casas.
+    sb.from("cmp_altas_producto").select("*").order("created_at",{ascending:false}).limit(120)
   ]);
   PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
@@ -283,9 +292,10 @@ function vAltas(){
       ${pend.length?pend.map(fichaAlta).join(""):'<div class="center muted">Nada pendiente. 👌</div>'}
     </div>
     ${hechas.length?`<div class="card"><h2>Ya resueltas</h2>
-      <table class="tbl"><thead><tr><th>Folio</th><th>Producto</th><th>Quién</th><th>Estado</th><th>Cuándo</th></tr></thead>
+      <table class="tbl"><thead><tr><th>Folio</th><th>Producto</th><th>Casa</th><th>Quién</th><th>Estado</th><th>Cuándo</th></tr></thead>
       <tbody>${hechas.map(a=>`<tr>
         <td>${esc(a.folio||"")}</td><td>${esc(a.nombre_propuesto)}</td>
+        <td class="small muted">${esc(sedeNombre(a.property_id))}</td>
         <td>${esc(a.solicitante_nombre||a.solicitante_email)}</td>
         <td><span class="chip ${(ALTA_EST[a.estado]||["",""])[1]}">${(ALTA_EST[a.estado]||[a.estado])[0]}</span></td>
         <td class="small muted">${a.revisado_at?new Date(a.revisado_at).toLocaleDateString("es-MX"):""}</td>
@@ -298,6 +308,7 @@ function fichaAlta(a){
       <span class="chip c-n">${esc(a.folio||"")}</span>
       <b>${esc(a.nombre_propuesto)}</b>
       ${a.urgencia==="urgente"?'<span class="chip c-bad">Urgente</span>':""}
+      <span class="chip">${esc(sedeNombre(a.property_id))}</span>
       <span class="small muted" style="margin-left:auto">${esc(a.solicitante_nombre||a.solicitante_email)} · ${new Date(a.created_at).toLocaleDateString("es-MX")}</span>
     </div>
     <div class="altagrid">
@@ -320,8 +331,18 @@ function fichaAlta(a){
 const AREAS_OK=["A&B","Cuartos","Administración","Mantenimiento","Tours","Tienda"];
 const sinTilde=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
 const normArea=a=>AREAS_OK.find(x=>sinTilde(x)===sinTilde(a))||"";
-function abrirAlta(id){
+const sedeNombre=id=>((PROPS.find(p=>p.id===id)||{}).nombre||"");
+async function abrirAlta(id){
   const a=ALTAS.find(x=>x.id===id); if(!a) return;
+  // Las cuentas, bodegas y proveedores son de cada casa: si la pidieron en otra, cambiamos de sede primero.
+  if(a.property_id && a.property_id!==SEDE){
+    if(!PROPS.some(p=>p.id===a.property_id)) return toast("Esa solicitud es de "+esc(sedeNombre(a.property_id)||"otra sede")+" y no tienes acceso.");
+    SEDE=a.property_id; recuerdaSede(SEDE);
+    const s=$("selSede"); if(s) s.value=SEDE;
+    toast("Cambio a "+sedeNombre(SEDE)+" para darla de alta.");
+    await recargar();
+    return abrirAlta(id);
+  }
   const area=normArea(a.area);
   const uni=a.unidad_sugerida||"pza";
   modal(`<h3 style="margin:0 0 8px">Dar de alta «${esc(a.nombre_propuesto)}»</h3>
