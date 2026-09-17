@@ -174,14 +174,36 @@ const P=v=>(v===null||v===undefined||isNaN(v))?"—":"$"+Number(v).toLocaleStrin
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MESES=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-let DIA=[], DVW=[], DET=[], PROPS=[], sel=null;
+let DIA=[], DVW=[], DET=[], CASO=[], PROPS=[], sel=null;
+
+// Enlaces para ir a comprobarlo con los ojos.
+const URL_BOOKING=(f)=>{ const d=new Date(f+"T00:00:00"); d.setDate(d.getDate()+1);
+  return "https://www.booking.com/hotel/mx/casa-pepe-ciudad-de-mexico1.es.html?checkin="+f
+       +"&checkout="+d.toISOString().slice(0,10)+"&group_adults=1&no_rooms=1&group_children=0&selected_currency=MXN"; };
+const URL_WEB=(f,promo)=>{ const d=new Date(f+"T00:00:00"); d.setDate(d.getDate()+1);
+  return "https://grupocasapepe.cloudbeds.com/es/reservas/hiU1o8?checkin="+f
+       +"&checkout="+d.toISOString().slice(0,10)+"&currency=mxn"+(promo?"&promo=SUPERPEPE":""); };
+
+// Que significa cada estado, en una frase que se pueda leer sin saber SQL.
+const DIAG={
+  mas_barato_que_web:["Una OTA está vendiendo por debajo de la web.","Es el único que rompe paridad."],
+  descuento_no_autorizado:["Hay un descuento mayor del autorizado.","Alguien abrió una promoción de más."],
+  multiplicador_movido:["Booking no está publicando el markup pactado.","La tarifa que vende no sale de la BAR de Cloudbeds por 1.1543."],
+  tarifa_no_empujada:["La tarifa no llegó al canal.","Cloudbeds cambió y la OTA sigue con la vieja."],
+  derivacion_rota:["La derivación entre tarifas no cuadra.","La flexible o el desayuno no salen de la no reembolsable."],
+  revisar:["Hay algo que no encaja con ningún patrón conocido.","Hay que mirarlo a mano."],
+  ok:["Cuadra con lo esperado.",""],
+  "sin lectura":["Sin lectura de esta habitación.",""]
+};
 
 async function cargar(){
-  const [d,v,t]=await Promise.all([
+  const [d,v,t,c]=await Promise.all([
     api("cp_disparidad_dia?select=*&order=fecha_estancia"),
     api("cp_dia_vs_web?select=*&order=fecha_estancia"),
-    api("cp_paridad_directo?select=*&order=fecha_estancia,clase_orden")
+    api("cp_paridad_directo?select=*&order=fecha_estancia,clase_orden"),
+    api("cp_caso_dia?select=*&order=fecha_estancia,clase_orden")
   ]);
+  CASO=Array.isArray(c)?c:[];
   const f=fallo(d)||fallo(v)||fallo(t);
   if(f){ document.getElementById("cal").innerHTML=
     `<div class="vacio-msg">No pude leer los datos (HTTP ${f.__fallo}). La pantalla no inventa: aquí no hay nada que mirar hasta que responda.</div>`;
@@ -199,18 +221,30 @@ const iso=d=>d.toISOString().slice(0,10);
 
 // Con el barrido a fondo semanal, el eje de calidad ya no es la profundidad sino
 // CUANDO se reviso. Una lectura de hace nueve dias no describe el precio de hoy.
+// Resume, en una linea, QUE se detecto esa noche y en cuantas habitaciones.
+function queSeDetecto(f){
+  const filas=CASO.filter(x=>x.fecha_estancia===f&&x.propiedad_id===pid()
+                            &&x.estado&&x.estado!=="ok"&&x.estado!=="sin lectura");
+  if(!filas.length) return "";
+  const cuenta={};
+  filas.forEach(x=>{ cuenta[x.estado]=(cuenta[x.estado]||0)+1; });
+  return Object.entries(cuenta)
+    .map(([e,n])=>`${(DIAG[e]||[e])[0]} (${n} hab.)`)
+    .join(" · ");
+}
+
 function estadoDe(f){
   const d=DIA.find(x=>x.fecha_estancia===f&&x.propiedad_id===pid());
   const v=DVW.filter(x=>x.fecha_estancia===f&&x.propiedad_id===pid());
   if(!d&&!v.length) return {cls:"nd", g:"", txt:"sin revisar"};
   if(d&&d.severidad==="grave") return {cls:"grave", g:"▲", txt:"una OTA vende por debajo de la web"};
   if(v.some(x=>x.veredicto==="disparidad")) return {cls:"grave", g:"▲", txt:"una OTA vende por debajo de la web"};
-  if(d&&d.severidad==="aviso") return {cls:"aviso", g:"●", txt:"algo se desvió"};
+  if(d&&d.severidad==="aviso") return {cls:"aviso", g:"●", txt:queSeDetecto(f)||"algo se desvió"};
   if(d&&d.severidad==="ok")
     return {cls:"ok", g:"", txt:`revisado a fondo hace ${d.dias_desde_revision} día${d.dias_desde_revision===1?"":"s"}`};
   if(d&&d.severidad==="ok_viejo")
     return {cls:"viejo", g:"↻", txt:`revisado hace ${d.dias_desde_revision} días — toca repetirlo`};
-  if(d&&d.severidad==="revisar") return {cls:"aviso", g:"●", txt:"hay algo sin explicar"};
+  if(d&&d.severidad==="revisar") return {cls:"aviso", g:"●", txt:queSeDetecto(f)||"hay algo sin explicar"};
   if(d||v.length) return {cls:"parcial", g:"", txt:"revisado a medias"};
   return {cls:"nd", g:"", txt:"sin revisar"};
 }
@@ -289,19 +323,59 @@ function mover(ev){
 }
 
 function verCaso(f){
-  const v=DVW.filter(x=>x.fecha_estancia===f&&x.propiedad_id===pid());
-  // Sólo las filas con las DOS puntas: una tabla de guiones no es informacion.
-  const det=DET.filter(x=>x.fecha_estancia===f&&x.propiedad_id===pid()
-                        &&x.directo_mas_barato!==null&&x.booking_mas_barato!==null);
-  document.getElementById("caso-lead").textContent=`Noche del ${f}.`;
+  const P_=pid();
+  const filas=CASO.filter(x=>x.fecha_estancia===f&&x.propiedad_id===P_)
+                  .sort((a,b)=>(a.clase_orden??99)-(b.clase_orden??99));
+  const v=DVW.filter(x=>x.fecha_estancia===f&&x.propiedad_id===P_);
+  document.getElementById("caso-lead").innerHTML=
+    `Noche del <b>${esc(f)}</b> · <a href="${URL_BOOKING(f)}" target="_blank" rel="noopener">ver en Booking ↗</a>`
+    + ` · <a href="${URL_WEB(f,false)}" target="_blank" rel="noopener">web ↗</a>`
+    + ` · <a href="${URL_WEB(f,true)}" target="_blank" rel="noopener">web con SUPERPEPE ↗</a>`;
   const cuerpo=document.getElementById("caso-cuerpo");
-  if(!v.length&&!det.length){
+  if(!filas.length&&!v.length){
     cuerpo.innerHTML=`<div class="vacio-msg">Esta noche no se ha leído. No hay caso que analizar todavía.</div>`;
     return;
   }
   let h="";
-  if(v.length){
+  const det=queSeDetecto(f);
+  if(det) h+=`<div class="expl" style="margin:0 0 14px"><b>Qué se detectó:</b> ${esc(det)}</div>`;
+  else if(filas.some(x=>x.estado==="ok")) h+=`<div class="expl" style="margin:0 0 14px">Todo cuadra con lo esperado esta noche.</div>`;
+
+  if(filas.length){
     h+=`<div style="overflow-x:auto"><table><thead><tr>
+      <th>Habitación</th><th>BAR Cloudbeds</th><th>Booking público</th><th>Múltiplo</th>
+      <th>Booking más barato</th><th>Web más barata</th><th>Brecha</th><th>Qué pasa</th><th></th>
+      </tr></thead><tbody>`;
+    filas.forEach((x,i)=>{
+      const mr=x.multiplicador_real, me=Number(x.multiplicador_esperado||0);
+      const mal = mr && me && Math.abs(Number(mr)-me) > 0.01;
+      const [titulo,extra]=DIAG[x.estado]||[x.estado,""];
+      const cls = x.veredicto==="disparidad" ? "bad"
+                : (x.estado==="ok" ? "ok" : (x.estado==="sin lectura" ? "nd" : "warn"));
+      h+=`<tr>
+        <td><b>${esc(x.codigo||"—")}</b> <span style="color:var(--muted)">${esc(x.habitacion||"")}</span></td>
+        <td class="num">${P(x.bar_cloudbeds)}</td>
+        <td class="num" style="color:var(--muted)">${P(x.booking_publico)}</td>
+        <td class="num" style="color:${mal?"var(--bad)":"var(--muted)"};font-weight:${mal?600:400}">${mr?Number(mr).toFixed(4):"—"}</td>
+        <td class="num">${P(x.booking_mas_barato)}</td>
+        <td class="num"><b>${P(x.directo_mas_barato)}</b></td>
+        <td class="num">${x.brecha_pct===null||x.brecha_pct===undefined?"—":Number(x.brecha_pct).toFixed(1)+"%"}</td>
+        <td style="text-align:left"><span class="chip ${cls}">${esc(titulo)}</span></td>
+        <td>${mal?`<button class="btn" data-fix="${i}" style="padding:4px 10px;font-size:.74rem">Proponer ajuste</button>`:""}</td>
+      </tr>`;
+      if(extra&&x.estado!=="ok"&&x.estado!=="sin lectura")
+        h+=`<tr><td colspan="9" style="padding-top:0;border-bottom:1px solid var(--rule);
+             color:var(--muted);font-size:.78rem;text-align:left">${esc(extra)}${
+             x.que_hacer?" — "+esc(x.que_hacer):""}</td></tr>`;
+    });
+    h+=`</tbody></table></div>
+      <div class="nota">«Múltiplo» es Booking público ÷ BAR de Cloudbeds. Debería ser
+      ${esc(Number(filas[0].multiplicador_esperado||0).toFixed(4))} siempre. Cuando se desvía,
+      Booking está vendiendo desde una base distinta a la que tenemos cargada.</div>`;
+  }
+  if(v.length){
+    h+=`<h2 style="margin-top:18px">Resumen por segmento</h2>
+      <div style="overflow-x:auto"><table><thead><tr>
       <th>Segmento</th><th>Booking público</th><th>Booking más barato</th><th>Web más barata</th>
       <th>Neto vía Booking</th><th>Ventaja</th><th>Ahorro huésped</th><th></th></tr></thead><tbody>`
       + v.map(x=>{
@@ -313,7 +387,7 @@ function verCaso(f){
           <td class="num">${P(x.mejor_booking)}</td>
           <td class="num"><b>${P(x.mejor_web)}</b></td>
           <td class="num" style="color:var(--muted)">${P(x.piso)}</td>
-          <td class="num" style="color:${Number(x.ventaja_mxn)<0?'var(--bad)':'var(--ok)'};font-weight:600">${P(x.ventaja_mxn)}</td>
+          <td class="num" style="color:${Number(x.ventaja_mxn)<0?"var(--bad)":"var(--ok)"};font-weight:600">${P(x.ventaja_mxn)}</td>
           <td class="num">${P(x.ahorro_huesped_mxn)}</td>
           <td><span class="chip ${c}">${esc(t)}</span></td></tr>`;
       }).join("") + `</tbody></table></div>
@@ -321,25 +395,35 @@ function verCaso(f){
       de por Booking. Es una <b>referencia de margen</b>: aunque salga en negativo no rompe paridad.
       Lo único que rompe paridad es que una OTA venda por debajo de la web.</div>`;
   }
-  if(det.length){
-    h+=`<h2 style="margin-top:18px">Cuarto por cuarto</h2>
-      <div style="overflow-x:auto"><table><thead><tr>
-      <th>Habitación</th><th>Condiciones</th><th>Booking</th><th>Web</th><th>Neto vía Booking</th><th>Ventaja</th><th></th>
-      </tr></thead><tbody>`
-      + det.map(x=>`<tr>
-        <td><b>${esc(x.codigo)}</b> <span style="color:var(--muted)">${esc(x.habitacion||"")}</span></td>
-        <td style="text-align:left;color:var(--muted)">${esc(x.condicion||"")}</td>
-        <td class="num">${P(x.booking_mas_barato)}</td>
-        <td class="num"><b>${P(x.directo_mas_barato)}</b></td>
-        <td class="num" style="color:var(--muted)">${P(x.directo_piso)}</td>
-        <td class="num" style="color:${Number(x.ventaja_directo_mxn)<0?'var(--bad)':'var(--ok)'};font-weight:600">${P(x.ventaja_directo_mxn)}</td>
-        <td><span class="chip ${x.veredicto==='paridad ok'?'ok':(x.veredicto==='disparidad'?'bad':'nd')}">${esc(x.veredicto)}</span></td>
-        </tr>`).join("") + `</tbody></table></div>`;
-  } else if(v.length){
-    h+=`<div class="nota">Esta noche sólo tiene la lectura rápida. Para saber <b>qué cuarto y qué
-      tarifa</b> hay que hacerle el barrido completo.</div>`;
-  }
   cuerpo.innerHTML=h;
+  cuerpo.querySelectorAll("[data-fix]").forEach(b=>{
+    b.onclick=()=>proponer(filas[Number(b.dataset.fix)], f);
+  });
+}
+
+// La propuesta se calcula aqui y se muestra. Ejecutarla en Cloudbeds exige la llave
+// de la API con permiso de escritura, que todavia no tenemos en el servidor.
+function proponer(x, f){
+  const objetivo=Number(x.bar_objetivo||0), actual=Number(x.bar_cloudbeds||0);
+  const dif=objetivo-actual;
+  const cuerpo=document.getElementById("caso-cuerpo");
+  const box=document.createElement("div");
+  box.className="expl";
+  box.style.margin="14px 0 0";
+  box.innerHTML=`<b>Propuesta para ${esc(x.codigo)} · ${esc(f)}</b><br>
+    Booking publica ${P(x.booking_publico)}, que sobre nuestra BAR de ${P(actual)} da un múltiplo de
+    ${x.multiplicador_real?Number(x.multiplicador_real).toFixed(4):"—"} en vez de
+    ${Number(x.multiplicador_esperado||0).toFixed(4)}.<br>
+    Hay dos maneras de cerrarlo:<br>
+    · <b>Bajar el markup en el channel manager</b> hasta dejarlo en
+      ${Number(x.multiplicador_esperado||0).toFixed(4)} — es lo correcto si la BAR está bien.<br>
+    · <b>Mover la BAR de Cloudbeds</b> de ${P(actual)} a <b>${P(objetivo)}</b>
+      (${dif>=0?"+":""}${dif.toFixed(2)}) — solo si lo que quieres es que Booking siga con ese precio.<br>
+    <span style="color:var(--muted)">Ejecutarlo desde aquí necesita la llave de la API de Cloudbeds
+    con permiso de escritura. Todavía no está puesta, así que por ahora esto es la propuesta,
+    no el cambio.</span>`;
+  cuerpo.appendChild(box);
+  box.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 
 document.getElementById("prop").onchange=()=>{ sel=null; pintar(); };
