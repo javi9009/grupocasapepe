@@ -1272,46 +1272,42 @@ function selectorCompetidores(destino, todos, estado, alCambiar){
    la MISMA OTA, y Hostelworld manda porque es la unica de la que tenemos
    competencia. */
 function grafIndice(){
-  const fuentes=[...new Set((D.rn||[]).filter(r=>!PLAZA||r.plaza===PLAZA).map(r=>r.plataforma))];
+  // Nota PÚBLICA (la que ve el cliente) a lo largo del tiempo, de nosotros y del
+  // compset, leyendo las capturas guardadas en D.evc. Cada punto es una captura
+  // (hoy semanales); la línea deja ver si alguien se confía y va hacia abajo.
+  const dEvc=(D.evc||[]).filter(r=>r.plaza===PLAZA && r.nota100!=null);
+  const fuentes=[...new Set(dEvc.map(r=>r.fuente).filter(Boolean))];
   const orden=["hostelworld","booking","google","tripadvisor"];
   fuentes.sort((a,b)=>orden.indexOf(a)-orden.indexOf(b));
   const sel=$("#idxFuente");
-  if(sel && !sel.options.length){
+  if(sel && (!sel.options.length || sel.dataset.modo!=="publica")){
+    const prev=sel.value;
+    sel.innerHTML="";
     fuentes.forEach(f=>sel.add(new Option(nf(f),f)));
-    sel.add(new Option("Todas (PepeFeliz)","*"));
-    // Hostelworld es la unica con compset, pero de ella apenas tenemos resenas
-    // nuestras: arrancar ahi daba una linea de dos puntos que parecia seis meses
-    // planos. Se arranca en la fuente con mas meses de historia propia y el
-    // selector deja ir a Hostelworld para comparar contra la competencia.
-    const meses = f => new Set((D.rn||[])
-      .filter(r=>(!PLAZA||r.plaza===PLAZA) && r.plataforma===f)
-      .map(r=>r.fecha.slice(0,7))).size;
-    sel.value = fuentes.slice().sort((a,b)=>meses(b)-meses(a))[0] || "*";
+    sel.dataset.modo="publica";
+    // Hostelworld es la única fuente con historia de competencia; ahí arranca.
+    sel.value = (prev && fuentes.includes(prev)) ? prev
+              : fuentes.includes("hostelworld") ? "hostelworld"
+              : fuentes.includes("booking") ? "booking" : (fuentes[0]||"");
     sel.onchange=grafIndice;
   }
-  const F = sel && sel.value ? sel.value : "hostelworld";
-  const nombreF = F==="*" ? "PepeFeliz (todas)" : nf(F);
+  const F = sel && sel.value ? sel.value
+          : (fuentes.includes("hostelworld") ? "hostelworld" : (fuentes[0]||"hostelworld"));
+  const nombreF = nf(F);
+  const enR = f => (!RANGO.desde || f>=RANGO.desde) && (!RANGO.hasta || f<=RANGO.hasta);
 
-  // Nuestra serie mensual en esa OTA, en base 100.
-  const g={};
-  (D.rn||[]).filter(r=>(!PLAZA||r.plaza===PLAZA) && (F==="*"||r.plataforma===F))
-    .filter(r=>{
-      const ini=r.fecha.slice(0,7)+"-01";
-      const fin=new Date(+r.fecha.slice(0,4), +r.fecha.slice(5,7), 0).toISOString().slice(0,10);
-      return (!RANGO.hasta || ini<=RANGO.hasta) && (!RANGO.desde || fin>=RANGO.desde);
-    })
-    .forEach(r=>{ const m=r.fecha.slice(0,7); (g[m] ||= []).push(Number(r.nota100)); });
-  const datos=Object.entries(g).map(([x,v])=>({x, y:v.reduce((a,b)=>a+b,0)/v.length}))
-                               .sort((a,b)=>a.x<b.x?-1:1);
+  // serie de un hotel: su nota publicada en cada captura del periodo.
+  const serie = pred => dEvc.filter(r=>r.fuente===F && enR(r.fecha_consulta) && pred(r))
+      .map(r=>({x:r.fecha_consulta, y:Number(r.nota100)}))
+      .sort((a,b)=>a.x<b.x?-1:1);
 
-  // Competidores de esa misma OTA. Solo hay capturas de finales de agosto, asi
-  // que se pintan como raya a su nota de hoy, no como curva: inventar una
-  // evolucion que no existe seria peor que no dibujarla.
-  const evc=(D.evc||[]).filter(r=>r.plaza===PLAZA && !r.es_nuestro && r.nota100!=null
-                                  && (F==="*" || r.fuente===F));
-  const ultima=evc.length ? evc.reduce((m,r)=> r.fecha_consulta>m ? r.fecha_consulta : m, "") : null;
+  const datos = serie(r=>r.es_nuestro);
+
+  // competidores: se ordenan por su última captura para armar la lista.
+  const evcComp=dEvc.filter(r=>r.fuente===F && !r.es_nuestro);
+  const ultima=evcComp.length ? evcComp.reduce((m,r)=> r.fecha_consulta>m ? r.fecha_consulta : m, "") : null;
   const hoy={};
-  evc.filter(r=>r.fecha_consulta===ultima).forEach(r=>{
+  evcComp.filter(r=>r.fecha_consulta===ultima).forEach(r=>{
     const h = hoy[r.nombre] ||= {notas:[], resenas:0};
     h.notas.push(Number(r.nota100)); h.resenas=Math.max(h.resenas, Number(r.resenas)||0);
   });
@@ -1320,47 +1316,38 @@ function grafIndice(){
       valor:h.notas.reduce((a,b)=>a+b,0)/h.notas.length
     })).sort((a,b)=>b.valor-a.valor);
 
-  // Arrancan marcados los tres primeros CON AL MENOS 100 RESEÑAS: sin ese corte
-  // los primeros son hostales diminutos con un 10.0 de cuatro resenas.
+  // Por defecto se marca NUESTRO compset; si no aparece, top-3 con ≥100 reseñas.
+  const COMPSET=["barrio","apapacho","mexico city","mundo joven","viajero","straw hat"];
   const plaza=(PLAZA||"")+"|"+F;
-  if(!SEL_IDX[plaza]) SEL_IDX[plaza]=new Set(comps.filter(c=>c.resenas>=100).slice(0,3).map(c=>c.nombre));
-  const elegidos = selectorCompetidores("#chkIndice", comps, SEL_IDX, grafIndice);
-
-  // Todos los meses del periodo, tengan datos o no.
-  const ejeX=[]; {
-    const fin = RANGO.hasta ? new Date(RANGO.hasta+"T12:00:00") : new Date();
-    let ini;
-    if (RANGO.desde) ini = new Date(RANGO.desde+"T12:00:00");
-    else { const t=(D.rn||[]).filter(r=>!PLAZA||r.plaza===PLAZA).map(r=>r.fecha).sort();
-           ini = t.length ? new Date(t[0]+"T12:00:00") : new Date(fin); }
-    for (let d=new Date(ini.getFullYear(), ini.getMonth(), 1);
-         d<=fin && ejeX.length<60;
-         d.setMonth(d.getMonth()+1)) ejeX.push(iso(d).slice(0,7));
+  if(!SEL_IDX[plaza]){
+    const enSet=comps.filter(c=>COMPSET.some(k=>c.nombre.toLowerCase().includes(k)));
+    SEL_IDX[plaza]=new Set((enSet.length?enSet:comps.filter(c=>c.resenas>=100).slice(0,3)).map(c=>c.nombre));
   }
-  const mesesConDato = new Set(datos.map(d=>d.x));
-  const huecos = ejeX.filter(m=>!mesesConDato.has(m)).length;
+  const elegidos = selectorCompetidores("#chkIndice", comps, SEL_IDX, grafIndice);
+  const seriesComp = elegidos
+    .map(c=>({nombre:c.nombre, color:c.color, datos:serie(r=>!r.es_nuestro && r.nombre===c.nombre)}))
+    .filter(s=>s.datos.length);
 
-  lineas("#grafIndice", [{nombre:`Casa Pepe ${PLAZA||""} · ${nombreF}`, color:"var(--accent)", datos}],
-    {sufijo:"/100", ejeX, rayas: elegidos.map(c=>({nombre:c.nombre, valor:c.valor, color:c.color})),
-     vacioTit:`Sin reseñas de ${esc(nombreF)} en este periodo`,
-     vacioSub:"Hacen falta al menos dos meses con reseñas de esa fuente. Amplía el periodo o elige otra OTA."});
+  // eje X = las fechas de captura que caen en el periodo (así se mueve al cambiar
+  // la temporalidad de arriba, en vez de quedarse plano).
+  const ejeX=[...new Set(dEvc.filter(r=>r.fuente===F && enR(r.fecha_consulta)).map(r=>r.fecha_consulta))].sort();
+
+  lineas("#grafIndice",
+    [{nombre:`Casa Pepe ${PLAZA||""} · ${nombreF}`, color:"var(--accent)", datos}, ...seriesComp],
+    {sufijo:"/100", ejeX,
+     vacioTit:`Aún no hay dos capturas en ${esc(nombreF)} en este periodo`,
+     vacioSub:"La línea de nota pública necesita al menos dos capturas. Amplía el periodo o cambia de OTA — cada lunes se guarda una nueva."});
 
   const caja=$("#grafIndice");
-  if(caja && datos.length>=2){
-    if(huecos)
-      caja.insertAdjacentHTML("afterbegin",
-        `<div class="aviso" style="margin:0 0 10px">
-          <b>${datos.length} de ${ejeX.length} meses del periodo tienen reseñas en ${esc(nombreF)}.</b>
-          Los ${huecos} restantes están vacíos porque no entró ninguna reseña de esa fuente, no porque
-          la nota no se moviera. ${nombreF!=="Booking"?`Con <b>Booking</b> hay serie completa: cámbiala en el selector de arriba.`:""}
-        </div>`);
+  if(caja && (datos.length || seriesComp.length)){
+    const soloHW = F==="hostelworld";
     caja.insertAdjacentHTML("beforeend",
       `<p style="margin:10px 0 0;color:var(--muted);font-size:.82rem;max-width:82ch">
-        Nuestra línea es el promedio de las reseñas de cada mes en <b>${esc(nombreF)}</b>, en base 100
-        (nota ÷ escala × 100) para poder compararla con los demás.
-        ${comps.length?`De los competidores <b>no hay historia mensual todavía</b> — solo la captura del
-        ${fecha(ultima)} — por eso cada uno es una raya a su nota de hoy y no una curva.`
-        :`No hay competidores capturados en ${esc(nombreF)}: solo tenemos compset de Hostelworld.`}
+        Es la <b>nota pública</b> que ve el cliente en <b>${esc(nombreF)}</b> (base 100), captura a captura.
+        ${comps.length
+          ? `Comparada contra el compset seleccionable de arriba — así se ve si alguien se confía y baja.`
+          : `En ${esc(nombreF)} todavía no hay capturas de la competencia (solo Hostelworld trae compset).`}
+        La serie se enriquece sola: cada lunes se guarda una captura nueva${soloHW?"":", y Booking/Google se irán llenando conforme se capturen"}.
       </p>`);
   }
 }
