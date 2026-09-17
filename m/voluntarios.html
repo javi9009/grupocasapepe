@@ -99,6 +99,7 @@ input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line)
     <button class="tab on" data-p="lista">Bandeja</button>
     <button class="tab" data-p="cal">Calendario</button>
     <button class="tab" data-p="carta">Carta compromiso</button>
+    <button class="tab" data-p="log">Cartas enviadas</button>
   </div>
 
   <section class="pane on" id="p-lista">
@@ -111,8 +112,16 @@ input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line)
       <h2>La carta compromiso que firman</h2>
       <p class="sub">Esto es lo que recibe cada voluntario cuando lo aceptas. Sale en <b>su</b> idioma — el que usó en el test —, así que cada sección se edita en español y en inglés. Los cambios aplican a las cartas que mandes de aquí en adelante; las ya enviadas no se tocan.</p>
       <p class="sub"><b>Huecos que se rellenan solos:</b> <code>{{NOMBRE}}</code> · <code>{{LLEGADA}}</code> · <code>{{SALIDA}}</code></p>
-      <div id="carta-secciones"><p class="vacio">Cargando…</p></div>
+      <div id="carta-doc"><p class="vacio">Cargando…</p></div>
       <p class="msg" id="carta-msg"></p>
+    </div>
+  </section>
+
+  <section class="pane" id="p-log">
+    <div class="card">
+      <h2>Cartas que hemos mandado</h2>
+      <p class="sub">Cada carta compromiso enviada, a quién, con qué fechas y cómo quedó firmada. Clic en una fila para ver el documento tal cual lo firmó, con su acuse.</p>
+      <div id="log-lista"><p class="vacio">Cargando…</p></div>
     </div>
   </section>
 
@@ -160,6 +169,8 @@ const bandera=i=>i==='es'
   ? '<span title="Hizo el test en español" style="font-size:12px;vertical-align:1px">🇲🇽</span>'
   : '<span title="Hizo el test en inglés" style="font-size:12px;vertical-align:1px">🇬🇧</span>';
 const f=d=>d?new Date(d+'T12:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short'}):'—';
+const fh=t=>{ if(!t) return '—'; const d=new Date(t); return isNaN(d)?'—'
+  :d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); };
 
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
@@ -167,6 +178,7 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
   b.classList.add('on');document.getElementById('p-'+b.dataset.p).classList.add('on');
   if(b.dataset.p==='cal') calendario();
   if(b.dataset.p==='carta') plantilla();
+  if(b.dataset.p==='log') cartasLog();
 });
 
 let FILA={};
@@ -355,50 +367,117 @@ async function verCarta(id){
   m.textContent='';
   const idi = (d.idioma==='es') ? 'español' : 'inglés';
   const cap = (!desde||!hasta) ? '<p class="msg e">Sin fechas todavía: pon llegada y salida para ver cómo queda esa parte.</p>' : '';
+  modal('Así le va a llegar a '+(d.nombre||''),
+    '<p class="sub">En <b>'+idi+'</b>, porque así hizo el test. Se manda a '+esc(d.email||'')+'.</p>'
+    + cap
+    +'<div style="background:#fff;border:1px solid var(--ln,#e6ded1);border-radius:12px;padding:18px 20px;line-height:1.6">'
+    + (d.html||'') + '</div>');
+}
+
+/* ---------- la carta, un solo documento ---------- */
+let DOC=null;
+async function plantilla(){
+  const c=document.getElementById('carta-doc');
+  const l=await rpc('vol_carta_plantilla_lista');
+  DOC=(l||[]).find(t=>t.clave==='documento');
+  if(!DOC){ c.innerHTML='<p class="vacio">No se pudo cargar la carta.</p>'; return }
+  c.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px">'
+    +'<button class="tab on" id="idi-es" onclick="verIdioma(\'es\')">Español</button>'
+    +'<button class="tab" id="idi-en" onclick="verIdioma(\'en\')">Inglés</button>'
+    +'<button class="btn" onclick="previoDoc()">Ver cómo queda</button></div>'
+    +(DOC.updated_by?'<p class="sub" style="margin:0 0 10px">Última edición de '+esc(DOC.updated_by)+'</p>':'')
+    +'<textarea id="doc-es" rows="22" style="width:100%">'+esc(DOC.cuerpo_es||'')+'</textarea>'
+    +'<textarea id="doc-en" rows="22" style="width:100%;display:none">'+esc(DOC.cuerpo_en||'')+'</textarea>'
+    +'<div class="row" style="margin-top:10px"><button class="btn g" onclick="guardaCarta()">Guardar la carta</button></div>';
+}
+function verIdioma(l){
+  document.getElementById('doc-es').style.display = l==='es'?'':'none';
+  document.getElementById('doc-en').style.display = l==='en'?'':'none';
+  document.getElementById('idi-es').classList.toggle('on', l==='es');
+  document.getElementById('idi-en').classList.toggle('on', l==='en');
+}
+function previoDoc(){
+  const esVis=document.getElementById('doc-es').style.display!=='none';
+  const t=(document.getElementById(esVis?'doc-es':'doc-en')||{}).value||'';
+  const html=t.replace(/\{\{NOMBRE\}\}/g,'María Ejemplo')
+              .replace(/\{\{LLEGADA\}\}/g,'01 Oct 2026')
+              .replace(/\{\{SALIDA\}\}/g,'01 Nov 2026');
+  modal('Así queda la carta', '<p class="sub">Con un nombre y unas fechas de ejemplo.</p>'
+    +'<div style="background:#fff;border:1px solid var(--ln,#e6ded1);border-radius:12px;padding:18px 20px;line-height:1.6">'+html+'</div>');
+}
+async function guardaCarta(){
+  const m=document.getElementById('carta-msg');
+  const es=(document.getElementById('doc-es')||{}).value||'';
+  const en=(document.getElementById('doc-en')||{}).value||'';
+  m.className='msg'; m.textContent='Guardando…';
+  const r=await rpc('vol_carta_plantilla_guardar',{p_clave:'documento',p_es:es,p_en:en,
+    p_titulo_es:(DOC&&DOC.titulo_es)||null,p_titulo_en:(DOC&&DOC.titulo_en)||null});
+  m.className='msg '+(r.error?'e':'k');
+  m.textContent=r.error||'Guardada. Las próximas cartas salen con este texto; las ya enviadas no se tocan.';
+  if(!r.error) await plantilla();
+}
+
+/* ---------- ventana reutilizable ---------- */
+function modal(titulo, cuerpo){
   const bx=document.createElement('div');
   bx.style.cssText='position:fixed;inset:0;background:rgba(20,16,10,.62);display:flex;align-items:center;'
     +'justify-content:center;padding:20px;z-index:60';
   bx.onclick=e=>{ if(e.target===bx) bx.remove(); };
-  bx.innerHTML='<div class="card" style="max-width:660px;max-height:86vh;overflow:auto;margin:0">'
-    +'<h2 style="margin-top:0">Así le va a llegar a '+esc(d.nombre||'')+'</h2>'
-    +'<p class="sub">En <b>'+idi+'</b>, porque así hizo el test. Se manda a '+esc(d.email||'')+'.</p>'
-    + cap
-    +'<div style="background:var(--pnl2,#fff);border:1px solid var(--ln,#e6ded1);border-radius:12px;padding:18px 20px;line-height:1.6">'
-    + (d.html||'') + '</div>'
+  bx.innerHTML='<div class="card" style="max-width:680px;max-height:86vh;overflow:auto;margin:0">'
+    +'<h2 style="margin-top:0">'+esc(titulo)+'</h2>'+cuerpo
     +'<div class="row" style="margin-top:14px"><button class="btn" onclick="this.closest(\'div[style*=fixed]\').remove()">Cerrar</button></div></div>';
   document.body.appendChild(bx);
+  return bx;
 }
 
-/* ---------- editar la plantilla ---------- */
-let PLANT=[];
-async function plantilla(){
-  const c=document.getElementById('carta-secciones');
-  PLANT=await rpc('vol_carta_plantilla_lista');
-  if(!PLANT || !PLANT.length){ c.innerHTML='<p class="vacio">No se pudo cargar la plantilla.</p>'; return }
-  c.innerHTML=PLANT.map(t=>{
-    const tit = t.titulo_es || t.titulo_en || t.clave;
-    return '<div style="border-top:1px solid var(--ln,#e6ded1);padding:16px 0">'
-      +'<h3 style="margin:0 0 4px">'+esc(tit)+'</h3>'
-      +'<p class="sub" style="margin:0 0 10px">sección <code>'+esc(t.clave)+'</code>'
-      + (t.updated_by?' · última edición de '+esc(t.updated_by):'') +'</p>'
-      +'<p class="lab" style="margin:0 0 4px">Español</p>'
-      +'<textarea id="ce-'+t.clave+'" rows="6" style="width:100%">'+esc(t.cuerpo_es||'')+'</textarea>'
-      +'<p class="lab" style="margin:10px 0 4px">Inglés</p>'
-      +'<textarea id="cn-'+t.clave+'" rows="6" style="width:100%">'+esc(t.cuerpo_en||'')+'</textarea>'
-      +'<div class="row" style="margin-top:8px"><button class="btn g" onclick="guardaCarta(\''+t.clave+'\')">Guardar esta sección</button></div>'
-      +'</div>';
-  }).join('');
+/* ---------- log de cartas enviadas ---------- */
+let LOG=[];
+async function cartasLog(){
+  const c=document.getElementById('log-lista');
+  LOG=await rpc('vol_cartas_log');
+  if(!LOG || !LOG.length){ c.innerHTML='<p class="vacio">Todavía no has mandado ninguna carta.</p>'; return }
+  const badge=x=> x.estatus==='aceptada' ? '<span class="tag aceptado">✓ Firmada</span>'
+                : x.estatus==='cancelada' ? '<span class="tag rechazado">Cancelada</span>'
+                : '<span class="tag en_votacion">📨 Sin firmar</span>';
+  c.innerHTML='<table><thead><tr><th>Quién</th><th>Fechas</th><th>Mandada</th><th>Estado</th><th>Firma</th></tr></thead><tbody>'
+    + LOG.map(x=>{
+        const ac=x.acuse||{};
+        const firma = x.estatus==='aceptada'
+          ? '<span class="chk">'+fh(x.aceptada_at)+(ac.ip?'<br>IP '+esc(ac.ip):'')+'</span>'
+          : '<span class="chk">—</span>';
+        return '<tr class="row" onclick="verCartaLog(\''+x.id+'\')">'
+          +'<td><b>'+esc(x.nombre||'')+'</b><br><span class="chk">'+esc(x.email||'')+'</span></td>'
+          +'<td class="chk">'+f(x.desde)+' → '+f(x.hasta)+'</td>'
+          +'<td class="chk">'+fh(x.created_at)+'<br>'+esc(x.created_by||'')+'</td>'
+          +'<td>'+badge(x)+'</td>'
+          +'<td>'+firma+'</td></tr>';
+      }).join('')
+    +'</tbody></table>';
 }
-async function guardaCarta(clave){
-  const m=document.getElementById('carta-msg');
-  const es=(document.getElementById('ce-'+clave)||{}).value||'';
-  const en=(document.getElementById('cn-'+clave)||{}).value||'';
-  const t=(PLANT||[]).find(x=>x.clave===clave)||{};
-  m.className='msg'; m.textContent='Guardando…';
-  const r=await rpc('vol_carta_plantilla_guardar',{p_clave:clave,p_es:es,p_en:en,p_titulo_es:t.titulo_es||null,p_titulo_en:t.titulo_en||null});
-  m.className='msg '+(r.error?'e':'k');
-  m.textContent=r.error||'Guardado. Las próximas cartas salen con este texto.';
-  if(!r.error) await plantilla();
+function verCartaLog(id){
+  const x=(LOG||[]).find(y=>y.id===id); if(!x) return;
+  const ac=x.acuse||{};
+  let acuse='';
+  if(x.estatus==='aceptada'){
+    const meta=[];
+    if(ac.at||x.aceptada_at) meta.push('Fecha y hora: '+new Date(ac.at||x.aceptada_at).toLocaleString('es-MX'));
+    if(ac.ip) meta.push('IP: '+ac.ip);
+    const dev=ac.device||x.acepta_device; if(dev) meta.push('Dispositivo: '+dev);
+    meta.push('Modo: aceptación electrónica desde SoyPepe');
+    acuse='<div style="margin-top:22px;border-top:2px solid var(--green);padding-top:12px">'
+      +'<div style="font-size:12px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.05em">Acuse de firma electrónica</div>'
+      +'<div style="font-size:11.5px;color:var(--mut);line-height:1.6;margin-top:6px">'
+      +'Aceptada por <b>'+esc(ac.firmado_por||x.nombre||'')+'</b> ('+esc(x.email||'')+')<br>'
+      + meta.map(esc).join('<br>') +'</div></div>';
+  } else if(x.estatus==='cancelada'){
+    acuse='<p class="msg e" style="margin-top:16px">Esta carta se canceló: se reemplazó por otra con fechas distintas.</p>';
+  } else {
+    acuse='<p class="msg" style="margin-top:16px">Todavía no la acepta. Le aparece en SoyPepe para leerla y aceptarla.</p>';
+  }
+  modal('Carta de '+(x.nombre||''),
+    '<p class="sub">'+esc(x.email||'')+' · '+f(x.desde)+' → '+f(x.hasta)+' · mandada por '+esc(x.created_by||'')+'</p>'
+    +'<div style="background:#fff;border:1px solid var(--ln,#e6ded1);border-radius:12px;padding:18px 20px;line-height:1.6">'
+    +(x.cuerpo_html||'')+acuse+'</div>');
 }
 
 async function aceptarCarta(id){
