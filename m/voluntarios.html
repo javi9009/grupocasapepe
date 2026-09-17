@@ -86,6 +86,7 @@ tr.row:hover{background:#fbf9f6;cursor:pointer}
 .est .n{flex:1;min-width:150px;font-weight:600;font-size:14px}
 .vacio{color:var(--mut);font-size:14px;padding:14px 4px}
 input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line);border-radius:9px;padding:8px 10px;background:#fbf9f6;color:var(--ink)}
+.lab{font-size:12.5px;color:var(--mut);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .msg{font-size:13.5px;margin-top:8px}.msg.e{color:var(--red)}.msg.k{color:var(--green)}
 </style>
 </head>
@@ -97,11 +98,22 @@ input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line)
   <div class="tabs">
     <button class="tab on" data-p="lista">Bandeja</button>
     <button class="tab" data-p="cal">Calendario</button>
+    <button class="tab" data-p="carta">Carta compromiso</button>
   </div>
 
   <section class="pane on" id="p-lista">
     <div class="card" id="bandeja"><p class="vacio">Cargando…</p></div>
     <div id="ficha"></div>
+  </section>
+
+  <section class="pane" id="p-carta">
+    <div class="card">
+      <h2>La carta compromiso que firman</h2>
+      <p class="sub">Esto es lo que recibe cada voluntario cuando lo aceptas. Sale en <b>su</b> idioma — el que usó en el test —, así que cada sección se edita en español y en inglés. Los cambios aplican a las cartas que mandes de aquí en adelante; las ya enviadas no se tocan.</p>
+      <p class="sub"><b>Huecos que se rellenan solos:</b> <code>{{NOMBRE}}</code> · <code>{{LLEGADA}}</code> · <code>{{SALIDA}}</code></p>
+      <div id="carta-secciones"><p class="vacio">Cargando…</p></div>
+      <p class="msg" id="carta-msg"></p>
+    </div>
   </section>
 
   <section class="pane" id="p-cal">
@@ -154,6 +166,7 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.pane').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');document.getElementById('p-'+b.dataset.p).classList.add('on');
   if(b.dataset.p==='cal') calendario();
+  if(b.dataset.p==='carta') plantilla();
 });
 
 let FILA={};
@@ -324,12 +337,70 @@ async function ficha(id){
      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
      'Llegada <input type="date" id="ac-desde" value="'+(fr.fechas_desde||s.fecha_desde||'')+'"> '+
      'Salida <input type="date" id="ac-hasta" value="'+(fr.fechas_hasta||s.fecha_hasta||'')+'"> '+
+     '<button class="btn" onclick="verCarta(\''+id+'\')">Ver la carta</button>'+
      '<button class="btn g" onclick="aceptarCarta(\''+id+'\')">✓ Aceptar y enviar carta</button>'+
      '<button class="btn r" onclick="resolver(\''+id+'\',\'rechazado\')">Rechazar</button>'+
      '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>'+
      '<p class="msg" id="f-msg"></p></div>';
   c.innerHTML=h; c.scrollIntoView({behavior:'smooth',block:'start'});
 }
+/* ---------- ver la carta antes de mandarla ---------- */
+async function verCarta(id){
+  const m=document.getElementById('f-msg');
+  const desde=(document.getElementById('ac-desde')||{}).value||null;
+  const hasta=(document.getElementById('ac-hasta')||{}).value||null;
+  m.className='msg'; m.textContent='Armando la carta…';
+  const d=await rpc('vol_carta_previo',{p_id:id,p_desde:desde,p_hasta:hasta});
+  if(d.error){ m.className='msg e'; m.textContent=d.error; return }
+  m.textContent='';
+  const idi = (d.idioma==='es') ? 'español' : 'inglés';
+  const cap = (!desde||!hasta) ? '<p class="msg e">Sin fechas todavía: pon llegada y salida para ver cómo queda esa parte.</p>' : '';
+  const bx=document.createElement('div');
+  bx.style.cssText='position:fixed;inset:0;background:rgba(20,16,10,.62);display:flex;align-items:center;'
+    +'justify-content:center;padding:20px;z-index:60';
+  bx.onclick=e=>{ if(e.target===bx) bx.remove(); };
+  bx.innerHTML='<div class="card" style="max-width:660px;max-height:86vh;overflow:auto;margin:0">'
+    +'<h2 style="margin-top:0">Así le va a llegar a '+esc(d.nombre||'')+'</h2>'
+    +'<p class="sub">En <b>'+idi+'</b>, porque así hizo el test. Se manda a '+esc(d.email||'')+'.</p>'
+    + cap
+    +'<div style="background:var(--pnl2,#fff);border:1px solid var(--ln,#e6ded1);border-radius:12px;padding:18px 20px;line-height:1.6">'
+    + (d.html||'') + '</div>'
+    +'<div class="row" style="margin-top:14px"><button class="btn" onclick="this.closest(\'div[style*=fixed]\').remove()">Cerrar</button></div></div>';
+  document.body.appendChild(bx);
+}
+
+/* ---------- editar la plantilla ---------- */
+let PLANT=[];
+async function plantilla(){
+  const c=document.getElementById('carta-secciones');
+  PLANT=await rpc('vol_carta_plantilla_lista');
+  if(!PLANT || !PLANT.length){ c.innerHTML='<p class="vacio">No se pudo cargar la plantilla.</p>'; return }
+  c.innerHTML=PLANT.map(t=>{
+    const tit = t.titulo_es || t.titulo_en || t.clave;
+    return '<div style="border-top:1px solid var(--ln,#e6ded1);padding:16px 0">'
+      +'<h3 style="margin:0 0 4px">'+esc(tit)+'</h3>'
+      +'<p class="sub" style="margin:0 0 10px">sección <code>'+esc(t.clave)+'</code>'
+      + (t.updated_by?' · última edición de '+esc(t.updated_by):'') +'</p>'
+      +'<p class="lab" style="margin:0 0 4px">Español</p>'
+      +'<textarea id="ce-'+t.clave+'" rows="6" style="width:100%">'+esc(t.cuerpo_es||'')+'</textarea>'
+      +'<p class="lab" style="margin:10px 0 4px">Inglés</p>'
+      +'<textarea id="cn-'+t.clave+'" rows="6" style="width:100%">'+esc(t.cuerpo_en||'')+'</textarea>'
+      +'<div class="row" style="margin-top:8px"><button class="btn g" onclick="guardaCarta(\''+t.clave+'\')">Guardar esta sección</button></div>'
+      +'</div>';
+  }).join('');
+}
+async function guardaCarta(clave){
+  const m=document.getElementById('carta-msg');
+  const es=(document.getElementById('ce-'+clave)||{}).value||'';
+  const en=(document.getElementById('cn-'+clave)||{}).value||'';
+  const t=(PLANT||[]).find(x=>x.clave===clave)||{};
+  m.className='msg'; m.textContent='Guardando…';
+  const r=await rpc('vol_carta_plantilla_guardar',{p_clave:clave,p_es:es,p_en:en,p_titulo_es:t.titulo_es||null,p_titulo_en:t.titulo_en||null});
+  m.className='msg '+(r.error?'e':'k');
+  m.textContent=r.error||'Guardado. Las próximas cartas salen con este texto.';
+  if(!r.error) await plantilla();
+}
+
 async function aceptarCarta(id){
   const desde=document.getElementById('ac-desde').value, hasta=document.getElementById('ac-hasta').value;
   const m=document.getElementById('f-msg');
