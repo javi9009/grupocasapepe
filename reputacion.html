@@ -440,8 +440,10 @@ footer.pie{border-top:1px solid var(--rule);padding:20px 16px 40px;color:var(--m
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="hd"><h2>Evolución vs competidores</h2>
-        <span class="note">Mes a mes, en base 100. Compara <b>en la misma OTA</b>: de los competidores solo tenemos Hostelworld.</span>
-        <span style="margin-left:auto"><select id="idxFuente"></select></span>
+        <span class="note">Nota pública (la que ve el cliente), base 100, captura a captura. <b>En la misma OTA</b>: de los competidores solo tenemos Hostelworld.</span>
+        <span style="margin-left:auto;display:flex;gap:12px;align-items:center">
+          <label style="font-size:.85rem;display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap"><input type="checkbox" id="idxSoloCompset" checked> Solo compset</label>
+          <select id="idxFuente"></select></span>
       </div>
       <div class="bd"><div class="checks" id="chkIndice"></div><div id="grafIndice"></div></div>
     </div>
@@ -646,6 +648,9 @@ let FUERTE_SEL = null;  // idem en la verde
 // Que competidores estan marcados en cada grafica. null = todavia sin tocar,
 // se arranca con una seleccion por defecto. Clave: plaza -> Set de nombres.
 let SEL_IDX = {};
+// Estado propio de la grafica de tendencia (nota publica): no comparte seleccion
+// con "Evolucion vs competidores" para que "Solo compset / Ver todos" mande sola.
+let SEL_TREND = {};
 // Paleta para las lineas de competidores. Lo nuestro va siempre en verde Casa
 // Pepe; estos son tonos que se distinguen entre si sobre la crema.
 const PALETA = ["#8C6212","#5B6BA8","#9E3B2E","#3F7A6B","#7A4E86","#A8683F","#4E7AA8","#8A7328"];
@@ -1116,7 +1121,7 @@ function pintarComentariosCat(sel, destino, primero){
    200 KB de Chart.js a una pantalla que ya carga 16 consultas. */
 function lineas(sel, series, opts){
   const box=$(sel); if(!box) return;
-  const {sufijo="", minY, maxY, vacioTit, vacioSub, rayas=[]} = opts||{};
+  const {sufijo="", minY, maxY, vacioTit, vacioSub, rayas=[], sinLeyenda=false} = opts||{};
   const puntos = series.flatMap(s=>s.datos);
   if (puntos.length < 2){
     box.innerHTML = vacio(vacioTit||"Todavía no hay serie", vacioSub||"Hacen falta al menos dos capturas para dibujar una línea.");
@@ -1151,8 +1156,8 @@ function lineas(sel, series, opts){
       ${d.map(p=>`<circle cx="${px(p.x)}" cy="${py(p.y)}" r="3.5" fill="${s.color}"><title>${esc(s.nombre)} · ${esc(etiquetaX(p.x))}: ${num(p.y,1)}${esc(sufijo)}</title></circle>`).join("")}`;
     }).join("")}
   </svg>
-  <div class="leyenda">${series.map(s=>`<span><i style="background:${s.color}"></i>${esc(s.nombre)}</span>`).join("")}
-    ${rayas.map(r=>`<span><i style="background:${r.color}"></i>${esc(r.nombre)} (${num(r.valor,1)}${esc(sufijo)})</span>`).join("")}</div>`;
+  ${sinLeyenda?"":`<div class="leyenda">${series.map(s=>`<span><i style="background:${s.color}"></i>${esc(s.nombre)}</span>`).join("")}
+    ${rayas.map(r=>`<span><i style="background:${r.color}"></i>${esc(r.nombre)} (${num(r.valor,1)}${esc(sufijo)})</span>`).join("")}</div>`}`;
 }
 const etiquetaX = x => {
   if (/^\d{4}-\d{2}-\d{2}$/.test(x))
@@ -1316,14 +1321,18 @@ function grafIndice(){
       valor:h.notas.reduce((a,b)=>a+b,0)/h.notas.length
     })).sort((a,b)=>b.valor-a.valor);
 
-  // Por defecto se marca NUESTRO compset; si no aparece, top-3 con ≥100 reseñas.
+  // Toggle "Solo compset / Ver todos". Arranca en solo compset para no llenar la
+  // pantalla con 30+ hostales; se abre cuando se quiere el mercado entero.
+  const tog=$("#idxSoloCompset");
+  if(tog && !tog.dataset.wired){ tog.dataset.wired="1"; tog.onchange=grafIndice; }
+  const soloCompset = tog ? tog.checked : true;
   const COMPSET=["barrio","apapacho","mexico city","mundo joven","viajero","straw hat"];
-  const plaza=(PLAZA||"")+"|"+F;
-  if(!SEL_IDX[plaza]){
-    const enSet=comps.filter(c=>COMPSET.some(k=>c.nombre.toLowerCase().includes(k)));
-    SEL_IDX[plaza]=new Set((enSet.length?enSet:comps.filter(c=>c.resenas>=100).slice(0,3)).map(c=>c.nombre));
-  }
-  const elegidos = selectorCompetidores("#chkIndice", comps, SEL_IDX, grafIndice);
+  const enSet = comps.filter(c=>COMPSET.some(k=>c.nombre.toLowerCase().includes(k)));
+  const lista = (soloCompset && enSet.length) ? enSet : comps;
+  // Los chips de arriba YA traen el color de cada línea; por eso esta gráfica va
+  // SIN leyenda abajo (no duplicar). Estado propio SEL_TREND: arranca con la
+  // lista visible marcada (= compset por defecto), sin colisionar con la otra gráfica.
+  const elegidos = selectorCompetidores("#chkIndice", lista, SEL_TREND, grafIndice);
   const seriesComp = elegidos
     .map(c=>({nombre:c.nombre, color:c.color, datos:serie(r=>!r.es_nuestro && r.nombre===c.nombre)}))
     .filter(s=>s.datos.length);
@@ -1334,13 +1343,18 @@ function grafIndice(){
 
   lineas("#grafIndice",
     [{nombre:`Casa Pepe ${PLAZA||""} · ${nombreF}`, color:"var(--accent)", datos}, ...seriesComp],
-    {sufijo:"/100", ejeX,
+    {sufijo:"/100", ejeX, sinLeyenda:true,
      vacioTit:`Aún no hay dos capturas en ${esc(nombreF)} en este periodo`,
      vacioSub:"La línea de nota pública necesita al menos dos capturas. Amplía el periodo o cambia de OTA — cada lunes se guarda una nueva."});
 
   const caja=$("#grafIndice");
   if(caja && (datos.length || seriesComp.length)){
     const soloHW = F==="hostelworld";
+    // Nuestra línea no tiene chip arriba, así que se marca sola una vez (sin duplicar).
+    caja.insertAdjacentHTML("afterbegin",
+      `<div class="leyenda" style="margin:0 0 6px">
+        <span><i style="background:var(--accent)"></i>Casa Pepe ${esc(PLAZA||"")} · ${esc(nombreF)} <b style="font-weight:600">(nosotros)</b></span>
+      </div>`);
     caja.insertAdjacentHTML("beforeend",
       `<p style="margin:10px 0 0;color:var(--muted);font-size:.82rem;max-width:82ch">
         Es la <b>nota pública</b> que ve el cliente en <b>${esc(nombreF)}</b> (base 100), captura a captura.
