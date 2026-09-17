@@ -384,7 +384,8 @@ async function verCaso(f){
           <a href="${URL_BOOKING(f,x.booking_room_id)}" target="_blank" rel="noopener">Booking</a> ·
           <a href="${URL_WEB(f,false,x.room_id)}" target="_blank" rel="noopener">web</a> ·
           <a href="${URL_WEB(f,true,x.room_id)}" target="_blank" rel="noopener">+PEPE</a></td>
-        <td>${mal?`<button class="btn" data-fix="${i}" style="padding:4px 10px;font-size:.74rem">Proponer ajuste</button>`:""}</td>
+        <td>${x.bar_cloudbeds?`<button class="btn${mal?"":" ghost"}" data-fix="${i}"
+             style="padding:4px 10px;font-size:.74rem">${mal?"Corregir":"Ajustar"}</button>`:""}</td>
       </tr>`;
       if(extra&&est!=="ok"&&est!=="sin lectura")
         h+=`<tr><td colspan="10" style="padding-top:0;border-bottom:1px solid var(--rule);
@@ -424,29 +425,78 @@ async function verCaso(f){
   });
 }
 
-// La propuesta se calcula aqui y se muestra. Ejecutarla en Cloudbeds exige la llave
-// de la API con permiso de escritura, que todavia no tenemos en el servidor.
+// El precio se teclea y se escribe en Cloudbeds, igual que en el calendario de
+// pricing. La cola de propuestas no es un permiso que haya que pedirle a nadie: es
+// el registro de quien movio que, cuando, de cuanto a cuanto y con que job de
+// Cloudbeds respondio. Se crea, se aprueba y se aplica en el mismo clic.
+//
+// Tres frenos, y ninguno estorba: cp_propuesta_crear rechaza cualquier movimiento
+// mayor del 60%, la funcion solo aplica lo que esta aprobado, y el navegador pide
+// confirmacion con el antes y el despues delante.
 function proponer(x, f){
   const objetivo=Number(x.bar_objetivo||0), actual=Number(x.bar_cloudbeds||0);
   const dif=objetivo-actual;
   const cuerpo=document.getElementById("caso-cuerpo");
+  cuerpo.querySelectorAll(".panel-ajuste").forEach(n=>n.remove());
   const box=document.createElement("div");
-  box.className="expl";
+  box.className="expl panel-ajuste";
   box.style.margin="14px 0 0";
-  box.innerHTML=`<b>Propuesta para ${esc(x.codigo)} · ${esc(f)}</b><br>
-    Booking publica ${P(x.booking_publico)}, que sobre nuestra BAR de ${P(actual)} da un múltiplo de
+  const mal = objetivo>0 && Math.abs(dif)>0.01;
+  box.innerHTML=`<b>Ajustar ${esc(x.codigo)} · ${esc(f)}</b><br>
+    ${mal?`Booking publica ${P(x.booking_publico)}, que sobre nuestra BAR de ${P(actual)} da un múltiplo de
     ${x.multiplicador_real?Number(x.multiplicador_real).toFixed(4):"—"} en vez de
     ${Number(x.multiplicador_esperado||0).toFixed(4)}.<br>
-    Hay dos maneras de cerrarlo:<br>
+    Se cierra de dos maneras:<br>
     · <b>Bajar el markup en el channel manager</b> hasta dejarlo en
       ${Number(x.multiplicador_esperado||0).toFixed(4)} — es lo correcto si la BAR está bien.<br>
     · <b>Mover la BAR de Cloudbeds</b> de ${P(actual)} a <b>${P(objetivo)}</b>
-      (${dif>=0?"+":""}${dif.toFixed(2)}) — solo si lo que quieres es que Booking siga con ese precio.<br>
-    <span style="color:var(--muted)">Ejecutarlo desde aquí necesita la llave de la API de Cloudbeds
-    con permiso de escritura. Todavía no está puesta, así que por ahora esto es la propuesta,
-    no el cambio.</span>`;
+      (${dif>=0?"+":""}${dif.toFixed(2)}) — solo si lo que quieres es que Booking siga con ese precio.`
+    :`BAR viva en Cloudbeds: <b>${P(actual)}</b>. Escribe la que quieras y se sube.`}
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:.82rem">BAR nueva
+        <input id="aj-val" type="number" step="0.01" min="1" value="${(mal?objetivo:actual).toFixed(2)}"
+          style="font:inherit;width:120px;padding:6px 8px;margin-left:6px;border:1px solid var(--rule-2);
+                 border-radius:6px;background:var(--bg);color:inherit;text-align:right"></label>
+      <button class="btn" id="aj-go" style="padding:6px 14px;font-size:.8rem">Subir a Cloudbeds</button>
+      <span id="aj-msg" style="font-size:.8rem;color:var(--muted)"></span>
+    </div>
+    <div class="nota" style="margin-top:8px">Se escribe sobre la <b>BAR</b> de esa habitación y esa
+    noche — nunca sobre AmigoPepe ni ningún plan opaco. De Cloudbeds baja sola a Booking,
+    Hostelworld y Expedia; tarda unos minutos en verse.</div>`;
   cuerpo.appendChild(box);
   box.scrollIntoView({behavior:"smooth",block:"nearest"});
+
+  const inp=box.querySelector("#aj-val"), msg=box.querySelector("#aj-msg"), b=box.querySelector("#aj-go");
+  b.onclick=async()=>{
+    const nuevo=Math.round(Number(inp.value)*100)/100;
+    if(!nuevo||nuevo<=0){ msg.style.color="var(--bad)"; msg.textContent="Pon un precio válido."; return; }
+    if(!tok()){ msg.style.color="var(--bad)"; msg.textContent="Necesitas sesión iniciada."; return; }
+    if(!confirm(`BAR de ${x.codigo} · ${f}\n\n${P(actual)}   →   ${P(nuevo)}\n\n`
+               +`Esto se escribe en Cloudbeds y baja a todas las OTAs. ¿Seguimos?`)) return;
+    b.disabled=true; inp.disabled=true;
+    msg.style.color="var(--muted)"; msg.textContent="Escribiendo en Cloudbeds…";
+    try{
+      const j1=await (await fetch(SB+"/rest/v1/rpc/cp_propuesta_crear",{method:"POST",headers:H(),
+        body:JSON.stringify({p_propiedad_id:pid(),p_fecha:f,p_codigo:x.codigo,p_bar_propuesta:nuevo,
+          p_motivo:"Ajuste a mano desde el mapa de disparidades"})})).json().catch(()=>null);
+      if(!j1||!j1.ok) throw new Error((j1&&j1.error)||"no se pudo registrar el ajuste");
+      const j2=await (await fetch(SB+"/rest/v1/rpc/cp_propuesta_aprobar",{method:"POST",headers:H(),
+        body:JSON.stringify({p_id:j1.id})})).json().catch(()=>null);
+      if(!j2||!j2.ok) throw new Error((j2&&j2.error)||"no se pudo aprobar");
+      const r3=await fetch(SB+"/functions/v1/cloudbeds-aplicar",{method:"POST",
+        headers:{apikey:AK,Authorization:"Bearer "+tok(),"Content-Type":"application/json"},
+        body:JSON.stringify({ids:[j1.id]})});
+      const j3=await r3.json().catch(()=>({}));
+      if(!r3.ok||!j3.ok) throw new Error(j3.error||("HTTP "+r3.status));
+      const d=(j3.detalle||[])[0]||{};
+      if(d.estado!=="aplicada") throw new Error("Cloudbeds no lo aceptó · queda registrado como fallido");
+      msg.style.color="var(--ok)";
+      msg.textContent=`Subido: ${P(actual)} → ${P(nuevo)}. Tarda unos minutos en verse en las OTAs.`;
+    }catch(e){
+      msg.style.color="var(--bad)"; msg.textContent=String((e&&e.message)||e);
+      inp.disabled=false;
+    }finally{ b.disabled=false; }
+  };
 }
 
 document.getElementById("prop").onchange=()=>{ sel=null; pintar(); };
