@@ -174,7 +174,7 @@ const P=v=>(v===null||v===undefined||isNaN(v))?"—":"$"+Number(v).toLocaleStrin
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MESES=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-let DIA=[], DVW=[], DET=[], CASO=[], PROPS=[], sel=null;
+let DIA=[], DVW=[], DET=[], PROPS=[], sel=null;
 
 // Enlaces para ir a comprobarlo con los ojos.
 const URL_BOOKING=(f)=>{ const d=new Date(f+"T00:00:00"); d.setDate(d.getDate()+1);
@@ -197,13 +197,11 @@ const DIAG={
 };
 
 async function cargar(){
-  const [d,v,t,c]=await Promise.all([
+  const [d,v,t]=await Promise.all([
     api("cp_disparidad_dia?select=*&order=fecha_estancia"),
     api("cp_dia_vs_web?select=*&order=fecha_estancia"),
-    api("cp_paridad_directo?select=*&order=fecha_estancia,clase_orden"),
-    api("cp_caso_dia?select=*&order=fecha_estancia,clase_orden")
+    api("cp_paridad_directo?select=*&order=fecha_estancia,clase_orden")
   ]);
-  CASO=Array.isArray(c)?c:[];
   const f=fallo(d)||fallo(v)||fallo(t);
   if(f){ document.getElementById("cal").innerHTML=
     `<div class="vacio-msg">No pude leer los datos (HTTP ${f.__fallo}). La pantalla no inventa: aquí no hay nada que mirar hasta que responda.</div>`;
@@ -221,16 +219,24 @@ const iso=d=>d.toISOString().slice(0,10);
 
 // Con el barrido a fondo semanal, el eje de calidad ya no es la profundidad sino
 // CUANDO se reviso. Una lectura de hace nueve dias no describe el precio de hoy.
-// Resume, en una linea, QUE se detecto esa noche y en cuantas habitaciones.
+// Resume, en una linea, QUE se detecto esa noche y en cuantas celdas. Sale de los
+// contadores que cp_disparidad_dia ya trae: pedir el detalle de los 180 dias para
+// pintar el calendario tumbaba la consulta.
+const ETIQ=[
+  ["mas_barato_que_web","una OTA por debajo de la web"],
+  ["dto_no_autorizado","descuento mayor del autorizado"],
+  ["mult_movido","markup de Booking movido"],
+  ["no_empujada","tarifa que no llegó al canal"],
+  ["derivacion_rota","derivación entre tarifas rota"],
+  ["a_revisar","sin patrón claro"]
+];
 function queSeDetecto(f){
-  const filas=CASO.filter(x=>x.fecha_estancia===f&&x.propiedad_id===pid()
-                            &&x.estado&&x.estado!=="ok"&&x.estado!=="sin lectura");
-  if(!filas.length) return "";
-  const cuenta={};
-  filas.forEach(x=>{ cuenta[x.estado]=(cuenta[x.estado]||0)+1; });
-  return Object.entries(cuenta)
-    .map(([e,n])=>`${(DIAG[e]||[e])[0]} (${n} hab.)`)
-    .join(" · ");
+  const d=DIA.find(x=>x.fecha_estancia===f&&x.propiedad_id===pid());
+  if(!d) return "";
+  const partes=[];
+  ETIQ.forEach(([k,txt])=>{ const n=Number(d[k]||0); if(n>0) partes.push(`${txt} (${n})`); });
+  if(Number(d.rotas_rel||0)>0) partes.push(`relación entre tarifas rota (${d.rotas_rel})`);
+  return partes.join(" · ");
 }
 
 function estadoDe(f){
@@ -322,10 +328,12 @@ function mover(ev){
   t.style.left=x+"px"; t.style.top=y+"px";
 }
 
-function verCaso(f){
+async function verCaso(f){
   const P_=pid();
-  const filas=CASO.filter(x=>x.fecha_estancia===f&&x.propiedad_id===P_)
-                  .sort((a,b)=>(a.clase_orden??99)-(b.clase_orden??99));
+  const cuerpo0=document.getElementById("caso-cuerpo");
+  cuerpo0.innerHTML=`<div class="vacio-msg">Abriendo la noche…</div>`;
+  const r=await api(`cp_caso_dia?select=*&propiedad_id=eq.${P_}&fecha_estancia=eq.${f}`);
+  const filas=(Array.isArray(r)?r:[]).sort((a,b)=>(a.clase_orden??99)-(b.clase_orden??99));
   const v=DVW.filter(x=>x.fecha_estancia===f&&x.propiedad_id===P_);
   document.getElementById("caso-lead").innerHTML=
     `Noche del <b>${esc(f)}</b> · <a href="${URL_BOOKING(f)}" target="_blank" rel="noopener">ver en Booking ↗</a>`
