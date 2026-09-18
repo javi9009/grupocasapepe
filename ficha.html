@@ -493,6 +493,52 @@ gmp-place-autocomplete,.gmpac{
   var LLEVAR=['Zapato cómodo','Protector solar','Gorra','Agua','Identificación','Efectivo','Ropa abrigada','Impermeable'];
   var ETIQ=[['general','General'],['principal','Principal (suele ser video)'],['header','Header horizontal'],['gastro','Gastro'],['souvenir','Souvenir'],['protagonista','Guía'],['otros','Otros']];
 
+  /* Un desplegable que admite escribir lo tuyo. Lo escrito NO va a ningún
+     catálogo compartido: se guarda en la ficha, y se le vuelve a ofrecer a
+     ese mismo touroperador en sus otros tours. */
+  var CODIGOS={cancelacion:CANCEL.map(function(o){return o[0];}),antelacion:ANTE.map(function(o){return o[0];})};
+  function eleccionLibre(sel,arr){
+    opts(sel,arr);
+    var el=document.querySelector('[data-c="'+sel+'"]');if(!el)return;
+    el.insertAdjacentHTML('beforeend','<option value="__otro">＋ Otro… (lo escribes tú)</option>');
+    el.addEventListener('focus',function(){el._antes=el.value;});
+    el.addEventListener('change',function(){
+      if(el.value!=='__otro')return;
+      var t=(prompt(sel==='cancelacion'
+        ? 'Escribe tu política de cancelación:'
+        : '¿Hasta cuándo se puede reservar?')||'').trim();
+      if(!t){el.value=el._antes||'';return;}
+      ponOpcion(el,t.slice(0,120));
+    });
+  }
+  function ponOpcion(el,texto){
+    if(!texto)return;
+    var hay=Array.prototype.some.call(el.options,function(o){return o.value===texto;});
+    if(!hay){
+      var o=document.createElement('option');o.value=texto;o.textContent=texto;
+      el.insertBefore(o,el.querySelector('option[value="__otro"]'));
+    }
+    el.value=texto;
+  }
+  /* lo que este operador ya se inventó en sus otros tours */
+  async function opcionesDelOperador(){
+    if(!E||!E.operador_id)return;
+    var otros=await get('op_experiencias?select=cancelacion,antelacion&operador_id=eq.'+E.operador_id);
+    ['cancelacion','antelacion'].forEach(function(c){
+      var el=document.querySelector('[data-c="'+c+'"]');if(!el)return;
+      var guardado=el.value;
+      otros.map(function(x){return x[c];})
+        .filter(function(v){return v&&CODIGOS[c].indexOf(v)<0;})
+        .filter(function(v,i,a){return a.indexOf(v)===i;})
+        .forEach(function(v){
+          var hay=Array.prototype.some.call(el.options,function(o){return o.value===v;});
+          if(!hay){var o=document.createElement('option');o.value=v;o.textContent=v;
+            el.insertBefore(o,el.querySelector('option[value="__otro"]'));}
+        });
+      el.value=guardado;
+    });
+  }
+
   function opts(sel,arr,vacio){
     var el=document.querySelector('[data-c="'+sel+'"]');if(!el)return;
     el.innerHTML=(vacio===false?'':'<option value="">—</option>')+arr.map(function(o){
@@ -563,7 +609,8 @@ gmp-place-autocomplete,.gmpac{
 
   function monta(){
     opts('categoria',CAT);opts('edad_minima',EDAD);opts('cupo_min',CUPO);opts('cupo_max',CUPO);
-    opts('cupo_max_grupo2',CUPO);opts('antelacion',ANTE);opts('cancelacion',CANCEL);opts('accesibilidad',ACCES);
+    eleccionLibre('cancelacion',CANCEL);eleccionLibre('antelacion',ANTE);
+    opts('cupo_max_grupo2',CUPO);opts('accesibilidad',ACCES);
     pintaIdiomas();chips('chDias',DIAS);chips('chIncluye',INCLUYE);chips('chLlevar',LLEVAR);
     $('bVolver').onclick=function(){location.href=interno?'/m/sinc-operadores.html':'/operador.html';};
     $('reqMin').onchange=function(){$('fldMin').classList.toggle('oculto',!this.checked);};
@@ -613,11 +660,17 @@ gmp-place-autocomplete,.gmpac{
     E._protas=p.map(function(x){return x.protagonista_id;});
 
     // volcar campos
+    /* si se inventaron una política, hay que devolverle su opción antes de volcar */
+    ['cancelacion','antelacion'].forEach(function(c){
+      var el=document.querySelector('[data-c="'+c+'"]');
+      if(el&&E[c]&&CODIGOS[c].indexOf(E[c])<0)ponOpcion(el,E[c]);
+    });
     Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(el){
       var c=el.getAttribute('data-c'),v=E[c];
       if(el.type==='checkbox'){el.checked=v===true;return;}
       el.value=v==null?'':v;
     });
+    await opcionesDelOperador();
     pintaIdiomas();ponChips('chDias',E.dias);
     ponChips('chIncluye',E.incluye);ponChips('chLlevar',E.que_llevar);
     ponChips('chGastro',g.map(idAGastro));ponChips('chTangible',t.map(idATangible));
@@ -1255,6 +1308,8 @@ gmp-place-autocomplete,.gmpac{
     if(!b.requiere_minimo)b.cupo_min=null;
     if(!b.admite_segundo_grupo)b.cupo_max_grupo2=null;
     delete b.comision_pct; // esa no se toca desde aquí
+    if(b.cancelacion==='__otro')b.cancelacion=null;
+    if(b.antelacion==='__otro')b.antelacion=null;
 
     $('btnGuardar').disabled=true;$('btnGuardar').textContent='Guardando…';
     var r=await patch('op_experiencias',ID,b);
