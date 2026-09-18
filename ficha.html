@@ -126,6 +126,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 .modal.on{display:flex}
 .modal .in{background:var(--blanco);border-radius:16px;max-width:520px;width:100%;padding:24px;box-shadow:0 26px 70px rgba(0,0,0,.34);max-height:92vh;overflow:auto}
 .pac-container{z-index:99999!important}
+gmp-place-autocomplete,.gmpac{display:block;width:100%;--gmp-mat-color-surface:var(--blanco);--gmp-mat-color-on-surface:var(--tinta);--gmp-mat-color-primary:var(--verde);font-family:inherit}
+.eco{color:var(--gris);font-style:italic}
 </style></head><body>
 
 <div class="barra"><div class="barra-in">
@@ -162,9 +164,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         <h3>La ceremonia</h3>
         <div class="porque">Una ceremonia es <b>un proceso hecho para un fin</b>, que tiene hitos y herramientas. No es un itinerario: es la forma en que el tour empieza, transcurre y termina.</div>
         <div class="fgrid">
-          <div class="fld"><label>Inicia en</label><input data-c="cer_inicio_lugar"></div>
+          <div class="fld"><label>Inicia en</label><input data-c="cer_inicio_lugar" id="cerIni" list="dlLugares" placeholder="Busca el lugar" autocomplete="off"><div class="ay">Escribe y elige de tus puntos de salida, o del buscador de Google.</div></div>
           <div class="fld"><label>A las</label><input data-c="cer_inicio_hora" placeholder="10:30"></div>
-          <div class="fld"><label>Termina en</label><input data-c="cer_final_lugar"></div>
+          <div class="fld"><label>Termina en</label><input data-c="cer_final_lugar" id="cerFin" list="dlLugares" placeholder="Busca el lugar" autocomplete="off"></div>
+          <datalist id="dlLugares"></datalist>
           <div class="fld"><label>A las</label><input data-c="cer_final_hora" placeholder="13:00"></div>
           <div class="fld"><label>Tiempo total aproximado (min)</label><input type="number" data-c="llegada_min" step="15"><div class="ay">Lo que de verdad tarda de punta a punta.</div></div>
         </div>
@@ -558,6 +561,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     fb.innerHTML=barrios.map(function(b){return '<option value="'+esc(b)+'">'+(b||'Todos los barrios')+'</option>';}).join('');
     fb.onchange=llenaLugares;
     llenaLugares();
+    var dl=$('dlLugares');
+    if(dl)dl.innerHTML=LUG.map(function(l){return '<option value="'+esc(l.nombre)+'">'+esc(l.barrio||l.direccion||'')+'</option>';}).join('');
   }
   function llenaLugares(){
     var b=$('filBarrio').value;
@@ -856,37 +861,104 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   }
 
   /* ---------- Google Maps ---------- */
+  var ACQ=[];                 /* campos esperando al buscador */
+  function autocompleta(el,cb){
+    if(!el||el._ac)return;
+    ACQ.push([el,cb]);
+    if(MAPS)enchufaAC();
+  }
+  function barrioDe(comps){
+    for(var i=0;i<(comps||[]).length;i++){
+      var c=comps[i],t=c.types||[];
+      if(t.indexOf('sublocality')>=0||t.indexOf('sublocality_level_1')>=0||t.indexOf('neighborhood')>=0)
+        return c.longText||c.long_name||'';
+    }
+    return '';
+  }
+  function enchufaAC(){
+    if(!(window.google&&google.maps&&google.maps.places))return;
+    var P=google.maps.places;
+    while(ACQ.length){
+      var it=ACQ.shift(),el=it[0],cb=it[1];
+      if(el._ac)continue;
+      try{
+        if(P.PlaceAutocompleteElement)acNuevo(P,el,cb); else acViejo(P,el,cb);
+        el._ac=true;
+      }catch(e){console.warn('maps',e);avisaSinMaps();}
+    }
+  }
+  /* Google retiró el buscador viejo para cuentas nuevas (marzo 2025): usamos el componente nuevo */
+  function acNuevo(P,el,cb){
+    var g=new P.PlaceAutocompleteElement({includedRegionCodes:['mx']});
+    if(el.placeholder)g.setAttribute('placeholder',el.placeholder);
+    g.className='gmpac';
+    el.style.display='none';
+    el.parentNode.insertBefore(g,el.nextSibling);
+    el._gmp=g;
+    if(el.hasAttribute('data-c')){
+      var eco=document.createElement('div');eco.className='ay eco';
+      el.parentNode.insertBefore(eco,g.nextSibling);el._eco=eco;ecoAC(el);
+    }
+    g.addEventListener('gmp-select',async function(ev){
+      try{
+        var pl=ev.placePrediction.toPlace();
+        await pl.fetchFields({fields:['displayName','formattedAddress','location','id','addressComponents']});
+        var L=pl.location,la=L?(typeof L.lat==='function'?L.lat():L.lat):null,ln=L?(typeof L.lng==='function'?L.lng():L.lng):null;
+        cb({name:pl.displayName||'',direccion:pl.formattedAddress||'',place_id:pl.id||'',
+            lat:la,lng:ln,barrio:barrioDe(pl.addressComponents)});
+        ecoAC(el);
+      }catch(e){console.warn('maps select',e);}
+    });
+  }
+  function acViejo(P,el,cb){
+    var ac=new P.Autocomplete(el,{componentRestrictions:{country:'mx'},
+      fields:['geometry','formatted_address','name','place_id','address_components']});
+    ac.addListener('place_changed',function(){
+      var p=ac.getPlace();if(!p)return;
+      cb({name:p.name||'',direccion:p.formatted_address||'',place_id:p.place_id||'',
+          lat:p.geometry?p.geometry.location.lat():null,lng:p.geometry?p.geometry.location.lng():null,
+          barrio:barrioDe(p.address_components)});
+    });
+  }
+  function ecoAC(el){ if(el&&el._eco)el._eco.textContent=el.value?'Guardado: '+el.value:''; }
+  function sincronizaAC(){ ['cerIni','cerFin'].forEach(function(id){ecoAC($(id));}); }
   async function cargaMaps(){
+    if(window.google&&google.maps&&google.maps.places){MAPS=true;enchufaAC();return;}
     var c=await get('sinc_config?select=valor&clave=eq.google_maps_key&limit=1');
     var k=c[0]&&c[0].valor;
-    if(!k)return;
+    if(!k){avisaSinMaps();return;}
     var s=document.createElement('script');
     s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(k)+'&libraries=places&language=es&region=MX&loading=async';
     s.async=true;
-    s.onload=function(){MAPS=true;};
+    s.onload=function(){MAPS=true;enchufaAC();};
+    s.onerror=function(){MAPS=false;avisaSinMaps();};
     document.head.appendChild(s);
+    /* si en 8 s no cargó (clave restringida, sin red), lo decimos en vez de dejarlo mudo */
+    setTimeout(function(){if(!MAPS)avisaSinMaps();},8000);
   }
+  function avisaSinMaps(){
+    MAPS=false;
+    ['cerIni','cerFin'].forEach(function(id){var e=$(id);if(e&&!e.placeholder.match(/mano/))e.placeholder='Escríbelo a mano';});
+    if($('lgCoord')&&!$('lgCoord').textContent)$('lgCoord').textContent='Sin buscador de Google: escribe la dirección a mano y se guarda igual.';
+  }
+  /* los dos campos de la ceremonia también buscan en Google */
+  autocompleta($('cerIni'),function(p){$('cerIni').value=p.name||p.direccion||$('cerIni').value;});
+  autocompleta($('cerFin'),function(p){$('cerFin').value=p.name||p.direccion||$('cerFin').value;});
+
   var lugarNuevo={};
   $('btnNuevoLugar').onclick=function(){
     lugarNuevo={};$('lgDir').value='';$('lgNom').value='';$('lgBarrio').value='';$('lgCoord').textContent='';
+    if($('lgDir')._gmp)try{$('lgDir')._gmp.value='';}catch(_){}
     $('mLugar').classList.add('on');
-    if(MAPS&&window.google&&google.maps&&google.maps.places){
-      try{
-        var ac=new google.maps.places.Autocomplete($('lgDir'),{componentRestrictions:{country:'mx'},fields:['geometry','formatted_address','name','place_id','address_components']});
-        ac.addListener('place_changed',function(){
-          var p=ac.getPlace();if(!p||!p.geometry)return;
-          lugarNuevo={lat:p.geometry.location.lat(),lng:p.geometry.location.lng(),
-            direccion:p.formatted_address,maps_place_id:p.place_id,
-            maps_url:'https://www.google.com/maps/place/?q=place_id:'+p.place_id};
-          if(!$('lgNom').value)$('lgNom').value=p.name||'';
-          var col=(p.address_components||[]).filter(function(c){return c.types.indexOf('sublocality')>=0||c.types.indexOf('neighborhood')>=0;})[0];
-          if(col&&!$('lgBarrio').value)$('lgBarrio').value=col.long_name;
-          $('lgCoord').textContent='Ubicación encontrada: '+p.formatted_address;
-        });
-      }catch(_){}
-    } else {
-      $('lgCoord').textContent='Sin buscador de Google: escribe la dirección a mano y se guarda igual.';
-    }
+    autocompleta($('lgDir'),function(p){
+      lugarNuevo={lat:p.lat,lng:p.lng,direccion:p.direccion,maps_place_id:p.place_id,
+        maps_url:p.place_id?'https://www.google.com/maps/place/?q=place_id:'+p.place_id:null};
+      $('lgDir').value=p.direccion||p.name||'';
+      if(!$('lgNom').value)$('lgNom').value=p.name||'';
+      if(p.barrio&&!$('lgBarrio').value)$('lgBarrio').value=p.barrio;
+      $('lgCoord').textContent='Ubicación encontrada: '+(p.direccion||p.name);
+    });
+    if(MAPS===false)$('lgCoord').textContent='Sin buscador de Google: escribe la dirección a mano y se guarda igual.';
   };
   $('lgCancel').onclick=function(){$('mLugar').classList.remove('on');};
   $('lgOk').onclick=async function(){
@@ -952,6 +1024,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       p.classList.toggle('on',+p.getAttribute('data-s')===step);});
     $('sLista').innerHTML=visibles.map(function(i){
       return '<div class="mini" style="padding:3px 0'+(h[i]?';color:var(--tinta)':'')+'">'+(h[i]?'✓':'○')+' '+PASOS[i]+'</div>';}).join('');
+    sincronizaAC();
   }
 
   /* ---------- guardar ---------- */
