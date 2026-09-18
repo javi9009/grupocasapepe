@@ -22,6 +22,11 @@ body{background:var(--ground);color:var(--ink);margin:0;font:15px/1.5 system-ui,
 .altagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 .altafoto{max-width:220px;border-radius:10px;margin-top:10px;display:block}
 .altabtns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.ctaextra{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.ctaextra select{flex:1}
+.provfila{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.provfila select{flex:1}
+.provfila input{width:130px}
 .secnav{position:sticky;top:0;z-index:19;background:var(--ground);border-bottom:1px solid var(--rule)}
 .secnav-in{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto}
 .secnav button{border:0;background:none;font:inherit;padding:12px 14px;color:var(--muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
@@ -250,7 +255,7 @@ function filaProd(p){
     <td><b>${esc(p.nombre)}</b>${p.categoria?`<div class="small muted">${esc(p.categoria)}</div>`:""}</td>
     <td class="small">${esc(p.area)}<div class="muted">${esc(p.tipo)}</div></td>
     <td class="small">${esc(b?b.nombre:"—")}</td>
-    <td class="small">${c?esc(c.codigo):"—"}<div class="muted">${c?esc(c.grupo_compra):""}</div></td>
+    <td class="small">${c?esc(c.codigo):"—"}${(p.cuentas_extra||[]).length?` <span class="chip" title="${esc((p.cuentas_extra||[]).map(x=>{const y=CUENTAS.find(z=>z.id===x);return y?y.codigo+" "+y.cuenta:"";}).filter(Boolean).join(" · "))}">+${p.cuentas_extra.length}</span>`:""}<div class="muted">${c?esc(c.grupo_compra):""}</div></td>
     <td class="num">${p.stock_min!=null?num(p.stock_min)+" "+esc(p.unidad_base):'<span class="chip c-n">sin mínimo</span>'}</td>
     <td>${p._sinPrecio?'<span class="chip c-warn">falta</span>':'<span class="chip c-ok">ok</span>'}</td>
     <td class="num">
@@ -258,37 +263,108 @@ function filaProd(p){
       ${PUEDE?`<button class="btn ghost sm" onclick="editaProducto('${p.id}')">✎</button>`:""}
     </td></tr>`;
 }
-function editaProducto(id){
-  const p=id?PRODS.find(x=>x.id===id):{area:"A&B",tipo:"consumible",unidad_base:"pza",activo:true};
+async function editaProducto(id){
+  const p=id?PRODS.find(x=>x.id===id):{area:"A&B",unidad_base:"pza",activo:true};
+  // Las presentaciones son "qué proveedor lo vende y a cuánto": se editan aquí mismo.
+  let pres=[];
+  if(id){ const {data}=await sb.from("cmp_presentaciones").select("*").eq("producto_id",id).order("precio"); pres=data||[]; }
+  const cont=pres.length&&pres[0].contenido!=null?pres[0].contenido:1;
   modal(`<h3 style="margin:0 0 8px">${id?"Editar producto":"Nuevo producto"}</h3>
     <div class="grid2">
       <div class="full"><label>Nombre</label><input id="pNombre" value="${esc(p.nombre||"")}"></div>
       <div><label>Área</label><select id="pArea">${AREAS.map(a=>`<option ${p.area===a?"selected":""}>${a}</option>`).join("")}</select></div>
-      <div><label>Tipo</label><select id="pTipo">${TIPOS.map(t=>`<option ${p.tipo===t?"selected":""}>${t}</option>`).join("")}</select></div>
-      <div><label>Categoría</label><input id="pCat" value="${esc(p.categoria||"")}" placeholder="Limpieza, Blancos, Papelería…"></div>
-      <div><label>Unidad base</label><select id="pUni">${UNIDADES.map(u=>`<option ${p.unidad_base===u?"selected":""}>${u}</option>`).join("")}</select></div>
-      <div><label>Unidad como la escriben</label><input id="pUniTxt" value="${esc(p.unidad_texto||"")}" placeholder="Galón 5Lt, Vidón…"></div>
-      <div><label>Stock mínimo (en unidad base)</label><input id="pMin" type="number" step="0.01" min="0" value="${p.stock_min!=null?p.stock_min:""}"></div>
+      <div><label>Se mide en</label><select id="pUni">${UNIDADES.map(u=>`<option ${p.unidad_base===u?"selected":""}>${u}</option>`).join("")}</select></div>
+      <div><label>Cantidad por envase <span class="muted small" id="pCantHint"></span></label><input id="pCant" type="number" step="0.001" min="0.001" value="${cont}"></div>
+      <div><label>Stock mínimo <span class="muted small">(en la unidad de arriba)</span></label><input id="pMin" type="number" step="0.01" min="0" value="${p.stock_min!=null?p.stock_min:""}"></div>
       <div><label>Bodega</label><select id="pBod"><option value="">— sin bodega —</option>${BODEGAS.map(b=>`<option value="${b.id}" ${p.bodega_id===b.id?"selected":""}>${esc(b.nombre)}</option>`).join("")}</select></div>
-      <div><label>Cuenta contable</label><select id="pCta"><option value="">— sin cuenta —</option>${CUENTAS.map(c=>`<option value="${c.id}" ${p.cuenta_id===c.id?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("")}</select></div>
+      <div><label>Cuenta contable</label><select id="pCta"><option value="">— sin cuenta —</option>${optCuenta(p.cuenta_id)}</select></div>
+      <div class="full"><label>Otras cuentas donde puede caer <span class="muted small">(el contador elige al recibir la factura)</span></label>
+        <div id="pCtaExtra"></div>
+        <button type="button" class="btn ghost sm" onclick="addCtaExtra()">+ Añadir cuenta</button></div>
+      <div class="full"><label>Quién lo vende y a cuánto <span class="muted small">(uno o varios; el más barato es el que se propone al pedir)</span></label>
+        <div id="pProvs"></div>
+        <button type="button" class="btn ghost sm" onclick="addProvPrecio()">+ Añadir proveedor</button></div>
       <div class="full"><label>Notas</label><input id="pNotas" value="${esc(p.notas||"")}"></div>
       <div class="full"><label><input type="checkbox" id="pAct" ${p.activo!==false?"checked":""}> Activo</label></div>
     </div>
     <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" onclick="guardaProducto(${id?"'"+id+"'":"null"})">Guardar</button></div>`);
+  (p.cuentas_extra||[]).forEach(addCtaExtra);
+  if(pres.length) pres.forEach(x=>addProvPrecio(x)); else addProvPrecio();
+  const hint=()=>{ const u=$("pUni").value; $("pCantHint").textContent="¿cuántos "+u+" trae cada envase?"; };
+  $("pUni").onchange=hint; hint();
+}
+/* Un producto puede caer en más de una cuenta (un mismo jabón: limpieza o amenidades).
+   cuenta_id es la de siempre; estas son las otras que el contador puede elegir. */
+const optCuenta=sel=>CUENTAS.map(c=>`<option value="${c.id}" ${sel===c.id?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("");
+function addCtaExtra(sel){
+  const box=$("pCtaExtra"); if(!box) return;
+  const row=document.createElement("div");
+  row.className="ctaextra";
+  row.innerHTML=`<select class="ctaX"><option value="">— elegir —</option>${optCuenta(typeof sel==="string"?sel:null)}</select>
+    <button type="button" class="btn ghost sm" title="Quitar">✕</button>`;
+  row.querySelector("button").onclick=()=>row.remove();
+  box.appendChild(row);
+}
+const ctasExtra=()=>[...document.querySelectorAll("#pCtaExtra .ctaX")].map(s=>s.value).filter(Boolean)
+  .filter((v,i,a)=>a.indexOf(v)===i && v!==$("pCta").value);
+
+/* Proveedores asociados: cada uno con su precio. Una fila = una presentación. */
+function addProvPrecio(x){
+  const box=$("pProvs"); if(!box) return;
+  x=x||{};
+  const row=document.createElement("div");
+  row.className="provfila";
+  row.dataset.pres=x.id||"";
+  row.innerHTML=`<select class="pvProv"><option value="">— elegir proveedor —</option>${
+      PROVS.filter(v=>v.estado!=="baja"||v.proveedor_id===x.proveedor_id)
+           .map(v=>`<option value="${v.proveedor_id}" ${x.proveedor_id===v.proveedor_id?"selected":""}>${esc(v.proveedor)}</option>`).join("")}</select>
+    <input class="pvPrecio" type="number" step="0.01" min="0" placeholder="precio" value="${x.precio!=null?x.precio:""}">
+    <button type="button" class="btn ghost sm" title="Quitar">✕</button>`;
+  row.querySelector("button").onclick=()=>row.remove();
+  box.appendChild(row);
 }
 async function guardaProducto(id){
   const nombre=$("pNombre").value.trim();
   if(!nombre) return toast("El nombre es obligatorio");
-  const rec={property_id:SEDE,nombre,area:$("pArea").value,tipo:$("pTipo").value,
-    categoria:$("pCat").value.trim()||null,unidad_base:$("pUni").value,
-    unidad_texto:$("pUniTxt").value.trim()||null,
+  const cant=parseFloat($("pCant").value);
+  if(!(cant>0)) return toast("La cantidad por envase debe ser mayor que cero");
+  const viejo=id?PRODS.find(x=>x.id===id):null;
+  const rec={property_id:SEDE,nombre,area:$("pArea").value,
+    // tipo y categoría ya no se piden en la ficha: se conservan, y lo nuevo nace como consumible.
+    tipo:(viejo&&viejo.tipo)||"consumible",
+    categoria:(viejo&&viejo.categoria)||null,
+    unidad_base:$("pUni").value,
     stock_min:$("pMin").value!==""?parseFloat($("pMin").value):null,
     bodega_id:$("pBod").value||null,cuenta_id:$("pCta").value||null,
+    cuentas_extra:ctasExtra(),
     notas:$("pNotas").value.trim()||null,activo:$("pAct").checked};
-  const r=id? await sb.from("cmp_productos").update(rec).eq("id",id)
-            : await sb.from("cmp_productos").insert(rec);
+  const r=id? await sb.from("cmp_productos").update(rec).eq("id",id).select("id").single()
+            : await sb.from("cmp_productos").insert(rec).select("id").single();
   if(r.error) return toast(r.error.message);
+  const prodId=id||(r.data&&r.data.id);
+
+  // Proveedores y precios: se sincronizan con las presentaciones del producto.
+  const filas=[...document.querySelectorAll("#pProvs .provfila")].map(f=>({
+    presId:f.dataset.pres||null,
+    prov:f.querySelector(".pvProv").value||null,
+    precio:f.querySelector(".pvPrecio").value!==""?parseFloat(f.querySelector(".pvPrecio").value):null
+  })).filter(x=>x.prov||x.presId);
+  const vivas=filas.filter(x=>x.presId).map(x=>x.presId);
+  const {data:actuales}=await sb.from("cmp_presentaciones").select("id").eq("producto_id",prodId);
+  for(const a of (actuales||[])) if(!vivas.includes(a.id)) await sb.from("cmp_presentaciones").delete().eq("id",a.id);
+  let primera=true;
+  for(const f of filas){
+    if(!f.prov) continue;
+    const pr={producto_id:prodId, proveedor_id:f.prov, precio:f.precio,
+      contenido:cant, unidad_contenido:$("pUni").value,
+      tipo:cant===1?"pieza":"paquete", preferida:primera, activo:true,
+      precio_actualizado:new Date().toISOString().slice(0,10)};
+    const e = f.presId ? (await sb.from("cmp_presentaciones").update(pr).eq("id",f.presId)).error
+                       : (await sb.from("cmp_presentaciones").insert(pr)).error;
+    if(e) return toast("Producto guardado, pero un precio no: "+e.message);
+    primera=false;
+  }
   toast("Guardado"); closeModal(); await recargar();
 }
 

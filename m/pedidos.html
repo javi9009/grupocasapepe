@@ -229,7 +229,7 @@ async function recargar(){
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE),
     sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
-    sb.from("cmp_productos").select("id,nombre,area,areas_extra,categoria,familia,unidad_base,unidad_texto,tipo,tasa_iva_default,bodega_id,cuenta_id").eq("property_id",SEDE).eq("activo",true).order("nombre"),
+    sb.from("cmp_productos").select("id,nombre,area,areas_extra,categoria,familia,unidad_base,unidad_texto,tipo,tasa_iva_default,bodega_id,cuenta_id,cuentas_extra").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_solicitudes_mtto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}),
     sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE)
   ]);
@@ -1133,6 +1133,8 @@ function abrirRecepcion(id){
       <div><label>Diferencia contra las líneas</label><input id="recDif" readonly></div>
       <div><label>Foto del ticket</label><input id="recFoto" type="file" accept="image/*,application/pdf"></div>
       <div><label>Firma de quien recibe</label><input id="recFirma" value="${esc(EMAIL)}"></div>
+      <div class="full"><label>Cuenta contable de la factura <span class="muted small">(cámbiala si el gasto va a otra)</span></label>
+        <select id="recCta">${optCtaPedido(p)}</select></div>
       <div class="full"><label>Notas de la recepción</label><input id="recNotas"></div>
     </div>
     <div class="foot">
@@ -1141,6 +1143,25 @@ function abrirRecepcion(id){
       <button class="btn" onclick="guardaRecepcion('${id}','recibido')">Firmar recepción completa</button>
     </div>`);
   calcRec();
+}
+/* Al recibir la factura, el contador elige la cuenta. Arriba salen las del propio pedido
+   (la del producto y sus cuentas alternativas); abajo, el resto por si hace falta otra. */
+function ctasDelPedido(p){
+  const ids=new Set(); if(p.cuenta_id) ids.add(p.cuenta_id);
+  (p.items||[]).forEach(i=>{
+    const pr=PRODS.find(x=>x.id===i.producto_id); if(!pr) return;
+    if(pr.cuenta_id) ids.add(pr.cuenta_id);
+    (pr.cuentas_extra||[]).forEach(c=>ids.add(c));
+  });
+  return ids;
+}
+function optCtaPedido(p){
+  const ids=ctasDelPedido(p);
+  const prop=CUENTAS.filter(c=>ids.has(c.id)), resto=CUENTAS.filter(c=>!ids.has(c.id));
+  const op=c=>`<option value="${c.id}" ${c.id===p.cuenta_id?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`;
+  return `<option value="">— sin cuenta —</option>`+
+    (prop.length?`<optgroup label="Las de este pedido">${prop.map(op).join("")}</optgroup>`:"")+
+    (resto.length?`<optgroup label="Otras cuentas">${resto.map(op).join("")}</optgroup>`:"");
 }
 function calcRec(){
   let suma=0;
@@ -1187,7 +1208,8 @@ async function guardaRecepcion(id,estadoFinal){
   const patch={estado:estadoFinal, recibido_at:new Date().toISOString(), recibido_por:USER.id,
     recibido_por_nombre:firma, firma_url:firma,
     total_recibo:parseFloat($("recTotal").value)||null,
-    conciliado_nota:$("recNotas").value||null};
+    conciliado_nota:$("recNotas").value||null,
+    cuenta_id:($("recCta")&&$("recCta").value)||p.cuenta_id||null};
   if(fotoUrl) patch.foto_recibo_url=fotoUrl;
   const t=parseFloat($("recTotal").value);
   if(!isNaN(t)){ patch.conciliado = Math.abs(t-(+p.total))<=0.5; if(patch.conciliado) patch.conciliado_at=new Date().toISOString(); }
