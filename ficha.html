@@ -1601,7 +1601,8 @@ gmp-place-autocomplete,.gmpac{
     var pesos=l.reduce(function(a,x){return a+aPesos(x,t,pvp);},0);
     /* El impacto es conjunto: lo que pone el operador y lo que ponemos nosotros */
     var cp=pvp?Math.round(pvp*Number(E.comision_pct||25)*CP_DERRAMA/10000):0;
-    var juntos=pesos+cp;
+    var bono=pvp?Math.round(pvp*Number(E.concierge_pct||0)/100):0;
+    var juntos=pesos+cp+bono;
     var clavesContestadas={}; l.forEach(function(x){clavesContestadas[x.clave]=1;});
     var sinContestar=IMPACTOS.length-Object.keys(clavesContestadas).length;
     var pasa=suyo&&pesos>suyo;
@@ -1611,8 +1612,10 @@ gmp-place-autocomplete,.gmpac{
         ? 'Ojo: has declarado <b>'+money(pesos)+'</b> por persona, pero de cada boleto de '+money(pvp)+' al operador le llegan <b>'+money(suyo)+'</b>. No se puede repartir más de lo que entra: baja alguna cifra.'
         : (juntos
           ? 'De cada boleto de <b>'+money(pvp)+'</b> se quedan <b>'+money(juntos)+'</b> en la comunidad: un <b>'+(pvp?Math.round(juntos*1000/pvp)/10:0)+'%</b> del precio que paga el viajero.'+
-            (cp?' Son '+money(pesos)+' que pone el operador y '+money(cp)+' que ponemos nosotros, el '+CP_DERRAMA+'% de nuestra comisión.':'')+
-            ' El resto se entiende como operación.'
+            ' Son '+money(pesos)+' que pone el operador'+
+            (cp?', '+money(cp)+' del '+CP_DERRAMA+'% de nuestra comisión':'')+
+            (bono?' y '+money(bono)+' de bono al colaborador que vende, que es salario':'')+
+            '. El resto se entiende como operación.'
           : 'Contesta las preguntas y te digo cuánto de cada boleto se queda en la comunidad.'))+
       '</div>'+
       (pvp&&juntos?pintaSello(juntos*100/pvp):'')+
@@ -1655,7 +1658,7 @@ gmp-place-autocomplete,.gmpac{
 
     if(!salidas||!cupo||!pvp||!l.length){
       $('proyTexto').innerHTML='<div class="aviso">Para hacer la cuenta faltan los días y horas de salida, el cupo máximo, el precio y al menos una respuesta de arriba.</div>';
-      $('proyOds').innerHTML='';ANUAL={};pintaImpactoAnual();return;
+      $('proyOds').innerHTML='';ANUAL={};ANUAL_VENTA=0;pintaImpactoAnual();return;
     }
     /* por meta, no solo por objetivo: si no, todo se apelmaza en el ODS 8 */
     var porMeta={};
@@ -1663,18 +1666,26 @@ gmp-place-autocomplete,.gmpac{
       var def=IMPACTOS.filter(function(i){return i[0]===x.clave;})[0]; if(!def)return;
       porMeta[def[3]]=(porMeta[def[3]]||0)+aPesos(x,t,pvp)*pax;
     });
-    /* y lo nuestro: Casa Pepe pone el 7% de su comisión en la comunidad */
+    /* y lo nuestro, que son dos cosas distintas:
+       el 7% de la comisión que ponemos en la comunidad, y el bono del
+       colaborador que vende, que es nómina formal a un trabajador */
     var comPct=Number(E.comision_pct||25);
     var cpPesos=Math.round(pvp*comPct*CP_DERRAMA/10000)*pax;
     if(cpPesos)porMeta['8.9']=(porMeta['8.9']||0)+cpPesos;
+    var bonoPesos=Math.round(pvp*Number(E.concierge_pct||0)/100)*pax;
+    if(bonoPesos)porMeta['8.5']=(porMeta['8.5']||0)+bonoPesos;
 
     var total=Object.keys(porMeta).reduce(function(a,k){return a+porMeta[k];},0);
-    ANUAL={}; Object.keys(porMeta).forEach(function(m){ANUAL[m]=porMeta[m];}); ANUAL._venta=pvp*pax; pintaImpactoAnual();
+    ANUAL={}; Object.keys(porMeta).forEach(function(m){ANUAL[m]=porMeta[m];}); ANUAL_VENTA=pvp*pax; pintaImpactoAnual();
 
     $('proyTexto').innerHTML='<div class="aviso ok">Si este año vendes <b>'+pax.toLocaleString('es-MX')+
       ' lugares</b> —'+salidas.toLocaleString('es-MX')+' salidas programadas al '+ocup+'% de ocupación— se habrán movido <b>'+
       money(total)+'</b> hacia estos objetivos:</div>'+
-      (cpPesos?'<div class="mini" style="margin-top:8px">Incluye <b>'+money(cpPesos)+'</b> que pone Casa Pepe: el '+CP_DERRAMA+'% de nuestra comisión va a la comunidad local. Eso no sale de lo tuyo.</div>':'');
+      ((cpPesos||bonoPesos)?'<div class="mini" style="margin-top:8px">Incluye lo que ponemos nosotros, que no sale de lo del operador: '+
+        (cpPesos?'<b>'+money(cpPesos)+'</b> del '+CP_DERRAMA+'% de nuestra comisión que va a la comunidad':'')+
+        (cpPesos&&bonoPesos?', y ':'')+
+        (bonoPesos?'<b>'+money(bonoPesos)+'</b> de bono al colaborador que vende, que es nómina formal con seguridad social':'')+
+        '.</div>':'');
 
     /* se agrupa por objetivo, y dentro se ve cada meta */
     var porOds={};
@@ -1752,22 +1763,24 @@ gmp-place-autocomplete,.gmpac{
   }
 
   /* El resumen de la barra lateral: lo mismo que la proyección, en corto. */
-  var ANUAL={};
+  /* La venta se guarda aparte a propósito: cuando vivía dentro del mismo
+     objeto se colaba en la suma y el impacto salía mayor que los ingresos. */
+  var ANUAL={}, ANUAL_VENTA=0;
   function pintaImpactoAnual(){
-    var k=Object.keys(ANUAL);
-    $('cardImpactoAnual').style.display=k.length?'':'none';
-    if(!k.length)return;
-    var total=k.reduce(function(a,m){return a+ANUAL[m];},0);
-    var venta=ANUAL._venta||0;
+    var metas=Object.keys(ANUAL).filter(function(m){return ANUAL[m]>0;});
+    $('cardImpactoAnual').style.display=metas.length?'':'none';
+    if(!metas.length)return;
+    var total=metas.reduce(function(a,m){return a+ANUAL[m];},0);
+    var pctTotal=ANUAL_VENTA?Math.round(total*1000/ANUAL_VENTA)/10:0;
     $('impAnual').innerHTML=
       '<div class="desglose">'+
-      k.filter(function(m){return m.charAt(0)!=='_';}).sort(function(a,b){return ANUAL[b]-ANUAL[a];}).map(function(m){
-        var pct=venta?Math.round(ANUAL[m]*1000/venta)/10:0;
-        return '<div><span>'+esc((METAS[m]||m).replace(/^Meta /,'').replace(/ ·.*$/,''))+'</span><b>'+money(ANUAL[m])+'</b></div>'+
+      metas.sort(function(a,b){return ANUAL[b]-ANUAL[a];}).map(function(m){
+        var pct=ANUAL_VENTA?Math.round(ANUAL[m]*1000/ANUAL_VENTA)/10:0;
+        return '<div><span>Meta '+esc(m)+'</span><b>'+money(ANUAL[m])+'</b></div>'+
                '<div class="mini" style="margin:-4px 0 6px">'+esc((METAS[m]||'').replace(/^Meta [\d.]+ · /,''))+' · '+pct+'% de la venta</div>';
       }).join('')+'</div>'+
-      '<div class="mini" style="margin-top:8px">Total al año: <b>'+money(total)+'</b>'+
-      (venta?', sobre una venta de '+money(venta):'')+'.</div>';
+      '<div class="mini" style="margin-top:8px">Suman <b>'+money(total)+'</b> al año'+
+      (ANUAL_VENTA?', el <b>'+pctTotal+'%</b> de una venta de '+money(ANUAL_VENTA):'')+'.</div>';
   }
   function pintaMedido(){
     var total=COS.reduce(function(a,c){return a+Number(c.cantidad||0)*Number(c.costo_unitario||0);},0);
