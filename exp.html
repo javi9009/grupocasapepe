@@ -49,7 +49,7 @@ h1,h2,h3{font-family:'Playfair Display',Georgia,serif;font-weight:600;letter-spa
 /* ---------- portada ---------- */
 .portada{max-width:1120px;margin:0 auto;padding:22px 20px 0;}
 .mosaico{display:grid;gap:8px;border-radius:var(--radio);overflow:hidden;
-  grid-template-columns:2fr 1fr 1fr;grid-template-rows:150px 150px;}
+  grid-template-columns:2fr 1fr 1fr;grid-template-rows:196px 196px;}
 .mosaico .celda{background:var(--hueso);position:relative;overflow:hidden;cursor:zoom-in;}
 .mosaico .celda:first-child{grid-row:span 2;}
 .mosaico img{width:100%;height:100%;object-fit:cover;transition:transform .5s ease;}
@@ -230,6 +230,11 @@ h3{font-size:16px;font-family:Montserrat,sans-serif;font-weight:700;margin:0 0 8
 .visor .nav.izq{left:14px;} .visor .nav.der{right:14px;}
 .visor .cuenta{color:rgba(255,255,255,.7);font-size:12px;margin-top:14px;}
 
+.verVideo{margin:10px 0 0;border:1px solid var(--linea);background:var(--blanco);
+  border-radius:999px;padding:8px 16px;font-size:13px;font-weight:600;color:var(--tinta-2);
+  display:inline-flex;align-items:center;gap:8px;}
+.verVideo span{color:var(--naranja);font-size:11px;}
+.verVideo:hover{border-color:var(--naranja);}
 .cargando{max-width:1120px;margin:0 auto;padding:70px 20px;text-align:center;color:var(--tenue);}
 footer{border-top:1px solid var(--linea);background:var(--hueso);padding:26px 20px;
   text-align:center;font-size:12px;color:var(--gris);}
@@ -368,6 +373,14 @@ async function get(p){
   if(!r.ok){try{console.error('GET '+p+' → '+r.status,await r.text());}catch(_){}return [];}
   return await r.json();
 }
+/* Las fotos que sube el operador pesan tres megas. Supabase sabe redimensionar
+   al vuelo, así que en la portada se pide el tamaño que de verdad se ve. Lo que
+   no vive en nuestro bucket (una liga de Drive, por ejemplo) se deja tal cual. */
+function mini(u,ancho){
+  if(!u||u.indexOf('/storage/v1/object/public/')<0)return u;
+  return u.replace('/storage/v1/object/public/','/storage/v1/render/image/public/')+
+         '?width='+ancho+'&quality=72&resize=cover';
+}
 async function rpc(f,b){
   var r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',headers:hdr(),body:JSON.stringify(b||{})});
   var t=await r.text(); var j=null; try{j=t?JSON.parse(t):null;}catch(_){}
@@ -431,9 +444,12 @@ async function arranca(){
 
 /* ---------- portada ---------- */
 function pintaPortada(){
-  /* el orden manda: primero el header, luego el resto; el video al visor */
-  var peso={header:0,principal:1,general:2,gastro:3,souvenir:4,protagonista:5,otros:6};
+  /* el orden manda: primero el header, luego lo demás */
+  var peso={header:0,general:1,gastro:2,souvenir:3,protagonista:4,otros:5,principal:6};
   FOTOS=MED.slice().sort(function(a,b){
+    /* el video no va en el mosaico: pesa catorce megas y no tiene carátula.
+       Se ofrece con un botón y se abre en el visor. */
+    if((a.tipo==='video')!==(b.tipo==='video'))return a.tipo==='video'?1:-1;
     var pa=peso[a.etiqueta]==null?9:peso[a.etiqueta], pb=peso[b.etiqueta]==null?9:peso[b.etiqueta];
     if(pa!==pb)return pa-pb;
     return (a.orden||0)-(b.orden||0);
@@ -443,17 +459,26 @@ function pintaPortada(){
     m.innerHTML='<div class="celda" style="grid-row:span 2;background:linear-gradient(135deg,#FDE7DC,#E4F1FA)"></div>';
     return;
   }
-  var cinco=FOTOS.slice(0,5);
+  var soloFotos=FOTOS.filter(function(f){return f.tipo!=='video';});
+  var cinco=(soloFotos.length?soloFotos:FOTOS).slice(0,5);
   m.innerHTML=cinco.map(function(f,i){
     var img=f.tipo==='video'
       ? '<video src="'+esc(f.url)+'" muted playsinline preload="metadata" style="width:100%;height:100%;object-fit:cover"></video>'
-      : '<img src="'+esc(f.url)+'" alt="'+esc(f.alt||E.nombre)+'" loading="'+(i?'lazy':'eager')+'">';
+      : '<img src="'+esc(mini(f.url,i?560:1000))+'" alt="'+esc(f.alt||E.nombre)+'"'+
+        ' loading="'+(i?'lazy':'eager')+'" fetchpriority="'+(i?'auto':'high')+'">';
     var mas=(i===4&&FOTOS.length>5)?'<div class="mas">+'+(FOTOS.length-5)+' más</div>':'';
-    return '<div class="celda" data-i="'+i+'">'+img+mas+'</div>';
+    return '<div class="celda" data-i="'+FOTOS.indexOf(f)+'">'+img+mas+'</div>';
   }).join('');
   Array.prototype.forEach.call(m.querySelectorAll('.celda'),function(c){
     c.onclick=function(){visor(+c.getAttribute('data-i'));};
   });
+  var vid=FOTOS.filter(function(f){return f.tipo==='video';})[0];
+  if(vid){
+    var b=document.createElement('button');
+    b.className='verVideo';b.innerHTML='<span>▶</span> Ver el video';
+    b.onclick=function(){visor(FOTOS.indexOf(vid));};
+    m.parentNode.appendChild(b);
+  }
 }
 
 /* ---------- visor ---------- */
@@ -466,7 +491,7 @@ function visor(i){
       (FOTOS.length>1?'<button class="nav izq" aria-label="Anterior">‹</button><button class="nav der" aria-label="Siguiente">›</button>':'')+
       (f.tipo==='video'
         ? '<video src="'+esc(f.url)+'" controls autoplay playsinline></video>'
-        : '<img src="'+esc(f.url)+'" alt="'+esc(f.alt||'')+'">')+
+        : '<img src="'+esc(mini(f.url,1600))+'" alt="'+esc(f.alt||'')+'">')+
       '<div class="cuenta">'+(n+1)+' de '+FOTOS.length+'</div>';
     v.querySelector('.cerrar').onclick=cierra;
     var iz=v.querySelector('.izq'),de=v.querySelector('.der');
@@ -539,7 +564,7 @@ function pintaGuias(){
     var ig=g.instagram?'<a class="ig" target="_blank" rel="noopener" href="https://instagram.com/'+
       esc(String(g.instagram).replace(/^@/,''))+'">'+esc(g.instagram)+'</a>':'';
     return '<div class="guia" style="margin-bottom:12px">'+
-      (g.foto_url?'<img class="foto" src="'+esc(g.foto_url)+'" alt="'+esc(g.nombre)+'">'
+      (g.foto_url?'<img class="foto" loading="lazy" src="'+esc(mini(g.foto_url,220))+'" alt="'+esc(g.nombre)+'">'
                  :'<div class="foto"></div>')+
       '<div><h3 style="margin-bottom:4px">'+esc(g.nombre)+'</h3>'+
       (g.descripcion_publica?'<div class="serif" style="font-size:1.05em">'+esc(g.descripcion_publica)+'</div>':'')+
