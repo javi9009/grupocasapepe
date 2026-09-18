@@ -126,6 +126,7 @@ let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
 let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={},COSTO={};
 let FPR={estado:"pendientes",area:"",bodega:"",cuenta:"",q:""};
 let VARP={};
+let PASILLOS=[],PASMAP={};   // arbol de pasillos: lista ordenada y mapa por id
 let STOCK=[],CONTEOS=[],CONCIL=[],ALTAS=[];
 let INCOM=[],FI={ubic:"",orden:"uso",area:"",prov:"",falta:"",q:""};
 let PROV_TODOS=[],BOD_TODAS=[];
@@ -206,7 +207,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt,cos,pat,varp]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt,cos,pat,varp,pas]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
@@ -226,12 +227,15 @@ async function recargar(){
     sb.from("cmp_v_costo_producto").select("*"),
     sb.from("cmp_presentaciones").select("producto_id,precio_actualizado").not("precio","is",null),
     // Cómo se ha movido el costo real: mediana del último trimestre contra el anterior.
-    sb.from("cmp_v_precio_variacion").select("*")
+    sb.from("cmp_v_precio_variacion").select("*"),
+    // El arbol de pasillos y subpasillos (anaqueles) es del Grupo, no de la sede.
+    sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz,productos").order("orden_ruta")
   ]);
   PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=bdt.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   COSTO={}; (cos.data||[]).forEach(c=>COSTO[c.producto_id]=c);
   VARP={}; (varp.data||[]).forEach(v=>VARP[v.producto_id]=v);
+  PASILLOS=pas.data||[]; PASMAP={}; PASILLOS.forEach(x=>PASMAP[x.id]=x);
   const at={}; (pat.data||[]).forEach(x=>{
     if(x.precio_actualizado && (!at[x.producto_id] || x.precio_actualizado>at[x.producto_id])) at[x.producto_id]=x.precio_actualizado;
   });
@@ -298,7 +302,7 @@ function vProductos(){
 function filaProd(p){
   const b=BODEGAS.find(x=>x.id===p.bodega_id), c=CUENTAS.find(x=>x.id===p.cuenta_id);
   return `<tr>
-    <td><b>${esc(p.nombre)}</b>${p.categoria?`<div class="small muted">${esc(p.categoria)}</div>`:""}</td>
+    <td><b>${esc(p.nombre)}</b>${p.pasillo_id?`<div class="small muted">${esc(pasRuta(p.pasillo_id))}</div>`:(p.categoria?`<div class="small muted">${esc(p.categoria)}</div>`:"")}</td>
     <td class="small">${esc(p.area)}<div class="muted">${esc(p.tipo)}</div></td>
     <td class="small">${esc(b?b.nombre:"—")}</td>
     <td class="small">${c?esc(c.codigo):"—"}${(p.cuentas_extra||[]).length?` <span class="chip" title="${esc((p.cuentas_extra||[]).map(x=>{const y=CUENTAS.find(z=>z.id===x);return y?y.codigo+" "+y.cuenta:"";}).filter(Boolean).join(" · "))}">+${p.cuentas_extra.length}</span>`:""}<div class="muted">${c?esc(c.grupo_compra):""}</div></td>
@@ -321,6 +325,8 @@ async function editaProducto(id){
       <div><label>Área</label><select id="pArea">${AREAS.map(a=>`<option ${p.area===a?"selected":""}>${a}</option>`).join("")}</select></div>
       <div><label>Se mide en</label><select id="pUni">${UNIDADES.map(u=>`<option ${p.unidad_base===u?"selected":""}>${u}</option>`).join("")}</select></div>
       <div><label>Cantidad por envase <span class="muted small" id="pCantHint"></span></label><input id="pCant" type="number" step="0.001" min="0.001" value="${cont}"></div>
+      <div class="full"><label>Pasillo <span class="muted small">(dónde se busca y dónde se acomoda)</span></label>
+        <select id="pPas">${optPasillo(p.pasillo_id)}</select></div>
       <div><label>Stock mínimo <span class="muted small">(en la unidad de arriba)</span></label><input id="pMin" type="number" step="0.01" min="0" value="${p.stock_min!=null?p.stock_min:""}"></div>
       <div><label>Bodega</label><select id="pBod"><option value="">— sin bodega —</option>${BODEGAS.map(b=>`<option value="${b.id}" ${p.bodega_id===b.id?"selected":""}>${esc(b.nombre)}</option>`).join("")}</select></div>
       <div><label>Cuenta contable</label><select id="pCta"><option value="">— sin cuenta —</option>${optCuenta(p.cuenta_id)}</select></div>
@@ -347,6 +353,20 @@ async function editaProducto(id){
 }
 /* Un producto puede caer en más de una cuenta (un mismo jabón: limpieza o amenidades).
    cuenta_id es la de siempre; estas son las otras que el contador puede elegir. */
+/* El pasillo es un arbol: el desplegable agrupa por el de arriba y sangra los de dentro.
+   Un producto puede colgar del pasillo raiz si no toca subpasillo. */
+function optPasillo(sel){
+  const raices=PASILLOS.filter(x=>x.nivel===1);
+  return `<option value="">— sin pasillo —</option>`+raices.map(r=>{
+    const rama=PASILLOS.filter(x=>x.ruta===r.ruta || x.ruta.startsWith(r.ruta+" › "));
+    return `<optgroup label="${esc(r.nombre)}">`+rama.map(x=>{
+      const sangria="\u00a0\u00a0".repeat(Math.max(0,x.nivel-1));
+      const et = x.nivel===1 ? x.nombre+" (todo el pasillo)" : sangria+"› "+x.nombre;
+      return `<option value="${x.id}" ${sel===x.id?"selected":""}>${esc(et)}</option>`;
+    }).join("")+`</optgroup>`;
+  }).join("");
+}
+const pasRuta=id=>((PASMAP[id]||{}).ruta||"");
 const optCuenta=sel=>CUENTAS.map(c=>`<option value="${c.id}" ${sel===c.id?"selected":""}>${esc(c.grupo_compra)} · ${esc(c.codigo)} ${esc(c.cuenta)}</option>`).join("");
 function addCtaExtra(sel){
   const box=$("pCtaExtra"); if(!box) return;
@@ -414,6 +434,7 @@ async function guardaProducto(id){
     stock_min:$("pMin").value!==""?parseFloat($("pMin").value):null,
     bodega_id:$("pBod").value||null,cuenta_id:$("pCta").value||null,
     cuentas_extra:ctasExtra(), tasa_iva_default:ivaProd(),
+    pasillo_id:$("pPas").value||null,
     notas:$("pNotas").value.trim()||null,activo:$("pAct").checked};
   const r=id? await sb.from("cmp_productos").update(rec).eq("id",id).select("id").single()
             : await sb.from("cmp_productos").insert(rec).select("id").single();
@@ -462,7 +483,7 @@ async function cargaIncompletos(){
    La lista de trabajo para terminar de cablear el catálogo. Ordena por uso real
    (las veces que el insumo se recibió en Poster) para que se empiece por lo que
    de verdad se compra, no por orden alfabético. */
-const FALTA_L={proveedor:"proveedor",precio:"precio",cantidad:"cantidad",minimo:"mínimo",cuenta:"cuenta",bodega:"bodega"};
+const FALTA_L={proveedor:"proveedor",precio:"precio",cantidad:"cantidad",minimo:"mínimo",cuenta:"cuenta",bodega:"bodega",pasillo:"pasillo"};
 function incFiltrados(){
   let l=INCOM.slice();
   if(FI.ubic)  l=l.filter(x=>x.property_id===FI.ubic);
@@ -502,11 +523,11 @@ function vIncompletos(){
     </div>
     <div class="card"><div class="scroll"><table class="incom">
       <thead><tr>
-        <th>Producto</th><th>Casa</th><th class="num">Uso</th>
+        <th>Producto</th><th>Casa</th><th class="num">Uso</th><th>Pasillo</th>
         <th>Proveedor</th><th class="num">Precio</th><th>Contenido</th>
         <th class="num">Mínimo</th><th>Bodega</th><th>Cuenta</th>
       </tr></thead>
-      <tbody>${l.length?l.slice(0,400).map(filaInc).join(""):'<tr><td colspan="9" class="center">Nada con ese filtro. 👌</td></tr>'}</tbody>
+      <tbody>${l.length?l.slice(0,400).map(filaInc).join(""):'<tr><td colspan="10" class="center">Nada con ese filtro. 👌</td></tr>'}</tbody>
     </table></div></div>
     ${l.length>400?'<div class="small muted" style="margin-top:8px">Mostrando los primeros 400. Afina el filtro.</div>':""}`;
 }
@@ -536,6 +557,7 @@ function celdasInc(x){
         <div class="small muted">${esc(x.area||"")}${x.familia?" · "+esc(x.familia):""}</div></td>
     <td class="small">${esc(x.sede)}</td>
     <td class="num small">${x.veces_recibido?x.veces_recibido+"×":'<span class="muted">—</span>'}</td>
+    <td class="small">${celda(x,"pasillo",x.pasillo_ruta?esc(x.pasillo_ruta):null,null)}</td>
     <td class="small">${celda(x,"proveedor",prov,prSug)}</td>
     <td class="num small">${celda(x,"precio",prec,pcSug)}</td>
     <td class="small">${celda(x,"cantidad",cont,null)}</td>
@@ -564,6 +586,9 @@ function editaInc(id,campo,btn){
   } else if(campo==="cuenta"){
     el=document.createElement("select");
     el.innerHTML=`<option value="">— elegir cuenta —</option>`+optCuenta(null);
+  } else if(campo==="pasillo"){
+    el=document.createElement("select");
+    el.innerHTML=optPasillo(null);
   } else if(campo==="bodega"){
     el=document.createElement("select");
     el.innerHTML=`<option value="">— elegir bodega —</option>`+
@@ -592,13 +617,15 @@ async function guardaInc(id,campo,valor,cerrar){
   if(valor===""||valor==null) return toast("Elige un valor o cierra con ✕.");
   const num1=parseFloat(valor);
   try{
-    if(campo==="minimo"||campo==="cuenta"||campo==="bodega"){
+    if(campo==="minimo"||campo==="cuenta"||campo==="bodega"||campo==="pasillo"){
       const patch = campo==="minimo" ? {stock_min:num1}
-                  : campo==="cuenta" ? {cuenta_id:valor} : {bodega_id:valor};
+                  : campo==="cuenta" ? {cuenta_id:valor}
+                  : campo==="pasillo"? {pasillo_id:valor} : {bodega_id:valor};
       const {error}=await sb.from("cmp_productos").update(patch).eq("id",id);
       if(error) return toast(error.message);
       if(campo==="minimo") x.stock_min=num1;
       if(campo==="bodega"){ const b=bodsDe(x.property_id).find(z=>z.id===valor); x.bodega_id=valor; x.bodega_nombre=b&&b.nombre; }
+      if(campo==="pasillo"){ x.pasillo_id=valor; x.pasillo_ruta=pasRuta(valor); }
       if(campo==="cuenta"){
         const c=CUENTAS.find(z=>z.id===valor);
         x.cuenta_id=valor; x.cuenta_grupo=c&&c.grupo_compra; x.cuenta_codigo=c&&c.codigo;
@@ -841,7 +868,7 @@ function vPrecios(){
         <tbody>${porArea[a].slice(0,150).map(p=>{
           const b=BODEGAS.find(x=>x.id===p.bodega_id);
           const c=COSTO[p.id];
-          return `<tr><td><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.categoria||p.tipo)}</div></td>
+          return `<tr><td><b>${esc(p.nombre)}</b><div class="small muted">${esc(pasRuta(p.pasillo_id)||p.categoria||p.tipo)}</div></td>
             <td class="small">${esc(b?b.nombre:"—")}</td>
             <td class="small">${esc(p.unidad_texto||p.unidad_base)}</td>
             ${verPrecio?`<td class="num">${c&&c.costo_unidad_base!=null?"$"+c.costo_unidad_base+'<div class="small muted">'+esc(c.presentacion||"")+" "+num(c.contenido||"")+" "+esc(c.unidad_contenido||"")+"</div>":'<span class="chip c-warn">falta</span>'}</td>
@@ -1000,7 +1027,7 @@ function vProveedores(){
 function filaProv(p){
   const falt=(p.faltantes_para_pedir||[]);
   return `<tr>
-    <td><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.categoria||"")}</div></td>
+    <td><b>${esc(p.nombre)}</b><div class="small muted">${esc(pasRuta(p.pasillo_id)||p.categoria||"")}</div></td>
     <td class="small">${esc(p.sedes||"—")}</td>
     <td class="small">${esc(p.telefono||p.mail||"—")}</td>
     <td class="small">${p.rfc?esc(p.rfc):'<span class="chip c-warn">falta</span>'}</td>
@@ -1163,7 +1190,7 @@ function pintaPick(bodId){
   $("bqLista").innerHTML = l.slice(0,200).map(p=>`
     <label class="picklinea">
       <input type="checkbox" ${BPICK.has(p.id)?"checked":""} onchange="BPICK.has('${p.id}')?BPICK.delete('${p.id}'):BPICK.add('${p.id}')">
-      <span><b>${esc(p.nombre)}</b><span class="small muted"> · ${esc(p.area||"")}${p.categoria?" · "+esc(p.categoria):""}</span></span>
+      <span><b>${esc(p.nombre)}</b><span class="small muted"> · ${esc(p.area||"")}${p.pasillo_id?" · "+esc(pasRuta(p.pasillo_id)):(p.categoria?" · "+esc(p.categoria):"")}</span></span>
     </label>`).join("") || '<div class="center muted" style="padding:14px">Nada que añadir con esa búsqueda.</div>';
   if(l.length>200) $("bqLista").innerHTML+='<div class="small muted" style="padding:8px">Mostrando 200. Afina la búsqueda.</div>';
 }
@@ -1183,8 +1210,8 @@ function nuevoEnBodega(bodId){
       <div class="full"><label>Nombre</label><input id="nbNom" placeholder="Ej. Jerga gruesa"></div>
       <div><label>Se mide en</label><select id="nbUni">${UNIDADES.map(u=>`<option>${u}</option>`).join("")}</select></div>
       <div><label>Área</label><select id="nbArea">${AREAS.map(a=>`<option ${b.area===a?"selected":""}>${a}</option>`).join("")}</select></div>
-      <div class="full"><label>Categoría (pasillo) <span class="muted small">opcional</span></label>
-        <input id="nbCat" list="nbCatL"><datalist id="nbCatL">${[...new Set(PRODS.map(p=>p.categoria).filter(Boolean))].sort().map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+      <div class="full"><label>Pasillo <span class="muted small">opcional</span></label>
+        <select id="nbPas">${optPasillo(null)}</select></div>
     </div>
     <div class="foot"><button class="btn ghost" onclick="poblarBodega('${bodId}')">Volver</button>
       <button class="btn" onclick="guardaNuevoEnBodega('${bodId}')">Crear y meter aquí</button></div>`);
@@ -1195,7 +1222,7 @@ async function guardaNuevoEnBodega(bodId){
   const b=BODEGAS.find(x=>x.id===bodId)||{};
   const {data,error}=await sb.from("cmp_productos").insert({
     property_id:SEDE, nombre, area:$("nbArea").value, tipo:"consumible",
-    categoria:($("nbCat").value||"").trim()||null,
+    pasillo_id:$("nbPas").value||null,
     unidad_base:$("nbUni").value, bodega_id:bodId, activo:true
   }).select("id").single();
   if(error) return toast(error.message);

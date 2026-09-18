@@ -132,6 +132,7 @@ let USER=null, EMAIL="", PROPS=[], SEDE=null, TAB="funnel";
 let PUEDE_APROBAR=false, PUEDE_EDITAR=false;
 let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[], SOLMTTO=[];
 let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={}, ERRCARGA=[];
+let PASILLOS={};   // id -> {nombre, ruta, nivel, raiz} del arbol de pasillos
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
 
 /* ───────────────── arranque ───────────────── */
@@ -231,19 +232,22 @@ function irTab(k){ TAB=k; pintaTabs(); render(); }
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
   const sede=PROPS.find(p=>p.id===SEDE);
-  const [sug,ped,prov,bod,cue,pro,sm,cp]=await Promise.all([
+  const [sug,ped,prov,bod,cue,pro,sm,cp,pas] = await Promise.all([
     sb.from("cmp_v_pedido_sugerido").select("*").eq("property_id",SEDE).gt("faltante",0).order("faltante",{ascending:false}),
     sb.from("cmp_pedidos").select("*, items:cmp_pedido_items(*, prod:producto_id(nombre,unidad_base), pres:presentacion_id(tipo,contenido,unidad_contenido))")
       .eq("property_id",SEDE).order("created_at",{ascending:false}).limit(200),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE),
     sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
-    sb.from("cmp_productos").select("id,nombre,area,areas_extra,categoria,familia,unidad_base,unidad_texto,tipo,tasa_iva_default,bodega_id,cuenta_id,cuentas_extra").eq("property_id",SEDE).eq("activo",true).order("nombre"),
+    sb.from("cmp_productos").select("id,nombre,area,areas_extra,categoria,familia,unidad_base,unidad_texto,tipo,tasa_iva_default,bodega_id,cuenta_id,cuentas_extra,pasillo_id").eq("property_id",SEDE).eq("activo",true).order("nombre"),
     sb.from("cmp_v_solicitudes_mtto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}),
-    sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE)
+    sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE),
+    // El arbol de pasillos y subpasillos (anaqueles) es del Grupo, no de la sede.
+    sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz").order("orden_ruta")
   ]);
   SUG=sug.data||[]; PEDIDOS=ped.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; PRODS=pro.data||[]; SOLMTTO=sm.data||[]; CATPROV=cp.data||[];
   // Un error de carga no debe disfrazarse de "no hay catálogo": se guarda para decirlo en pantalla.
+  PASILLOS={}; (pas&&pas.data||[]).forEach(x=>PASILLOS[x.id]=x);
   ERRCARGA=[["productos",pro],["precios",cp],["proveedores",prov],["bodegas",bod],["cuentas",cue]]
     .filter(([,r])=>r&&r.error).map(([q,r])=>q+": "+(r.error.message||r.error.code||"error"));
   window.__sede=sede;
@@ -624,7 +628,7 @@ function misItems(){ return catalogo(); }
 const SINPROV="Sin proveedor asignado";
 function itemsVista(){
   const base=catalogo();
-  if(VISTA!=="proveedor") return base.map(x=>Object.assign({},x,{grupo:x.p.categoria||x.p.area||"Sin categoría", key:x.p.id}));
+  if(VISTA!=="proveedor") return base.map(x=>Object.assign({},x,{grupo:pasilloDe(x.p), key:x.p.id}));
   const out=[];
   base.forEach(x=>{
     if(!x.ops.length){ out.push(Object.assign({},x,{grupo:SINPROV, key:x.p.id})); return; }
@@ -640,12 +644,32 @@ function cpCats(){
 function cpPintaCats(){
   const cats=cpCats(), tot=cats.reduce((a,c)=>a+c[1],0);
   const el=$("cpCats"); if(el) el.innerHTML=[["","Todo",tot]].concat(cats.map(([k,n])=>[k,k,n]))
-    .map(([k,l,n])=>`<span class="pill ${CATFIL===k?"on":""}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(l)} <b class="small muted">${n}</b></span>`).join("");
+    .map(([k,l,n])=>`<span class="pill ${CATFIL===k?"on":""}" title="${esc(l)}" onclick="CATFIL='${k.replace(/'/g,"\\'")}';cpPintaCats();cpPintaGrid()">${esc(String(l).split(" › ").pop())} <b class="small muted">${n}</b></span>`).join("");
   const s=$("cpSel");
-  if(s) s.innerHTML=`<option value="">${VISTA==="proveedor"?"Todos los proveedores":"Todos los pasillos"} (${tot})</option>`+
-    cats.map(([k,n])=>`<option value="${esc(k)}"${CATFIL===k?" selected":""}>${esc(k)} (${n})</option>`).join("");
+  if(!s) return;
+  const cab=`<option value="">${VISTA==="proveedor"?"Todos los proveedores":"Todos los pasillos"} (${tot})</option>`;
+  if(VISTA==="proveedor"){
+    s.innerHTML=cab+cats.map(([k,n])=>`<option value="${esc(k)}"${CATFIL===k?" selected":""}>${esc(k)} (${n})</option>`).join("");
+    return;
+  }
+  // Por pasillo: se agrupa por el de arriba y el subpasillo va sangrado debajo.
+  const porRaiz={};
+  cats.forEach(([k,n])=>{ const r=k.split(" › ")[0]; (porRaiz[r]=porRaiz[r]||[]).push([k,n]); });
+  s.innerHTML=cab+Object.keys(porRaiz).map(r=>{
+    const hijos=porRaiz[r], suma=hijos.reduce((a,x)=>a+x[1],0);
+    return `<optgroup label="${esc(r)} (${suma})">`+hijos.map(([k,n])=>{
+      const hoja=k.split(" › ").slice(1).join(" › ")||k;
+      return `<option value="${esc(k)}"${CATFIL===k?" selected":""}>${esc(hoja)} (${n})</option>`;
+    }).join("")+`</optgroup>`;
+  }).join("");
 }
-const catDe=pid=>{const p=PRODS.find(x=>x.id===pid); return p?(p.categoria||p.area):null;};
+const catDe=pid=>{const p=PRODS.find(x=>x.id===pid); return p?pasilloDe(p):null;};
+/* El pasillo se muestra con su ruta: "Bebidas › Alcohólicas › Cerveza".
+   Si el producto todavía no tiene pasillo, se cae a la categoría de siempre. */
+function pasilloDe(p){
+  const x=p&&p.pasillo_id&&PASILLOS[p.pasillo_id];
+  return x ? x.ruta : (p&&(p.categoria||p.area)||"Sin pasillo");
+}
 function cpOpciones(prodId){
   const p=PRODS.find(x=>x.id===prodId)||{};
   return CATPROV.filter(c=>c.producto_id===prodId&&c.precio!=null)
@@ -728,7 +752,7 @@ function tarjeta(x){
   const sug=(SUG.find(s=>s.producto_id===p.id)||{}).piezas_a_pedir;
   const bajo=(SUG.find(s=>s.producto_id===p.id)||{}).faltante>0;
   // En la vista por proveedor cada tarjeta ya es de un proveedor: se muestra el pasillo.
-  const pie=VISTA==="proveedor"?esc(p.categoria||p.area||""):(b?esc(b.proveedor):"");
+  const pie=VISTA==="proveedor"?esc(pasilloDe(p)):(b?esc(b.proveedor):"");
   return `<div class="pcard${b?"":" sinprecio"}">
     <div class="pnom">${esc(p.nombre)}</div>
     <div class="small muted">${esc(p.unidad_texto||p.unidad_base)}${bajo?` · <b style="color:var(--warn)">bajo mínimo</b>`:""}</div>
