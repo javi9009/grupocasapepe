@@ -12,6 +12,30 @@
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
   var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+
+  /* Portero: un touroperador no tiene nada que hacer en el panel del Grupo.
+     Si el correo de la sesión está dado de alta como usuario de un touroperador,
+     lo mandamos a su portal de Sincrético y esta página no se pinta. */
+  (function portero(){
+    try{
+      var tk=null;
+      for(var i=0;i<localStorage.length;i++){
+        var k=localStorage.key(i);
+        if(k&&/sb-.*-auth-token/.test(k)){
+          var v=JSON.parse(localStorage.getItem(k)||'null');
+          var ss=v&&(v.currentSession||v);
+          if(ss&&ss.access_token){tk=ss.access_token;break;}
+        }
+      }
+      if(!tk)return;
+      if(/\/operador\.html/.test(location.pathname))return;
+      fetch(SB+'/rest/v1/rpc/es_operador_externo',{method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+tk,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(x){ if(x===true) location.replace('/operador.html'); })
+      .catch(function(){});
+    }catch(_){}
+  })();
+
   function tokEmail(){ try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k&&/sb-.*-auth-token/.test(k)){ var v=JSON.parse(localStorage.getItem(k)||'null'); var s=v&&(v.currentSession||v); var e=s&&s.user&&s.user.email; if(e) return String(e).toLowerCase(); } } }catch(_){} return ''; }
   function toProy(s){ s=(s||'').toString().toLowerCase().trim();
     if(s.indexOf('cdmx')>=0||s.indexOf('mexico')>=0||s.indexOf('méxico')>=0||s==='mex'||s==='df') return 'cdmx';
