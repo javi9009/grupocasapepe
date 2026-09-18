@@ -31,6 +31,10 @@ body{background:var(--ground);color:var(--ink);margin:0;font:15px/1.5 system-ui,
 .provfila .pvEq{flex:0 0 130px;white-space:nowrap}
 .filtros{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .filtros select,.filtros input{width:auto;min-width:150px}
+.chipbtn{cursor:pointer;border:1px dashed var(--rule-2);background:transparent;font:inherit;padding:2px 8px}
+.chipbtn:hover{border-style:solid;background:var(--bg2)}
+.inlinefix{display:inline-flex;gap:4px;align-items:center;vertical-align:middle}
+.inlinefix .inlinein{width:auto;min-width:130px;max-width:220px;padding:4px 6px;font-size:13px;margin:0}
 .secnav{position:sticky;top:0;z-index:19;background:var(--ground);border-bottom:1px solid var(--rule)}
 .secnav-in{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto}
 .secnav button{border:0;background:none;font:inherit;padding:12px 14px;color:var(--muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
@@ -115,6 +119,7 @@ let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
 let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={};
 let STOCK=[],CONTEOS=[],CONCIL=[],ALTAS=[];
 let INCOM=[],FI={ubic:"",orden:"uso",area:"",prov:"",falta:"",q:""};
+let PROV_TODOS=[],BOD_TODAS=[];
 let F={area:"",tipo:"",bodega:"",q:"",solo:"todos"};
 
 async function boot(){
@@ -124,7 +129,9 @@ async function boot(){
   try{ const {data}=await sb.rpc("permiso_efectivo",{p_email:EMAIL,p_pagina:"PAG-SERV-CATALOGO"}); PUEDE=(data==="editar"); }catch(_){}
 
   let props=(await sb.from("properties").select("id,nombre,pl_loc").not("pl_loc","is",null)).data||[];
-  try{ props=await cpAcceso.filtra(props,p=>p.nombre); }catch(_){}
+  // Fail-open como cp-acceso: si el filtro de ubicación deja la lista en cero,
+  // es un fallo del filtro, no que la persona no tenga casas. Mejor enseñarlas todas.
+  try{ const f=await cpAcceso.filtra(props,p=>p.nombre); if(f&&f.length) props=f; }catch(_){}
   PROPS=props.sort((a,b)=>a.nombre.localeCompare(b.nombre));
   if(!PROPS.length){ $("view").innerHTML='<div class="center">No tienes ninguna sede asignada.</div>'; return; }
   SEDE=await sedeInicial();
@@ -143,6 +150,11 @@ function proyDelPanel(){
     return (window.cpAcceso&&cpAcceso.toProy(q))||"";
   }catch(_){ return ""; }
 }
+// Soy Pepe no pasa ?proyecto=: su selector de arriba guarda la propiedad en cp_view_prop.
+// Sin esto, el módulo abría en una casa distinta de la que dice el selector.
+function sedeDeSoyPepe(){
+  try{ return localStorage.getItem("cp_view_prop")||""; }catch(_){ return ""; }
+}
 async function sedeInicial(){
   let con=new Set();
   try{ const {data}=await sb.from("cmp_v_sedes_con_catalogo").select("property_id");
@@ -153,6 +165,8 @@ async function sedeInicial(){
     // Corporativo y Sincrético no tienen catálogo de compras: ahí seguimos con selector propio.
     if(m && (!con.size || con.has(m.id))){ MANDA_PANEL=true; return m.id; }
   }
+  const sp=sedeDeSoyPepe();
+  if(sp && PROPS.some(p=>p.id===sp) && (!con.size || con.has(sp))){ MANDA_PANEL=true; return sp; }
   try{ const g=localStorage.getItem("cp_sede_compras"); if(g && PROPS.some(p=>p.id===g)) return g; }catch(_){}
   try{
     const {data}=await sb.from("employees").select("property_id").ilike("email",EMAIL).maybeSingle();
@@ -182,7 +196,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
@@ -194,9 +208,12 @@ async function recargar(){
     // Las solicitudes de producto nuevo son una sola bandeja: Roberto ve las de las tres casas.
     sb.from("cmp_altas_producto").select("*").order("created_at",{ascending:false}).limit(120),
     // Los incompletos también se ven de todas las casas: quien los completa trabaja en bloque.
-    sb.from("cmp_v_productos_incompletos").select("*").order("veces_recibido",{ascending:false}).limit(3000)
+    cargaIncompletos(),
+    // Para editar en línea productos de cualquier casa hacen falta sus proveedores y bodegas.
+    sb.from("cmp_v_proveedores_sede").select("property_id,proveedor_id,proveedor,estado").order("proveedor"),
+    sb.from("pos_almacenes").select("id,nombre,area,property_id").eq("activo",true).order("nombre")
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc.data||[]).filter(x=>(x.faltantes||[]).length);
+  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=bdt.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   PRODS.forEach(p=>p._sinPrecio=sinPrecio.has(p.id));
   pintaTabs();
@@ -407,6 +424,20 @@ async function guardaProducto(id){
   toast("Guardado"); closeModal(); await recargar();
 }
 
+/* Supabase corta en 1000 filas por consulta: se pide por páginas hasta agotar,
+   porque son ~2.500 productos con algún hueco. */
+async function cargaIncompletos(){
+  const out=[]; const paso=1000;
+  for(let i=0;i<6;i++){
+    const {data,error}=await sb.from("cmp_v_productos_incompletos").select("*")
+      .order("veces_recibido",{ascending:false}).order("id")
+      .range(i*paso,(i+1)*paso-1);
+    if(error||!data||!data.length) break;
+    out.push(...data);
+    if(data.length<paso) break;
+  }
+  return out;
+}
 /* ───────── Productos incompletos ─────────
    La lista de trabajo para terminar de cablear el catálogo. Ordena por uso real
    (las veces que el insumo se recibió en Poster) para que se empiece por lo que
@@ -456,19 +487,116 @@ function vIncompletos(){
     ${l.length>400?'<div class="small muted" style="margin-top:8px">Mostrando los primeros 400. Afina el filtro.</div>':""}`;
 }
 function filaInc(x){
-  const surte=(x.proveedores||[]).length?x.proveedores.join(", ")
+  return `<tr data-inc="${x.id}">${celdasInc(x)}</tr>`;
+}
+function celdasInc(x){
+  const surte=(x.proveedores||[]).length?esc(x.proveedores.join(", "))
     :(x.proveedor_sugerido?`<span class="muted">${esc(x.proveedor_sugerido)}</span> <span class="chip">sugerido</span>`:"—");
-  return `<tr>
+  return `
     <td><b>${esc(x.nombre)}</b>${x.huerfano?' <span class="chip c-warn">huérfano</span>':""}
         <div class="small muted">${esc(x.area||"")}${x.familia?" · "+esc(x.familia):""}</div></td>
     <td class="small">${esc(x.sede)}</td>
     <td class="small">${esc(x.cuenta_grupo||"—")}<div class="muted">${esc(x.cuenta_codigo||"")}</div></td>
     <td class="num">${x.veces_recibido?x.veces_recibido+"×":'<span class="muted">—</span>'}</td>
     <td class="small">${surte}</td>
-    <td class="num small">${x.costo_sugerido!=null?money(x.costo_sugerido):(x.precio_min!=null?money(x.precio_min):"—")}</td>
-    <td class="small">${(x.faltantes||[]).map(f=>`<span class="chip c-n">${esc(FALTA_L[f]||f)}</span>`).join(" ")}</td>
-    <td class="num">${PUEDE?`<button class="btn ghost sm" onclick="completar('${x.id}')">✎</button>`:""}</td>
-  </tr>`;
+    <td class="num small">${x.precio_min!=null?money(x.precio_min):(x.costo_sugerido!=null?`<span class="muted">${money(x.costo_sugerido)}</span>`:"—")}</td>
+    <td class="small faltas">${(x.faltantes||[]).length
+        ? (x.faltantes||[]).map(f=>PUEDE
+            ? `<button class="chip c-n chipbtn" onclick="editaInc('${x.id}','${f}',this)" title="Rellenar aquí mismo">${esc(FALTA_L[f]||f)}</button>`
+            : `<span class="chip c-n">${esc(FALTA_L[f]||f)}</span>`).join(" ")
+        : '<span class="chip c-ok">completo</span>'}</td>
+    <td class="num">${PUEDE?`<button class="btn ghost sm" onclick="completar('${x.id}')" title="Abrir la ficha completa">✎</button>`:""}</td>`;
+}
+/* Rellenar sin abrir la ficha: se toca el hueco y sale el campo justo ahí.
+   Proveedores y bodegas son de cada casa, por eso se cargan los de las tres. */
+const provsDe=pid=>PROV_TODOS.filter(v=>v.property_id===pid && v.estado!=="baja");
+const bodsDe =pid=>BOD_TODAS.filter(b=>b.property_id===pid);
+function editaInc(id,campo,btn){
+  const x=INCOM.find(y=>y.id===id); if(!x||btn.dataset.abierto) return;
+  btn.dataset.abierto="1";
+  const cont=document.createElement("span");
+  cont.className="inlinefix";
+  const cerrar=()=>{ cont.replaceWith(btn); delete btn.dataset.abierto; };
+  let el;
+  if(campo==="proveedor"){
+    el=document.createElement("select");
+    const l=provsDe(x.property_id);
+    el.innerHTML=`<option value="">— elegir proveedor —</option>`+
+      l.map(v=>`<option value="${v.proveedor_id}" ${v.proveedor_id===x.proveedor_id_sugerido?"selected":""}>${esc(v.proveedor)}</option>`).join("");
+    if(!l.length) el.innerHTML=`<option value="">— ${esc(x.sede)} no tiene proveedores dados de alta —</option>`;
+  } else if(campo==="cuenta"){
+    el=document.createElement("select");
+    el.innerHTML=`<option value="">— elegir cuenta —</option>`+optCuenta(null);
+  } else if(campo==="bodega"){
+    el=document.createElement("select");
+    el.innerHTML=`<option value="">— elegir bodega —</option>`+
+      bodsDe(x.property_id).map(b=>`<option value="${b.id}">${esc(b.nombre)}</option>`).join("");
+  } else {
+    el=document.createElement("input");
+    el.type="number"; el.step="0.01"; el.min="0";
+    el.placeholder = campo==="precio" ? "precio sin IVA" : campo==="cantidad" ? "por envase" : "mínimo";
+    if(campo==="precio" && x.costo_sugerido!=null) el.value=(+x.costo_sugerido).toFixed(2);
+    if(campo==="cantidad") el.value="1";
+  }
+  el.className="inlinein";
+  const btnOk=document.createElement("button");
+  btnOk.className="btn sm"; btnOk.textContent="✓";
+  btnOk.onclick=()=>guardaInc(id,campo,el.value,cerrar);
+  const btnNo=document.createElement("button");
+  btnNo.className="btn ghost sm"; btnNo.textContent="✕"; btnNo.onclick=cerrar;
+  cont.append(el,btnOk,btnNo);
+  btn.replaceWith(cont);
+  el.focus();
+  el.onkeydown=e=>{ if(e.key==="Enter"){e.preventDefault();btnOk.click();} if(e.key==="Escape") cerrar(); };
+  if(el.tagName==="SELECT") el.onchange=()=>btnOk.click();
+}
+async function guardaInc(id,campo,valor,cerrar){
+  const x=INCOM.find(y=>y.id===id); if(!x) return;
+  if(valor===""||valor==null) return toast("Elige un valor o cierra con ✕.");
+  const num1=parseFloat(valor);
+  try{
+    if(campo==="minimo"||campo==="cuenta"||campo==="bodega"){
+      const patch = campo==="minimo" ? {stock_min:num1}
+                  : campo==="cuenta" ? {cuenta_id:valor} : {bodega_id:valor};
+      const {error}=await sb.from("cmp_productos").update(patch).eq("id",id);
+      if(error) return toast(error.message);
+      if(campo==="minimo") x.stock_min=num1;
+      if(campo==="bodega") x.faltantes=x.faltantes.filter(f=>f!=="bodega");
+      if(campo==="cuenta"){
+        const c=CUENTAS.find(z=>z.id===valor);
+        x.cuenta_id=valor; x.cuenta_grupo=c&&c.grupo_compra; x.cuenta_codigo=c&&c.codigo;
+      }
+    } else {
+      // proveedor, precio y cantidad viven en la presentación
+      const {data:ps}=await sb.from("cmp_presentaciones").select("*").eq("producto_id",id).order("precio").limit(1);
+      const cur=(ps||[])[0]||null;
+      const rec = campo==="proveedor" ? {proveedor_id:valor}
+                : campo==="precio"    ? {precio:num1, precio_actualizado:new Date().toISOString().slice(0,10)}
+                                      : {contenido:num1, tipo:num1===1?"pieza":"paquete"};
+      if(cur){
+        const {error}=await sb.from("cmp_presentaciones").update(rec).eq("id",cur.id);
+        if(error) return toast(error.message);
+      }else{
+        const base={producto_id:id, contenido:1, unidad_contenido:x.unidad_base||"pza",
+                    tipo:"pieza", preferida:true, activo:true};
+        const {error}=await sb.from("cmp_presentaciones").insert(Object.assign(base,rec));
+        if(error) return toast(error.message);
+      }
+      if(campo==="proveedor"){
+        const v=provsDe(x.property_id).find(z=>z.proveedor_id===valor);
+        x.proveedores=[v?v.proveedor:"(proveedor)"]; x.n_prov=1;
+      }
+      if(campo==="precio")   { x.precio_min=num1; x.n_precio=1; }
+      if(campo==="cantidad") { x.contenido=num1; }
+    }
+  }catch(e){ return toast(String(e.message||e)); }
+  x.faltantes=(x.faltantes||[]).filter(f=>f!==campo);
+  x.huerfano = !x.n_prov && !x.n_precio && x.contenido==null && x.stock_min==null;
+  cerrar();
+  const tr=document.querySelector(`tr[data-inc="${id}"]`);
+  if(tr) tr.innerHTML=celdasInc(x);
+  if(!x.faltantes.length){ INCOM=INCOM.filter(y=>y.id!==id); pintaTabs(); }
+  toast("Guardado");
 }
 async function completar(id){
   const x=INCOM.find(y=>y.id===id); if(!x) return;
