@@ -29,6 +29,8 @@ body{background:var(--ground);color:var(--ink);margin:0;font:15px/1.5 system-ui,
 .provfila input{width:120px}
 .provfila .pvModo{flex:0 0 100px;width:100px}
 .provfila .pvEq{flex:0 0 130px;white-space:nowrap}
+.filtros{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.filtros select,.filtros input{width:auto;min-width:150px}
 .secnav{position:sticky;top:0;z-index:19;background:var(--ground);border-bottom:1px solid var(--rule)}
 .secnav-in{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto}
 .secnav button{border:0;background:none;font:inherit;padding:12px 14px;color:var(--muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent}
@@ -112,6 +114,7 @@ const PRESENTACIONES=["pieza","paquete","bolsa","botella","garrafón","caja","bo
 let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
 let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={};
 let STOCK=[],CONTEOS=[],CONCIL=[],ALTAS=[];
+let INCOM=[],FI={ubic:"",orden:"uso",area:"",prov:"",falta:"",q:""};
 let F={area:"",tipo:"",bodega:"",q:"",solo:"todos"};
 
 async function boot(){
@@ -170,6 +173,7 @@ function pintaSede(){
 function pintaTabs(){
   const pend=ALTAS.filter(a=>a.estado==='nueva'||a.estado==='en_revision').length;
   const t=[["productos","📦 Productos"],["altas","🆕 Productos nuevos"+(pend?" ("+pend+")":"")],
+           ["incompletos","🧩 Incompletos"+(INCOM.length?" ("+INCOM.length+")":"")],
            ["precios","🏷️ Precios"],["proveedores","🚚 Proveedores"],
            ["stock","🏬 Stock por bodega"],["conteos","🧮 Conteos"],["concilia","🍽️ Conciliación A&B"]];
   $("tabs").innerHTML=t.map(([k,l])=>`<button aria-selected="${TAB===k}" onclick="irTab('${k}')">${esc(l)}</button>`).join("");
@@ -178,7 +182,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
@@ -188,9 +192,11 @@ async function recargar(){
     sb.from("cmp_v_valor_stock").select("*").eq("property_id",SEDE),
     sb.from("cmp_conteos").select("*").eq("property_id",SEDE).order("periodo_fin",{ascending:false}).limit(40),
     // Las solicitudes de producto nuevo son una sola bandeja: Roberto ve las de las tres casas.
-    sb.from("cmp_altas_producto").select("*").order("created_at",{ascending:false}).limit(120)
+    sb.from("cmp_altas_producto").select("*").order("created_at",{ascending:false}).limit(120),
+    // Los incompletos también se ven de todas las casas: quien los completa trabaja en bloque.
+    sb.from("cmp_v_productos_incompletos").select("*").order("veces_recibido",{ascending:false}).limit(3000)
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[];
+  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc.data||[]).filter(x=>(x.faltantes||[]).length);
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   PRODS.forEach(p=>p._sinPrecio=sinPrecio.has(p.id));
   pintaTabs();
@@ -199,6 +205,7 @@ async function recargar(){
 function render(){
   if(TAB==="productos")  return vProductos();
   if(TAB==="altas")      return vAltas();
+  if(TAB==="incompletos")return vIncompletos();
   if(TAB==="precios")    return vPrecios();
   if(TAB==="proveedores")return vProveedores();
   if(TAB==="stock")      return vStock();
@@ -295,7 +302,8 @@ async function editaProducto(id){
     <div class="foot"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" onclick="guardaProducto(${id?"'"+id+"'":"null"})">Guardar</button></div>`);
   (p.cuentas_extra||[]).forEach(addCtaExtra);
-  if(pres.length) pres.forEach(x=>addProvPrecio(x)); else addProvPrecio();
+  if(pres.length) pres.forEach(x=>addProvPrecio(x));
+  else addProvPrecio(SUGER||undefined);   // lo que ya sabemos de Poster, para confirmar
   const hint=()=>{ const u=$("pUni").value; $("pCantHint").textContent="¿cuántos "+u+" trae cada envase?"; };
   $("pUni").onchange=hint; hint();
   $("pIva").onchange=calcIva; calcIva();
@@ -398,6 +406,86 @@ async function guardaProducto(id){
   }
   toast("Guardado"); closeModal(); await recargar();
 }
+
+/* ───────── Productos incompletos ─────────
+   La lista de trabajo para terminar de cablear el catálogo. Ordena por uso real
+   (las veces que el insumo se recibió en Poster) para que se empiece por lo que
+   de verdad se compra, no por orden alfabético. */
+const FALTA_L={proveedor:"proveedor",precio:"precio",cantidad:"cantidad",minimo:"mínimo",cuenta:"cuenta",bodega:"bodega"};
+function incFiltrados(){
+  let l=INCOM.slice();
+  if(FI.ubic)  l=l.filter(x=>x.property_id===FI.ubic);
+  if(FI.area)  l=l.filter(x=>(x.cuenta_grupo||"(sin cuenta)")===FI.area);
+  if(FI.prov==="__sin") l=l.filter(x=>!(x.proveedores||[]).length);
+  else if(FI.prov)      l=l.filter(x=>(x.proveedores||[]).includes(FI.prov));
+  if(FI.falta==="__huerfano") l=l.filter(x=>x.huerfano);
+  else if(FI.falta)           l=l.filter(x=>(x.faltantes||[]).includes(FI.falta));
+  if(FI.q){ const q=sinTilde(FI.q); l=l.filter(x=>sinTilde(x.nombre).includes(q)); }
+  if(FI.orden==="nombre")     l.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  else if(FI.orden==="huecos")l.sort((a,b)=>(b.faltantes||[]).length-(a.faltantes||[]).length||b.veces_recibido-a.veces_recibido);
+  else l.sort((a,b)=>b.veces_recibido-a.veces_recibido||a.nombre.localeCompare(b.nombre));
+  return l;
+}
+function setFI(k,v){ FI[k]=v; vIncompletos(); }
+function vIncompletos(){
+  const l=incFiltrados();
+  const areas=[...new Set(INCOM.map(x=>x.cuenta_grupo||"(sin cuenta)"))].sort();
+  const provs=[...new Set(INCOM.flatMap(x=>x.proveedores||[]))].sort();
+  const conUso=l.filter(x=>x.veces_recibido>0).length;
+  const opt=(v,t,sel)=>`<option value="${esc(v)}" ${sel===v?"selected":""}>${esc(t)}</option>`;
+  $("view").innerHTML=`
+    <div class="card">
+      <h2>🧩 Productos a los que les falta información</h2>
+      <p class="muted small">Lista de trabajo para dejar el catálogo listo para pedir. Por defecto salen primero
+        los que más se compran de verdad —según lo que se ha recibido en Poster—, no por orden alfabético.
+        El botón ✎ abre la ficha; si hay proveedor y costo conocidos, ya vienen puestos para confirmar.</p>
+      <div class="filtros">
+        <select onchange="setFI('ubic',this.value)">${opt("","Todas las casas",FI.ubic)}${PROPS.map(p=>opt(p.id,p.nombre,FI.ubic)).join("")}</select>
+        <select onchange="setFI('orden',this.value)">${opt("uso","Los más usados primero",FI.orden)}${opt("huecos","Los que más les falta",FI.orden)}${opt("nombre","Por nombre",FI.orden)}</select>
+        <select onchange="setFI('area',this.value)">${opt("","Toda el área (por cuenta)",FI.area)}${areas.map(a=>opt(a,a,FI.area)).join("")}</select>
+        <select onchange="setFI('prov',this.value)">${opt("","Cualquier proveedor",FI.prov)}${opt("__sin","— sin proveedor —",FI.prov)}${provs.map(a=>opt(a,a,FI.prov)).join("")}</select>
+        <select onchange="setFI('falta',this.value)">${opt("","Le falta cualquier cosa",FI.falta)}${opt("__huerfano","Huérfanos (solo el nombre)",FI.falta)}${Object.keys(FALTA_L).map(k=>opt(k,"Sin "+FALTA_L[k],FI.falta)).join("")}</select>
+        <input placeholder="Buscar…" value="${esc(FI.q)}" oninput="FI.q=this.value;clearTimeout(window._ti);window._ti=setTimeout(vIncompletos,250)">
+      </div>
+      <div class="small muted" style="margin-top:8px">${l.length} productos · ${conUso} con historial de compra</div>
+    </div>
+    <div class="card"><div class="scroll"><table>
+      <thead><tr><th>Producto</th><th>Casa</th><th>Cuenta</th><th class="num">Se compra</th><th>Quién lo surte</th><th class="num">Último costo</th><th>Le falta</th><th></th></tr></thead>
+      <tbody>${l.length?l.slice(0,400).map(filaInc).join(""):'<tr><td colspan="8" class="center">Nada con ese filtro. 👌</td></tr>'}</tbody>
+    </table></div></div>
+    ${l.length>400?'<div class="small muted" style="margin-top:8px">Mostrando los primeros 400. Afina el filtro.</div>':""}`;
+}
+function filaInc(x){
+  const surte=(x.proveedores||[]).length?x.proveedores.join(", ")
+    :(x.proveedor_sugerido?`<span class="muted">${esc(x.proveedor_sugerido)}</span> <span class="chip">sugerido</span>`:"—");
+  return `<tr>
+    <td><b>${esc(x.nombre)}</b>${x.huerfano?' <span class="chip c-warn">huérfano</span>':""}
+        <div class="small muted">${esc(x.area||"")}${x.familia?" · "+esc(x.familia):""}</div></td>
+    <td class="small">${esc(x.sede)}</td>
+    <td class="small">${esc(x.cuenta_grupo||"—")}<div class="muted">${esc(x.cuenta_codigo||"")}</div></td>
+    <td class="num">${x.veces_recibido?x.veces_recibido+"×":'<span class="muted">—</span>'}</td>
+    <td class="small">${surte}</td>
+    <td class="num small">${x.costo_sugerido!=null?money(x.costo_sugerido):(x.precio_min!=null?money(x.precio_min):"—")}</td>
+    <td class="small">${(x.faltantes||[]).map(f=>`<span class="chip c-n">${esc(FALTA_L[f]||f)}</span>`).join(" ")}</td>
+    <td class="num">${PUEDE?`<button class="btn ghost sm" onclick="completar('${x.id}')">✎</button>`:""}</td>
+  </tr>`;
+}
+async function completar(id){
+  const x=INCOM.find(y=>y.id===id); if(!x) return;
+  // Cuentas, bodegas y proveedores son de cada casa: si es de otra, cambiamos primero.
+  if(x.property_id && x.property_id!==SEDE){
+    if(!PROPS.some(p=>p.id===x.property_id)) return toast("Ese producto es de "+esc(sedeNombre(x.property_id)||"otra casa")+" y no tienes acceso.");
+    SEDE=x.property_id; recuerdaSede(SEDE); pintaSede();
+    toast("Cambio a "+sedeNombre(SEDE));
+    await recargar(); TAB="incompletos"; pintaTabs();
+    return completar(id);
+  }
+  SUGER = (!(x.proveedores||[]).length && x.proveedor_id_sugerido)
+    ? {proveedor_id:x.proveedor_id_sugerido, precio:x.costo_sugerido} : null;
+  await editaProducto(id);
+  SUGER=null;
+}
+let SUGER=null;
 
 /* ───────── Precios y presentaciones ───────── */
 let PSEL=null;
