@@ -588,10 +588,66 @@ gmp-place-autocomplete,.gmpac{
   function sesionPanel(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&/sb-.*-auth-token/.test(k)){var v=JSON.parse(localStorage.getItem(k)||'null');var s=v&&(v.currentSession||v);if(s&&s.access_token)return s;}}}catch(_){}return null;}
   function tok(){return ses&&ses.access_token||KEY;}
   function hdr(){return {'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':'application/json'};}
-  async function get(p){var r=await fetch(SB+'/rest/v1/'+p,{headers:hdr()});return r.ok?await r.json():[];}
-  async function patch(t,id,b){return await fetch(SB+'/rest/v1/'+t+'?id=eq.'+id,{method:'PATCH',headers:hdr(),body:JSON.stringify(b)});}
-  async function post(t,b,rep){return await fetch(SB+'/rest/v1/'+t,{method:'POST',headers:rep?Object.assign(hdr(),{'Prefer':'return=representation'}):hdr(),body:JSON.stringify(b)});}
-  async function del(t,q){return await fetch(SB+'/rest/v1/'+t+'?'+q,{method:'DELETE',headers:hdr()});}
+
+  /* El token de Supabase dura una hora. Esta pantalla lo leía una sola vez de
+     localStorage y no lo renovaba nunca: pasada esa hora todo devolvía 401 y,
+     como get() se tragaba el error, la ficha salía vacía con un "no es tuya"
+     que no tenía nada que ver. Ahora se renueva y se reintenta. */
+  function guardaSes(s){
+    ses=s;
+    try{ if(localStorage.getItem(LS))localStorage.setItem(LS,JSON.stringify(s)); }catch(_){}
+    try{
+      for(var i=0;i<localStorage.length;i++){
+        var k=localStorage.key(i);
+        if(k&&/sb-.*-auth-token/.test(k)){
+          var v=null; try{v=JSON.parse(localStorage.getItem(k)||'null');}catch(_e){}
+          if(v&&v.currentSession){v.currentSession=s;localStorage.setItem(k,JSON.stringify(v));}
+          else localStorage.setItem(k,JSON.stringify(s));
+          return;
+        }
+      }
+    }catch(_){}
+  }
+  var refrescando=null;
+  function refresca(){
+    if(refrescando)return refrescando;
+    var rt=ses&&ses.refresh_token;
+    if(!rt)return Promise.resolve(false);
+    refrescando=fetch(SB+'/auth/v1/token?grant_type=refresh_token',{
+        method:'POST',headers:{'apikey':KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({refresh_token:rt})})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(s){if(!s||!s.access_token)return false;guardaSes(s);return true;})
+      .catch(function(){return false;})
+      .then(function(ok){refrescando=null;return ok;});
+    return refrescando;
+  }
+  var caduco=false;
+  function caducada(){
+    if(caduco)return;caduco=true;
+    error('Tu sesión caducó. Te llevo a entrar otra vez…');
+    setTimeout(function(){location.href=interno?'/m/sinc-operadores.html':'/operador.html';},2200);
+  }
+  async function req(p,o){
+    o=o||{};
+    function tira(){
+      return fetch(SB+'/rest/v1/'+p,{method:o.method||'GET',
+        headers:Object.assign(hdr(),o.headers||{}),body:o.body});
+    }
+    var r=await tira();
+    if(r.status===401){ if(await refresca())r=await tira(); }
+    if(r.status===401)caducada();
+    return r;
+  }
+  async function get(p){
+    var r=await req(p);
+    if(r.ok)return await r.json();
+    if(r.status!==401){try{console.error('GET '+p+' → '+r.status,await r.text());}catch(_){}}
+    return [];
+  }
+  async function patch(t,id,b){return await req(t+'?id=eq.'+id,{method:'PATCH',body:JSON.stringify(b)});}
+  async function post(t,b,rep){return await req(t,{method:'POST',headers:rep?{'Prefer':'return=representation'}:null,body:JSON.stringify(b)});}
+  async function del(t,q){return await req(t+'?'+q,{method:'DELETE'});}
 
   /* catálogos fijos */
   /* Tipología alineada con lo que usan Airbnb Experiences, Fever y
@@ -753,11 +809,14 @@ gmp-place-autocomplete,.gmpac{
     if(!ses){location.href='/operador.html';return;}
     if(!ID){error('Falta el id de la experiencia.');return;}
 
-    var ext=await fetch(SB+'/rest/v1/rpc/es_operador_externo',{method:'POST',headers:hdr(),body:'{}'});
+    var ext=await req('rpc/es_operador_externo',{method:'POST',body:'{}'});
+    if(ext.status===401)return;
     interno=ext.ok?((await ext.json())!==true):false;
 
-    var a=await get('v_op_experiencias?select=*&id=eq.'+ID+'&limit=1');
-    E=a[0];
+    var rf=await req('v_op_experiencias?select=*&id=eq.'+ID+'&limit=1');
+    if(rf.status===401)return;
+    if(!rf.ok){error('La base respondió '+rf.status+'. Recarga en un momento.');return;}
+    E=(await rf.json())[0];
     if(!E){error('No encontré esa experiencia, o no es tuya.');return;}
 
     monta();

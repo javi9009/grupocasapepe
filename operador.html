@@ -479,6 +479,38 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   function hdr(){return {'apikey':KEY,'Authorization':'Bearer '+(ses&&ses.access_token||KEY),'Content-Type':'application/json'};}
   function money(n){return n==null||n===''?'—':'$'+Number(n).toLocaleString('es-MX');}
 
+  /* El token de Supabase caduca a la hora. Antes nadie lo renovaba: pasado ese
+     rato el portal se quedaba vacío sin decir por qué. Envolvemos fetch una vez
+     y así lo cubrimos todo: si la base contesta 401, renovamos y repetimos. */
+  (function(){
+    var orig=window.fetch, renovando=null;
+    function renueva(){
+      if(renovando)return renovando;
+      var rt=ses&&ses.refresh_token;
+      if(!rt)return Promise.resolve(false);
+      renovando=orig(SB+'/auth/v1/token?grant_type=refresh_token',{
+          method:'POST',headers:{apikey:KEY,'Content-Type':'application/json'},
+          body:JSON.stringify({refresh_token:rt})})
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(s){if(!s||!s.access_token)return false;guarda(s);return true;})
+        .catch(function(){return false;})
+        .then(function(ok){renovando=null;return ok;});
+      return renovando;
+    }
+    window.fetch=function(u,o){
+      if(typeof u!=='string'||!ses||u.indexOf(SB+'/rest/v1/')!==0)return orig(u,o);
+      return orig(u,o).then(function(r){
+        if(r.status!==401)return r;
+        return renueva().then(function(ok){
+          if(!ok){olvida();location.reload();return r;}
+          var o2=Object.assign({},o||{});
+          o2.headers=Object.assign({},o2.headers||{},{'Authorization':'Bearer '+ses.access_token});
+          return orig(u,o2);
+        });
+      });
+    };
+  })();
+
   /* ---------- catálogos ---------- */
   var DOCS=[
     {t:'poliza_rc',n:'Póliza de responsabilidad civil',p:'Es la que responde si un huésped se lastima durante tu tour. Sin ella no podemos publicar. Si no la tienes, marca la casilla y te conseguimos una de grupo.',must:true,
