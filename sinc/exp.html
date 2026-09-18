@@ -2,6 +2,13 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<script>/* Servida como /sincretico (sin barra final), el navegador resuelve
+   sinc.css y las imágenes contra la raíz del dominio y la página sale desnuda.
+   Se añade la barra antes de que eso pase. */
+(function(){var p=location.pathname;
+ if(!/\/$/.test(p)&&!/\.[a-z0-9]+$/i.test(p))
+   location.replace(p+'/'+location.search+location.hash);})();</script>
+
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sincrético · la experiencia</title>
 <meta name="description" content="Experiencias con gente de aquí, en la Ciudad de México.">
@@ -94,6 +101,12 @@ h3{font-size:14px;letter-spacing:.06em;margin:0 0 8px;}
 /* mapa */
 .mapa{border:1px solid var(--linea);border-radius:var(--radio);overflow:hidden;background:var(--hueso);}
 .mapa iframe{width:100%;height:270px;border:0;display:block;}
+.comollegar{display:inline-flex;align-items:center;gap:8px;margin:12px 0 0;
+  border:1px solid var(--linea);background:var(--blanco);border-radius:999px;
+  padding:9px 17px;font-family:Oswald,sans-serif;font-weight:600;font-size:12.5px;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--tinta-2);text-decoration:none;}
+.comollegar:hover{border-color:var(--naranja);color:var(--naranja-oscuro);}
+.comollegar span{color:var(--naranja);}
 
 /* a dónde va tu dinero · dentro del panel, debajo del botón */
 .impacto{margin:18px 0 0;padding:16px 0 0;border-top:1px solid var(--linea);}
@@ -655,6 +668,13 @@ function pintaDonde(){
     return;
   }
   $('mapa').innerHTML='<div id="lienzoMapa" style="height:330px"></div>';
+  var liga=ligaComoLlegar();
+  if(liga){
+    var a=document.createElement('a');
+    a.className='comollegar';a.href=liga;a.target='_blank';a.rel='noopener';
+    a.innerHTML='<span>↗</span> Abrir el recorrido en Google Maps';
+    $('mapa').parentNode.insertBefore(a,$('mapa').nextSibling);
+  }
   cargaLeaflet().then(dibujaRuta).catch(function(){
     $('mapa').innerHTML='<iframe loading="lazy" title="Mapa" src="https://www.google.com/maps?q='+
       PUNTOS[0].lat+','+PUNTOS[0].lng+'&z=15&output=embed"></iframe>';
@@ -684,10 +704,19 @@ function dibujaRuta(){
 
   var coords=PUNTOS.map(function(p){return [p.lat,p.lng];});
 
-  /* la línea punteada de punto a punto: es un orden de visita, no una ruta
-     callejera, y punteada se lee así */
-  L.polyline(coords,{color:'#C9501A',weight:3,opacity:.85,
+  /* De entrada, la recta punteada entre paradas: siempre se puede dibujar y
+     dice el orden de visita. Si el servicio de rutas contesta, se sustituye
+     por el camino real a pie, que es lo que de verdad se anda. */
+  var guia=L.polyline(coords,{color:'#C9501A',weight:2.5,opacity:.7,
     dashArray:'2 9',lineCap:'round'}).addTo(m);
+  rutaAndando(coords).then(function(linea){
+    if(!linea||linea.length<2)return;
+    m.removeLayer(guia);
+    L.polyline(linea,{color:'#C9501A',weight:4,opacity:.9,lineCap:'round',
+      lineJoin:'round'}).addTo(m);
+    L.polyline(linea,{color:'#fff',weight:1.2,opacity:.55,dashArray:'1 7',
+      lineCap:'round'}).addTo(m);
+  }).catch(function(){});
 
   PUNTOS.forEach(function(p,i){
     var etq=p.tipo==='ini'?'A':(p.tipo==='fin'?'B':String(i+(PUNTOS[0].tipo==='ini'?0:1)));
@@ -703,6 +732,39 @@ function dibujaRuta(){
 
   m.fitBounds(L.latLngBounds(coords).pad(0.18));
   setTimeout(function(){m.invalidateSize();},120);
+}
+
+/* El camino a pie de verdad, con sus calles. Lo resuelve OSRM, que es abierto
+   y no pide clave. Si no contesta, se queda la recta punteada y no pasa nada. */
+function rutaAndando(coords){
+  if(coords.length<2||coords.length>25)return Promise.resolve(null);
+  var pares=coords.map(function(c){return c[1]+','+c[0];}).join(';');
+  var u='https://router.project-osrm.org/route/v1/foot/'+pares+
+        '?overview=full&geometries=geojson&continue_straight=false';
+  var corta=new AbortController();
+  var reloj=setTimeout(function(){corta.abort();},6000);
+  return fetch(u,{signal:corta.signal})
+    .then(function(r){return r.ok?r.json():null;})
+    .then(function(j){
+      clearTimeout(reloj);
+      var g=j&&j.routes&&j.routes[0]&&j.routes[0].geometry;
+      if(!g||!g.coordinates)return null;
+      return g.coordinates.map(function(c){return [c[1],c[0]];});
+    })
+    .catch(function(){clearTimeout(reloj);return null;});
+}
+
+/* Para llevárselo en el bolsillo: Google Maps con todas las paradas cargadas,
+   que es lo que se abre el día del tour. El enlace no necesita clave. */
+function ligaComoLlegar(){
+  if(PUNTOS.length<2)return null;
+  var pt=function(p){return p.lat+','+p.lng;};
+  var medio=PUNTOS.slice(1,-1).map(pt).join('|');
+  return 'https://www.google.com/maps/dir/?api=1'+
+    '&origin='+encodeURIComponent(pt(PUNTOS[0]))+
+    '&destination='+encodeURIComponent(pt(PUNTOS[PUNTOS.length-1]))+
+    (medio?'&waypoints='+encodeURIComponent(medio):'')+
+    '&travelmode=walking';
 }
 
 /* ---------- a dónde va tu dinero ---------- */
