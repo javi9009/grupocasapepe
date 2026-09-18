@@ -116,7 +116,8 @@ const UNIDADES=["pza","ml","l","gr","kg","rollo","m","paq"];
 const PRESENTACIONES=["pieza","paquete","bolsa","botella","garrafón","caja","bote","galón","vidón","costal","rollo","kit"];
 
 let USER=null,EMAIL="",PROPS=[],SEDE=null,TAB="productos",PUEDE=false;
-let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={};
+let PRODS=[],PROVS=[],BODEGAS=[],CUENTAS=[],CONFIG=[],PRESCACHE={},COSTO={};
+let FPR={estado:"pendientes",area:"",bodega:"",cuenta:"",q:""};
 let STOCK=[],CONTEOS=[],CONCIL=[],ALTAS=[];
 let INCOM=[],FI={ubic:"",orden:"uso",area:"",prov:"",falta:"",q:""};
 let PROV_TODOS=[],BOD_TODAS=[];
@@ -196,7 +197,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
-  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt]=await Promise.all([
+  const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt,cos,pat]=await Promise.all([
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
@@ -211,11 +212,18 @@ async function recargar(){
     cargaIncompletos(),
     // Para editar en línea productos de cualquier casa hacen falta sus proveedores y bodegas.
     sb.from("cmp_v_proveedores_sede").select("property_id,proveedor_id,proveedor,estado").order("proveedor"),
-    sb.from("pos_almacenes").select("id,nombre,area,property_id").eq("activo",true).order("nombre")
+    sb.from("pos_almacenes").select("id,nombre,area,property_id").eq("activo",true).order("nombre"),
+    // el costo vigente de cada producto: sale de su presentación preferida, o de la más barata
+    sb.from("cmp_v_costo_producto").select("*"),
+    sb.from("cmp_presentaciones").select("producto_id,precio_actualizado").not("precio","is",null)
   ]);
   PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=bdt.data||[];
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
-  PRODS.forEach(p=>p._sinPrecio=sinPrecio.has(p.id));
+  COSTO={}; (cos.data||[]).forEach(c=>COSTO[c.producto_id]=c);
+  const at={}; (pat.data||[]).forEach(x=>{
+    if(x.precio_actualizado && (!at[x.producto_id] || x.precio_actualizado>at[x.producto_id])) at[x.producto_id]=x.precio_actualizado;
+  });
+  PRODS.forEach(p=>{p._sinPrecio=sinPrecio.has(p.id); p._precioAt=at[p.id]?String(at[p.id]).slice(0,10):"";});
   pintaTabs();
   render();
 }
@@ -758,27 +766,62 @@ async function confirmaRechazo(id){
   closeModal(); toast("Rechazada y avisada."); await recargar();
 }
 
+function setFPR(k,v){ FPR[k]=v; vPrecios(); }
+function preciosFiltrados(){
+  return PRODS.filter(p=>{
+    if(!p.activo) return false;
+    if(FPR.estado==="pendientes" && !p._sinPrecio) return false;
+    if(FPR.estado==="conprecio"  &&  p._sinPrecio) return false;
+    if(FPR.area   && p.area!==FPR.area) return false;
+    if(FPR.bodega && p.bodega_id!==FPR.bodega) return false;
+    if(FPR.cuenta && String(p.cuenta_id)!==FPR.cuenta) return false;
+    if(FPR.q && !p.nombre.toLowerCase().includes(FPR.q.toLowerCase())) return false;
+    return true;
+  });
+}
 function vPrecios(){
-  const sinPrecio=PRODS.filter(p=>p.activo&&p._sinPrecio);
-  const porArea={}; sinPrecio.forEach(p=>{(porArea[p.area]=porArea[p.area]||[]).push(p);});
+  const sinPrecio=PRODS.filter(p=>p.activo&&p._sinPrecio).length;
+  const conPrecio=PRODS.filter(p=>p.activo&&!p._sinPrecio).length;
+  const l=preciosFiltrados();
+  const porArea={}; l.forEach(p=>{(porArea[p.area]=porArea[p.area]||[]).push(p);});
+  const areas=[...new Set(PRODS.filter(p=>p.activo).map(p=>p.area).filter(Boolean))].sort();
+  const cuentas=CUENTAS.filter(c=>PRODS.some(p=>String(p.cuenta_id)===String(c.id)));
+  const opt=(v,t,sel)=>`<option value="${esc(v)}" ${String(sel)===String(v)?"selected":""}>${esc(t)}</option>`;
+  const verPrecio=FPR.estado!=="pendientes";
+
   $("view").innerHTML=`
-    <div class="avisos">Cada jefe de área captura aquí el precio de lo suyo. En cuanto un producto tiene al menos una presentación con precio, deja de aparecer en esta lista y ya se puede pedir.</div>
+    <div class="avisos">Cada jefe de área captura aquí el precio de lo suyo. En cuanto un producto tiene al menos una presentación con precio, ya se puede pedir. Cambia el primer filtro para volver a los que ya costeaste y editarlos.</div>
     <div class="kpis" style="margin-top:12px">
-      <div class="kpi"><div class="n" style="color:var(--warn)">${sinPrecio.length}</div><div class="l">productos por costear</div></div>
-      <div class="kpi"><div class="n" style="color:var(--ok)">${PRODS.filter(p=>p.activo&&!p._sinPrecio).length}</div><div class="l">ya con precio</div></div>
+      <div class="kpi" style="cursor:pointer" onclick="setFPR('estado','pendientes')"><div class="n" style="color:var(--warn)">${sinPrecio}</div><div class="l">productos por costear</div></div>
+      <div class="kpi" style="cursor:pointer" onclick="setFPR('estado','conprecio')"><div class="n" style="color:var(--ok)">${conPrecio}</div><div class="l">ya con precio</div></div>
+    </div>
+    <div class="card">
+      <div class="filtros">
+        <select onchange="setFPR('estado',this.value)">${opt("pendientes","Por costear",FPR.estado)}${opt("conprecio","Ya con precio",FPR.estado)}${opt("todos","Todos",FPR.estado)}</select>
+        <select onchange="setFPR('area',this.value)">${opt("","Todas las áreas",FPR.area)}${areas.map(a=>opt(a,a,FPR.area)).join("")}</select>
+        <select onchange="setFPR('bodega',this.value)">${opt("","Cualquier bodega",FPR.bodega)}${BODEGAS.map(b=>opt(b.id,b.nombre,FPR.bodega)).join("")}</select>
+        <select onchange="setFPR('cuenta',this.value)">${opt("","Cualquier cuenta",FPR.cuenta)}${cuentas.map(c=>opt(c.id,(c.codigo?c.codigo+" · ":"")+c.cuenta,FPR.cuenta)).join("")}</select>
+        <input placeholder="Buscar producto…" value="${esc(FPR.q)}" oninput="FPR.q=this.value;clearTimeout(window._tp);window._tp=setTimeout(vPrecios,250)">
+      </div>
+      <div class="small muted" style="margin-top:8px">${l.length} producto${l.length===1?"":"s"} con este filtro</div>
     </div>
     ${Object.keys(porArea).sort().map(a=>`
-      <div class="card"><h3>${esc(a)} <span class="chip c-warn">${porArea[a].length}</span></h3><div class="scroll"><table>
-        <thead><tr><th>Producto</th><th>Bodega</th><th>Unidad</th><th></th></tr></thead>
+      <div class="card"><h3>${esc(a)} <span class="chip ${FPR.estado==="pendientes"?"c-warn":""}">${porArea[a].length}</span></h3><div class="scroll"><table>
+        <thead><tr><th>Producto</th><th>Bodega</th><th>Unidad</th>
+          ${verPrecio?`<th class="num">Costo por unidad</th><th>Quién lo surte</th><th class="num">Actualizado</th>`:""}<th></th></tr></thead>
         <tbody>${porArea[a].slice(0,150).map(p=>{
           const b=BODEGAS.find(x=>x.id===p.bodega_id);
+          const c=COSTO[p.id];
           return `<tr><td><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.categoria||p.tipo)}</div></td>
             <td class="small">${esc(b?b.nombre:"—")}</td>
             <td class="small">${esc(p.unidad_texto||p.unidad_base)}</td>
-            <td class="num"><button class="btn sm" onclick="verPresentaciones('${p.id}')">Capturar precio</button></td></tr>`;
+            ${verPrecio?`<td class="num">${c&&c.costo_unidad_base!=null?"$"+c.costo_unidad_base+'<div class="small muted">'+esc(c.presentacion||"")+" "+num(c.contenido||"")+" "+esc(c.unidad_contenido||"")+"</div>":'<span class="chip c-warn">falta</span>'}</td>
+              <td class="small">${esc(c&&c.proveedor?c.proveedor:"—")}</td>
+              <td class="num small muted">${esc(p._precioAt||"—")}</td>`:""}
+            <td class="num"><button class="btn sm" onclick="verPresentaciones('${p.id}')">${p._sinPrecio?"Capturar precio":"Ver y editar"}</button></td></tr>`;
         }).join("")}</tbody></table></div>
-        ${porArea[a].length>150?'<div class="small muted" style="padding:8px 14px">Mostrando 150 de '+porArea[a].length+'.</div>':""}
-      </div>`).join("") || '<div class="card"><div class="center">Todo el catálogo tiene precio. 🎉</div></div>'}`;
+        ${porArea[a].length>150?'<div class="small muted" style="padding:8px 14px">Mostrando 150 de '+porArea[a].length+'. Afina el filtro.</div>':""}
+      </div>`).join("") || `<div class="card"><div class="center">${FPR.estado==="pendientes"&&!FPR.q&&!FPR.area?"Todo el catálogo tiene precio. 🎉":"Nada con ese filtro."}</div></div>`}`;
 }
 async function verPresentaciones(prodId){
   PSEL=prodId;
