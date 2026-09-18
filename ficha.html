@@ -577,7 +577,7 @@ gmp-place-autocomplete,.gmpac{
   var LS='sinc_op_sesion';
   var ID=(location.search.match(/[?&]id=([0-9a-f-]{36})/)||[])[1];
   var PASOS=['Lo esencial','Capacidad','De dónde sale','Cuándo sale','Precio','El ADN','Fotos','Impacto','Costeo'];
-  var ses=null,E=null,step=0,interno=false;
+  var ses=null,E=null,step=0,interno=false,CFG={};
   var LUG=[],GAS=[],TAN=[],PRO=[],MED=[],PAR=[],BLQ=[],COS=[],INS=[],MAPS=null;
 
   function $(id){return document.getElementById(id);}
@@ -846,6 +846,7 @@ gmp-place-autocomplete,.gmpac{
   }
 
   async function catalogos(){
+    (await get('v_sinc_publico?select=*')).forEach(function(c){CFG[c.clave]=c.valor;});
     LUG=await get('sinc_lugares?select=*&activo=is.true&order=barrio,nombre');
     GAS=await get('sinc_gastros?select=*&activo=is.true&order=nombre');
     TAN=await get('sinc_tangibles?select=*&activo=is.true&order=nombre');
@@ -1548,24 +1549,56 @@ gmp-place-autocomplete,.gmpac{
 
   /* El touroperador tiene derecho a ver a dónde va nuestra comisión.
      Repartir no es impactar: esto es el reparto, el impacto va aparte. */
-  function pintaReparto(){
-    var neto=Number($('netoAd').value||0);
+  /* El mismo desglose que ve el cliente, con la misma fórmula: primero fuera el
+     IVA y sobre el neto se calcula todo. Aquí se recalcula en el navegador
+     porque el precio cambia mientras se teclea; la versión buena, la que se
+     publica, es sinc_desglose_precio() en la base. Si las dos se separan,
+     manda la de la base. */
+  function cfg(k,d){var v=CFG[k];return v==null||v===''?d:Number(v);}
+  function desglose(){
+    var netoOp=Number($('netoAd').value||0);
     var com=Number(E.comision_pct||25);
-    var pvp=neto?Math.round(neto/(1-com/100)):0;
-    var partes=[
-      ['Tú, el operador',100-Number(E.concierge_pct||0)-Number(E.hotel_pct||0)-Number(E.plataforma_pct||0),'Lo que cobras por persona'],
-      ['Quien lo vende',Number(E.concierge_pct||0),'Bono al colaborador que hizo la venta'],
-      ['El hotel',Number(E.hotel_pct||0),'Al canal que trajo al huésped'],
-      ['La plataforma',Number(E.plataforma_pct||0),'Reservas, cobro, soporte y tecnología']
-    ];
+    var pvp=netoOp?Math.round(netoOp/(1-com/100)):0;
+    if(!pvp)return null;
+    var ivaPct=cfg('sinc_iva_pct',16);
+    var neto=Math.round(pvp/(1+ivaPct/100));
+    var banco=Math.round((pvp*cfg('sinc_stripe_pct',3.6)/100+cfg('sinc_stripe_fijo_mxn',3))
+                         *(1+cfg('sinc_stripe_iva_pct',16)/100)
+                         + pvp*cfg('sinc_banco_extra_pct',1)/100);
+    var imp   =Math.round(neto*cfg('sinc_imp_indirecto_pct',7)/100);
+    var hotel =Math.round(neto*Number(E.hotel_pct||0)/100);
+    var conc  =Math.round(neto*Number(E.concierge_pct||0)/100);
+    var pcom  =Math.round(neto*cfg('sinc_plataforma_comunidad_pct',3)/100);
+    var pgas  =Math.round(neto*cfg('sinc_plataforma_gastos_pct',6)/100);
+    var oper  =neto-imp-banco-hotel-conc-pcom-pgas;
+    return {pvp:pvp,iva:pvp-neto,ivaPct:ivaPct,neto:neto,imp:imp,banco:banco,
+            hotel:hotel,conc:conc,pcom:pcom,pgas:pgas,oper:oper};
+  }
+  function pintaReparto(){
+    var d=desglose();
     $('cardReparto').style.display='';
+    if(!d){$('repartoInfo').innerHTML='<div class="mini">Pon el precio y aquí sale el desglose entero.</div>';return;}
+    var filas=[
+      ['Tú, la operadora',d.oper,'Lo que te queda a ti, antes de tus costes',true],
+      ['Quien lo vende · '+Number(E.concierge_pct||0)+'%',d.conc,'Bono al colaborador que hizo la venta'],
+      ['El hotel · '+Number(E.hotel_pct||0)+'%',d.hotel,'Al canal que trajo al huésped'],
+      ['A la comunidad, de nuestra parte · '+cfg('sinc_plataforma_comunidad_pct',3)+'%',d.pcom,'Lo que aporta Sincrético'],
+      ['La plataforma · '+cfg('sinc_plataforma_gastos_pct',6)+'%',d.pgas,'Reservas, cobro, soporte y tecnología'],
+      ['Otros impuestos y tasas · '+cfg('sinc_imp_indirecto_pct',7)+'%',d.imp,'Retenciones, derechos y permisos'],
+      ['Comisiones bancarias',d.banco,'Stripe '+cfg('sinc_stripe_pct',3.6)+'% + $'+cfg('sinc_stripe_fijo_mxn',3)+' con IVA, más '+cfg('sinc_banco_extra_pct',1)+'% del banco']
+    ];
     $('repartoInfo').innerHTML=
-      (pvp?'<div class="mini" style="margin-bottom:8px">Sobre un precio de venta de <b>'+money(pvp)+'</b>:</div>':'')+
-      '<div class="desglose">'+partes.map(function(p){
-        var mxn=pvp?Math.round(pvp*p[1]/100):0;
-        return '<div'+(p[0]==='Tú, el operador'?' style="font-weight:700"':'')+'><span>'+esc(p[0])+' · '+p[1]+'%</span><b>'+(pvp?money(mxn):'—')+'</b></div>'+
-               '<div class="mini" style="margin:-4px 0 6px">'+esc(p[2])+'</div>';
-      }).join('')+'</div>';
+      '<div class="desglose" style="margin-bottom:6px">'+
+        '<div><span>Precio de venta</span><b>'+money(d.pvp)+'</b></div>'+
+        '<div class="mini" style="margin:-4px 0 6px">IVA '+d.ivaPct+'% · '+money(d.iva)+'</div>'+
+        '<div style="border-top:1px solid var(--tinta);padding-top:6px"><span>Precio neto</span><b>'+money(d.neto)+'</b></div>'+
+        '<div class="mini" style="margin:-4px 0 8px">Sobre esto se calcula todo lo de abajo</div>'+
+      '</div>'+
+      '<div class="desglose">'+filas.map(function(f){
+        return '<div'+(f[3]?' style="font-weight:700"':'')+'><span>'+esc(f[0])+'</span><b>'+money(f[1])+'</b></div>'+
+               '<div class="mini" style="margin:-4px 0 6px">'+esc(f[2])+'</div>';
+      }).join('')+'</div>'+
+      (d.oper<0?'<div class="aviso err" style="margin-top:8px">Con este precio no queda nada para ti: sube el precio o baja las comisiones.</div>':'');
   }
 
   /* ---------- impacto ---------- */
