@@ -1129,27 +1129,70 @@ gmp-place-autocomplete,.gmpac{
   };
 
   /* ---------- paradas ---------- */
+  /* Cada parada puede salir del catálogo de lugares o buscarse en Google. Lo
+     segundo faltaba: si el sitio no estaba en la lista no había forma de
+     ponerlo en el mapa, y sin coordenadas no se puede dibujar el recorrido. */
   function pintaParadas(){
     $('paradas').innerHTML=PAR.length?PAR.map(function(p,i){
-      return '<div class="parada" data-par="'+(p.id||('n'+i))+'">'+
+      var l=p.lugar_id?LUG.filter(function(x){return x.id===p.lugar_id;})[0]:null;
+      var lat=p.lat!=null?p.lat:(l&&l.lat!=null?l.lat:null);
+      var lng=p.lng!=null?p.lng:(l&&l.lng!=null?l.lng:null);
+      return '<div class="parada" data-par="'+(p.id||('n'+i))+'"'+
+          ' data-lat="'+(lat==null?'':lat)+'" data-lng="'+(lng==null?'':lng)+'"'+
+          ' data-dir="'+esc(p.direccion||'')+'">'+
         '<div class="cab"><span class="num">'+(i+1)+'</span>'+
         '<input class="pTit" value="'+esc(p.titulo||'')+'" placeholder="Nombre de la parada" style="flex:1;padding:7px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13.5px">'+
         '<label class="mini" style="display:flex;gap:5px;align-items:center;white-space:nowrap"><input type="checkbox" class="pImp"'+(p.imperdible?' checked':'')+'> imperdible</label>'+
         '<button class="btn fantasma sm" data-delpar="'+i+'">✕</button></div>'+
         '<textarea class="pDesc" rows="2" placeholder="Qué se ve o qué se cuenta aquí" style="width:100%;margin-top:8px;padding:8px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13px">'+esc(p.descripcion||'')+'</textarea>'+
-        '<select class="pLug" style="width:100%;margin-top:8px;padding:7px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13px"><option value="">Sin ubicación en el mapa</option>'+
-        LUG.map(function(l){return '<option value="'+l.id+'"'+(p.lugar_id===l.id?' selected':'')+'>'+esc(l.nombre)+'</option>';}).join('')+'</select>'+
+        '<select class="pLug" style="width:100%;margin-top:8px;padding:7px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13px"><option value="">De los lugares que ya tenemos…</option>'+
+        LUG.map(function(x){return '<option value="'+x.id+'"'+(p.lugar_id===x.id?' selected':'')+'>'+esc(x.nombre)+'</option>';}).join('')+'</select>'+
+        '<input class="pBusca" placeholder="…o búscalo en el mapa" autocomplete="off" style="width:100%;margin-top:6px;padding:7px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13px">'+
+        '<div class="mini pEco" style="margin-top:5px">'+esc(textoUbic(p,l,lat,lng))+'</div>'+
       '</div>';
     }).join(''):'<div class="mini">Todavía no hay paradas. Añade entre 5 y 10.</div>';
+
     Array.prototype.forEach.call($('paradas').querySelectorAll('[data-delpar]'),function(b){
       b.onclick=function(){PAR=leeParadas();PAR.splice(+b.getAttribute('data-delpar'),1);pintaParadas();};});
+
+    Array.prototype.forEach.call($('paradas').querySelectorAll('.parada'),function(d){
+      d.querySelector('.pLug').onchange=function(){
+        /* elegir del catálogo pisa lo que se hubiera buscado a mano */
+        var x=LUG.filter(function(y){return y.id===this.value;}.bind(this))[0];
+        d.setAttribute('data-lat',x&&x.lat!=null?x.lat:'');
+        d.setAttribute('data-lng',x&&x.lng!=null?x.lng:'');
+        d.setAttribute('data-dir','');
+        var b=d.querySelector('.pBusca'); if(b&&b._gmp)b._gmp.value='';
+        d.querySelector('.pEco').textContent=textoUbic({},x,
+          x&&x.lat!=null?x.lat:null, x&&x.lng!=null?x.lng:null);
+      };
+      autocompleta(d.querySelector('.pBusca'),function(pl){
+        d.querySelector('.pLug').value='';
+        d.setAttribute('data-lat',pl.lat==null?'':pl.lat);
+        d.setAttribute('data-lng',pl.lng==null?'':pl.lng);
+        d.setAttribute('data-dir',pl.direccion||'');
+        var t=d.querySelector('.pTit');
+        if(!t.value.trim()&&pl.name)t.value=pl.name;
+        d.querySelector('.pEco').textContent='📍 '+(pl.name||'')+(pl.direccion?' · '+pl.direccion:'');
+      });
+    });
+    enchufaAC();
+  }
+  function textoUbic(p,l,lat,lng){
+    if(p&&p.direccion)return '📍 '+p.direccion;
+    if(l)return '📍 '+l.nombre+(l.barrio?' · '+l.barrio:'');
+    if(lat!=null&&lng!=null)return '📍 '+Number(lat).toFixed(5)+', '+Number(lng).toFixed(5);
+    return 'Sin ubicación: esta parada no saldrá en el mapa del recorrido.';
   }
   function leeParadas(){
     return Array.prototype.map.call($('paradas').querySelectorAll('.parada'),function(d,i){
       var vieja=PAR[i]||{};
+      var la=d.getAttribute('data-lat'), ln=d.getAttribute('data-lng');
       return {id:vieja.id,orden:i,titulo:d.querySelector('.pTit').value.trim(),
               descripcion:d.querySelector('.pDesc').value.trim()||null,
               lugar_id:d.querySelector('.pLug').value||null,
+              direccion:d.getAttribute('data-dir')||null,
+              lat:la===''?null:Number(la), lng:ln===''?null:Number(ln),
               imperdible:d.querySelector('.pImp').checked};
     });
   }
@@ -2037,7 +2080,9 @@ gmp-place-autocomplete,.gmpac{
     PAR=leeParadas().filter(function(p){return p.titulo;});
     await del('op_exp_paradas','experiencia_id=eq.'+ID);
     if(PAR.length)await post('op_exp_paradas',PAR.map(function(p,i){
-      return {experiencia_id:ID,orden:i,titulo:p.titulo,descripcion:p.descripcion,lugar_id:p.lugar_id,imperdible:p.imperdible};}));
+      return {experiencia_id:ID,orden:i,titulo:p.titulo,descripcion:p.descripcion,
+              lugar_id:p.lugar_id,direccion:p.direccion,lat:p.lat,lng:p.lng,
+              imperdible:p.imperdible};}));
 
     // lugares por día u hora
     if(b.salida_modo!=='fijo'){

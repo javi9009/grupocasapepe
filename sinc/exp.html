@@ -378,7 +378,7 @@ var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ID=(location.search.match(/[?&]id=([0-9a-f-]{36})/)||[])[1];
 
-var E=null,MED=[],GUI=[],PAR=[],IMP=[],DES=[],DISP=[],FOTOS=[],METAS={};
+var E=null,MED=[],GUI=[],PAR=[],IMP=[],DES=[],DISP=[],FOTOS=[],METAS={},PUNTOS=[];
 var mesCursor=null, diaSel=null, horaSel=null, adultos=1, menores=0;
 
 function $(id){return document.getElementById(id);}
@@ -609,33 +609,106 @@ function pintaDonde(){
   if(E.cer_final_lugar&&E.cer_final_lugar!==E.cer_inicio_lugar)
     t.push('Termina en <b>'+esc(E.cer_final_lugar)+'</b>');
   $('dondeTexto').innerHTML=t.join(' · ')||'El punto de encuentro te llega al confirmar.';
-  if(E.cer_inicio_lat&&E.cer_inicio_lng){
+
+  /* Los puntos del recorrido, en orden: de dónde se sale, las paradas que
+     tengan coordenadas, y dónde termina si no es el mismo sitio. */
+  PUNTOS=[];
+  if(E.cer_inicio_lat&&E.cer_inicio_lng)
+    PUNTOS.push({lat:+E.cer_inicio_lat,lng:+E.cer_inicio_lng,
+                 nom:E.cer_inicio_lugar||'Punto de encuentro',tipo:'ini'});
+  PAR.forEach(function(p){
+    if(p.lat!=null&&p.lng!=null)
+      PUNTOS.push({lat:+p.lat,lng:+p.lng,nom:p.titulo||'Parada',dir:p.direccion,tipo:'par'});
+  });
+  if(E.cer_final_lat&&E.cer_final_lng&&
+     (E.cer_final_lat!==E.cer_inicio_lat||E.cer_final_lng!==E.cer_inicio_lng))
+    PUNTOS.push({lat:+E.cer_final_lat,lng:+E.cer_final_lng,
+                 nom:E.cer_final_lugar||'Fin del recorrido',tipo:'fin'});
+
+  if(!PUNTOS.length){ $('mapa').classList.add('oculto'); return; }
+
+  /* Con una sola chincheta basta el mapa incrustado; en cuanto hay recorrido
+     hace falta dibujarlo, y eso pide un mapa de verdad. Va con Leaflet sobre
+     teselas de CARTO: no necesita clave ni dominio autorizado, que es justo lo
+     que rompería al servir esto desde dos sitios a la vez. */
+  if(PUNTOS.length<2){
     $('mapa').innerHTML='<iframe loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Mapa"'+
-      ' src="https://www.google.com/maps?q='+E.cer_inicio_lat+','+E.cer_inicio_lng+'&z=16&output=embed"></iframe>';
-  }else{
-    $('mapa').classList.add('oculto');
+      ' src="https://www.google.com/maps?q='+PUNTOS[0].lat+','+PUNTOS[0].lng+'&z=16&output=embed"></iframe>';
+    return;
   }
+  $('mapa').innerHTML='<div id="lienzoMapa" style="height:330px"></div>';
+  cargaLeaflet().then(dibujaRuta).catch(function(){
+    $('mapa').innerHTML='<iframe loading="lazy" title="Mapa" src="https://www.google.com/maps?q='+
+      PUNTOS[0].lat+','+PUNTOS[0].lng+'&z=15&output=embed"></iframe>';
+  });
+}
+
+function cargaLeaflet(){
+  if(window.L)return Promise.resolve();
+  return new Promise(function(ok,mal){
+    var c=document.createElement('link');
+    c.rel='stylesheet';
+    c.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(c);
+    var j=document.createElement('script');
+    j.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    j.onload=function(){ok();};
+    j.onerror=function(){mal(new Error('leaflet'));};
+    document.head.appendChild(j);
+  });
+}
+
+function dibujaRuta(){
+  var m=L.map('lienzoMapa',{scrollWheelZoom:false,attributionControl:true});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{
+    maxZoom:19, subdomains:'abcd',
+    attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(m);
+
+  var coords=PUNTOS.map(function(p){return [p.lat,p.lng];});
+
+  /* la línea punteada de punto a punto: es un orden de visita, no una ruta
+     callejera, y punteada se lee así */
+  L.polyline(coords,{color:'#C9501A',weight:3,opacity:.85,
+    dashArray:'2 9',lineCap:'round'}).addTo(m);
+
+  PUNTOS.forEach(function(p,i){
+    var etq=p.tipo==='ini'?'A':(p.tipo==='fin'?'B':String(i+(PUNTOS[0].tipo==='ini'?0:1)));
+    var col=p.tipo==='par'?'#F2682A':'#1E1A16';
+    L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',iconSize:[26,26],iconAnchor:[13,13],
+      html:'<div style="width:26px;height:26px;border-radius:50%;background:'+col+
+           ';color:#fff;display:flex;align-items:center;justify-content:center;'+
+           'font-family:Oswald,sans-serif;font-weight:700;font-size:12px;'+
+           'box-shadow:0 2px 6px rgba(30,26,22,.45);border:2px solid #fff">'+etq+'</div>'})})
+     .addTo(m)
+     .bindPopup('<b>'+esc(p.nom)+'</b>'+(p.dir?'<br>'+esc(p.dir):''));
+  });
+
+  m.fitBounds(L.latLngBounds(coords).pad(0.18));
+  setTimeout(function(){m.invalidateSize();},120);
 }
 
 /* ---------- a dónde va tu dinero ---------- */
 /* El desglose entero, no solo lo bonito: primero se separa el IVA y sobre el
-   neto se reparte todo lo demás, impuestos y banco incluidos. Lo que suma para
-   la comunidad lleva su objetivo de la Agenda 2030, y al abrirlo aparece con
-   quién se colabora. Van el número y el color oficial del objetivo, no el
-   logotipo: reproducirlo tiene sus reglas y no es nuestro. */
+   neto se reparte todo lo demás, impuestos y banco incluidos. Lo que llega a
+   la comunidad va en una sola línea —lo que reparte la operadora, el bono de
+   quien vendió y lo que pone Sincrético— y al abrirla aparece cada parte con
+   su objetivo de la Agenda 2030 y con quién se colabora. Van el número y el
+   color oficial del objetivo, no el logotipo: reproducirlo tiene sus reglas y
+   no es nuestro. */
 function pintaImpacto(){
   if(!DES.length)return;
   var por={}; DES.forEach(function(d){por[d.clave]=d;});
   var pvp=Number((por.pvp||{}).mxn||0), neto=Number((por.neto||{}).mxn||0);
   if(!neto)return;
 
-  /* las partidas del reparto, en el orden en que salen de la base */
-  var partes=DES.filter(function(d){
+  var reparto=DES.filter(function(d){
     return ['pvp','iva','neto'].indexOf(d.clave)<0 && Number(d.mxn)>0;});
-  if(!partes.length)return;
+  if(!reparto.length)return;
 
-  var suma=partes.filter(function(d){return d.es_impacto;})
-                 .reduce(function(a,d){return a+Number(d.mxn);},0);
+  var impacta=reparto.filter(function(d){return d.es_impacto;});
+  var gastos =reparto.filter(function(d){return !d.es_impacto;});
+  var suma=impacta.reduce(function(a,d){return a+Number(d.mxn);},0);
+  if(!suma)return;
   var pct=Math.round(suma*1000/neto)/10;
 
   function ficha(f){
@@ -651,67 +724,74 @@ function pintaImpacto(){
         (liga?'<a href="'+esc(liga)+'" target="_blank" rel="noopener nofollow">'+esc(etiq)+'</a>':'')+
       '</div><span class="v">'+money(f.mxn)+'</span></div>';
   }
-  /* el detalle de "Impacto en la comunidad": sus metas, una a una */
-  function detalleOperadora(){
+  function cabMeta(meta,extra){
+    var m=METAS[meta];
+    if(!m)return extra?'<p class="mp">'+esc(extra)+'</p>':'';
+    return '<div class="mt"><span class="cod" style="background:'+esc(m.color)+'">ODS '+m.ods+
+      ' · meta '+esc(m.meta)+'</span> '+esc(m.titulo||'')+'</div>'+
+      (m.texto?'<p class="mp">'+esc(m.texto)+'</p>':'')+
+      (extra?'<p class="mp" style="color:var(--tinta-2)">'+esc(extra)+'</p>':'');
+  }
+  /* lo que reparte la operadora, meta a meta y con nombres */
+  function bloqueOperadora(d){
     var metas=[];
     IMP.forEach(function(i){
       if(!i.meta||!(Number(i.mxn)>0))return;
       var m=metas.filter(function(x){return x.meta===i.meta;})[0];
-      if(!m){m={meta:i.meta,ods:i.ods,nombre:i.ods_nombre,color:i.color,
-                titulo:i.meta_titulo,texto:i.meta_texto,lineas:[]};metas.push(m);}
+      if(!m){m={meta:i.meta,lineas:[]};metas.push(m);}
       m.lineas.push(i);
     });
-    if(!metas.length)return '';
+    if(!metas.length)
+      return '<div class="meta"><div class="mt">'+esc(d.concepto)+' · '+money(d.mxn)+'</div></div>';
     return metas.map(function(m){
-      return '<div class="meta">'+
-        '<div class="mt"><span class="cod" style="background:'+esc(m.color)+'">ODS '+m.ods+
-          ' · meta '+esc(m.meta)+'</span> '+esc(m.titulo||'')+'</div>'+
-        (m.texto?'<p class="mp">'+esc(m.texto)+'</p>':'')+
-        m.lineas.map(ficha).join('')+'</div>';
+      return '<div class="meta">'+cabMeta(m.meta)+m.lineas.map(ficha).join('')+'</div>';
     }).join('');
   }
-  /* Para las partidas que no son el reparto de la operadora (el bono de quien
-     vende, el 3% que pone Sincrético) solo va la meta: las personas que declaró
-     la operadora ya están contadas arriba y repetirlas aquí sería contarlas
-     dos veces. */
-  function detalleMeta(d){
-    var m=METAS[d.meta];
-    if(!m)return '<p class="mp">'+esc(d.detalle||'')+'</p>';
-    return '<div class="meta">'+
-      '<div class="mt"><span class="cod" style="background:'+esc(m.color)+'">ODS '+m.ods+
-        ' · meta '+esc(m.meta)+'</span> '+esc(m.titulo||'')+'</div>'+
-      (m.texto?'<p class="mp">'+esc(m.texto)+'</p>':'')+
-      (d.detalle?'<p class="mp" style="color:var(--tinta-2)">'+esc(d.detalle)+'</p>':'')+
-      '</div>';
+  /* las otras dos partidas: su meta y nada más, que las personas de la
+     operadora ya están contadas arriba y repetirlas sería contarlas dos veces */
+  function bloqueSuelto(d){
+    return '<div class="meta">'+cabMeta(d.meta,d.detalle)+
+      '<div class="quien"><span class="ini">$</span>'+
+      '<div class="txt"><b>'+esc(d.concepto)+'</b>'+
+        '<span>'+(d.pct_neto!=null?(+d.pct_neto)+'% del precio neto':'')+'</span></div>'+
+      '<span class="v">'+money(d.mxn)+'</span></div></div>';
   }
 
-  function linea(d){
-    var abre=d.clave==='impacto' ? detalleOperadora()
-            :(d.meta ? detalleMeta(d) : '');
-    var cuerpo=
-      '<span class="pt" style="background:'+esc(d.color||'#E6DFD6')+'"></span>'+
+  function fila(d){
+    return '<div class="fila"><span class="pt" style="background:'+esc(d.color||'#E6DFD6')+'"></span>'+
       '<span class="nom">'+esc(d.concepto)+
         (d.pct_neto!=null?' <em>'+(+d.pct_neto)+'%</em>':'')+'</span>'+
-      '<span class="v">'+money(d.mxn)+'</span>';
-    if(!abre)return '<div class="fila'+(d.es_impacto?' imp':'')+'">'+cuerpo+'</div>';
-    return '<details class="fila imp"><summary>'+cuerpo+'</summary>'+
-           '<div class="detalle">'+abre+'</div></details>';
+      '<span class="v">'+money(d.mxn)+'</span></div>';
   }
+
+  var detalle=impacta.map(function(d){
+    return d.clave==='impacto'?bloqueOperadora(d):bloqueSuelto(d);
+  }).join('');
 
   $('impacto').classList.remove('oculto');
   $('impacto').innerHTML=
     '<div class="cabimp">A dónde va tu dinero</div>'+
     '<div class="cifra"><b>'+money(suma)+'</b> a la comunidad'+
       (pct?' · <span class="pc">'+pct+'%</span> del neto':'')+'</div>'+
-    '<div class="barra">'+partes.map(function(d){
+    '<div class="barra">'+
+      '<i style="width:'+(suma*100/neto)+'%;background:#A21942"></i>'+
+      gastos.map(function(d){
         return '<i style="width:'+(Number(d.mxn)*100/neto)+'%;background:'+
-               esc(d.color||'#E6DFD6')+';opacity:'+(d.es_impacto?1:.45)+'"></i>';
-      }).join('')+'</div>'+
+               esc(d.color||'#E6DFD6')+';opacity:.45"></i>';}).join('')+'</div>'+
     '<div class="tramo"><span>Lo que pagas</span><b>'+money(pvp)+'</b></div>'+
     '<div class="tramo sub"><span>IVA '+(+(por.iva||{}).pct_neto||0)+'%</span><b>−'+
       money((por.iva||{}).mxn)+'</b></div>'+
     '<div class="tramo linea"><span>Precio neto</span><b>'+money(neto)+'</b></div>'+
-    partes.map(linea).join('')+
+    (por.imp?fila(por.imp):'')+
+    (por.banco?fila(por.banco):'')+
+    '<details class="fila imp"><summary>'+
+      '<span class="pt" style="background:#A21942"></span>'+
+      '<span class="nom">Impacto en la comunidad <em>'+pct+'%</em></span>'+
+      '<span class="v">'+money(suma)+'</span></summary>'+
+      '<div class="detalle">'+detalle+'</div></details>'+
+    (por.oper?fila(por.oper):'')+
+    (por.hotel?fila(por.hotel):'')+
+    (por.pgas?fila(por.pgas):'')+
     '<div class="nota">Las cifras de impacto las declara quien opera la experiencia; '+
       'Sincrético aporta la suya. Es una declaración, no una auditoría. '+
       '<a href="https://www.un.org/sustainabledevelopment/es/objetivos-de-desarrollo-sostenible/" '+
