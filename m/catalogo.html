@@ -211,7 +211,7 @@ async function recargar(){
     sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
-    sb.from("pos_almacenes").select("id,nombre,area").eq("property_id",SEDE).eq("activo",true).order("nombre"),
+    sb.from("cmp_v_bodegas").select("id,nombre,ruta,padre_id,nivel,area,raiz").eq("property_id",SEDE).eq("activo",true).order("ruta"),
     sb.from("cmp_v_cuentas").select("*").order("grupo_compra"),
     sb.from("cmp_v_proveedores_config").select("*").order("nombre"),
     sb.from("cmp_v_valor_stock").select("*").eq("property_id",SEDE),
@@ -222,7 +222,7 @@ async function recargar(){
     cargaIncompletos(),
     // Para editar en línea productos de cualquier casa hacen falta sus proveedores y bodegas.
     sb.from("cmp_v_proveedores_sede").select("property_id,proveedor_id,proveedor,estado").order("proveedor"),
-    sb.from("pos_almacenes").select("id,nombre,area,property_id").eq("activo",true).order("nombre"),
+    sb.from("cmp_v_bodegas").select("id,nombre,ruta,area,property_id,nivel").eq("activo",true).order("ruta"),
     // el costo vigente de cada producto: sale de su presentación preferida, o de la más barata
     sb.from("cmp_v_costo_producto").select("*"),
     sb.from("cmp_presentaciones").select("producto_id,precio_actualizado").not("precio","is",null),
@@ -231,7 +231,7 @@ async function recargar(){
     // El arbol de pasillos y subpasillos (anaqueles) es del Grupo, no de la sede.
     sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz,productos").order("orden_ruta")
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=bdt.data||[];
+  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=(bod.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre,hoja:b.nombre})); CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=(bdt.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre}));
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   COSTO={}; (cos.data||[]).forEach(c=>COSTO[c.producto_id]=c);
   VARP={}; (varp.data||[]).forEach(v=>VARP[v.producto_id]=v);
@@ -1138,7 +1138,8 @@ function vStock(){
       <div class="scroll"><table>
       <thead><tr><th>Bodega</th><th>Área</th><th class="num">Productos</th><th class="num">Unidades</th><th class="num">Valor</th><th></th></tr></thead>
       <tbody>${BODEGAS.map(b=>{ const d=porBod[b.id]||{n:0,u:0,v:0};
-        return `<tr><td><b>${esc(b.nombre)}</b></td><td class="small">${esc(b.area||"—")}</td>
+        const sang=(b.nivel||1)>1?'<span class="muted">'+"&nbsp;&nbsp;".repeat(b.nivel-1)+"› </span>":"";
+        return `<tr><td>${sang}<b>${esc(b.hoja||b.nombre)}</b></td><td class="small">${esc(b.area||"—")}</td>
           <td class="num">${num(d.n)}</td><td class="num">${num(Math.round(d.u))}</td><td class="num">${money(d.v)}</td>
           <td class="num"><button class="btn ghost sm" onclick="FBOD='${b.id}';TAB='stock';render()">Ver</button>
             ${PUEDE?`<button class="btn ghost sm" onclick="poblarBodega('${b.id}')" title="Meter productos a esta bodega">＋ Productos</button>`:""}
@@ -1245,6 +1246,9 @@ function editaBodega(id){
       <div class="full"><label>Nombre</label><input id="bNom" value="${esc(b.nombre||"")}"></div>
       <div><label>Tipo</label><select id="bTipo">${["almacen","cocina","barra","otro"].map(t=>`<option ${b.tipo===t?"selected":""}>${t}</option>`).join("")}</select></div>
       <div><label>Área</label><select id="bArea">${AREAS.map(a=>`<option ${b.area===a?"selected":""}>${a}</option>`).join("")}</select></div>
+      <div class="full"><label>Depende de <span class="muted small">(déjalo vacío si es una bodega principal)</span></label>
+        <select id="bPadre"><option value="">— es una bodega principal —</option>${
+          BODEGAS.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${b.padre_id===x.id?"selected":""}>${esc(x.nombre)}</option>`).join("")}</select></div>
       <div><label><input type="checkbox" id="bServ" ${b.es_servicio?"checked":""}> Bodega de servicio (de aquí descuentan las ventas)</label></div>
       <div><label><input type="checkbox" id="bBlan" ${b.es_blancos?"checked":""}> Bodega de blancos</label></div>
       <div class="full"><label>Responsable</label><input id="bJefe" value="${esc(b.jefe_nombre||"")}"></div>
@@ -1255,6 +1259,7 @@ function editaBodega(id){
 async function guardaBodega(id){
   const nombre=$("bNom").value.trim(); if(!nombre) return toast("El nombre es obligatorio");
   const rec={property_id:SEDE,nombre,tipo:$("bTipo").value,area:$("bArea").value,
+    padre_id:($("bPadre")&&$("bPadre").value)||null,
     es_servicio:$("bServ").checked,es_blancos:$("bBlan").checked,
     jefe_nombre:$("bJefe").value.trim()||null,activo:true};
   const r=id? await sb.from("pos_almacenes").update(rec).eq("id",id)
