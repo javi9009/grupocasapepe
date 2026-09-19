@@ -158,7 +158,7 @@ async function boot(){
   MODO = q.get("modo")||"";            // ?modo=pedir -> vista simple de Soy Pepe
   if(MODO==="pedir") TAB="pedir";
   else if(q.get("tab")) TAB=q.get("tab");
-  if(TAB==="aprobar" && !PUEDE_APROBAR) TAB="sugeridos";
+  if(TAB==="aprobar") TAB="funnel";   // la pestaña ya no existe
   await recargar();
 }
 async function nivel(pagina){
@@ -220,7 +220,7 @@ function pintaTabs(){
     return;
   }
   const t=[["funnel","🔭 Funnel"],["sugeridos","📉 Sugeridos por mínimo"],["pedidos","🧾 Pedidos"]];
-  if(PUEDE_APROBAR) t.push(["aprobar","✔️ Por aprobar"]);
+  // "Por aprobar" se fue: lo que falta por aprobar se ve en el Funnel.
   t.push(["recepcion","📦 Recepción"]);
   t.push(["presupuesto","📊 Presupuesto"]);
   $("tabs").innerHTML=t.map(([k,l])=>
@@ -498,14 +498,18 @@ function verPedido(id){
   if(p.estado==="borrador"&&PUEDE_EDITAR)
     acciones=`<button class="btn ghost" onclick="agregarLinea('${p.id}')">＋ Agregar producto</button>
               <button class="btn ghost danger" onclick="cambiaEstado('${p.id}','cancelado')">Cancelar</button>
-              <button class="btn" onclick="cambiaEstado('${p.id}','solicitado')">Solicitar</button>`;
+              <button class="btn ghost" onclick="cambiaEstado('${p.id}','solicitado')">Mandar a aprobar</button>
+              ${PUEDE_APROBAR?`<button class="btn" onclick="apruebaYa('${p.id}')">Aprobar</button>`:""}`;
   else if(p.estado==="solicitado"&&PUEDE_APROBAR)
     acciones=`<button class="btn ghost" onclick="rechazar('${p.id}')">Rechazar</button>
               <button class="btn" onclick="aprobar('${p.id}')">Aprobar</button>`;
   else if(p.estado==="aprobado")
-    acciones=`<button class="btn" onclick="prepararEnvio('${p.id}')">Preparar envío al proveedor</button>`;
+    acciones=`<button class="btn ghost" onclick="ordenQR('${p.id}')">📄 Orden con QR</button>
+              <button class="btn ghost" onclick="prepararEnvio('${p.id}')">Preparar envío al proveedor</button>
+              <button class="btn" onclick="abrirRecepcion('${p.id}')">Registrar recepción</button>`;
   else if(["enviado","recibido_parcial"].includes(p.estado))
-    acciones=`<button class="btn" onclick="abrirRecepcion('${p.id}')">Registrar recepción</button>`;
+    acciones=`<button class="btn ghost" onclick="ordenQR('${p.id}')">📄 Orden con QR</button>
+              <button class="btn" onclick="abrirRecepcion('${p.id}')">Registrar recepción</button>`;
 
   modal(`
     <h3 style="margin:0 0 4px">${esc(p.folio)} ${chipEst(p.estado)}</h3>
@@ -1015,6 +1019,14 @@ async function cambiaEstado(id,estado,extra){
   await sb.from("cmp_pedido_eventos").insert({pedido_id:id,evento:estado,estado_nuevo:estado,actor_id:USER.id,actor_nombre:EMAIL});
   toast("Pedido "+estado); closeModal(); await recargar();
 }
+/* Aprobar el borrador de un tirón: lo solicita y lo aprueba. Quien puede aprobar
+   no tiene por qué dar la vuelta de mandárselo a sí mismo. */
+async function apruebaYa(id){
+  const {error}=await sb.from("cmp_pedidos").update({estado:"solicitado",
+    solicitado_at:new Date().toISOString()}).eq("id",id).is("solicitado_at",null);
+  if(error) return toast(error.message);
+  return aprobar(id);
+}
 async function aprobar(id){
   const {error}=await sb.from("cmp_pedidos").update({estado:"aprobado",aprobado_at:new Date().toISOString(),
     aprobado_por:USER.id,aprobado_por_nombre:EMAIL}).eq("id",id);
@@ -1044,6 +1056,66 @@ function textoPedido(p){
   l.push(``,`Subtotal: ${money(p.subtotal)}`,`IVA: ${money(p.impuestos)}`,`Total estimado: ${money(p.total)}`,``,
     `Favor de confirmar disponibilidad y fecha de entrega.`,``,`Casa Pepe — ${sede}`);
   return l.filter(x=>x!==undefined).join("\n");
+}
+/* La orden de compra que se imprime o se manda: lleva el QR que abre la recepción
+   en el teléfono de quien recibe. El proveedor la trae con la mercancía. */
+function ordenQR(id){
+  const p=PEDIDOS.find(x=>x.id===id); if(!p) return;
+  if(!p.recepcion_token) return toast("Este pedido todavía no tiene QR: apruébalo primero.");
+  const prov=PROVS.find(x=>x.proveedor_id===p.proveedor_id)||{};
+  const sede=(PROPS.find(x=>x.id===p.property_id)||{}).nombre||"";
+  const bod=BODEGAS.find(b=>b.id===p.bodega_destino_id);
+  const url=location.origin+"/soypepe/recibir.html?t="+encodeURIComponent(p.recepcion_token);
+  const filas=(p.items||[]).map(i=>`<tr>
+      <td>${esc(i.prod?i.prod.nombre:(i.descripcion||""))}</td>
+      <td class="num">${num(i.cantidad_solicitada)} ${esc(i.prod?i.prod.unidad_base:"")}</td>
+      <td class="num">${money(i.precio_unitario)}</td>
+      <td class="num">${money((+i.cantidad_solicitada||0)*(+i.precio_unitario||0))}</td></tr>`).join("");
+  const w=window.open("","_blank");
+  if(!w) return toast("Permite las ventanas emergentes para ver la orden.");
+  w.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Orden ${esc(p.folio)}</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
+    <style>
+      body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#16130f;max-width:720px;margin:24px auto;padding:0 20px}
+      h1{font-size:21px;margin:0 0 2px} .sub{color:#6b6a66;font-size:13px;margin-bottom:18px}
+      .caja{display:flex;gap:20px;align-items:flex-start;border:1px solid #e3e0d8;border-radius:12px;padding:14px;margin-bottom:18px}
+      .caja .d{flex:1;font-size:13.5px;line-height:1.8}
+      .caja b{color:#6b6a66;font-weight:600}
+      table{width:100%;border-collapse:collapse;font-size:13.5px}
+      th,td{padding:8px 6px;border-bottom:1px solid #eeece5;text-align:left}
+      th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b6a66}
+      .num{text-align:right}
+      tfoot td{font-weight:700;border-top:2px solid #16130f;border-bottom:none}
+      .qr{text-align:center} .qr .t{font-size:11px;color:#6b6a66;margin-top:6px;max-width:150px}
+      .pie{margin-top:22px;font-size:12px;color:#6b6a66;line-height:1.6}
+      .firma{margin-top:34px;display:flex;gap:40px}
+      .firma div{flex:1;border-top:1px solid #16130f;padding-top:6px;font-size:11.5px;color:#6b6a66}
+      @media print{body{margin:0} .noprint{display:none}}
+    </style></head><body>
+    <h1>Orden de compra ${esc(p.folio)}</h1>
+    <div class="sub">${esc(sede)} · ${esc(p.area||"")} · ${new Date(p.solicitado_at||p.created_at).toLocaleDateString("es-MX")}</div>
+    <div class="caja">
+      <div class="d">
+        <div><b>Proveedor:</b> ${esc(prov.proveedor||"—")}</div>
+        <div><b>Entregar en:</b> ${esc(bod?bod.nombre:"—")}</div>
+        <div><b>Pidió:</b> ${esc(p.solicitado_por_nombre||"")}</div>
+        ${p.fecha_requerida?`<div><b>Para el:</b> ${esc(p.fecha_requerida)}</div>`:""}
+      </div>
+      <div class="qr"><div id="qr"></div>
+        <div class="t">Escanea para registrar la entrega</div></div>
+    </div>
+    <table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr><td colspan="3" class="num">Total estimado</td><td class="num">${money(p.total)}</td></tr></tfoot></table>
+    <div class="pie">Al entregar, quien recibe escanea el QR desde Soy Pepe, corrige lo que haya llegado
+      distinto y firma. Mientras no se firme, la mercancía no entra al inventario.</div>
+    <div class="firma"><div>Entrega (nombre y firma)</div><div>Recibe (nombre y firma)</div></div>
+    <p class="noprint" style="margin-top:24px">
+      <button onclick="print()" style="padding:9px 16px;font:inherit;cursor:pointer">Imprimir</button></p>
+    <script>new QRCode(document.getElementById("qr"),{text:${JSON.stringify(url)},width:130,height:130,correctLevel:QRCode.CorrectLevel.M});<\/script>
+    </body></html>`);
+  w.document.close();
 }
 function prepararEnvio(id){
   const p=PEDIDOS.find(x=>x.id===id); if(!p) return;
@@ -1113,7 +1185,8 @@ async function pintaPresupuestoCelda(p){
 
 /* ── Recepción ── */
 function vRecepcion(){
-  const l=PEDIDOS.filter(p=>["enviado","recibido_parcial"].includes(p.estado));
+  // Aprobado ya cuenta como "por recibir": no todo pedido pasa por mandarlo al proveedor.
+  const l=PEDIDOS.filter(p=>["aprobado","enviado","recibido_parcial"].includes(p.estado));
   const recientes=PEDIDOS.filter(p=>p.estado==="recibido").slice(0,10);
   $("view").innerHTML=`
     <div class="card"><h3>Por recibir</h3><div class="scroll"><table>
