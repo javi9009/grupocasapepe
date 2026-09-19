@@ -56,6 +56,8 @@ tr.grp td{background:var(--surface-2);font-weight:700;font-size:12.5px;letter-sp
 label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px;font-weight:600}
 input,select,textarea{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--rule-2);border-radius:8px;background:var(--surface);color:var(--ink)}
 input.mini{padding:4px 7px;font-size:13px;width:86px;text-align:right}
+canvas.pad{width:100%;height:132px;background:#fff;border:1px dashed var(--rule);border-radius:10px;touch-action:none;display:block;margin-top:6px}
+.fotobox{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
 .modal-bg{position:fixed;inset:0;background:rgba(31,27,22,.45);display:none;align-items:center;justify-content:center;z-index:50;padding:14px}
 .modal-bg.on{display:flex}
 .modal{background:var(--surface);border-radius:14px;max-width:820px;width:100%;max-height:92vh;overflow:auto;padding:18px}
@@ -133,6 +135,7 @@ let PUEDE_APROBAR=false, PUEDE_EDITAR=false;
 let SUG=[], PEDIDOS=[], PROVS=[], BODEGAS=[], CUENTAS=[], PRODS=[], SOLMTTO=[];
 let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={}, ERRCARGA=[];
 let PASILLOS={};   // id -> {nombre, ruta, nivel, raiz} del arbol de pasillos
+let ULTPROV={};    // producto_id -> con quién se recibió la última vez en esta sede
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
 
 /* ───────────────── arranque ───────────────── */
@@ -232,7 +235,7 @@ function irTab(k){ TAB=k; pintaTabs(); render(); }
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
   const sede=PROPS.find(p=>p.id===SEDE);
-  const [sug,ped,prov,bod,cue,pro,sm,cp,pas] = await Promise.all([
+  const [sug,ped,prov,bod,cue,pro,sm,cp,pas,ult] = await Promise.all([
     sb.from("cmp_v_pedido_sugerido").select("*").eq("property_id",SEDE).gt("faltante",0).order("faltante",{ascending:false}),
     sb.from("cmp_pedidos").select("*, items:cmp_pedido_items(*, prod:producto_id(nombre,unidad_base), pres:presentacion_id(tipo,contenido,unidad_contenido))")
       .eq("property_id",SEDE).order("created_at",{ascending:false}).limit(200),
@@ -243,11 +246,14 @@ async function recargar(){
     sb.from("cmp_v_solicitudes_mtto").select("*").eq("property_id",SEDE).order("created_at",{ascending:false}),
     sb.from("cmp_v_catalogo_proveedor").select("*").eq("property_id",SEDE),
     // El arbol de pasillos y subpasillos (anaqueles) es del Grupo, no de la sede.
-    sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz").order("orden_ruta")
+    sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz").order("orden_ruta"),
+    // Con quién se compró de verdad la última vez: manda sobre el más barato.
+    sb.from("cmp_v_ultimo_proveedor").select("*").eq("property_id",SEDE)
   ]);
   SUG=sug.data||[]; PEDIDOS=ped.data||[]; PROVS=prov.data||[]; BODEGAS=bod.data||[]; CUENTAS=cue.data||[]; PRODS=pro.data||[]; SOLMTTO=sm.data||[]; CATPROV=cp.data||[];
   // Un error de carga no debe disfrazarse de "no hay catálogo": se guarda para decirlo en pantalla.
   PASILLOS={}; (pas&&pas.data||[]).forEach(x=>PASILLOS[x.id]=x);
+  ULTPROV={}; (ult&&ult.data||[]).forEach(x=>ULTPROV[x.producto_id]=x);
   ERRCARGA=[["productos",pro],["precios",cp],["proveedores",prov],["bodegas",bod],["cuentas",cue]]
     .filter(([,r])=>r&&r.error).map(([q,r])=>q+": "+(r.error.message||r.error.code||"error"));
   window.__sede=sede;
@@ -493,13 +499,14 @@ function verPedido(id){
   const avisoProv = p.info_pendiente ? `<div class="avisos">Información pendiente: falta ${esc((p.info_faltante||[]).join(", "))}. No puede solicitarse hasta completarlo.</div>`
     : !p.proveedor_id ? `<div class="avisos">Este pedido no tiene proveedor. No puede solicitarse hasta asignarlo.</div>`
     : (prov && prov.activo===false ? `<div class="avisos">Este proveedor no ha tenido movimiento en los últimos 3 meses.</div>` : "");
+  const avisoFijo = avisoOtroProveedor(p);
 
   let acciones="";
   if(p.estado==="borrador"&&PUEDE_EDITAR)
     acciones=`<button class="btn ghost" onclick="agregarLinea('${p.id}')">＋ Agregar producto</button>
               <button class="btn ghost danger" onclick="cambiaEstado('${p.id}','cancelado')">Cancelar</button>
-              <button class="btn ghost" onclick="cambiaEstado('${p.id}','solicitado')">Mandar a aprobar</button>
-              ${PUEDE_APROBAR?`<button class="btn" onclick="apruebaYa('${p.id}')">Aprobar</button>`:""}`;
+              <button class="btn ${PUEDE_APROBAR?"ghost":""}" onclick="cambiaEstado('${p.id}','solicitado')">Solicitar</button>
+              ${PUEDE_APROBAR?`<button class="btn" onclick="apruebaYa('${p.id}')">Solicitar y aprobar</button>`:""}`;
   else if(p.estado==="solicitado"&&PUEDE_APROBAR)
     acciones=`<button class="btn ghost" onclick="rechazar('${p.id}')">Rechazar</button>
               <button class="btn" onclick="aprobar('${p.id}')">Aprobar</button>`;
@@ -515,6 +522,7 @@ function verPedido(id){
     <h3 style="margin:0 0 4px">${esc(p.folio)} ${chipEst(p.estado)}</h3>
     <div class="small muted" style="margin-bottom:10px">${esc(p.area||"")} · ${esc(prov?prov.proveedor:"sin proveedor")} · destino ${esc(bod?bod.nombre:"—")} · cuenta ${esc(cta?cta.codigo+" "+cta.cuenta:"—")}</div>
     ${avisoProv}
+    ${avisoFijo}
     ${editable?`<div class="grid2">
       <div><label>Área</label><select id="edArea" onchange="edCascada()">${optArea(p.area)}</select></div>
       <div><label>Proveedor</label><select id="edProv">${optProv(p.proveedor_id,p.area)}</select></div>
@@ -536,13 +544,28 @@ function verPedido(id){
     ${bitacora(p)}
     <div class="foot"><button class="btn ghost" onclick="closeModal()">Cerrar</button>${acciones}</div>`);
 }
+/* Si el pedido va a un proveedor distinto del que de verdad ha traído ese
+   producto, se dice en voz alta: es el error que se cuela sin avisar. */
+function avisoOtroProveedor(p){
+  if(!p.proveedor_id) return "";
+  const l=(p.items||[]).map(i=>{
+    const u=ULTPROV[i.producto_id];
+    if(!u || u.proveedor_id===p.proveedor_id) return null;
+    const n=(PROVS.find(x=>x.proveedor_id===u.proveedor_id)||{}).proveedor;
+    return `${esc(i.prod?i.prod.nombre:(i.descripcion||""))} lo trajo <b>${esc(n||"otro proveedor")}</b>`;
+  }).filter(Boolean);
+  if(!l.length) return "";
+  return `<div class="avisos">La última entrega de ${l.length===1?"este producto":"estos productos"} fue con otro proveedor:
+    ${l.join(" · ")}. Si es a propósito, sigue; si no, cambia el proveedor del pedido.</div>`;
+}
 function bitacora(p){
   const l=[];
   if(p.solicitado_at) l.push(`Solicitado por ${esc(p.solicitado_por_nombre||"")} el ${new Date(p.solicitado_at).toLocaleString("es-MX")}`);
   if(p.aprobado_at)   l.push(`Aprobado por ${esc(p.aprobado_por_nombre||"")} el ${new Date(p.aprobado_at).toLocaleString("es-MX")}`);
   if(p.rechazo_motivo)l.push(`Rechazado: ${esc(p.rechazo_motivo)}`);
   if(p.enviado_at)    l.push(`Enviado a ${esc(p.enviado_a_mail||"")} el ${new Date(p.enviado_at).toLocaleString("es-MX")}`);
-  if(p.recibido_at)   l.push(`Recibido y firmado por ${esc(p.recibido_por_nombre||"")} el ${new Date(p.recibido_at).toLocaleString("es-MX")}`);
+  if(p.recibido_at)   l.push(`Recibido y firmado por ${esc(p.recibido_por_nombre||"")} el ${new Date(p.recibido_at).toLocaleString("es-MX")}`+
+                              (p.entrego_nombre?` · lo entregó ${esc(p.entrego_nombre)}`:""));
   if(p.total_recibo!=null) l.push(`Ticket: ${money(p.total_recibo)} · diferencia ${money((+p.total_recibo)-(+p.total))}`);
   return l.length?`<div class="card"><h3>Bitácora</h3><div style="padding:10px 14px" class="small muted">${l.join("<br>")}</div></div>`:"";
 }
@@ -672,12 +695,25 @@ function pasilloDe(p){
   const x=p&&p.pasillo_id&&PASILLOS[p.pasillo_id];
   return x ? x.ruta : (p&&(p.categoria||p.area)||"Sin pasillo");
 }
+/* El orden de las opciones dice qué se pide por defecto. Manda con quién se
+   recibió de verdad la última vez: si el abrelatas lo trajo El Titán, el
+   siguiente abrelatas se pide a El Titán aunque otro lo tenga más barato.
+   El más barato sigue estando en la lista, marcado, para cambiarlo a mano. */
 function cpOpciones(prodId){
   const p=PRODS.find(x=>x.id===prodId)||{};
-  return CATPROV.filter(c=>c.producto_id===prodId&&c.precio!=null)
+  const u=ULTPROV[prodId];
+  const ops=CATPROV.filter(c=>c.producto_id===prodId&&c.precio!=null)
     .map(c=>{const base=cvtBase(c.contenido,c.unidad_contenido,p.unidad_base);
              return Object.assign({},c,{porUnidad: base>0? c.precio/base : null});})
     .sort((a,b)=>(a.porUnidad==null?1:b.porUnidad==null?-1:a.porUnidad-b.porUnidad));
+  if(ops.length) ops[0].barato=true;
+  if(!u) return ops;
+  // Primero la presentación exacta que se recibió; si ya no existe, cualquiera del mismo proveedor.
+  let i=ops.findIndex(o=>o.presentacion_id===u.presentacion_id);
+  if(i<0) i=ops.findIndex(o=>o.proveedor_id===u.proveedor_id);
+  if(i<0) return ops;
+  ops[i].fijo=true; ops[i].veces=u.veces;
+  return [ops[i]].concat(ops.filter((_,j)=>j!==i));
 }
 function cvtBase(cant,de,a){
   if(de===a) return cant;
@@ -759,8 +795,9 @@ function tarjeta(x){
     <div class="pnom">${esc(p.nombre)}</div>
     <div class="small muted">${esc(p.unidad_texto||p.unidad_base)}${bajo?` · <b style="color:var(--warn)">bajo mínimo</b>`:""}</div>
     ${b? `<div class="pprec">${money(b.precio)} <span class="small muted">${esc(b.presentacion)} ${num(b.contenido)}${esc(b.unidad_contenido)}</span></div>
-          ${ops.length>1?`<select id="op-${k}" class="small">${ops.map((o,i)=>
-              `<option value="${o.presentacion_id}">${esc(o.proveedor)} · ${money(o.precio)}${i===0?" · más barato":""}</option>`).join("")}</select>`
+          ${b.fijo?`<div class="small" style="color:var(--ok)">✓ el de siempre${b.veces>1?` · ${b.veces} entregas`:""}</div>`:""}
+          ${ops.length>1?`<select id="op-${k}" class="small">${ops.map(o=>
+              `<option value="${o.presentacion_id}">${esc(o.proveedor)} · ${money(o.precio)}${o.fijo?" · el de siempre":o.barato?" · más barato":""}</option>`).join("")}</select>`
             :`<input type="hidden" id="op-${k}" value="${b.presentacion_id}"><div class="small muted">${pie}</div>`}`
        : `<div class="pprec small" style="color:var(--warn)">Sin precio cargado</div>
           <input type="hidden" id="op-${k}" value="">
@@ -1235,18 +1272,37 @@ function abrirRecepcion(id){
     <div class="grid2">
       <div><label>Total del ticket (lo que dice el papel)</label><input id="recTotal" type="number" step="0.01" oninput="calcRec()"></div>
       <div><label>Diferencia contra las líneas</label><input id="recDif" readonly></div>
-      <div><label>Foto del ticket</label><input id="recFoto" type="file" accept="image/*,application/pdf"></div>
-      <div><label>Firma de quien recibe</label><input id="recFirma" value="${esc(EMAIL)}"></div>
+      <div class="full"><label>Foto del ticket</label>
+        <input id="recFoto" type="file" accept="image/*" capture="environment" style="display:none" onchange="recFotoElegida(this)">
+        <input id="recFotoArch" type="file" accept="image/*,application/pdf" style="display:none" onchange="recFotoElegida(this)">
+        <div class="fotobox">
+          <button type="button" class="btn ghost" onclick="$('recFoto').click()">📷 Tomar foto</button>
+          <button type="button" class="btn ghost sm" onclick="$('recFotoArch').click()">o buscar en el teléfono</button>
+          <span class="small muted" id="recFotoNom">sin foto todavía</span>
+        </div>
+        <div id="recFotoPrev"></div></div>
       <div class="full"><label>Cuenta contable de la factura <span class="muted small">(cámbiala si el gasto va a otra)</span></label>
         <select id="recCta">${optCtaPedido(p)}</select></div>
       <div class="full"><label>Notas de la recepción</label><input id="recNotas"></div>
     </div>
     <div class="foot">
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn ghost" onclick="guardaRecepcion('${id}','recibido_parcial')">Guardar como parcial</button>
-      <button class="btn" onclick="guardaRecepcion('${id}','recibido')">Firmar recepción completa</button>
+      <button class="btn ghost" onclick="pideFirmas('${id}','recibido_parcial')">Llegó incompleto</button>
+      <button class="btn" onclick="pideFirmas('${id}','recibido')">Firmar y recibir</button>
     </div>`);
-  calcRec();
+  RECFOTO=null; calcRec();
+}
+/* La foto del ticket: en el teléfono abre la cámara; el botón de al lado sirve
+   para el que ya la tiene guardada o trae la factura en PDF. */
+let RECFOTO=null;
+function recFotoElegida(inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  RECFOTO=f;
+  const nom=$("recFotoNom"); if(nom) nom.textContent=f.name;
+  const prev=$("recFotoPrev");
+  if(prev) prev.innerHTML = /^image\//.test(f.type)
+    ? `<img src="${URL.createObjectURL(f)}" alt="ticket" style="max-height:160px;margin-top:8px;border-radius:8px;border:1px solid var(--rule)">`
+    : `<div class="small muted" style="margin-top:6px">Archivo adjunto (no es imagen).</div>`;
 }
 /* Al recibir la factura, el contador elige la cuenta. Arriba salen las del propio pedido
    (la del producto y sus cuentas alternativas); abajo, el resto por si hace falta otra. */
@@ -1280,47 +1336,194 @@ function calcRec(){
   const d=$("recDif");
   if(d){ if(isNaN(t)){ d.value=""; } else { const dif=t-suma; d.value=money(dif)+(Math.abs(dif)>0.5?"  ← revisar":""); } }
 }
-async function guardaRecepcion(id,estadoFinal){
-  const p=PEDIDOS.find(x=>x.id===id);
-  const firma=$("recFirma").value.trim();
-  if(!firma) return toast("Falta la firma de quien recibe");
+/* ── Firmas de la entrega ──
+   Recibir mercancía es un acto entre dos personas: el que la trae y el que la
+   mete a la bodega. Por eso la pantalla de firmas viene después de cuadrar
+   cantidades: primero se revisa el papel, luego se firma lo revisado. */
+let RECAP=null;
+function pideFirmas(id,estadoFinal){
+  const p=PEDIDOS.find(x=>x.id===id); if(!p) return;
   const prov=PROVS.find(x=>x.proveedor_id===p.proveedor_id);
   if(prov && !prov.rfc) return toast("No se puede recibir: al proveedor le falta el RFC");
 
-  // 1) líneas
-  for(const tr of document.querySelectorAll("#recBody tr")){
-    const itemId=tr.dataset.item;
-    const patch={
-      cantidad_recibida:parseFloat(tr.querySelector(".rc").value)||0,
-      precio_recibido:parseFloat(tr.querySelector(".rp").value)||null,
-      nota_recepcion:tr.querySelector(".nota").value||null
-    };
-    const {error}=await sb.from("cmp_pedido_items").update(patch).eq("id",itemId);
-    if(error){ return toast("Error en una línea: "+error.message); }
-  }
-
-  // 2) foto del ticket
-  let fotoUrl=null;
-  const f=$("recFoto").files[0];
-  if(f){
-    const path=`pedidos/${p.folio}-${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]/g,"_")}`;
-    const up=await sb.storage.from("comprobantes").upload(path,f,{upsert:false});
-    if(up.error) toast("No se pudo subir la foto: "+up.error.message); else fotoUrl=path;
-  }
-
-  // 3) encabezado
-  const patch={estado:estadoFinal, recibido_at:new Date().toISOString(), recibido_por:USER.id,
-    recibido_por_nombre:firma, firma_url:firma,
-    total_recibo:parseFloat($("recTotal").value)||null,
-    conciliado_nota:$("recNotas").value||null,
+  // Se guarda lo capturado ANTES de cambiar la pantalla: el modal se reescribe.
+  const lineas=[...document.querySelectorAll("#recBody tr")].map(tr=>({
+    id:tr.dataset.item,
+    cantidad_recibida:parseFloat(tr.querySelector(".rc").value)||0,
+    precio_recibido:parseFloat(tr.querySelector(".rp").value)||null,
+    nota_recepcion:tr.querySelector(".nota").value||null,
+    nombre:(tr.querySelector("td")||{}).textContent||""
+  }));
+  const suma=lineas.reduce((a,l)=>a+(l.cantidad_recibida||0)*(+l.precio_recibido||0),0);
+  RECAP={id, estadoFinal, lineas, suma, foto:RECFOTO,
+    total:parseFloat($("recTotal").value),
+    notas:$("recNotas")?$("recNotas").value:"",
     cuenta_id:($("recCta")&&$("recCta").value)||p.cuenta_id||null};
-  if(fotoUrl) patch.foto_recibo_url=fotoUrl;
-  const t=parseFloat($("recTotal").value);
-  if(!isNaN(t)){ patch.conciliado = Math.abs(t-(+p.total))<=0.5; if(patch.conciliado) patch.conciliado_at=new Date().toISOString(); }
 
-  const {error}=await sb.from("cmp_pedidos").update(patch).eq("id",id);
-  if(error) return toast(error.message);
-  toast("Recepción firmada. La mercancía entró a stock."); closeModal(); await recargar();
+  modal(`<h3 style="margin:0 0 4px">Firmas de la entrega · ${esc(p.folio)}</h3>
+    <div class="small muted" style="margin-bottom:10px">
+      ${esc(prov?prov.proveedor:"sin proveedor")} · ${RECAP.lineas.length} línea(s) · ${money(isNaN(RECAP.total)?RECAP.suma:RECAP.total)}
+      ${estadoFinal==="recibido_parcial"?" · <b>entrega incompleta</b>":""}</div>
+    <div class="avisos">Las dos firmas quedan en el recibo. El repartidor firma que entregó,
+      el colaborador firma que lo revisó y lo metió a bodega.</div>
+    <div class="grid2">
+      <div>
+        <label>Firma de repartidor</label>
+        <input id="recEntrego" placeholder="Nombre de quien trae la mercancía" autocomplete="off">
+        <canvas class="pad" id="padEntrega"></canvas>
+        <div class="small muted">Firma con el dedo · <a href="javascript:void(0)" onclick="limpiaPad('padEntrega')">Borrar</a></div>
+      </div>
+      <div>
+        <label>Firma del colaborador que recibe</label>
+        <input id="recFirma" value="${esc(EMAIL)}" autocomplete="off">
+        <canvas class="pad" id="padRecibe"></canvas>
+        <div class="small muted">Firma con el dedo · <a href="javascript:void(0)" onclick="limpiaPad('padRecibe')">Borrar</a></div>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn ghost" onclick="abrirRecepcion('${id}')">← Volver a las cantidades</button>
+      <button class="btn" id="btnFirmar" onclick="guardaRecepcion()">Firmar y recibir</button>
+    </div>`);
+  // Tras pintar: el canvas necesita su ancho real para no salir borroso ni vacío.
+  requestAnimationFrame(()=>{ montaPad("padEntrega"); montaPad("padRecibe"); });
+}
+const TINTA={};
+function montaPad(pid){
+  const c=$(pid); if(!c) return;
+  const r=c.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+  c.width=Math.max(1,r.width*dpr); c.height=Math.max(1,r.height*dpr);
+  const x=c.getContext("2d"); x.scale(dpr,dpr);
+  x.lineWidth=2.2; x.lineCap="round"; x.lineJoin="round"; x.strokeStyle="#16130f";
+  TINTA[pid]=false;
+  let trazando=false;
+  const pos=e=>{ const b=c.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return [t.clientX-b.left,t.clientY-b.top]; };
+  const ini=e=>{ e.preventDefault(); trazando=true; TINTA[pid]=true; const [a,b]=pos(e); x.beginPath(); x.moveTo(a,b); };
+  const mov=e=>{ if(!trazando) return; e.preventDefault(); const [a,b]=pos(e); x.lineTo(a,b); x.stroke(); };
+  const fin=()=>{ trazando=false; };
+  c.addEventListener("pointerdown",ini); c.addEventListener("pointermove",mov);
+  c.addEventListener("pointerup",fin);   c.addEventListener("pointerleave",fin);
+  c.addEventListener("touchstart",ini,{passive:false}); c.addEventListener("touchmove",mov,{passive:false});
+  c.addEventListener("touchend",fin);
+}
+function limpiaPad(pid){
+  const c=$(pid); if(!c) return;
+  c.getContext("2d").clearRect(0,0,c.width,c.height); TINTA[pid]=false;
+}
+const pngDe=pid=>new Promise(r=>{ const c=$(pid); if(!c) return r(null); c.toBlob(r,"image/png"); });
+
+async function subeComprobante(blob,nombre,folio){
+  const path=`pedidos/${folio}-${Date.now()}-${nombre.replace(/[^A-Za-z0-9._-]/g,"_")}`;
+  const up=await sb.storage.from("comprobantes").upload(path,blob,{upsert:false});
+  if(up.error){ toast("No se pudo subir "+nombre+": "+up.error.message); return null; }
+  return path;
+}
+
+async function guardaRecepcion(){
+  if(!RECAP) return;
+  const p=PEDIDOS.find(x=>x.id===RECAP.id); if(!p) return;
+  const entrego=($("recEntrego").value||"").trim();
+  const firma=($("recFirma").value||"").trim();
+  if(!entrego) return toast("Falta el nombre del repartidor");
+  if(!TINTA.padEntrega) return toast("Falta la firma del repartidor");
+  if(!firma) return toast("Falta el nombre del colaborador que recibe");
+  if(!TINTA.padRecibe) return toast("Falta la firma del colaborador");
+
+  const btn=$("btnFirmar"); if(btn){ btn.disabled=true; btn.textContent="Guardando…"; }
+  try{
+    // 1) líneas
+    for(const l of RECAP.lineas){
+      const {error}=await sb.from("cmp_pedido_items").update({
+        cantidad_recibida:l.cantidad_recibida,
+        precio_recibido:l.precio_recibido,
+        nota_recepcion:l.nota_recepcion}).eq("id",l.id);
+      if(error) throw new Error("Error en una línea: "+error.message);
+    }
+
+    // 2) foto del ticket y las dos firmas
+    const [bEnt,bRec]=await Promise.all([pngDe("padEntrega"),pngDe("padRecibe")]);
+    const fotoUrl   = RECAP.foto ? await subeComprobante(RECAP.foto,RECAP.foto.name,p.folio) : null;
+    const firmaEnt  = bEnt ? await subeComprobante(bEnt,"firma-entrega.png",p.folio) : null;
+    const firmaRec  = bRec ? await subeComprobante(bRec,"firma-recibe.png",p.folio)  : null;
+
+    // 3) encabezado
+    const patch={estado:RECAP.estadoFinal, recibido_at:new Date().toISOString(), recibido_por:USER.id,
+      recibido_por_nombre:firma, entrego_nombre:entrego,
+      total_recibo:isNaN(RECAP.total)?null:RECAP.total,
+      conciliado_nota:RECAP.notas||null,
+      cuenta_id:RECAP.cuenta_id||null};
+    if(fotoUrl)  patch.foto_recibo_url=fotoUrl;
+    if(firmaEnt) patch.firma_entrega_url=firmaEnt;
+    if(firmaRec) patch.firma_url=firmaRec;
+    if(!isNaN(RECAP.total)){
+      patch.conciliado = Math.abs(RECAP.total-(+p.total))<=0.5;
+      if(patch.conciliado) patch.conciliado_at=new Date().toISOString();
+    }
+    const {error}=await sb.from("cmp_pedidos").update(patch).eq("id",RECAP.id);
+    if(error) throw new Error(error.message);
+
+    await sb.from("cmp_pedido_eventos").insert({pedido_id:RECAP.id,evento:"recepcion",
+      estado_nuevo:RECAP.estadoFinal,actor_id:USER.id,actor_nombre:firma,
+      detalle:"Entregó "+entrego});
+
+    // El recibo se arma con las firmas que acaban de dibujarse, sin ir a buscarlas.
+    const recibo={folio:p.folio, entrego, firma, estadoFinal:RECAP.estadoFinal,
+      lineas:RECAP.lineas, suma:RECAP.suma, total:RECAP.total, notas:RECAP.notas,
+      proveedor:(PROVS.find(x=>x.proveedor_id===p.proveedor_id)||{}).proveedor||"",
+      bodega:(BODEGAS.find(b=>b.id===p.bodega_destino_id)||{}).nombre||"",
+      sede:(PROPS.find(x=>x.id===p.property_id)||{}).nombre||"",
+      pngEntrega:$("padEntrega")?$("padEntrega").toDataURL("image/png"):null,
+      pngRecibe:$("padRecibe")?$("padRecibe").toDataURL("image/png"):null};
+    RECAP=null; RECFOTO=null;
+    closeModal(); await recargar();
+    reciboPDF(recibo);
+    toast("Recepción firmada. La mercancía entró a stock.");
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent="Firmar y recibir"; }
+    toast(e.message||"No se pudo guardar");
+  }
+}
+/* El recibo que se imprime o se guarda en PDF: mismas dos firmas, en papel. */
+function reciboPDF(r){
+  const filas=r.lineas.map(l=>`<tr>
+      <td>${esc((l.nombre||"").split("\n")[0])}</td>
+      <td class="num">${num(l.cantidad_recibida)}</td>
+      <td class="num">${money(l.precio_recibido)}</td>
+      <td class="num">${money((+l.cantidad_recibida||0)*(+l.precio_recibido||0))}</td></tr>`).join("");
+  const w=window.open("","_blank");
+  if(!w) return toast("El navegador bloqueó la ventana del recibo. Permítelo para guardarlo en PDF.");
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <title>Recibo ${esc(r.folio)}</title>
+    <style>
+      body{font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1f1b16;margin:28px;max-width:720px}
+      h1{font-size:19px;margin:0 0 2px} .m{color:#6b625a;font-size:12px}
+      table{width:100%;border-collapse:collapse;margin-top:16px}
+      th,td{border-bottom:1px solid #e6ded2;padding:7px 6px;text-align:left}
+      th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b625a}
+      .num{text-align:right}
+      .tot{margin-top:12px;text-align:right;font-size:15px;font-weight:600}
+      .firmas{display:flex;gap:28px;margin-top:40px}
+      .fbox{flex:1;text-align:center}
+      .fbox img{height:74px;display:block;margin:0 auto 2px}
+      .fline{border-top:1px solid #1f1b16;padding-top:5px;font-size:12px}
+      .nota{margin-top:18px;font-size:12px;color:#6b625a}
+      @media print{body{margin:14mm}}
+    </style></head><body>
+    <h1>Recibo de entrega · ${esc(r.folio)}</h1>
+    <div class="m">${esc(r.sede)} · ${esc(r.proveedor||"sin proveedor")} · entró en ${esc(r.bodega||"—")}<br>
+      ${new Date().toLocaleString("es-MX")}${r.estadoFinal==="recibido_parcial"?" · <b>entrega incompleta</b>":""}</div>
+    <table><thead><tr><th>Producto</th><th class="num">Recibido</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead>
+      <tbody>${filas}</tbody></table>
+    <div class="tot">Suma de líneas: ${money(r.suma)}${!isNaN(r.total)&&r.total!=null?` · Ticket: ${money(r.total)}`:""}</div>
+    ${r.notas?`<div class="nota">Notas: ${esc(r.notas)}</div>`:""}
+    <div class="firmas">
+      <div class="fbox">${r.pngEntrega?`<img src="${r.pngEntrega}" alt="firma">`:"<div style='height:74px'></div>"}
+        <div class="fline">${esc(r.entrego)}<br><span class="m">Entregó (repartidor)</span></div></div>
+      <div class="fbox">${r.pngRecibe?`<img src="${r.pngRecibe}" alt="firma">`:"<div style='height:74px'></div>"}
+        <div class="fline">${esc(r.firma)}<br><span class="m">Recibió (Casa Pepe)</span></div></div>
+    </div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},350);}<\/script>
+    </body></html>`);
+  w.document.close();
 }
 
 /* ── Presupuesto ── */
