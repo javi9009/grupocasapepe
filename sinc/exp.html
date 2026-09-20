@@ -821,18 +821,21 @@ function ligaComoLlegar(){
 function pintaImpacto(){
   if(!DES.length)return;
   var por={}; DES.forEach(function(d){por[d.clave]=d;});
-  var pvp=Number((por.pvp||{}).mxn||0), neto=Number((por.neto||{}).mxn||0);
+  var pvp=Number((por.bruto||{}).mxn||0), neto=Number((por.neto||{}).mxn||0);
   if(!neto)return;
 
-  var reparto=DES.filter(function(d){
-    return ['pvp','iva','neto'].indexOf(d.clave)<0 && Number(d.mxn)>0;});
-  if(!reparto.length)return;
+  /* El desglose viene por conceptos (nivel 1) y dentro de cada uno, quién lo
+     pone (nivel 2) y a qué objetivo de la ONU va (nivel 3). Aquí arriba solo
+     se pintan los conceptos: sumar los otros niveles sería contar dos veces. */
+  var conceptos=DES.filter(function(d){return d.nivel===1 && Number(d.mxn)>0;});
+  if(!conceptos.length)return;
 
-  var impacta=reparto.filter(function(d){return d.es_impacto;});
-  var gastos =reparto.filter(function(d){return !d.es_impacto;});
-  var suma=impacta.reduce(function(a,d){return a+Number(d.mxn);},0);
+  var gastos=conceptos.filter(function(d){return !d.es_impacto;});
+  var suma=Number((por.comunidad||{}).mxn||0);
   if(!suma)return;
   var pct=Math.round(suma*1000/neto)/10;
+  var hijos=function(p){return DES.filter(function(d){return d.padre===p && Number(d.mxn)>0;});};
+  var metasCom=hijos('comunidad').filter(function(d){return d.nivel===3;});
 
   /* Cada prestador se abre por su cuenta: quién es, qué rubro cubre y a qué
      objetivo de la ONU empuja lo que se le paga. */
@@ -871,27 +874,6 @@ function pintaImpacto(){
       (m.texto&&!repe?'<p class="mp">'+esc(m.texto)+'</p>':'')+
       (extra?'<p class="mp" style="color:var(--tinta-2)">'+esc(extra)+'</p>':'');
   }
-  /* Lo que reparte la operadora: por meta, con su total, y dentro cada
-     prestador, que a su vez se abre para ver quién es y a qué empuja. */
-  function bloqueOperadora(d){
-    var metas=[];
-    IMP.forEach(function(i){
-      if(!i.meta||!(Number(i.mxn)>0))return;
-      var m=metas.filter(function(x){return x.meta===i.meta;})[0];
-      if(!m){m={meta:i.meta,mxn:0,lineas:[]};metas.push(m);}
-      m.mxn+=Number(i.mxn); m.lineas.push(i);
-    });
-    if(!metas.length)
-      return '<div class="meta"><div class="mt">'+esc(d.concepto)+' · '+money(d.mxn)+'</div></div>';
-    metas.sort(function(a,b){return b.mxn-a.mxn;});
-    metas.forEach(function(m){m.lineas.sort(function(a,b){return Number(b.mxn)-Number(a.mxn);});});
-    return metas.map(function(m){
-      return '<div class="meta">'+cabMeta(m.meta)+
-        '<div class="tot">'+m.lineas.length+' '+
-          (m.lineas.length===1?'prestador':'prestadores')+' · <b>'+money(m.mxn)+'</b></div>'+
-        m.lineas.map(ficha).join('')+'</div>';
-    }).join('');
-  }
   /* las otras dos partidas: su meta y nada más, que las personas de la
      operadora ya están contadas arriba y repetirlas sería contarlas dos veces */
   function bloqueSuelto(d){
@@ -909,9 +891,28 @@ function pintaImpacto(){
       '<span class="v">'+money(d.mxn)+'</span></div>';
   }
 
-  var detalle=impacta.map(function(d){
-    return d.clave==='impacto'?bloqueOperadora(d):bloqueSuelto(d);
-  }).join('');
+  /* Dentro de comunidad: primero el objetivo de la ONU, y dentro de él las
+     personas concretas. Da igual si el dinero llegó por la operadora o por
+     nosotros: al objetivo le llegó, y eso es lo que se cuenta. */
+  var detalle=metasCom.length
+    ? metasCom.map(function(m){
+        var lineas=IMP.filter(function(i){return i.meta===m.meta && Number(i.mxn)>0;})
+                      .sort(function(a,b){return Number(b.mxn)-Number(a.mxn);});
+        var plat=por.com_plat && m.meta==='8.3' ? por.com_plat : null;
+        return '<div class="meta">'+cabMeta(m.meta)+
+          '<div class="tot">'+money(m.mxn)+
+            (lineas.length?' · '+lineas.length+' '+(lineas.length===1?'prestador':'prestadores'):'')+
+          '</div>'+
+          lineas.map(ficha).join('')+
+          (plat?'<div class="quien"><span class="ini">$</span>'+
+             '<div class="txt"><b>'+esc(plat.concepto)+'</b><span>'+esc(plat.detalle||'')+'</span></div>'+
+             '<span class="v">'+money(plat.mxn)+'</span></div>':'')+
+        '</div>';
+      }).join('')
+    : hijos('comunidad').filter(function(d){return d.nivel===2;}).map(bloqueSuelto).join('');
+
+  /* Los costes de operación también se abren: quién se queda cada parte. */
+  var detOperativos=hijos('operativos').map(fila).join('');
 
   $('impacto').classList.remove('oculto');
   $('impacto').innerHTML=
@@ -927,16 +928,21 @@ function pintaImpacto(){
     '<div class="tramo sub"><span>IVA '+(+(por.iva||{}).pct_neto||0)+'%</span><b>−'+
       money((por.iva||{}).mxn)+'</b></div>'+
     '<div class="tramo linea"><span>Precio neto</span><b>'+money(neto)+'</b></div>'+
-    (por.imp?fila(por.imp):'')+
-    (por.banco?fila(por.banco):'')+
     '<details class="fila imp"><summary>'+
       '<span class="pt" style="background:#A21942"></span>'+
-      '<span class="nom">Impacto en la comunidad <em>'+pct+'%</em></span>'+
+      '<span class="nom">Comunidad <em>'+pct+'%</em></span>'+
       '<span class="v">'+money(suma)+'</span></summary>'+
       '<div class="detalle">'+detalle+'</div></details>'+
-    (por.oper?fila(por.oper):'')+
-    (por.hotel?fila(por.hotel):'')+
-    (por.pgas?fila(por.pgas):'')+
+    (por.imp?fila(por.imp):'')+
+    (por.banco?fila(por.banco):'')+
+    (por.operativos
+      ? '<details class="fila"><summary>'+
+          '<span class="pt" style="background:'+esc(por.operativos.color||'#E6DFD6')+'"></span>'+
+          '<span class="nom">'+esc(por.operativos.concepto)+
+            (por.operativos.pct_neto!=null?' <em>'+(+por.operativos.pct_neto)+'%</em>':'')+'</span>'+
+          '<span class="v">'+money(por.operativos.mxn)+'</span></summary>'+
+          '<div class="detalle">'+detOperativos+'</div></details>'
+      : '')+
     '<div class="nota">Las cifras de impacto las declara quien opera la experiencia; '+
       'Sincrético aporta la suya. Es una declaración, no una auditoría. '+
       '<a href="https://www.un.org/sustainabledevelopment/es/objetivos-de-desarrollo-sostenible/" '+
