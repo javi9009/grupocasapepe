@@ -145,7 +145,18 @@
 
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-var CAT=[], filtro='Todo';
+var CAT=[], filtro='Todo', clase='Todo';
+
+/* Modo de prueba: ademas de las publicadas entran las prefichas de terceros que
+   ya traen foto, para poder ver el catalogo entero antes de publicarlo.
+   Se enciende con ?prueba=1 y se apaga con ?prueba=0. Mientras el sitio esta en
+   noindex viene encendido por defecto. */
+var PRUEBA=(function(){
+  var q=new URLSearchParams(location.search).get('prueba');
+  if(q==='0'||q==='no')return false;
+  return true;
+})();
+var QS=PRUEBA?'&prueba=1':'';
 
 function $(id){return document.getElementById(id);}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
@@ -191,7 +202,7 @@ function marco(e,ancho,alto){
 }
 
 async function arranca(){
-  try{ CAT=await rpc('sinc_catalogo',{p_dias:90})||[]; }
+  try{ CAT=await rpc(PRUEBA?'sinc_catalogo_prueba':'sinc_catalogo',{p_dias:90})||[]; }
   catch(x){ $('cargando').textContent='No pudimos cargar las experiencias. '+x.message; return; }
   if(!CAT.length){ $('cargando').textContent='Todavía no hay experiencias publicadas.'; return; }
 
@@ -209,13 +220,26 @@ async function arranca(){
    No es para el turista; se cae solo en cuanto haya diez con fechas. */
 function pintaAviso(){
   var conFecha=CAT.filter(function(e){return e.proxima_fecha;}).length;
+  var conFoto=CAT.filter(function(e){return !!e.portada;}).length;
+  if(PRUEBA){
+    var pro=CAT.filter(esPropia).length;
+    $('aviso').classList.remove('oculto');
+    $('avisoTexto').innerHTML='<b>Modo de prueba.</b> Están subidas las '+CAT.length+
+      ' experiencias de la base: '+pro+' nuestras activas y '+(CAT.length-pro)+
+      ' de terceros. '+conFoto+' tienen foto y '+conFecha+' tienen fechas publicadas. '+
+      'Las de terceros son prefichas: se ven, pero todavía no se reservan. '+
+      '<a href="?prueba=0" style="color:inherit">Ver solo lo publicado</a>.';
+    return;
+  }
   if(conFecha>=10)return;
-  var sinFoto=CAT.filter(function(e){return !e.portada;}).length;
   $('aviso').classList.remove('oculto');
   $('avisoTexto').innerHTML='Vista interna · '+CAT.length+' experiencias publicadas, '+
-    conFecha+' con fechas y '+(CAT.length-sinFoto)+' con fotos. '+
+    conFecha+' con fechas y '+conFoto+' con fotos. '+
     'Las que no tienen días y horas en su ficha no se pueden reservar todavía.';
 }
+
+function esPropia(e){ return e.clase?e.clase==='propia':true; }
+function reservable(e){ return e.estado?e.estado==='publicada':true; }
 
 function pintaDestacados(){
   var conFecha=CAT.filter(function(e){return e.proxima_fecha;});
@@ -226,7 +250,7 @@ function pintaDestacados(){
     ? estaSemana.length+' con salida esta semana'
     : 'las próximas fechas';
   $('carril').innerHTML=lista.map(function(e){
-    return '<a class="grande" href="exp.html?id='+esc(e.id)+'">'+
+    return '<a class="grande" href="exp.html?id='+esc(e.id)+QS+'">'+
       '<div class="marco">'+marco(e,700)+
         '<div class="velo">'+
           '<div class="cuando">'+esc(cuando(e.proxima_fecha,e.proxima_hora)||'')+'</div>'+
@@ -240,31 +264,57 @@ function pintaDestacados(){
   }).join('');
 }
 
+/* En modo de prueba conviven las nuestras con las de terceros: primero se elige
+   de quién es, y después la tipología, para que no se mezclen al comparar. */
+function porClase(){
+  if(!PRUEBA||clase==='Todo')return CAT;
+  return CAT.filter(function(e){return clase==='Nuestras'?esPropia(e):!esPropia(e);});
+}
+
 function pintaFiltros(){
-  var tipos=[];
-  CAT.forEach(function(e){if(tipos.indexOf(e.tipologia)<0)tipos.push(e.tipologia);});
+  var html='';
+  if(PRUEBA){
+    html+=['Todo','Nuestras','De terceros'].map(function(c){
+      var n=c==='Todo'?CAT.length:CAT.filter(function(e){
+        return c==='Nuestras'?esPropia(e):!esPropia(e);}).length;
+      return '<button class="chip'+(c===clase?' on':'')+'" data-c="'+esc(c)+'">'+
+             esc(c)+' <b>'+n+'</b></button>';
+    }).join('')+'<span style="width:1px;background:var(--linea);margin:2px 6px"></span>';
+  }
+  var base=porClase(), tipos=[];
+  base.forEach(function(e){if(e.tipologia&&tipos.indexOf(e.tipologia)<0)tipos.push(e.tipologia);});
   tipos.sort();
-  var todos=['Todo'].concat(tipos);
-  $('filtros').innerHTML=todos.map(function(t){
-    var n=t==='Todo'?CAT.length:CAT.filter(function(e){return e.tipologia===t;}).length;
+  html+=['Todo'].concat(tipos).map(function(t){
+    var n=t==='Todo'?base.length:base.filter(function(e){return e.tipologia===t;}).length;
     return '<button class="chip'+(t===filtro?' on':'')+'" data-t="'+esc(t)+'">'+
            esc(t)+' <b>'+n+'</b></button>';
   }).join('');
+  $('filtros').innerHTML=html;
   Array.prototype.forEach.call($('filtros').querySelectorAll('.chip'),function(b){
-    b.onclick=function(){filtro=b.getAttribute('data-t');pintaFiltros();pintaRejilla();};
+    b.onclick=function(){
+      if(b.hasAttribute('data-c')){clase=b.getAttribute('data-c');filtro='Todo';}
+      else filtro=b.getAttribute('data-t');
+      pintaFiltros();pintaRejilla();
+    };
   });
 }
 
 function pintaRejilla(){
-  var l=filtro==='Todo'?CAT:CAT.filter(function(e){return e.tipologia===filtro;});
+  var base=porClase();
+  var l=filtro==='Todo'?base:base.filter(function(e){return e.tipologia===filtro;});
   $('cuentaLista').textContent=l.length+(l.length===1?' experiencia':' experiencias');
   $('vacio').classList.toggle('oculto',!!l.length);
   $('rejilla').innerHTML=l.map(function(e){
     var c=cuando(e.proxima_fecha,e.proxima_hora);
     var pocos=e.libres!=null&&e.libres<=4;
-    return '<a class="tarj" href="exp.html?id='+esc(e.id)+'">'+
+    var dueno=PRUEBA
+      ? '<span class="sello et '+(esPropia(e)?'naranja':'')+'" style="top:auto;bottom:10px">'+
+        (esPropia(e)?'Nuestra':esc(e.operador||'Tercero'))+'</span>'
+      : '';
+    return '<a class="tarj" href="exp.html?id='+esc(e.id)+QS+'">'+
       '<div class="marco">'+marco(e,520)+
         '<span class="sello et '+(e.proxima_fecha?'naranja':'')+'">'+esc(e.tipologia)+'</span>'+
+        dueno+
       '</div>'+
       '<div class="cuerpo">'+
         '<div class="nom">'+esc(e.nombre)+'</div>'+
@@ -272,7 +322,7 @@ function pintaRejilla(){
         '<div class="fin">'+
           '<span class="cuando'+(c?'':' gris')+'">'+
             (c?esc(c)+(pocos?'<br>quedan '+e.libres+' lugares':'')
-              :'Sin fechas publicadas')+'</span>'+
+              :(reservable(e)?'Sin fechas publicadas':'Preficha · aún no se reserva'))+'</span>'+
           '<span class="pre">'+money(e.pvp_adulto)+'<small>por persona</small></span>'+
         '</div>'+
       '</div></a>';
