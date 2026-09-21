@@ -958,10 +958,76 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     }
   };
 
+  /* Quién es "yo" en este portal.
+     Para el touroperador, RLS solo le deja ver su operadora, así que la
+     primera fila ES la suya. Para alguien de casa, RLS le deja verlas TODAS y
+     la primera es una cualquiera —por eso, mirándolo como admin, salía el
+     portal de otro—. Así que a los de casa se les exige decir cuál: ?op=<id>. */
+  var ADMIN=false, OPID=(location.search.match(/[?&]op=([0-9a-f-]{36})/)||[])[1];
+
+  /* Mirar el portal de otro no puede parecerse a ser otro: si no se ve la
+     diferencia, uno acaba escribiendo cosas en nombre de alguien sin darse
+     cuenta. Por eso la banda es fea a propósito y no se puede cerrar. */
+  function avisoAdmin(){
+    if(document.getElementById('bandaAdmin'))return;
+    var d=document.createElement('div');
+    d.id='bandaAdmin';
+    d.style.cssText='position:sticky;top:0;z-index:90;background:#1E1A16;color:#fff;'+
+      'padding:9px 16px;font-size:12.5px;display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+    d.innerHTML='<b style="letter-spacing:.06em;text-transform:uppercase;font-size:11px">Vista de Casa Pepe</b>'+
+      '<span>Estás viendo el portal de <b>'+esc(cur.nombre_comercial||'')+'</b> tal como lo ve ella. '+
+      'Lo que guardes aquí queda a su nombre.</span>'+
+      '<span style="flex:1"></span>'+
+      '<a href="?" style="color:#8DC8EA">Cambiar de operadora</a>'+
+      '<a href="/m/sinc-operadores.html" target="_top" style="color:#8DC8EA">Volver al panel</a>';
+    document.body.insertBefore(d, document.body.firstChild);
+
+    /* El impacto no. Esa declaración va bajo protesta de decir verdad y es
+       suya: se puede mirar, no contestar por ella. */
+    var arbol=$('odsArbol');
+    if(arbol){
+      arbol.style.pointerEvents='none';
+      arbol.style.opacity='.65';
+      var n=document.createElement('div');
+      n.className='aviso';
+      n.style.marginBottom='10px';
+      n.textContent='El cuestionario de impacto solo lo contesta ella: va bajo protesta de decir verdad. Desde aquí se mira, no se llena.';
+      arbol.parentNode.insertBefore(n,arbol);
+    }
+    var fc=$('odsFirmaCard'); if(fc)fc.style.display='none';
+  }
+
   async function cargar(){
-    var r=await fetch(SB+'/rest/v1/tour_operadores?select=*&limit=1',{headers:hdr()});
+    try{
+      var e=await fetch(SB+'/rest/v1/rpc/es_operador_externo',
+        {method:'POST',headers:hdr(),body:'{}'});
+      if(e.ok)ADMIN=((await e.json())!==true);
+    }catch(_){}
+
+    if(ADMIN && !OPID)return 'ELIGE';
+
+    var q='tour_operadores?select=*&limit=1'+(ADMIN&&OPID?'&id=eq.'+OPID:'');
+    var r=await fetch(SB+'/rest/v1/'+q,{headers:hdr()});
     if(!r.ok)return null;
     return (await r.json())[0]||null;
+  }
+
+  /* Cuando entra alguien de casa sin decir a quién mira, se le enseña la lista
+     en vez de meterlo en el portal de quien salga primero. */
+  async function eligeOperador(){
+    var r=await fetch(SB+'/rest/v1/v_operadores?select=id,nombre_comercial,estado,usuarios,han_entrado&order=nombre_comercial',{headers:hdr()});
+    var L=r.ok?await r.json():[];
+    $('entrar').style.display='block';$('app').style.display='none';
+    var c=document.querySelector('#entrar .card')||$('entrar');
+    c.innerHTML='<h2 style="margin:0 0 4px">¿El portal de quién?</h2>'+
+      '<p class="mini" style="margin:0 0 14px">Estás entrando como Casa Pepe. Elige a qué touroperadora quieres ver por dentro, tal como la ve ella.</p>'+
+      (L.length?L.map(function(o){
+        return '<a href="?op='+o.id+'" style="display:block;padding:11px 12px;border:1px solid var(--linea);'+
+          'border-radius:10px;margin-bottom:8px;text-decoration:none;color:inherit">'+
+          '<b>'+esc(o.nombre_comercial)+'</b>'+
+          '<div class="mini">'+esc(o.estado)+' · '+o.usuarios+' con acceso · '+
+          (o.han_entrado?'ya entró':'nunca ha entrado')+'</div></a>';
+      }).join(''):'<div class="mini">No hay touroperadoras cargadas.</div>');
   }
 
   // si ya inició sesión en el panel del Grupo, reusamos ese token en vez de pedírselo otra vez
@@ -984,8 +1050,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!ses)ses=sesionDelPanel();
     if(!ses){$('entrar').style.display='block';$('app').style.display='none';return;}
     cur=await cargar();
+    if(cur==='ELIGE'){await eligeOperador();return;}
     if(!cur){olvida();$('entrar').style.display='block';$('app').style.display='none';
-      errLogin('Tu sesión caducó o esa cuenta todavía no tiene un operador. Vuelve a entrar o escríbenos.');return;}
+      errLogin(ADMIN
+        ? 'No encontré esa touroperadora. Vuelve al panel y ábrela desde ahí.'
+        : 'Tu sesión caducó o esa cuenta todavía no tiene un operador. Vuelve a entrar o escríbenos.');return;}
     $('entrar').style.display='none';$('app').style.display='block';
     montaEditor();
     await detalle();
@@ -994,6 +1063,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     await odsCarga();
     if(!cur.onboarding_visto){$('guia').classList.add('on');vista('cuenta');}
     $('gTit').textContent='Bienvenido'+(cur.nombre_comercial?', '+cur.nombre_comercial:'');
+    if(ADMIN)avisoAdmin();
   }
 
   async function detalle(){
