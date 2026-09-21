@@ -1190,6 +1190,10 @@ gmp-place-autocomplete,.gmpac{
 
     monta();
     await catalogos();
+    /* El catálogo de impacto manda sobre lo que se pregunta: si no está
+       cargado, la tabla sale vacía y el operador creería que no hay nada
+       que declarar. Por eso se espera. */
+    await cargaImpactoClaves();
     await detalle();
     pinta();
     cargaMaps();cargaVnum();
@@ -2022,19 +2026,30 @@ gmp-place-autocomplete,.gmpac{
   /* Cada renglón va atado a una meta de la Agenda 2030. Son METAS, no
      indicadores: los indicadores de turismo (8.9.1, 12.b.1) son nacionales
      y no se pueden reclamar desde un tour. */
-  var IMPACTOS=[
-    ['alimentos_locales','¿Trabajas con alguna taquería, mercado o comercio de comida local?','La fonda, el puesto, la cocinera del barrio','8.9','¿Cuál?'],
-    ['artesania','¿Entregas alguna artesanía hecha a mano?','Comprada a quien la hace, sin intermediario','8.3','¿A quién se la compras?'],
-    ['guias_comunidad','¿El guía o el protagonista es de la comunidad donde opera el tour?','Lo que cobra la persona que da la cara','8.5','¿Quién?'],
-    ['microempresa','¿Tú o alguno de tus colaboradores son emprendedores con menos de 5 empleados?','Negocio chico, no cadena','8.3','¿Quién?'],
-    ['cooperativa','¿Trabajas con alguna cooperativa u ONG en este tour?','Reparto directo, sin intermediario','8.3','¿Cuál?'],
-    ['comunidad_originaria','¿Trabajas con alguna comunidad originaria?','Wixárika, náhuatl, mixteca, la que sea','8.3','¿Cuál?'],
-    ['accesos_comunidad','¿Pagas entradas o permisos a la comunidad anfitriona?','Lo que se le paga al sitio por entrar','11.4','¿A quién?'],
-    ['formacion','¿Pagas formación a gente de la comunidad?','Capacitar a quien opera','4.4','¿A quién?']
-  ];
-  var METAS={'8.3':'Meta 8.3 · apoyo a la pequeña empresa','8.5':'Meta 8.5 · empleo y salario dignos',
-    '8.9':'Meta 8.9 · turismo que crea empleo y cultura local','11.4':'Meta 11.4 · proteger el patrimonio',
-    '4.4':'Meta 4.4 · competencias para el empleo','13.3':'Meta 13.3 · sensibilización climática'};
+  /* La derrama directa ya no vive aquí: vive en sinc_impacto_claves, junto al
+     catálogo de metas de la ONU. Antes esta pantalla llevaba su propio
+     diccionario de seis metas escrito a mano, que no sabía nada de las 33 que
+     hay cargadas, y cuatro preguntas caían en la misma meta. Ahora se carga de
+     la base y crece sin tocar este archivo. */
+  var IMPACTOS=[], METAS={}, GRUPOS={
+    mesa: ['Quien cocina y quien siembra','Dónde cae el dinero de lo que se come y se bebe.'],
+    manos:['Quien hace a mano','Lo que se entrega, se regala o se vende hecho por alguien.'],
+    gente:['Quien da la cara','Lo que cobra la gente que sostiene el tour el día de la salida.'],
+    lugar:['El lugar y su gente','Lo que se le paga al sitio por dejarnos entrar y por seguir estando.'],
+    casa: ['Lo que sostiene el oficio','Formación, residuos, transporte: lo que no se ve pero se paga.']
+  };
+
+  async function cargaImpactoClaves(){
+    var c=await get('sinc_impacto_claves?select=*&activo=is.true&order=orden');
+    var m=await get('sinc_ods_metas?select=*');
+    var porMeta={}; (m||[]).forEach(function(x){porMeta[x.meta]=x;});
+    IMPACTOS=(c||[]).map(function(x){
+      var mm=porMeta[x.meta]||{};
+      METAS[x.meta]='Meta '+x.meta+' · '+(mm.titulo||'').toLowerCase();
+      if(mm.ods!=null)ODS[String(mm.ods)]=[String(mm.ods), mm.ods_nombre||('Objetivo '+mm.ods), mm.color||'#6E665C'];
+      return [x.clave, x.pregunta, x.ayuda, x.meta, x.quien, x.grupo, mm.color, mm.ods];
+    });
+  }
   var IMP=[];
 
   /* Esta ficha es del tour, y el tour lo opera el operador: aquí siempre se
@@ -2052,7 +2067,22 @@ gmp-place-autocomplete,.gmpac{
   }
   function pintaImpacto(){
     var t=miTajada();
-    $('impTabla').innerHTML=IMPACTOS.map(function(x){
+    /* Por bloques, no en una lista corrida: preguntar por la comida, por las
+       manos y por el lugar en el mismo montón las vuelve todas iguales. */
+    var orden=['mesa','manos','gente','lugar','casa'];
+    var vistos={};
+    $('impTabla').innerHTML=orden.map(function(g){
+      var dentro=IMPACTOS.filter(function(x){return (x[5]||'casa')===g;});
+      if(!dentro.length)return '';
+      var cab=GRUPOS[g]||[g,''];
+      return '<div style="margin:18px 0 4px">'+
+          '<div class="mini" style="font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--tinta)">'+esc(cab[0])+'</div>'+
+          '<div class="mini">'+esc(cab[1])+'</div>'+
+        '</div>'+
+        dentro.map(pregImp).join('');
+    }).join('');
+
+    function pregImp(x){
       var lineas=IMP.filter(function(i){return i.clave===x[0]&&i.quien===t.quien;})
                     .sort(function(a,b){return (a.orden||0)-(b.orden||0);});
       var si=lineas.length?(lineas[0].responde!==false):null;
@@ -2068,9 +2098,14 @@ gmp-place-autocomplete,.gmpac{
           '<div class="lineas" data-lineas="'+x[0]+'">'+lineas.map(function(g,i){return lineaImp(x,g,i);}).join('')+'</div>'+
           '<button type="button" class="chip add" data-mas="'+x[0]+'" style="margin-top:8px">＋ otro</button>'+
           '<div class="mini" data-eq="'+x[0]+'" style="margin-top:8px"></div>'+
-          '<div class="mini" style="margin-top:2px">'+esc(METAS[x[3]]||'')+'</div>'+
+          '<div style="margin-top:6px">'+
+            '<span style="display:inline-block;border-radius:999px;padding:2px 9px;font-size:10.5px;'+
+              'font-weight:700;letter-spacing:.04em;color:#fff;background:'+esc(x[6]||'#6E665C')+'">'+
+              'ODS '+esc(x[7]||'')+' · '+esc(x[3])+'</span> '+
+            '<span class="mini">'+esc(METAS[x[3]]||'')+'</span>'+
+          '</div>'+
         '</div></div>';
-    }).join('');
+    }
 
     Array.prototype.forEach.call($('impTabla').querySelectorAll('[data-si]'),function(b){
       b.onclick=function(){marca(b.getAttribute('data-si'),true);};});
@@ -2215,13 +2250,10 @@ gmp-place-autocomplete,.gmpac{
   }
   /* Los colores son los oficiales de cada Objetivo: es el idioma con el que
      se leen de un vistazo. No reproducimos los iconos de la ONU. */
-  var ODS={
-    '4':['4','Educación de calidad','#C5192D'],
-    '8':['8','Trabajo decente y crecimiento económico','#A21942'],
-    '11':['11','Ciudades y comunidades sostenibles','#FD9D24'],
-    '12':['12','Producción y consumo responsables','#BF8B2E'],
-    '13':['13','Acción por el clima','#3F7E44']
-  };
+  /* Los objetivos también salían de una lista a mano con cinco, y el tour ya
+     toca diez. Se arma del mismo catálogo que las metas, así que añadir una
+     meta nueva trae su objetivo solo. */
+  var ODS={};
   function salidasAlAnio(){
     var porDia=Math.max(1,leeHoras().length);
     var m=E.calendario_modo||'semanal';
@@ -2303,11 +2335,20 @@ gmp-place-autocomplete,.gmpac{
   }
   /* El número y el color son el idioma de los Objetivos; el logo oficial y
      la explicación viven en la ONU, y ahí mandamos. */
-  var ODS_URL={'4':'https://www.un.org/sustainabledevelopment/es/education/',
+  var ODS_URL={
+    '1':'https://www.un.org/sustainabledevelopment/es/poverty/',
+    '2':'https://www.un.org/sustainabledevelopment/es/hunger/',
+    '3':'https://www.un.org/sustainabledevelopment/es/health/',
+    '4':'https://www.un.org/sustainabledevelopment/es/education/',
+    '5':'https://www.un.org/sustainabledevelopment/es/gender-equality/',
+    '6':'https://www.un.org/sustainabledevelopment/es/water-and-sanitation/',
     '8':'https://www.un.org/sustainabledevelopment/es/economic-growth/',
+    '10':'https://www.un.org/sustainabledevelopment/es/inequality/',
     '11':'https://www.un.org/sustainabledevelopment/es/cities/',
     '12':'https://www.un.org/sustainabledevelopment/es/sustainable-consumption-production/',
-    '13':'https://www.un.org/sustainabledevelopment/es/climate-change-2/'};
+    '13':'https://www.un.org/sustainabledevelopment/es/climate-change-2/',
+    '15':'https://www.un.org/sustainabledevelopment/es/biodiversity/',
+    '16':'https://www.un.org/sustainabledevelopment/es/peace-justice/'};
   function abreOds(k){
     var o=ODS[k]||[k,'Objetivo '+k,'#6E665C'];
     var tuyos=IMPACTOS.filter(function(i){return i[3].split('.')[0]===k;});
