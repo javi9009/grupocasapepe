@@ -316,6 +316,21 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       <div id="cuerpo">
 
         <section class="panel on" data-s="0">
+          <div class="card" id="cardReclamar">
+            <h3>¿Ya vendes en Airbnb, Viator o GetYourGuide?</h3>
+            <div class="hint">Pega la liga de uno de tus anuncios, o escribe el nombre de tu
+              empresa. Si te tenemos detectado, te traemos tus experiencias ya cargadas y solo
+              las revisas. Te ahorra llenar todo a mano.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+              <input id="recTexto" placeholder="https://www.airbnb.com/experiences/…  o  el nombre de tu empresa"
+                style="flex:1 1 340px;padding:10px 12px;border:1.5px solid var(--linea);border-radius:9px;font:inherit;font-size:14px">
+              <button type="button" class="btn" id="recBuscar">Buscar</button>
+            </div>
+            <div id="recResultado" style="margin-top:12px"></div>
+            <div class="mini" style="margin-top:10px">Solo te enseñamos lo que coincide con lo
+              que escribes. Si no aparece nada, sigue llenando abajo con calma.</div>
+          </div>
+
           <div class="card">
             <h3>Tu empresa</h3>
             <div class="hint">Estos datos salen de tu constancia fiscal. Se piden una sola vez.</div>
@@ -972,6 +987,74 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       .catch(function(){});
   }
 
+  /* ---------- reclamar la empresa ----------
+     El operador no ve nuestra base: escribe una liga o un nombre y el
+     servidor le devuelve como mucho cinco candidatos, con lo justo para
+     reconocerse. Al elegir el suyo, le generamos sus experiencias con lo que
+     tenemos detectado — en azul, sin validar. */
+  function recPinta(lista, texto){
+    var c=$('recResultado');
+    if(!lista || !lista.length){
+      c.innerHTML='<div class="mini">No encontramos nada con «'+esc(texto)+'». '+
+        'Prueba con la liga de un anuncio tuyo, o sigue llenando a mano más abajo.</div>';
+      return;
+    }
+    c.innerHTML='<div class="mini" style="margin-bottom:8px">'+
+        (lista.length===1?'Encontramos esto. ¿Es tuyo?':'Encontramos '+lista.length+'. ¿Cuál es tuyo?')+
+      '</div>'+
+      lista.map(function(g){
+        var plat=(g.plataformas||[]).map(function(p){
+          return {airbnb:'Airbnb',viator:'Viator',gyg:'GetYourGuide',civitatis:'Civitatis'}[p]||p;}).join(' · ');
+        return '<div class="doc" style="display:flex;gap:12px;align-items:flex-start;margin-bottom:8px">'+
+          '<div style="flex:1;min-width:0">'+
+            '<b>'+esc(g.nombre)+'</b>'+
+            '<div class="mini">'+esc(plat||'—')+
+              (g.tours?' · '+g.tours+' experiencia'+(g.tours===1?'':'s'):'')+
+              (g.resenas?' · '+g.resenas+' reseñas':'')+
+              (g.rating?' · '+Number(g.rating).toFixed(2)+'★':'')+'</div>'+
+            (g.ya_reclamada?'<div class="mini" style="color:var(--magenta,#B00)">Ya está enlazada a otra cuenta</div>':'')+
+          '</div>'+
+          (g.ya_reclamada?'':'<button type="button" class="btn sm" data-rec="'+g.guia_id+'">Es mi empresa</button>')+
+        '</div>';
+      }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('[data-rec]'),function(b){
+      b.onclick=function(){recReclama(b.getAttribute('data-rec'), b);};});
+  }
+
+  function recBusca(){
+    var t=($('recTexto').value||'').trim();
+    if(t.length<3){toast('Escribe al menos tres letras, o pega una liga.',true);return;}
+    var b=$('recBuscar'); b.disabled=true; b.textContent='Buscando…';
+    fetch(SB+'/rest/v1/rpc/sinc_buscar_mi_empresa',
+      {method:'POST',headers:hdr(),body:JSON.stringify({p_texto:t})})
+      .then(function(r){ return r.ok?r.json():[]; })
+      .then(function(l){ recPinta(l,t); })
+      .catch(function(){ recPinta([],t); })
+      .then(function(){ b.disabled=false; b.textContent='Buscar'; });
+  }
+
+  function recReclama(id, boton){
+    boton.disabled=true; boton.textContent='Trayendo…';
+    fetch(SB+'/rest/v1/rpc/sinc_reclamar_empresa',
+      {method:'POST',headers:hdr(),body:JSON.stringify({p_guia_id:id})})
+      .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,t:t}; }); })
+      .then(function(x){
+        if(!x.ok){
+          boton.disabled=false; boton.textContent='Es mi empresa';
+          var m='No se pudo enlazar';
+          try{ var j=JSON.parse(x.t); if(j.message)m=j.message; }catch(_){}
+          toast(m,true); return;
+        }
+        var j={}; try{ j=JSON.parse(x.t); }catch(_){}
+        $('recResultado').innerHTML='<div class="avisos" style="background:#F5F9FF;border-color:#BFDBFE">'+
+          '<b>Listo, es tuya.</b> Te trajimos <b>'+(j.creadas||0)+'</b> experiencia'+
+          ((j.creadas===1)?'':'s')+
+          ((j.ya_estaban)?' ('+j.ya_estaban+' ya la tenías)':'')+
+          '. Están en azul: revísalas, corrige lo que esté mal y dales guardar.</div>';
+        setTimeout(function(){ location.reload(); }, 1800);
+      });
+  }
+
   // ¿Se abre este hijo con lo que contestó su padre?
   function odsAbre(q){
     if(!q.padre_clave)return true;
@@ -1329,6 +1412,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        nunca: el paso salía con su texto y sin una sola pregunta debajo. */
     await odsCarga();
     await ceCarga();
+    if($('recBuscar')){
+      $('recBuscar').onclick=recBusca;
+      $('recTexto').onkeydown=function(e){ if(e.key==='Enter')recBusca(); };
+      if(cur&&cur.crm_guia_id)$('cardReclamar').style.display='none';
+    }
     await cmpCarga();
     if(!cur.onboarding_visto){$('guia').classList.add('on');vista('cuenta');}
     $('gTit').textContent='Bienvenido'+(cur.nombre_comercial?', '+cur.nombre_comercial:'');
