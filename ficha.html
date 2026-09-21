@@ -580,6 +580,7 @@ gmp-place-autocomplete,.gmpac{
           <div class="fld"><label>Política de cancelación</label><select data-c="cancelacion"></select></div>
           <div class="fld"><label>¿Hasta cuándo se puede reservar?</label><select data-c="antelacion"></select></div>
         </div>
+        <div id="recoPrecio"></div>
         <div class="desglose" id="desPrecio"></div>
         <div id="repartoInterno"></div>
       </div>
@@ -793,14 +794,55 @@ gmp-place-autocomplete,.gmpac{
     <section class="panel" data-s="8">
       <div class="card">
         <h3>Costeo</h3>
-        <div class="hint">Solo en los tours propios. Cada línea se ata a un insumo del stock, para que el costo salga del precio real de compra.</div>
-        <div class="fgrid">
-          <div class="fld"><label>Insumo</label><select id="csInsumo"></select></div>
+        <div class="hint">Solo en los tours propios. Primero di de dónde sale lo que vas a comprar; cada cosa se suma al costo de la salida.</div>
+        <div class="cxtabs" id="csFuentes" style="margin-bottom:12px"></div>
+
+        <!-- catálogo interno: los mismos pasillos de compras -->
+        <div id="csInterno" style="display:none">
+          <div class="fgrid">
+            <div class="fld"><label>Pasillo</label><select id="csPasillo"></select></div>
+            <div class="fld"><label>Buscar</label><input id="csBusca" placeholder="jitomate, servilleta, mezcal…" autocomplete="off"></div>
+          </div>
+          <div class="cxgrid" id="csGaleria" style="margin-top:12px"></div>
+        </div>
+
+        <!-- menú de la Cósmica -->
+        <div id="csCosmica" style="display:none">
+          <div class="cxtabs" id="csCosSec"></div>
+          <div class="cxgrid" id="csCosGrid" style="margin-top:10px"></div>
+        </div>
+
+        <!-- compra de fuera: la taquería de la esquina -->
+        <div id="csExterna" style="display:none">
+          <div class="hint">Lo que se compra en la calle el día de la salida. Lo importante es con qué papel vuelve.</div>
+          <div class="fgrid">
+            <div class="fld"><label>¿A quién se le compra?</label>
+              <input id="csProvTxt" list="dlProv" placeholder="Taquería Los Cocuyos" autocomplete="off">
+              <datalist id="dlProv"></datalist>
+              <div class="ay">Si ya es proveedor nuestro, elígelo de la lista.</div></div>
+            <div class="fld"><label>¿Qué se va a adquirir?</label><input id="csExtQue" placeholder="Orden de tacos por persona"></div>
+            <div class="fld"><label>Monto a comprar (MXN)</label><input type="number" id="csExtMonto" min="0" step="1"></div>
+            <div class="fld"><label>¿Con qué papel vuelve?</label>
+              <select id="csExtComp">
+                <option value="factura">Factura</option>
+                <option value="comprobante">Comprobante simple</option>
+                <option value="ninguno">Sin comprobante</option>
+              </select>
+              <div class="ay">Sin factura no es deducible: conviene saberlo antes, no en el cierre.</div></div>
+          </div>
+        </div>
+
+        <div class="fgrid" style="margin-top:12px">
           <div class="fld"><label>Cantidad</label><input type="number" id="csCant" step="0.01" value="1"></div>
           <div class="fld"><label>Tipo</label><select id="csTipo"><option value="variable">Por persona</option><option value="fijo">Fijo por salida</option></select></div>
-          <div class="fld" style="display:flex;align-items:flex-end"><button class="btn fantasma" id="csAdd">Añadir</button></div>
+          <div class="fld"><label>¿A dónde cae el peso?</label><select id="csBloque">
+            <option value="comunidad_local">Comunidad local</option>
+            <option value="operativo">Operativo</option></select>
+            <div class="ay">Lo que cae en comunidad es lo que cuenta para el ODS 8 y el 12.</div></div>
+          <div class="fld" style="display:flex;align-items:flex-end"><button class="btn" id="csAdd">Añadir al costeo</button></div>
         </div>
-        <table style="margin-top:12px"><thead><tr><th>Concepto</th><th>Tipo</th><th class="n">Cantidad</th><th class="n">Costo unit.</th><th class="n">Total</th><th></th></tr></thead><tbody id="tbCos"></tbody></table>
+
+        <table style="margin-top:14px"><thead><tr><th>Concepto</th><th>De dónde</th><th>Tipo</th><th class="n">Cant.</th><th class="n">Unitario</th><th class="n">Total</th><th></th></tr></thead><tbody id="tbCos"></tbody></table>
         <div class="desglose" id="desCosteo" style="margin-top:12px"></div>
       </div>
     </section>
@@ -2566,158 +2608,200 @@ gmp-place-autocomplete,.gmpac{
   };
 
   /* ---------- costeo (propios) ---------- */
+  /* ---------- Costeo: tres fuentes ----------
+     1) catálogo de compras, con los mismos pasillos que usa Don José
+     2) menú de la Cósmica, que ya existía
+     3) compra de fuera: la taquería de la esquina, donde lo que importa es
+        a quién se le compra y con qué papel vuelve.
+     Aviso: insumos.precio_base está en cero en los 799 insumos, así que el
+     precio bueno sale de la presentación preferida del producto de compras. */
+  var CSF='interno', GAL=[], PASILLOS=[], PROVS=[], CSCOS=[], CSSEC='', CSEL=null;
+
   async function costeo(){
-    INS=await get('insumos?select=id,nombre,categoria,unidad,precio_base,tipo_costo&order=nombre&limit=900');
-    $('csInsumo').innerHTML='<option value="">—</option>'+INS.map(function(i){
-      return '<option value="'+i.id+'">'+esc(i.nombre)+' · '+money(i.precio_base)+'/'+esc(i.unidad||'u')+'</option>';}).join('');
+    if(!GAL.length){
+      GAL  = await get('v_compras_galeria?select=id,nombre,pasillo,pasillo_id,unidad_base,precio,contenido,unidad_contenido,proveedor&order=pasillo,nombre&limit=4000');
+      PROVS= await get('proveedores?select=id,nombre&activo=is.true&order=nombre&limit=600');
+      CSCOS= await get('cosmica_productos?select=id,seccion,nombre,precio_mxn,unidad&activo=is.true&order=seccion,orden');
+      PASILLOS=[];
+      GAL.forEach(function(g){ if(g.pasillo&&PASILLOS.indexOf(g.pasillo)<0)PASILLOS.push(g.pasillo); });
+      $('csPasillo').innerHTML='<option value="">Todos los pasillos</option>'+
+        PASILLOS.map(function(x){return '<option value="'+esc(x)+'">'+esc(x)+'</option>';}).join('');
+      $('dlProv').innerHTML=PROVS.map(function(x){return '<option value="'+esc(x.nombre)+'">';}).join('');
+      $('csPasillo').onchange=galeria; $('csBusca').oninput=galeria;
+      fuentes();
+    }
     await recargaCostos();
   }
+
+  function fuentes(){
+    var F=[['interno','Catálogo de compras'],['cosmica','Menú Cósmica'],['externa','Compra externa']];
+    $('csFuentes').innerHTML=F.map(function(f){
+      return '<button type="button" data-f="'+f[0]+'" aria-selected="'+(CSF===f[0])+'">'+f[1]+'</button>';}).join('');
+    Array.prototype.forEach.call($('csFuentes').querySelectorAll('[data-f]'),function(b){
+      b.onclick=function(){CSF=b.getAttribute('data-f');CSEL=null;fuentes();};});
+    $('csInterno').style.display = CSF==='interno'?'':'none';
+    $('csCosmica').style.display = CSF==='cosmica'?'':'none';
+    $('csExterna').style.display = CSF==='externa'?'':'none';
+    if(CSF==='interno')galeria();
+    if(CSF==='cosmica')cosGrid();
+  }
+
+  function tarjeta(id,nombre,sub,precio,sel){
+    return '<button type="button" class="cxcard'+(sel?' dentro':'')+'" data-pick="'+esc(id)+'">'+
+      '<div class="cxn">'+esc(nombre)+'</div>'+
+      '<div class="cxd">'+esc(sub||'')+'</div>'+
+      '<div class="cxp">'+(precio!=null?money(precio):'sin precio')+'</div></button>';
+  }
+
+  function galeria(){
+    var pas=$('csPasillo').value, q=($('csBusca').value||'').toLowerCase().trim();
+    var hay=GAL.filter(function(g){
+      if(pas&&g.pasillo!==pas)return false;
+      if(q&&(g.nombre||'').toLowerCase().indexOf(q)<0)return false;
+      return true;
+    }).slice(0,120);
+    $('csGaleria').innerHTML = hay.length
+      ? hay.map(function(g){
+          var sub=[g.pasillo,g.contenido?g.contenido+' '+(g.unidad_contenido||''):null,g.proveedor]
+                  .filter(Boolean).join(' · ');
+          return tarjeta(g.id,g.nombre,sub,g.precio,CSEL&&CSEL.id===g.id);
+        }).join('')
+      : '<div class="mini">Nada con ese filtro. De 3.373 productos, 382 traen precio: si el tuyo no lo trae, se puede escribir a mano al añadirlo.</div>';
+    Array.prototype.forEach.call($('csGaleria').querySelectorAll('[data-pick]'),function(b){
+      b.onclick=function(){
+        CSEL=GAL.filter(function(x){return String(x.id)===b.getAttribute('data-pick');})[0]||null;
+        galeria();
+      };});
+  }
+
+  function cosGrid(){
+    var secs=[]; CSCOS.forEach(function(c){if(secs.indexOf(c.seccion)<0)secs.push(c.seccion);});
+    if(!CSSEC||secs.indexOf(CSSEC)<0)CSSEC=secs[0]||'';
+    $('csCosSec').innerHTML=secs.map(function(x){
+      return '<button type="button" data-cs="'+esc(x)+'" aria-selected="'+(CSSEC===x)+'">'+esc(x)+'</button>';}).join('');
+    Array.prototype.forEach.call($('csCosSec').querySelectorAll('[data-cs]'),function(b){
+      b.onclick=function(){CSSEC=b.getAttribute('data-cs');CSEL=null;cosGrid();};});
+    var hay=CSCOS.filter(function(c){return c.seccion===CSSEC;});
+    $('csCosGrid').innerHTML=hay.map(function(c){
+      return tarjeta(c.id,c.nombre,c.unidad||'',c.precio_mxn,CSEL&&CSEL.id===c.id);}).join('');
+    Array.prototype.forEach.call($('csCosGrid').querySelectorAll('[data-pick]'),function(b){
+      b.onclick=function(){
+        CSEL=CSCOS.filter(function(x){return String(x.id)===b.getAttribute('data-pick');})[0]||null;
+        cosGrid();
+      };});
+  }
+
+  $('csAdd').onclick=async function(){
+    var cant=Number($('csCant').value||1), tipo=$('csTipo').value, bloque=$('csBloque').value;
+    var fila={op_experiencia_id:ID, tour_id:E.tour_id||null, cantidad:cant,
+              tipo_costo:tipo, bloque_derrama:bloque, fuente:CSF, orden:COS.length};
+    if(CSF==='externa'){
+      var quien=($('csProvTxt').value||'').trim(), que=($('csExtQue').value||'').trim();
+      var monto=Number($('csExtMonto').value||0);
+      if(!quien){error('Di a quién se le compra.');return;}
+      if(!que){error('Di qué se va a adquirir.');return;}
+      if(!monto){error('Falta el monto.');return;}
+      var pv=PROVS.filter(function(x){return x.nombre===quien;})[0];
+      fila.concepto=que; fila.costo_unitario=monto;
+      fila.proveedor_id=pv?pv.id:null; fila.proveedor_texto=pv?null:quien;
+      fila.comprobante=$('csExtComp').value;
+    }else{
+      if(!CSEL){error('Elige algo de la galería.');return;}
+      var precio=CSEL.precio!=null?CSEL.precio:CSEL.precio_mxn;
+      if(precio==null||precio===''){
+        var t=prompt('Este producto no tiene precio cargado. ¿Cuánto cuesta '+CSEL.nombre+'?','');
+        if(t===null)return;
+        precio=Number(t||0);
+        if(!precio){error('Sin precio no se puede costear.');return;}
+      }
+      fila.concepto=CSEL.nombre; fila.costo_unitario=precio;
+      if(CSF==='interno'){fila.cmp_producto_id=CSEL.id; fila.categoria=CSEL.pasillo||null;}
+      else {fila.cosmica_producto_id=CSEL.id; fila.categoria=CSEL.seccion||null;}
+    }
+    var r=await post('tour_costos',fila);
+    if(!r.ok){error('No se pudo añadir.');return;}
+    CSEL=null; $('csExtQue').value=''; $('csExtMonto').value=''; $('csProvTxt').value='';
+    if(CSF==='interno')galeria(); if(CSF==='cosmica')cosGrid();
+    await recargaCostos(); pinta(); toast('Añadido al costeo');
+  };
+
   async function recargaCostos(){
     /* El costeo cuelga de la ficha, no de la tabla tours: esa se apagó el
        21-sep-2026 y su contenido se volcó aquí. */
-    COS=await get('tour_costos?select=*&op_experiencia_id=eq.'+ID+'&order=orden');
+    COS=await get('tour_costos?select=*&op_experiencia_id=eq.'+ID+'&archivado_at=is.null&order=orden');
+    var DE={interno:'catálogo',cosmica:'Cósmica',externa:'de fuera'};
+    var CP={factura:'factura',comprobante:'comprobante',ninguno:'sin papel'};
     $('tbCos').innerHTML=COS.length?COS.map(function(c){
       var tot=(Number(c.cantidad||0)*Number(c.costo_unitario||0));
-      return '<tr><td>'+esc(c.concepto||'')+'</td><td class="mini">'+(c.tipo_costo==='fijo'?'Fijo':'Por persona')+'</td>'+
-        '<td class="n">'+(c.cantidad||'')+'</td><td class="n">'+money(c.costo_unitario)+'</td><td class="n"><b>'+money(tot)+'</b></td>'+
+      var de=DE[c.fuente]||'—';
+      if(c.fuente==='externa'&&(c.proveedor_texto))de+=' · '+esc(c.proveedor_texto);
+      if(c.comprobante)de+=' <span class="etq'+(c.comprobante==='ninguno'?' al':'')+'">'+CP[c.comprobante]+'</span>';
+      return '<tr><td>'+esc(c.concepto||'')+
+        (c.bloque_derrama==='comunidad_local'?' <span class="etq ok">comunidad</span>':'')+'</td>'+
+        '<td class="mini">'+de+'</td>'+
+        '<td class="mini">'+(c.tipo_costo==='fijo'?'Fijo':'Por persona')+'</td>'+
+        '<td class="n">'+(c.cantidad||'')+'</td><td class="n">'+money(c.costo_unitario)+'</td>'+
+        '<td class="n"><b>'+money(tot)+'</b></td>'+
         '<td class="n"><button class="btn fantasma sm" data-delc="'+c.id+'">✕</button></td></tr>';
-    }).join(''):'<tr><td colspan="6" class="mini">Sin costeo. No sabemos cuánto deja este tour.</td></tr>';
+    }).join(''):'<tr><td colspan="7" class="mini">Sin costeo. No sabemos cuánto deja este tour.</td></tr>';
     Array.prototype.forEach.call($('tbCos').querySelectorAll('[data-delc]'),function(b){
-      b.onclick=async function(){await del('tour_costos','id=eq.'+b.getAttribute('data-delc'));await recargaCostos();};});
-    var varc=COS.filter(function(c){return c.tipo_costo!=='fijo';}).reduce(function(a,c){return a+Number(c.cantidad||0)*Number(c.costo_unitario||0);},0);
-    var fij=COS.filter(function(c){return c.tipo_costo==='fijo';}).reduce(function(a,c){return a+Number(c.cantidad||0)*Number(c.costo_unitario||0);},0);
-    var neto=Number(E.neto_adulto||0);
+      b.onclick=async function(){await del('tour_costos','id=eq.'+b.getAttribute('data-delc'));await recargaCostos();pinta();};});
+
+    var d=costos();
     $('desCosteo').innerHTML=
-      '<div><span>Costo variable por persona</span><b>'+money(varc)+'</b></div>'+
-      '<div><span>Costo fijo por salida</span><b>'+money(fij)+'</b></div>'+
-      (neto?'<div><span>Margen por persona (sin repartir el fijo)</span><b>'+money(neto-varc)+'</b></div>':'');
+      '<div><span>Costo variable por persona</span><b>'+money(d.cv)+'</b></div>'+
+      '<div><span>Costo fijo por salida</span><b>'+money(d.cf)+'</b></div>'+
+      (d.com?'<div><span>De eso, a comunidad local</span><b>'+money(d.com)+' · '+d.comPct+'%</b></div>':'')+
+      (d.sinPapel?'<div><span>Compras sin factura</span><b>'+money(d.sinPapel)+'</b></div>':'')+
+      (Number(E.neto_adulto||0)?'<div><span>Margen por persona a cupo lleno</span><b>'+
+        money(Number(E.neto_adulto)-d.cv-(E.cupo_max?d.cf/E.cupo_max:0))+'</b></div>':'');
+    recoPrecio();
   }
-  $('csAdd').onclick=async function(){
-    var id=$('csInsumo').value;if(!id){error('Elige un insumo.');return;}
-    var ins=INS.filter(function(i){return i.id===id;})[0];
-    var r=await post('tour_costos',{op_experiencia_id:ID,tour_id:E.tour_id,insumo_id:id,concepto:ins.nombre,
-      categoria:ins.categoria,cantidad:Number($('csCant').value||1),costo_unitario:ins.precio_base,
-      tipo_costo:$('csTipo').value,orden:COS.length});
-    if(!r.ok){error('No se pudo añadir.');return;}
-    await recargaCostos();toast('Añadido al costeo');
-  };
 
+  function costos(){
+    var cv=0,cf=0,com=0,sinPapel=0,tot=0;
+    (COS||[]).forEach(function(c){
+      var t=Number(c.cantidad||0)*Number(c.costo_unitario||0);
+      tot+=t;
+      if(c.tipo_costo==='fijo')cf+=t; else cv+=t;
+      if(c.bloque_derrama==='comunidad_local')com+=t;
+      if(c.comprobante==='ninguno')sinPapel+=t;
+    });
+    return {cv:cv,cf:cf,com:com,tot:tot,sinPapel:sinPapel,
+            comPct:tot?Math.round(com*100/tot):0};
+  }
 
-  /* ---------- La guía del guía, dentro de la ficha ----------
-     El material ya existe: 35 protagonistas, 24 autores, 244 obras, 240 tesis
-     y 603 conclusiones. Aquí solo se elige quién lo cuenta y con qué idea, y
-     se arma el tronco; el texto largo se sigue editando en la Guía del Guía. */
-  async function cargaGuias(){
-    if(!PROTAS.length){
-      PROTAS=await get('guia_protagonistas?select=id,slug,nombre,tipo,epoca,vinculo,voz,mirada_hospitalidad,biografia_breve,personalidad,puente_internacional,lo_que_nunca,cuidado,fuentes&activo=is.true&order=nombre');
-      IDEAS =await get('ideas?select=id,nombre,pensador,sistema_pensamiento,descripcion&order=nombre');
-      $('gvProta').innerHTML='<option value="">—</option>'+PROTAS.map(function(p){
-        return '<option value="'+esc(p.slug||p.id)+'">'+esc(p.nombre)+(p.epoca?' · '+esc(p.epoca):'')+'</option>';}).join('');
-      $('gvIdea').innerHTML='<option value="">Ninguna en particular</option>'+IDEAS.map(function(i){
-        return '<option value="'+esc(i.id)+'">'+esc(i.nombre)+(i.pensador?' · '+esc(i.pensador):'')+'</option>';}).join('');
-      $('gvProta').onchange=function(){
-        var p=PROTAS.filter(function(x){return String(x.slug||x.id)===$('gvProta').value;})[0];
-        var d=$('gvFicha');
-        if(!p){d.style.display='none';return;}
-        d.style.display='';
-        d.innerHTML=(p.biografia_breve?'<div><span>Quién es</span><b>'+esc(p.biografia_breve).slice(0,160)+'</b></div>':'')+
-          (p.voz?'<div><span>Su voz</span><b>'+esc(p.voz).slice(0,160)+'</b></div>':'')+
-          (p.mirada_hospitalidad?'<div><span>Cómo mira la hospitalidad</span><b>'+esc(p.mirada_hospitalidad).slice(0,160)+'</b></div>':'')+
-          (p.lo_que_nunca?'<div><span>Lo que nunca diría</span><b>'+esc(p.lo_que_nunca).slice(0,160)+'</b></div>':'');
-        if(!$('gvNombre').value)$('gvNombre').value=p.nombre+' en '+(E.cer_inicio_barrio||E.nombre||'este tour');
-      };
+  /* El precio no se saca del aire: sale del costeo, del cupo y del margen.
+     Y al revés, con un precio puesto, el costeo dice cuánta gente hace falta
+     para que la salida deje de perder dinero. */
+  function recoPrecio(){
+    var box=$('recoPrecio'); if(!box)return;
+    if(E.tipo!=='propio'||!interno){box.innerHTML='';return;}
+    var d=costos();
+    if(!d.cv&&!d.cf){
+      box.className='aviso';
+      box.innerHTML='Todavía no hay costeo. Llénalo en el paso de <b>Costeo</b> y aquí te digo qué precio y qué grupo mínimo salen de ahí.';
+      return;
     }
-    await recargaGuias();
+    var cupo=Number(E.cupo_max||0)||10;
+    var ind=Number(E.indirecto_pct==null?30:E.indirecto_pct)/100;
+    var mg =Number(E.margen_pct==null?25:E.margen_pct)/100;
+    var costoPax=d.cv+(cupo?d.cf/cupo:0);
+    var divisor=1-ind-mg;
+    var neto=divisor>0?Math.ceil(costoPax/divisor):null;
+    var actual=Number(E.neto_adulto||0);
+    var minimo=(actual>d.cv)?Math.ceil(d.cf/(actual-d.cv)):null;
+
+    box.className='porque';
+    box.innerHTML='<b>Lo que dice tu costeo</b><br>'+
+      'Cuesta '+money(d.cv)+' por persona y '+money(d.cf)+' fijos por salida. '+
+      'A cupo de '+cupo+', cada persona cuesta <b>'+money(costoPax)+'</b>.<br>'+
+      (neto?('Con '+Math.round(ind*100)+'% de indirecto y '+Math.round(mg*100)+'% de margen, el neto recomendado es <b>'+money(neto)+'</b> por persona.'):
+            'Ojo: el indirecto y el margen suman 100% o más, así que no sale un precio recomendado.')+
+      (actual?('<br>Tienes puesto '+money(actual)+'. '+
+        (minimo?('Con ese precio, la salida cubre el fijo a partir de <b>'+minimo+' persona'+(minimo===1?'':'s')+'</b>: ese es el grupo mínimo que recomienda el costeo.')
+               :'Ese precio no cubre ni el costo por persona, así que ningún grupo mínimo lo arregla.')):'');
   }
-
-  async function recargaGuias(){
-    GUI=await get('guia_versiones?select=id,nombre,protagonista_slug,es_base,tipo,created_at&op_experiencia_id=eq.'+ID+'&order=created_at');
-    var pars={};
-    if(GUI.length){
-      var ids=GUI.map(function(g){return g.id;}).join(',');
-      var pp=await get('guia_paradas?select=version_id&version_id=in.('+ids+')');
-      pp.forEach(function(x){pars[x.version_id]=(pars[x.version_id]||0)+1;});
-    }
-    $('tbGuias').innerHTML=GUI.length?GUI.map(function(g){
-      var pr=PROTAS.filter(function(p){return p.slug===g.protagonista_slug;})[0];
-      return '<tr><td><b>'+esc(g.nombre||'Sin nombre')+'</b></td>'+
-        '<td class="mini">'+esc(pr?pr.nombre:(g.protagonista_slug||'—'))+'</td>'+
-        '<td class="n">'+(pars[g.id]||0)+'</td>'+
-        '<td class="mini">'+(g.es_base?'tronco base':'variante')+'</td>'+
-        '<td class="n"><a class="btn fantasma sm" href="/guia.html?v='+g.id+'" target="_blank">Editar</a> '+
-        '<button class="btn fantasma sm" data-delg="'+g.id+'">✕</button></td></tr>';
-    }).join(''):'<tr><td colspan="5" class="mini">Todavía no tiene ninguna guía. Elige quién lo cuenta y créala.</td></tr>';
-    Array.prototype.forEach.call($('tbGuias').querySelectorAll('[data-delg]'),function(b){
-      b.onclick=async function(){
-        if(!confirm('¿Borrar esta versión de la guía? No se puede deshacer.'))return;
-        await del('guia_versiones','id=eq.'+b.getAttribute('data-delg'));await recargaGuias();pinta();};});
-  }
-
-  function guiaPinta(){ cargaGuias(); }
-
-  /* El tronco que se crea no es un texto inventado: es lo que ya dice la
-     ficha, puesto en la voz del protagonista, con los huecos señalados para
-     que quien la edite sepa qué falta. */
-  function troncoHTML(p,idea){
-    function bloque(t,x){return x?'<h2>'+t+'</h2><p>'+esc(x).replace(/\n+/g,'</p><p>')+'</p>':'';}
-    var paradas=(PAR||[]).map(function(x,n){
-      return '<li><b>'+esc(x.nombre||('Parada '+(n+1)))+'</b>'+(x.descripcion?' — '+esc(x.descripcion):'')+'</li>';}).join('');
-    var falta=[];
-    if(!E.storytelling)   falta.push('el storytelling');
-    if(!E.dinamica)       falta.push('la dinámica');
-    if(!E.fin_teleologico)falta.push('el fin teleológico');
-    if(!paradas)          falta.push('las paradas');
-
-    return '<h1>'+esc($('gvNombre').value||E.nombre)+'</h1>'+
-      '<p class="voz"><em>Lo cuenta '+esc(p.nombre)+(p.epoca?'. '+esc(p.epoca):'')+'</em></p>'+
-
-      '<h2>Su voz</h2>'+(p.voz?'<blockquote>'+esc(p.voz)+'</blockquote>':'<p><em>Sin voz registrada.</em></p>')+
-      bloque('Quién es', p.biografia_breve)+
-      bloque('Cómo es', p.personalidad)+
-      bloque('Por qué él cuenta este tour', p.vinculo)+
-      bloque('Cómo mira la hospitalidad', p.mirada_hospitalidad)+
-      bloque('El puente con quien viene de fuera', p.puente_internacional)+
-
-      (idea?'<h2>La idea que lo atraviesa</h2><p><b>'+esc(idea.nombre)+'</b>'+
-            (idea.pensador?' · '+esc(idea.pensador):'')+
-            (idea.sistema_pensamiento?' · '+esc(idea.sistema_pensamiento):'')+'</p>'+
-            (idea.descripcion?'<p>'+esc(idea.descripcion)+'</p>':''):'')+
-
-      '<h2>De qué va este recorrido</h2>'+
-      (E.storytelling?'<p>'+esc(E.storytelling)+'</p>':'<p><em>Pendiente: la ficha no tiene storytelling.</em></p>')+
-      (E.resumen?'<p>'+esc(E.resumen)+'</p>':'')+
-      bloque('Cómo se hace', E.dinamica)+
-      bloque('El elemento gastronómico', E.gastro_desc)+
-      (paradas?'<h2>Las paradas</h2><ol>'+paradas+'</ol>':'<h2>Las paradas</h2><p><em>Pendiente: la ficha no tiene paradas cargadas.</em></p>')+
-      bloque('Para qué', E.fin_teleologico)+
-      bloque('Lo que se lleva puesto', E.tangible_souvenir)+
-
-      (p.lo_que_nunca?'<h2>Lo que este protagonista nunca diría</h2><p>'+esc(p.lo_que_nunca)+'</p>':'')+
-      (p.cuidado?'<h2>Con qué hay que tener cuidado</h2><p>'+esc(p.cuidado)+'</p>':'')+
-      (p.fuentes?'<h2>De dónde sale lo que dice</h2><p>'+esc(p.fuentes)+'</p>':'')+
-
-      '<hr><p class="mini"><em>Este es el <b>tronco</b>, no la guía terminada: junta lo que hay del protagonista y lo que hay en la ficha, para que quien la escriba no empiece en blanco. '+
-      (falta.length?'De esta ficha falta '+esc(falta.join(', '))+', así que esas partes salen vacías a propósito. ':'')+
-      'Armado el '+new Date().toLocaleDateString('es-MX')+'.</em></p>';
-  }
-
-  $('gvAdd').onclick=async function(){
-    var slug=$('gvProta').value;
-    if(!slug){error('Elige quién lo cuenta.');return;}
-    var p=PROTAS.filter(function(x){return String(x.slug||x.id)===slug;})[0];
-    var idea=IDEAS.filter(function(x){return String(x.id)===$('gvIdea').value;})[0];
-    var nom=($('gvNombre').value||'').trim()||(p.nombre+' · '+E.nombre);
-    var r=await post('guia_versiones',{
-      op_experiencia_id:ID, tour_id:E.tour_id||null, nombre:nom, autor:'Ficha del producto',
-      protagonista_slug:slug, tipo:'protagonista', es_base:GUI.length===0,
-      descripcion:'Creada desde la ficha'+(idea?' con la idea de '+idea.nombre:'')+'.',
-      documento_html:troncoHTML(p,idea)});
-    if(!r.ok){error('No se pudo crear la guía.');return;}
-    $('gvNombre').value='';
-    await recargaGuias(); pinta();
-    toast('Tronco armado con '+p.nombre+'. Ábrelo en Editar para escribirla.');
-  };
-
 
   /* ---------- Convertir propia <-> de terceros (solo dirección) ----------
      No se duplica el id. 19 tablas apuntan a op_experiencias.id —entre ellas
@@ -3019,6 +3103,7 @@ gmp-place-autocomplete,.gmpac{
       p.classList.toggle('on',+p.getAttribute('data-s')===cual);});
     if(cual===9){cxHereda();cxPinta();}
     if(cual===10)guiaPinta();
+    if(cual===4)recoPrecio();
 
     var cuenta={0:0,1:0,2:0};
     $('sLista').innerHTML=visibles.map(function(i){
