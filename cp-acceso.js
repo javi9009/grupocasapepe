@@ -69,5 +69,46 @@
   // Auto-init: cualquier <select data-cp-ubic> se poda solo al cargar
   function auto(){ document.querySelectorAll('select[data-cp-ubic]').forEach(function(s){ scopeSelect(s); }); }
   if(document.readyState!=='loading') auto(); else document.addEventListener('DOMContentLoaded',auto);
-  window.cpAcceso={ubicaciones:ubicaciones,permite:permite,filtra:filtra,scopeSelect:scopeSelect,toProy:toProy,tokEmail:tokEmail,esDireccion:esDireccion};
+  /* Pantalla de "entra primero". Una pantalla de /m/ abierta directa —un enlace
+     guardado, el teléfono— no tiene sesión, la base contesta vacío y se queda
+     con ceros o con un "no se pudo cargar" que parece un error nuestro. Esto lo
+     dice claro y devuelve al panel, que al entrar te trae de vuelta aquí.
+     Es opt-in: la página llama cpAcceso.exige() si de verdad necesita sesión. */
+  function sinSesion(){
+    if(document.getElementById('cp-sin-sesion')) return;
+    if(document.readyState==='loading'){
+      document.addEventListener('DOMContentLoaded',sinSesion); return;
+    }
+    /* Va como capa encima, no reemplazando el documento: así no importa si la
+       página termina de pintarse después; el aviso sigue mandando. */
+    var vuelta=encodeURIComponent(location.pathname+location.search);
+    var d=document.createElement('div');
+    d.id='cp-sin-sesion';
+    d.setAttribute('style','position:fixed;inset:0;z-index:2147483647;background:#FBF7F2;'+
+      'color:#1E1A16;font-family:Inter,system-ui,-apple-system,sans-serif;'+
+      'display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto');
+    d.innerHTML=
+      '<div style="max-width:470px;text-align:center">'+
+      '<div style="font-family:Oswald,Inter,sans-serif;font-weight:700;font-size:21px;'+
+      'text-transform:uppercase;letter-spacing:.04em">Entra primero al panel</div>'+
+      '<p style="color:#6E665C;font-size:14px;line-height:1.6;margin:12px 0 22px">'+
+      'Esta pantalla lee los datos con tu sesión, y en este navegador no hay ninguna '+
+      'abierta. Pasa al abrir el enlace directo desde el teléfono o desde un favorito. '+
+      'Entra al panel y te devolvemos aquí.</p>'+
+      '<a href="/index.html?volver='+vuelta+'" style="display:inline-block;'+
+      'font-family:Oswald,Inter,sans-serif;font-weight:600;font-size:13px;text-transform:uppercase;'+
+      'letter-spacing:.05em;padding:12px 22px;border-radius:9px;background:#F2682A;'+
+      'color:#fff;text-decoration:none">Ir al panel</a></div>';
+    document.body.appendChild(d);
+  }
+  /* true = hay sesión y la página puede seguir. false = ya se pintó el aviso. */
+  function exige(){
+    if(tokEmail()) return true;
+    /* Dentro del panel la página va en un iframe y la sesión la tiene el padre:
+       ahí no hay nada que avisar. */
+    if(window.top!==window.self) return true;
+    sinSesion(); return false;
+  }
+
+  window.cpAcceso={ubicaciones:ubicaciones,permite:permite,filtra:filtra,scopeSelect:scopeSelect,toProy:toProy,tokEmail:tokEmail,esDireccion:esDireccion,exige:exige,sinSesion:sinSesion};
 })();
