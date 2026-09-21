@@ -456,6 +456,13 @@ gmp-place-autocomplete,.gmpac{
         <div id="impResumen"></div>
       </div>
 
+      <div class="card" id="cardTq">
+        <h3>Cómo es este tour por dentro</h3>
+        <div class="porque">Aquí no hay pesos. Son cosas del tour que no cuestan dinero pero cambian lo que deja: de dónde viene la comida, quién lo protagoniza, cómo se evita saturar el lugar. El huésped las ve en <b>«¿Qué más estás logrando?»</b>.</div>
+        <div class="hint">Solo salen las preguntas que aplican a lo que ya llenaste. Si añades comida o un protagonista, aparecen más.</div>
+        <div id="tqArbol" style="margin-top:6px"></div>
+      </div>
+
       <div class="card">
         <h3>Cómo se mueve el grupo</h3>
         <div class="hint">Esto no es un porcentaje del gasto, es cómo opera el tour. Pesa en la presión sobre el centro y en la huella.</div>
@@ -823,6 +830,141 @@ gmp-place-autocomplete,.gmpac{
     var n=document.querySelector('nav.pasos');if(n)n.style.display='none';
   }
 
+  /* ---------- el cuestionario del tour ----------
+     El hermano del que contesta la empresa al darse de alta, pero de este tour
+     y sin firma: la ficha ya pasa por nuestra revisión antes de publicarse.
+
+     Preguntar de menos es mejor que preguntar de más. Cada pregunta trae su
+     condición — que el tour incluya comida, que tenga protagonista, que el
+     cupo pase de quince — y solo sale si se cumple con lo que ya está lleno.
+     Así nadie contesta sobre comida en un tour donde no se come. */
+  var TQQ=[],TQR={},TQV=1;
+
+  function tqAplica(q){
+    var c=q.condicion; if(!c)return true;
+    var inc=(E.incluye||[]).map(String);
+    if(c.incluye_alguno && !c.incluye_alguno.some(function(x){return inc.indexOf(x)>=0;}))return false;
+    if(c.incluye_ninguno && c.incluye_ninguno.some(function(x){return inc.indexOf(x)>=0;}))return false;
+    if(c.tiene_protagonistas && !(PRO||[]).length)return false;
+    if(c.tiene_paradas && !(PAR||[]).length)return false;
+    if(c.cupo_mayor_que!=null && !(Number(E.cupo_max)>Number(c.cupo_mayor_que)))return false;
+    if(c.categoria_alguna && c.categoria_alguna.indexOf(String(E.categoria||''))<0)return false;
+    return true;
+  }
+  /* ¿Se abre este hijo con lo que contestó su padre? */
+  function tqAbre(q){
+    if(!q.padre_clave)return true;
+    var pr=TQR[q.padre_clave];
+    if(pr==null||pr===''||pr===false)return false;
+    if(Array.isArray(pr)&&!pr.length)return false;
+    var c=q.abre_si;
+    if(!c)return true;
+    if(c.igual!=null)   return String(pr)===String(c.igual);
+    if(c.distinto!=null)return String(pr)!==String(c.distinto);
+    return true;
+  }
+  function tqPadre(q){return TQQ.filter(function(x){return x.clave===q.padre_clave;})[0];}
+  function tqVisible(q){
+    var v=q,g=0;
+    while(v&&g++<12){
+      if(!tqAplica(v)||!tqAbre(v))return false;
+      if(!v.padre_clave)return true;
+      v=tqPadre(v);
+    }
+    return true;
+  }
+  function tqHondo(q){
+    var h=0,v=q,g=0;
+    while(v&&v.padre_clave&&g++<12){h++;v=tqPadre(v);}
+    return h;
+  }
+
+  function tqCampo(q){
+    var val=TQR[q.clave], id='tq-'+q.clave;
+    if(q.tipo==='si_no'||q.tipo==='si_no_ns'){
+      var ops=q.tipo==='si_no'?['si','no']:['si','no','ns'];
+      var nom={si:'Sí',no:'No',ns:'No sé'};
+      return '<div class="radios">'+ops.map(function(o){
+        return '<label><input type="radio" name="'+id+'" value="'+o+'"'+
+          (String(val)===o?' checked':'')+' data-tq="'+esc(q.clave)+'"> <span>'+nom[o]+'</span></label>';
+      }).join('')+'</div>';
+    }
+    if(q.tipo==='opcion'){
+      return '<div class="radios">'+(q.opciones||[]).map(function(o){
+        return '<label><input type="radio" name="'+id+'" value="'+esc(o)+'"'+
+          (String(val)===String(o)?' checked':'')+' data-tq="'+esc(q.clave)+'"> <span>'+esc(o)+'</span></label>';
+      }).join('')+'</div>';
+    }
+    if(q.tipo==='multi'){
+      var sel=Array.isArray(val)?val:[];
+      return '<div class="chips">'+(q.opciones||[]).map(function(o){
+        return '<span class="chip'+(sel.indexOf(o)>=0?' on':'')+'" data-tqm="'+esc(q.clave)+
+               '" data-v="'+esc(o)+'">'+esc(o)+'</span>';
+      }).join('')+'</div>';
+    }
+    var t=(q.tipo==='numero'||q.tipo==='dinero')?'number':'text';
+    return '<input type="'+t+'" value="'+esc(val==null?'':val)+'" data-tqt="'+esc(q.clave)+'">';
+  }
+
+  function tqPinta(){
+    var el=$('tqArbol'); if(!el)return;
+    var vis=TQQ.filter(tqVisible);
+    if(!vis.length){
+      el.innerHTML='<div class="mini">Con lo que llevas lleno todavía no hay nada que preguntar aquí. '+
+        'Cuando añadas comida, paradas o un protagonista, aparecen las preguntas que toquen.</div>';
+      return;
+    }
+    el.innerHTML=vis.map(function(q){
+      var h=tqHondo(q);
+      return '<div class="fld" style="margin-top:14px;padding-left:'+(h*16)+'px'+
+             (h?';border-left:2px solid var(--linea)':'')+'">'+
+        '<label style="font-weight:600;text-transform:none;letter-spacing:0;font-size:13px">'+
+          esc(q.pregunta)+'</label>'+
+        (q.ayuda?'<div class="ay" style="margin:-2px 0 6px">'+esc(q.ayuda)+'</div>':'')+
+        tqCampo(q)+'</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(el.querySelectorAll('[data-tq]'),function(r){
+      r.onchange=function(){tqSet(r.getAttribute('data-tq'),r.value);};});
+    Array.prototype.forEach.call(el.querySelectorAll('[data-tqt]'),function(i){
+      /* al escribir no se guarda en cada tecla: al salir del campo */
+      i.onchange=function(){tqSet(i.getAttribute('data-tqt'),i.value);};});
+    Array.prototype.forEach.call(el.querySelectorAll('[data-tqm]'),function(c){
+      c.onclick=function(){
+        var k=c.getAttribute('data-tqm'), v=c.getAttribute('data-v');
+        var a=Array.isArray(TQR[k])?TQR[k].slice():[];
+        var i=a.indexOf(v); if(i>=0)a.splice(i,1); else a.push(v);
+        tqSet(k,a);
+      };});
+  }
+
+  function tqSet(clave,val){ TQR[clave]=val; tqGuarda(clave,val); tqPinta(); }
+
+  async function tqGuarda(clave,val){
+    var q=TQQ.filter(function(x){return x.clave===clave;})[0]; if(!q)return;
+    /* Se borra y se vuelve a poner: una respuesta por pregunta, siempre la
+       última. Sin monto ni pct — esto no es dinero de la reserva, y la base
+       lo impide para las que no son 'directo'. */
+    await del('ods_aportacion','ambito=eq.tour&experiencia_id=eq.'+ID+'&clave=eq.'+encodeURIComponent(clave));
+    var r=await post('ods_aportacion',{
+      ambito:'tour', experiencia_id:ID, version:TQV, clave:clave,
+      respuesta:val, via:q.via, meta:(q.metas&&q.metas[0])||null,
+      declarado_por:(ses&&ses.user&&ses.user.email)||null});
+    if(r&&!r.ok)error('No se pudo guardar esa respuesta. Inténtalo otra vez.');
+  }
+
+  async function tqCarga(){
+    var q=await get('ods_cuestionario?ambito=eq.tour&activo=is.true&order=orden');
+    TQQ=q||[];
+    if(TQQ.length){
+      TQV=Math.max.apply(null,TQQ.map(function(x){return x.version||1;}));
+      TQQ=TQQ.filter(function(x){return (x.version||1)===TQV;});
+    }
+    var a=await get('ods_aportacion?ambito=eq.tour&experiencia_id=eq.'+ID);
+    TQR={}; (a||[]).forEach(function(x){TQR[x.clave]=x.respuesta;});
+    tqPinta();
+  }
+
   /* ---------- arranque ---------- */
   async function arranca(){
     ses=null;
@@ -858,6 +1000,7 @@ gmp-place-autocomplete,.gmpac{
     await detalle();
     pinta();
     cargaMaps();cargaVnum();
+    tqCarga();
   }
 
   function monta(){
@@ -1580,6 +1723,9 @@ gmp-place-autocomplete,.gmpac{
       b.onclick=function(){step=+b.getAttribute('data-i');pinta();window.scrollTo(0,0);};});
     Array.prototype.forEach.call(document.querySelectorAll('.panel'),function(p){
       p.classList.toggle('on',+p.getAttribute('data-s')===step);});
+    /* Las preguntas del tour dependen de lo que hay lleno en los otros pasos,
+       y eso cambia mientras se edita. Se repintan al entrar en el de impacto. */
+    if(step===7 && TQQ.length)tqPinta();
     $('sLista').innerHTML=visibles.map(function(i){
       return '<div class="mini" style="padding:3px 0'+(h[i]?';color:var(--tinta)':'')+'">'+(h[i]?'✓':'○')+' '+PASOS[i]+'</div>';}).join('');
     sincronizaAC();
