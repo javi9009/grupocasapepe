@@ -853,7 +853,7 @@ gmp-place-autocomplete,.gmpac{
         <div class="fgrid">
           <div class="fld"><label>Quién lo cuenta</label><select id="gvProta"></select></div>
           <div class="fld"><label>Idea que lo atraviesa</label><select id="gvIdea"></select></div>
-          <div class="fld"><label>Nombre de esta versión</label><input id="gvNombre" placeholder="Vasconcelos en el Centro"></div>
+          <div class="fld"><label>Nombre de esta versión</label><input id="gvNombre" placeholder="Se pone solo al elegir quién lo cuenta"></div>
           <div class="fld" style="display:flex;align-items:flex-end"><button class="btn" id="gvAdd">Crear la guía</button></div>
         </div>
         <div id="gvFicha" class="desglose" style="margin-top:10px;display:none"></div>
@@ -957,7 +957,7 @@ gmp-place-autocomplete,.gmpac{
   ];
   var ses=null,E=null,step=0,interno=false,CFG={};
   var LUG=[],GAS=[],TAN=[],PRO=[],MED=[],PAR=[],BLQ=[],COS=[],INS=[],MAPS=null;
-  var GUI=[],PROTAS=[],IDEAS=[];
+  var GUI=[],PROTAS=[],IDEAS=[],GVTOCADO=false;
 
   function $(id){return document.getElementById(id);}
   function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -2808,6 +2808,117 @@ gmp-place-autocomplete,.gmpac{
         (minimo?('Con ese precio, la salida cubre el fijo a partir de <b>'+minimo+' persona'+(minimo===1?'':'s')+'</b>: ese es el grupo mínimo que recomienda el costeo.')
                :'Ese precio no cubre ni el costo por persona, así que ningún grupo mínimo lo arregla.')):'');
   }
+
+
+  /* ---------- La guía del guía, dentro de la ficha ----------
+     El material ya existe: 35 protagonistas, 24 autores, 244 obras, 240 tesis
+     y 603 conclusiones. Aquí se elige quién lo cuenta y con qué idea, y se
+     arma el tronco; el texto largo se escribe en la Guía del Guía. */
+  function cargaGuias(){ return _cargaGuias(); }
+  async function _cargaGuias(){
+    if(!PROTAS.length){
+      PROTAS=await get('guia_protagonistas?select=id,slug,nombre,tipo,epoca,vinculo,voz,mirada_hospitalidad,biografia_breve,personalidad,puente_internacional,lo_que_nunca,cuidado,fuentes&activo=is.true&order=nombre');
+      IDEAS =await get('ideas?select=id,nombre,pensador,sistema_pensamiento,descripcion&order=nombre');
+      $('gvProta').innerHTML='<option value="">—</option>'+PROTAS.map(function(p){
+        return '<option value="'+esc(p.slug||p.id)+'">'+esc(p.nombre)+(p.epoca?' · '+esc(String(p.epoca).slice(0,40)):'')+'</option>';}).join('');
+      $('gvIdea').innerHTML='<option value="">Ninguna en particular</option>'+IDEAS.map(function(i){
+        return '<option value="'+esc(i.id)+'">'+esc(i.nombre)+(i.pensador?' · '+esc(i.pensador):'')+'</option>';}).join('');
+      $('gvNombre').addEventListener('input',function(){GVTOCADO=true;});
+      $('gvProta').onchange=function(){
+        var p=PROTAS.filter(function(x){return String(x.slug||x.id)===$('gvProta').value;})[0];
+        var d=$('gvFicha');
+        if(!p){d.style.display='none';return;}
+        d.style.display='';
+        function fila(k,v){return v?'<div><span>'+k+'</span><b>'+esc(String(v).slice(0,150))+'</b></div>':'';}
+        d.innerHTML=fila('Quién es',p.biografia_breve)+fila('Su voz',p.voz)+
+                    fila('Cómo mira la hospitalidad',p.mirada_hospitalidad)+
+                    fila('Lo que nunca diría',p.lo_que_nunca);
+        /* El nombre sugerido sigue al protagonista elegido. Antes solo se
+           rellenaba la primera vez, así que al cambiar de protagonista la
+           versión nacía con el nombre del anterior. */
+        if(!GVTOCADO)$('gvNombre').value=p.nombre+' · '+(E.nombre||'este tour');
+      };
+    }
+    await recargaGuias();
+  }
+
+  async function recargaGuias(){
+    GUI=await get('guia_versiones?select=id,nombre,protagonista_slug,es_base,tipo,created_at&op_experiencia_id=eq.'+ID+'&archivado_at=is.null&order=created_at');
+    var pars={};
+    if(GUI.length){
+      var ids=GUI.map(function(g){return g.id;}).join(',');
+      var pp=await get('guia_paradas?select=version_id&version_id=in.('+ids+')');
+      pp.forEach(function(x){pars[x.version_id]=(pars[x.version_id]||0)+1;});
+    }
+    $('tbGuias').innerHTML=GUI.length?GUI.map(function(g){
+      var pr=PROTAS.filter(function(p){return p.slug===g.protagonista_slug;})[0];
+      return '<tr><td><b>'+esc(g.nombre||'Sin nombre')+'</b></td>'+
+        '<td class="mini">'+esc(pr?pr.nombre:(g.protagonista_slug||'—'))+'</td>'+
+        '<td class="n">'+(pars[g.id]||0)+'</td>'+
+        '<td class="mini">'+(g.es_base?'tronco base':'variante')+'</td>'+
+        '<td class="n"><a class="btn fantasma sm" href="/guia.html?v='+g.id+'" target="_blank">Editar</a> '+
+        '<button class="btn fantasma sm" data-delg="'+g.id+'">✕</button></td></tr>';
+    }).join(''):'<tr><td colspan="5" class="mini">Todavía no tiene ninguna guía. Elige quién lo cuenta y créala.</td></tr>';
+    Array.prototype.forEach.call($('tbGuias').querySelectorAll('[data-delg]'),function(b){
+      b.onclick=async function(){
+        if(!confirm('¿Borrar esta versión de la guía? No se puede deshacer.'))return;
+        await del('guia_versiones','id=eq.'+b.getAttribute('data-delg'));await recargaGuias();pinta();};});
+  }
+
+  function guiaPinta(){ _cargaGuias(); }
+
+  function troncoHTML(p,idea){
+    function bloque(t,x){return x?'<h2>'+t+'</h2><p>'+esc(x).replace(/\n+/g,'</p><p>')+'</p>':'';}
+    var paradas=(PAR||[]).map(function(x,n){
+      return '<li><b>'+esc(x.nombre||('Parada '+(n+1)))+'</b>'+(x.descripcion?' — '+esc(x.descripcion):'')+'</li>';}).join('');
+    var falta=[];
+    if(!E.storytelling)   falta.push('el storytelling');
+    if(!E.dinamica)       falta.push('la dinámica');
+    if(!E.fin_teleologico)falta.push('el fin teleológico');
+    if(!paradas)          falta.push('las paradas');
+    return '<h1>'+esc(($('gvNombre').value||'').trim()||(p.nombre+' · '+E.nombre))+'</h1>'+
+      '<p class="voz"><em>Lo cuenta '+esc(p.nombre)+(p.epoca?'. '+esc(p.epoca):'')+'</em></p>'+
+      (p.voz?'<h2>Su voz</h2><blockquote>'+esc(p.voz)+'</blockquote>':'')+
+      bloque('Quién es', p.biografia_breve)+
+      bloque('Cómo es', p.personalidad)+
+      bloque('Por qué él cuenta este tour', p.vinculo)+
+      bloque('Cómo mira la hospitalidad', p.mirada_hospitalidad)+
+      bloque('El puente con quien viene de fuera', p.puente_internacional)+
+      (idea?'<h2>La idea que lo atraviesa</h2><p><b>'+esc(idea.nombre)+'</b>'+
+            (idea.pensador?' · '+esc(idea.pensador):'')+
+            (idea.sistema_pensamiento?' · '+esc(idea.sistema_pensamiento):'')+'</p>'+
+            (idea.descripcion?'<p>'+esc(idea.descripcion)+'</p>':''):'')+
+      '<h2>De qué va este recorrido</h2>'+
+      (E.storytelling?'<p>'+esc(E.storytelling)+'</p>':'<p><em>Pendiente: la ficha no tiene storytelling.</em></p>')+
+      bloque('Cómo se hace', E.dinamica)+
+      bloque('El elemento gastronómico', E.gastro_desc)+
+      (paradas?'<h2>Las paradas</h2><ol>'+paradas+'</ol>':'<h2>Las paradas</h2><p><em>Pendiente: la ficha no tiene paradas cargadas.</em></p>')+
+      bloque('Para qué', E.fin_teleologico)+
+      bloque('Lo que se lleva puesto', E.tangible_souvenir)+
+      (p.lo_que_nunca?'<h2>Lo que este protagonista nunca diría</h2><p>'+esc(p.lo_que_nunca)+'</p>':'')+
+      (p.cuidado?'<h2>Con qué hay que tener cuidado</h2><p>'+esc(p.cuidado)+'</p>':'')+
+      (p.fuentes?'<h2>De dónde sale lo que dice</h2><p>'+esc(p.fuentes)+'</p>':'')+
+      '<hr><p class="mini"><em>Este es el <b>tronco</b>, no la guía terminada: junta lo que hay del protagonista y lo que hay en la ficha, para que quien la escriba no empiece en blanco. '+
+      (falta.length?'De esta ficha falta '+esc(falta.join(', '))+', así que esas partes salen vacías a propósito. ':'')+
+      'Armado el '+new Date().toLocaleDateString('es-MX')+'.</em></p>';
+  }
+
+  $('gvAdd').onclick=async function(){
+    var slug=$('gvProta').value;
+    if(!slug){error('Elige quién lo cuenta.');return;}
+    var p=PROTAS.filter(function(x){return String(x.slug||x.id)===slug;})[0];
+    var idea=IDEAS.filter(function(x){return String(x.id)===$('gvIdea').value;})[0];
+    var nom=(GVTOCADO?($('gvNombre').value||'').trim():'')||(p.nombre+' · '+E.nombre);
+    var r=await post('guia_versiones',{
+      op_experiencia_id:ID, tour_id:E.tour_id||null, nombre:nom, autor:'Ficha del producto',
+      protagonista_slug:slug, tipo:'protagonista', es_base:GUI.length===0,
+      descripcion:'Creada desde la ficha'+(idea?' con la idea de '+idea.nombre:'')+'.',
+      documento_html:troncoHTML(p,idea)});
+    if(!r.ok){error('No se pudo crear la guía.');return;}
+    $('gvNombre').value=''; GVTOCADO=false;
+    await recargaGuias(); pinta();
+    toast('Tronco armado con '+p.nombre+'. Ábrelo en Editar para escribirla.');
+  };
 
   /* ---------- Convertir propia <-> de terceros (solo dirección) ----------
      No se duplica el id. 19 tablas apuntan a op_experiencias.id —entre ellas
