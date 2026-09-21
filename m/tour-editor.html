@@ -63,6 +63,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .etq{display:inline-block;font-family:Oswald;font-weight:600;font-size:10.5px;text-transform:uppercase;
   letter-spacing:.06em;border-radius:999px;padding:3px 9px;white-space:nowrap}
 .etq.propia{background:var(--naranja-suave);color:var(--naranja-oscuro)}
+.etq.sinalta{background:#EFF4FF;color:#1D4ED8}
 .etq.tercero{background:var(--cielo-suave);color:#1F5B7A}
 .etq.sin{background:var(--alerta-bg);color:var(--alerta)}
 .etq.pub{background:var(--ok-bg);color:var(--ok)}
@@ -96,6 +97,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   <button class="chip" data-c="todas" aria-pressed="true">Todas</button>
   <button class="chip" data-c="propia" aria-pressed="false">Propias</button>
   <button class="chip" data-c="tercero" aria-pressed="false">De terceros</button>
+  <button class="chip" data-c="sinalta" aria-pressed="false">Sin alta todavía</button>
   <button class="chip" data-c="pendientes" aria-pressed="false">Con pendientes</button>
   <select class="sel" id="fEstado"><option value="">Cualquier estado</option><option value="publicada">Publicadas</option><option value="borrador">Borrador</option></select>
   <select class="sel" id="fOperador"><option value="">Cualquier operador</option></select>
@@ -107,7 +109,10 @@ td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
     La ficha es la misma para todas. En las <b>propias</b> trae además el paso <b>10 · Costeo</b>
     y el <b>11 · Guía del guía</b>; en las de terceros, la comisión y la liquidación.
     Se abre tocando la fila. Arriba a la derecha eliges la <b>ciudad</b>; solo salen las que
-    tienen fichas.
+    tienen fichas.<br>
+    Las marcadas <b>sin alta</b> son empresas que están en nuestra base porque leímos lo que
+    publican, pero nadie de su equipo ha entrado todavía. Su ficha es una <b>pre-ficha</b>:
+    todo en azul, sin validar. Al darse de alta y reclamar su empresa, se encuentran esto ya hecho.
   </div>
   <div class="kpis" id="kpis"></div>
   <div class="tw">
@@ -139,6 +144,9 @@ var F=[], filtro='todas';
 var Q=new URLSearchParams(location.search);
 var CIUDAD=Q.get('ciudad')||'CDMX';   /* por defecto CDMX; Puebla entra en cuanto haya fichas */
 var CIUDADES=['CDMX','Puebla','Guatemala'];
+/* El centro de mando puede llegar con el filtro ya puesto */
+(function(){var c=Q.get('clase');
+  if(['propia','tercero','sinalta','pendientes'].indexOf(c)>=0)filtro=c;})();
 
 /* Lo que le falta a una ficha para poder venderse. Mismo criterio que el
    semáforo de dentro de la ficha, para que no digan cosas distintas. */
@@ -165,6 +173,7 @@ function pinta(){
     if((e.ciudad||'CDMX')!==CIUDAD) return false;
     if(filtro==='propia'  && e.clase!=='propia')  return false;
     if(filtro==='tercero' && e.clase!=='tercero') return false;
+    if(filtro==='sinalta' && !e.operador_sin_alta) return false;
     if(filtro==='pendientes' && !pendientes(e).length) return false;
     if(est && e.estado!==est) return false;
     if(op && String(e.operador_id||'')!==op) return false;
@@ -177,19 +186,23 @@ function pinta(){
   var terc=enCiudad.filter(function(e){return e.clase==='tercero';}).length;
   var pub=enCiudad.filter(function(e){return e.estado==='publicada';}).length;
   var conPend=enCiudad.filter(function(e){return pendientes(e).length;}).length;
+  var sinAlta=enCiudad.filter(function(e){return e.operador_sin_alta;}).length;
   document.getElementById('kpis').innerHTML=
     '<div class="kpi"><div class="k">Fichas en '+esc(CIUDAD)+'</div><div class="v">'+enCiudad.length+'</div></div>'+
     '<div class="kpi"><div class="k">Propias</div><div class="v">'+propias+'</div></div>'+
     '<div class="kpi"><div class="k">De terceros</div><div class="v">'+terc+'</div></div>'+
+    '<div class="kpi"><div class="k">Sin alta todavía</div><div class="v">'+sinAlta+'</div></div>'+
     '<div class="kpi"><div class="k">Publicadas</div><div class="v">'+pub+'</div></div>'+
     '<div class="kpi"><div class="k">Con pendientes</div><div class="v">'+conPend+'</div></div>';
   document.getElementById('sub').textContent=
-    CIUDAD+' · '+enCiudad.length+' fichas · '+propias+' propias y '+terc+' de terceros · '+conPend+' con algo pendiente';
+    CIUDAD+' · '+enCiudad.length+' fichas · '+propias+' propias y '+terc+' de terceros · '+
+    sinAlta+' de empresas que aún no han entrado · '+conPend+' con algo pendiente';
 
   document.getElementById('tb').innerHTML = vis.length ? vis.map(function(e){
     var p=pendientes(e);
     var clase = e.clase==='propia'?'<span class="etq propia">propia</span>'
-              : (e.clase==='tercero'?'<span class="etq tercero">'+esc(e.operador_nombre||'tercero')+'</span>'
+              : (e.clase==='tercero'?'<span class="etq tercero">'+esc(e.operador_nombre||'tercero')+'</span>'+
+                   (e.operador_sin_alta?' <span class="etq sinalta" title="La empresa está en la base pero nadie de su equipo ha entrado todavía">sin alta</span>':'')
                                     :'<span class="etq sin">sin clasificar</span>');
     return '<tr class="fila" data-id="'+esc(e.id)+'">'+
       '<td class="nom"><b>'+esc(e.nombre)+'</b><span>'+esc(e.categoria||'sin tipo')+
@@ -221,7 +234,7 @@ function pinta(){
 }
 
 async function carga(){
-  var r=await fetch(SB+'/rest/v1/v_ficha_experiencia?select=id,nombre,ciudad,categoria,estado,clase,operador_id,operador_nombre,precio_adulto,storytelling,dinamica,cer_inicio_lugar,ods,sku,es_componente,lineas_costeo,guias_del_guia&order=nombre',{headers:hdr()});
+  var r=await fetch(SB+'/rest/v1/v_ficha_experiencia?select=id,nombre,ciudad,categoria,estado,clase,origen,operador_id,operador_nombre,operador_sin_alta,precio_adulto,storytelling,dinamica,cer_inicio_lugar,ods,sku,es_componente,lineas_costeo,guias_del_guia&order=nombre',{headers:hdr()});
   if(!r.ok){
     document.getElementById('tb').innerHTML='<tr><td colspan="8" class="vacio">No se pudo leer el catálogo. Entra al panel y vuelve a abrir esta pantalla.</td></tr>';
     return;
@@ -249,6 +262,10 @@ function pintaCiudades(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-ciudad]'),function(b){
     b.onclick=function(){CIUDAD=b.dataset.ciudad;pintaCiudades();pinta();};});
 }
+
+/* si el filtro vino en la liga, el chip tiene que verse marcado */
+Array.prototype.forEach.call(document.querySelectorAll('.chip'),function(b){
+  b.setAttribute('aria-pressed', String(b.dataset.c===filtro));});
 
 Array.prototype.forEach.call(document.querySelectorAll('.chip'),function(b){
   b.onclick=function(){
