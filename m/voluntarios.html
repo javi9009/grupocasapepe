@@ -439,20 +439,51 @@ async function cartasLog(){
   const badge=x=> x.estatus==='aceptada' ? '<span class="tag aceptado">✓ Firmada</span>'
                 : x.estatus==='cancelada' ? '<span class="tag rechazado">Cancelada</span>'
                 : '<span class="tag en_votacion">📨 Sin firmar</span>';
-  c.innerHTML='<table><thead><tr><th>Quién</th><th>Fechas</th><th>Mandada</th><th>Estado</th><th>Firma</th></tr></thead><tbody>'
+  /* Días sin firmar: si lleva mucho ahí parado, es que no la encuentra o no la
+     entiende. Antes no había forma de verlo desde aquí. */
+  const dias=x=>Math.floor((Date.now()-new Date(x.created_at))/86400000);
+  c.innerHTML='<table><thead><tr><th>Quién</th><th>Fechas</th><th>Mandada</th><th>Estado</th><th>Firma</th><th></th></tr></thead><tbody>'
     + LOG.map(x=>{
         const ac=x.acuse||{};
         const firma = x.estatus==='aceptada'
           ? '<span class="chk">'+fh(x.aceptada_at)+(ac.ip?'<br>IP '+esc(ac.ip):'')+'</span>'
           : '<span class="chk">—</span>';
+        const d=dias(x);
+        const espera = x.estatus==='enviada'
+          ? '<br><span class="chk" style="color:'+(d>=3?'#9E3B2E':'#8a6420')+'">'+d+' día'+(d===1?'':'s')+' sin firmar</span>'
+          : '';
+        const acc = x.estatus==='enviada'
+          ? '<button class="btn" onclick="event.stopPropagation();reenviarCarta(\''+x.id+'\',this)">📨 Reenviar correo</button>'
+          : '';
         return '<tr class="row" onclick="verCartaLog(\''+x.id+'\')">'
           +'<td><b>'+esc(x.nombre||'')+'</b><br><span class="chk">'+esc(x.email||'')+'</span></td>'
           +'<td class="chk">'+f(x.desde)+' → '+f(x.hasta)+'</td>'
-          +'<td class="chk">'+fh(x.created_at)+'<br>'+esc(x.created_by||'')+'</td>'
+          +'<td class="chk">'+fh(x.created_at)+'<br>'+esc(x.created_by||'')+espera+'</td>'
           +'<td>'+badge(x)+'</td>'
-          +'<td>'+firma+'</td></tr>';
+          +'<td>'+firma+'</td>'
+          +'<td>'+acc+'</td></tr>';
       }).join('')
     +'</tbody></table>';
+}
+
+/* La función vol-carta-reenviar existía desde el 21-sep pero no la llamaba
+   nadie: no había botón. Manda el correo con la carta y el enlace a SoyPepe,
+   y sella enviada_por, que es como sabemos que salió de verdad. */
+async function reenviarCarta(id, btn){
+  const x=(LOG||[]).find(r=>r.id===id)||{};
+  if(!confirm('¿Reenviar por correo la carta de '+(x.nombre||'')+' a '+(x.email||'')+'?')) return;
+  const txt=btn.textContent; btn.disabled=true; btn.textContent='Mandando…';
+  try{
+    const r=await fetch(SBU+'/functions/v1/vol-carta-reenviar',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':SBK,'Authorization':'Bearer '+(T||SBK)},
+      body:JSON.stringify({carta_id:id})});
+    const j=await r.json().catch(()=>({}));
+    const h=(j&&j.hechos&&j.hechos[0])||null;
+    if(h&&h.ok){ btn.textContent='✓ Mandado'; cartasLog(); }
+    else { btn.disabled=false; btn.textContent=txt;
+           alert('No salió el correo: '+((h&&h.detalle)||(j&&j.error)||'error desconocido')); }
+  }catch(e){ btn.disabled=false; btn.textContent=txt; alert('No se pudo: '+e.message); }
 }
 function verCartaLog(id){
   const x=(LOG||[]).find(y=>y.id===id); if(!x) return;
