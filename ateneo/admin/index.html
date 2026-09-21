@@ -213,7 +213,8 @@ async function vOcup(){
 async function vCowork(){
   const {data,error}=await sb.from('ateneo_reservas').select('*').order('created_at',{ascending:false});
   if(error)throw error;
-  if(!data.length){$('view').innerHTML='<div class="empty">Aún no hay solicitudes de coworking.</div>';return;}
+  const _ct=await htmlContratos();
+  if(!data.length){$('view').innerHTML=_ct+'<div class="empty">Aún no hay solicitudes de coworking.</div>';bindContratos();return;}
   let h='<div class="grid">'+data.map(r=>'<div class="card"><div class="t">'+esc(r.empresa||r.nombre||'—')+'</div><div class="sub">'+esc(r.plan||r.espacio||'')+' · '+fd(r.created_at)+'</div>'
     +'<div class="row">👤 '+esc(r.persona_contacto||r.nombre||'')+' · <a href="mailto:'+esc(r.email)+'">'+esc(r.email)+'</a></div>'
     +(r.telefono?'<div class="row">📞 '+esc(r.telefono)+'</div>':'')
@@ -221,12 +222,163 @@ async function vCowork(){
     +(r.notas?'<div class="row" style="color:var(--muted)">'+esc(r.notas)+'</div>':'')
     +'<div class="row" style="margin-top:6px">'+estBadge(r.estado)+' &nbsp; Monto: <b>'+(r.monto!=null?('$'+r.monto):'—')+'</b> · Pago: '+estBadge(r.estado_pago)+'</div>'
     +'<div class="acts"><button class="btn btn-o btn-sm setm" data-id="'+r.id+'">💲 Monto</button><button class="btn btn-v btn-sm mkp" data-id="'+r.id+'">✓ Pagado</button><button class="btn btn-v btn-sm cf" data-id="'+r.id+'">Confirmar</button><button class="btn btn-x btn-sm cx" data-id="'+r.id+'">Cancelar</button></div></div>').join('')+'</div>';
-  $('view').innerHTML=h;
+  $('view').innerHTML=_ct+h;
+  bindContratos();
   const upd=async(id,patch)=>{const {error}=await sb.from('ateneo_reservas').update(patch).eq('id',id);if(error){alert(error.message);return;}render();};
   document.querySelectorAll('.setm').forEach(b=>b.onclick=()=>{const v=prompt('Monto a cobrar (MXN):');if(v===null)return;upd(b.dataset.id,{monto:parseFloat(v)||0});});
   document.querySelectorAll('.mkp').forEach(b=>b.onclick=()=>upd(b.dataset.id,{estado_pago:'pagado',estado:'confirmado'}));
   document.querySelectorAll('.cf').forEach(b=>b.onclick=()=>upd(b.dataset.id,{estado:'confirmado'}));
   document.querySelectorAll('.cx').forEach(b=>{b.onclick=()=>{if(confirm('¿Cancelar solicitud?'))upd(b.dataset.id,{estado:'cancelado'});};});
+}
+
+/* ===== Contratos de coworking =====================================================
+   Tres cosas en la pestaña Coworking: el contrato modelo (se edita entero, como un
+   documento), la liga para que un cliente se dé de alta y lo firme, y la lista de lo
+   firmado con su contrafirma. Todo pasa por la función contrato-admin, que exige
+   sesión con permiso de editar en PAG-ATE. */
+let CT_PLANTILLA=null, CT_LISTA=[];
+
+async function ctApi(body){
+  const {data:{session}}=await sb.auth.getSession();
+  const t=session&&session.access_token;
+  if(!t) throw new Error('Se cerró tu sesión, vuelve a entrar.');
+  const r=await fetch(SB_URL+'/functions/v1/contrato-admin',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+t},
+    body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({error:'respuesta ilegible'}));
+  if(!r.ok||j.error) throw new Error(j.error||('error '+r.status));
+  return j;
+}
+
+function ctEstado(e){
+  const m={enviado:['Pendiente de firma','#8a6d1f','#fdf3d3'],
+           firmado:['Firmado por el cliente','#1f6b3a','#dff3e4'],
+           contrafirmado:['Firmado por los dos','#15422a','#c9ebd5']};
+  const v=m[e]||[e||'—','#5b6b4d','#eef1e8'];
+  return '<span style="background:'+v[2]+';color:'+v[1]+';border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:700">'+esc(v[0])+'</span>';
+}
+
+async function htmlContratos(){
+  let planes=[];
+  try{ const {data}=await sb.from('ateneo_planes').select('slug,nombre,precio,precio_lanzamiento,requiere_contrato').order('nombre');
+       planes=(data||[]).filter(p=>p.requiere_contrato); }catch(e){}
+  try{ CT_LISTA=(await ctApi({accion:'lista'})).contratos||[]; }catch(e){ CT_LISTA=[]; }
+
+  const opts=planes.map(p=>'<option value="'+esc(p.slug)+'" data-precio="'+(Number(p.precio_lanzamiento||0)>0?p.precio_lanzamiento:p.precio)+'">'+esc(p.nombre)+'</option>').join('');
+  const hoy=new Date().toISOString().slice(0,10);
+
+  let lista;
+  if(!CT_LISTA.length) lista='<div class="empty">Todavía no hay contratos.</div>';
+  else lista='<div class="grid">'+CT_LISTA.map(c=>{
+    const liga='https://grupocasapepe.netlify.app/ateneo/contrato.html?t='+esc(c.token);
+    return '<div class="card"><div class="t">'+esc(c.cliente||'(sin llenar todavía)')+'</div>'
+      +'<div class="sub">'+esc(c.folio)+' · '+esc(c.plan_slug||'')+'</div>'
+      +'<div class="row" style="margin-top:6px">'+ctEstado(c.estado)+'</div>'
+      +'<div class="row">'+(c.desde?esc(c.desde)+' → '+esc(c.hasta||''):'')+(c.meses?' · '+c.meses+' meses':'')+'</div>'
+      +'<div class="row">Renta: <b>$'+Number(c.importe||0).toLocaleString('es-MX')+'</b>'+(Number(c.deposito||0)?' · Depósito: $'+Number(c.deposito).toLocaleString('es-MX'):'')+'</div>'
+      +(c.email?'<div class="row">✉️ '+esc(c.email)+'</div>':'')
+      +(c.firmado_at?'<div class="row" style="color:var(--muted)">Firmó el cliente: '+fd(c.firmado_at)+'</div>':'')
+      +(c.contrafirma_at?'<div class="row" style="color:var(--muted)">Contrafirmado: '+fd(c.contrafirma_at)+'</div>':'')
+      +'<div class="acts"><a class="btn btn-o btn-sm" href="'+liga+'" target="_blank" rel="noopener">Ver</a>'
+      +'<button class="btn btn-o btn-sm ctCopy" data-liga="'+liga+'">Copiar liga</button>'
+      +(c.estado==='firmado'?'<button class="btn btn-v btn-sm ctFirma" data-folio="'+esc(c.folio)+'">✍️ Contrafirmar</button>':'')
+      +'</div></div>';
+  }).join('')+'</div>';
+
+  return '<div style="margin-bottom:18px">'
+    +'<h2 style="font-size:17px;margin-bottom:8px">📄 Contratos de coworking</h2>'
+
+    +'<details style="background:var(--card,#fff);border:1px solid var(--bd,#e3e0d6);border-radius:12px;padding:12px 14px;margin-bottom:10px">'
+    +'<summary style="cursor:pointer;font-weight:700">Contrato modelo (se edita entero)</summary>'
+    +'<div class="empty" style="text-align:left;margin:10px 0">Este es el texto que firman todos. Los campos entre llaves — <code>{{CLIENTE}}</code>, <code>{{PRECIO}}</code>, <code>{{FECHA_INICIO}}</code>… — se rellenan solos al generar cada contrato; no los borres. Lo demás se edita libre.</div>'
+    +'<textarea id="ctMd" style="width:100%;min-height:380px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;padding:10px;border:1px solid var(--bd,#e3e0d6);border-radius:10px" placeholder="Pulsa Cargar para traer el contrato…"></textarea>'
+    +'<div class="acts" style="margin-top:8px"><button class="btn btn-o btn-sm" id="ctCargar">Cargar</button>'
+    +'<button class="btn btn-v btn-sm" id="ctGuardar">Guardar contrato modelo</button>'
+    +'<span id="ctMsg" style="font-size:12.5px;color:var(--muted);align-self:center"></span></div>'
+    +'</details>'
+
+    +'<details style="background:var(--card,#fff);border:1px solid var(--bd,#e3e0d6);border-radius:12px;padding:12px 14px;margin-bottom:10px">'
+    +'<summary style="cursor:pointer;font-weight:700">Nuevo contrato · liga para que lo llene y lo firme</summary>'
+    +'<div class="empty" style="text-align:left;margin:10px 0">Le mandas la liga y él pone su razón social, RFC y domicilio fiscal, lee el contrato y lo firma. Tú lo contrafirmas después desde la lista de abajo.</div>'
+    +'<div class="rm-row"><div class="fld"><label>Plan / oficina</label><select id="ctPlan">'+opts+'</select></div>'
+    +'<div class="fld"><label>Empieza a cobrarse</label><input id="ctDesde" type="date" value="'+hoy+'"></div></div>'
+    +'<div class="rm-row"><div class="fld"><label>Meses</label><input id="ctMeses" type="number" value="12" min="1"></div>'
+    +'<div class="fld"><label>Renta mensual (MXN)</label><input id="ctImporte" type="number" step="50"></div>'
+    +'<div class="fld"><label>Depósito (MXN)</label><input id="ctDeposito" type="number" step="50"></div></div>'
+    +'<div class="rm-row"><div class="fld"><label>Correo del cliente (opcional: si lo pones, se le manda)</label><input id="ctEmail" type="email" placeholder="correo@empresa.com"></div>'
+    +'<div class="fld"><label>Nombre o razón social (opcional)</label><input id="ctCliente" type="text" placeholder="Se puede dejar en blanco: lo pone él"></div></div>'
+    +'<div class="fld"><label>Condiciones especiales (cortesías, arranque retroactivo…)</label><textarea id="ctNota" style="width:100%;min-height:64px;padding:8px;border:1px solid var(--bd,#e3e0d6);border-radius:10px"></textarea></div>'
+    +'<div class="acts" style="margin-top:8px"><button class="btn btn-v btn-sm" id="ctCrear">Generar liga</button></div>'
+    +'<div id="ctSalida" style="margin-top:10px"></div>'
+    +'</details>'
+
+    +lista+'</div>';
+}
+
+function bindContratos(){
+  const msg=(t,mal)=>{const e=$('ctMsg'); if(e){e.textContent=t; e.style.color=mal?'#b3261e':'var(--muted)';}};
+  const bC=$('ctCargar'), bG=$('ctGuardar'), bN=$('ctCrear'), selP=$('ctPlan');
+
+  if(bC) bC.onclick=async()=>{
+    msg('Cargando…');
+    try{ const j=await ctApi({accion:'plantilla_ver'});
+      CT_PLANTILLA=j.plantilla||{};
+      $('ctMd').value=CT_PLANTILLA.cuerpo_md||'';
+      msg('Cargado — '+(CT_PLANTILLA.cuerpo_md||'').length+' caracteres'+(CT_PLANTILLA.actualizado_at?' · último cambio '+fd(CT_PLANTILLA.actualizado_at):''));
+    }catch(e){ msg(e.message,true); }
+  };
+
+  if(bG) bG.onclick=async()=>{
+    const md=$('ctMd').value||'';
+    if(md.trim().length<500){ msg('El texto se ve demasiado corto. No se guardó.',true); return; }
+    if(!confirm('Vas a cambiar el contrato que firman todos los nuevos clientes. ¿Guardo?')) return;
+    msg('Guardando…');
+    try{ const j=await ctApi({accion:'plantilla_guardar',cuerpo_md:md}); msg('Guardado — '+j.bytes+' caracteres'); }
+    catch(e){ msg(e.message,true); }
+  };
+
+  if(selP){
+    const sincroniza=()=>{
+      const o=selP.options[selP.selectedIndex]; if(!o) return;
+      const p=Number(o.getAttribute('data-precio')||0);
+      if($('ctImporte')) $('ctImporte').value=p;
+      const esOf=/^oficina/.test(selP.value)&&selP.value!=='oficina-virtual';
+      if($('ctDeposito')) $('ctDeposito').value=esOf?p:0;
+    };
+    selP.onchange=sincroniza; sincroniza();
+  }
+
+  if(bN) bN.onclick=async()=>{
+    const out=$('ctSalida'); out.innerHTML='Generando…';
+    try{
+      const j=await ctApi({accion:'invitar',
+        plan_slug:selP.value, desde:$('ctDesde').value, meses:parseInt($('ctMeses').value,10)||12,
+        importe:$('ctImporte').value, deposito:$('ctDeposito').value,
+        email:($('ctEmail').value||'').trim(), cliente:($('ctCliente').value||'').trim(),
+        nota_cortesia:($('ctNota').value||'').trim()});
+      out.innerHTML='<div class="empty" style="text-align:left">Contrato <b>'+esc(j.folio)+'</b> · '+esc(j.desde)+' → '+esc(j.hasta)
+        +(j.correo_enviado?' · <b>se le mandó por correo</b>':' · sin correo, cópiale la liga')
+        +'<br><input readonly value="'+esc(j.url)+'" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--bd,#e3e0d6);border-radius:8px;font-size:12.5px">'
+        +'<button class="btn btn-o btn-sm ctCopy" data-liga="'+esc(j.url)+'" style="margin-top:8px">Copiar liga</button></div>';
+      bindCopias();
+    }catch(e){ out.innerHTML='<div class="msg err" style="display:block">'+esc(e.message)+'</div>'; }
+  };
+
+  document.querySelectorAll('.ctFirma').forEach(b=>b.onclick=async()=>{
+    const quien=prompt('¿Quién firma por El Pontigu, S.A. de C.V.?','Javier Puente García');
+    if(!quien) return;
+    b.disabled=true; b.textContent='Firmando…';
+    try{ await ctApi({accion:'contrafirmar',folio:b.dataset.folio,firmante:quien}); render(); }
+    catch(e){ alert(e.message); b.disabled=false; b.textContent='✍️ Contrafirmar'; }
+  });
+  bindCopias();
+}
+function bindCopias(){
+  document.querySelectorAll('.ctCopy').forEach(b=>b.onclick=()=>{
+    try{ navigator.clipboard.writeText(b.dataset.liga); const t=b.textContent; b.textContent='¡Copiada!'; setTimeout(()=>b.textContent=t,1400); }
+    catch(e){ prompt('Copia la liga:', b.dataset.liga); }
+  });
 }
 
 // ---- Cine / Teatro (catálogo + reservas) ----
