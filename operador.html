@@ -415,6 +415,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
             </div>
             <div class="ft"><button class="btn" id="btnStripe">Quiero vincular mi Stripe</button></div>
             <div class="aviso" style="margin-top:12px">El cobro es siempre por Stripe. Quien recibe fondos tiene que identificarse ante el procesador, y eso se hace dentro de Stripe, no aquí.</div>
+            <div class="aviso" style="margin-top:8px">Como el cobro cae en tu cuenta, <b>tú eres el comercio de registro</b>: la comisión de Stripe te la cobra Stripe a ti a su tarifa, y si un huésped desconoce un cargo, el contracargo lo peleas tú con tu panel de Stripe. Si ya tienes cuenta, al vincular entras con ella; no te creamos una nueva.</div>
           </div>
         </section>
 
@@ -1468,6 +1469,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     $('entrar').style.display='none';$('app').style.display='block';
     montaEditor();
     await detalle();
+    await stripeDeVuelta();   /* si venimos de Stripe, cerrar la vinculacion */
     /* El cuestionario de impacto se cargaba solo después de firmar, o sea
        nunca: el paso salía con su texto y sin una sola pregunta debajo. */
     await odsCarga();
@@ -2115,9 +2117,46 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   /* Antes esto solo marcaba 'liga_enviada' en la base y decia que te mandabamos
      una liga que no salia de ningun sitio. Ahora lleva a la pantalla que de
      verdad abre la cuenta en Stripe. */
-  $('btnStripe').onclick=function(){
-    location.href='/operador-stripe.html?operador='+encodeURIComponent(cur.id);
+  /* ---------- vincular su Stripe ----------
+     Va por OAuth y no creando una cuenta nueva: casi todos los operadores ya
+     tienen la suya, y una cuenta creada por API seria otra distinta. Al volver,
+     Stripe nos deja ?code y ?state en la URL y aqui se cierra el trato. */
+  $('btnStripe').onclick=async function(){
+    if(!cur)return;
+    this.disabled=true; this.textContent='Abriendo Stripe…';
+    try{
+      var r=await fetch(SB+'/functions/v1/sinc-stripe-connect',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'iniciar', operador_id:cur.id})});
+      var j=await r.json();
+      if(j&&j.ya){ toast('Tu Stripe ya está vinculado.'); }
+      else if(!r.ok||!j.url){
+        throw new Error(j&&j.error==='falta_client_id'
+          ? 'Todavía no está abierta la vinculación. Escríbenos y lo dejamos listo.'
+          : (j&&(j.detalle||j.error))||'no se pudo');
+      }
+      else { location.href=j.url; return; }
+    }catch(x){ toast('No se pudo abrir Stripe: '+x.message,true); }
+    this.disabled=false; this.textContent='Quiero vincular mi Stripe';
   };
+
+  /* La vuelta de Stripe: ?code y ?state en la URL. Se cierra, se limpia la
+     barra de direcciones y se repinta, para que no quede el codigo a la vista
+     ni se reintente si recarga. */
+  async function stripeDeVuelta(){
+    var q=new URLSearchParams(location.search);
+    var code=q.get('code'), st=q.get('state');
+    if(!code||!st||!cur)return;
+    try{
+      var r=await fetch(SB+'/functions/v1/sinc-stripe-connect',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'terminar', operador_id:cur.id, code:code, state:st})});
+      var j=await r.json();
+      if(!r.ok||!j.ok)throw new Error((j&&(j.detalle||j.error))||'no se pudo');
+      toast(j.cobra?'Listo: tu Stripe quedó vinculado.'
+                   :'Vinculado, pero Stripe todavía te pide unos datos para poder cobrar.',!j.cobra);
+    }catch(x){ toast('No se pudo terminar la vinculación: '+x.message,true); }
+    history.replaceState({},'',location.pathname);
+    await refresca();
+  }
   $('btnFirmar').onclick=function(){pedir({estado:'en_revision'},'Anotado: te mandamos el contrato');};
 
   arranca();
