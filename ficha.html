@@ -418,6 +418,17 @@ gmp-place-autocomplete,.gmpac{
         </div>
         <div style="margin-top:14px"><label style="font-family:'Oswald';font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--gris);font-weight:600">Idiomas en que se da</label><div class="chips" id="chIdiomas"></div></div>
       </div>
+      <div class="card" id="cardClase" style="display:none">
+        <h3>De quién es esta experiencia</h3>
+        <div class="hint">Solo dirección. Al convertirla no se cambia el identificador: hay 19 tablas colgando de él, entre ellas las reservas. Lo que sobra se archiva y vuelve si se deshace.</div>
+        <div id="claseAhora" class="desglose" style="margin-top:10px"></div>
+        <div class="fgrid" style="margin-top:10px">
+          <div class="fld"><label>Convertir en</label><select id="cvClase"><option value="">—</option><option value="propia">Tour propio</option><option value="tercero">Tour de terceros</option></select></div>
+          <div class="fld" id="cvOpWrap" style="display:none"><label>¿Quién la opera?</label><select id="cvOperador"></select></div>
+          <div class="fld ancho"><label>Por qué</label><input id="cvMotivo" placeholder="Jorge se da de alta y pasa a operarla él"></div>
+          <div class="fld" style="display:flex;align-items:flex-end"><button class="btn" id="cvGo">Convertir</button></div>
+        </div>
+      </div>
     </section>
 
     <!-- 1 · LA CEREMONIA -->
@@ -1994,7 +2005,7 @@ gmp-place-autocomplete,.gmpac{
     $('bEtq').innerHTML=E.tipo==='propio'?'<span class="etq nar">Propio · Sincrético</span>':'<span class="etq">Tour de tercero</span>';
 
     if(E.tipo==='propio'&&interno){await costeo();}
-    if(interno)pintaComision();
+    if(interno){pintaComision();pintaClase();}
   }
 
   /* ---------- lugares ---------- */
@@ -2608,6 +2619,53 @@ gmp-place-autocomplete,.gmpac{
     if(!r.ok){error('No se pudo crear la guía.');return;}
     $('gvNombre').value='';
     await recargaGuias(); pinta(); toast('Guía creada. Edítala en la Guía del Guía.');
+  };
+
+
+  /* ---------- Convertir propia <-> de terceros (solo dirección) ----------
+     No se duplica el id. 19 tablas apuntan a op_experiencias.id —entre ellas
+     sinc_reservas—, así que cambiarlo dejaría reservas huérfanas. Se convierte
+     en el sitio: el costeo y las guías se archivan al pasar a terceros y
+     vuelven si se deshace. Lo hace sinc_convertir_experiencia() en la base. */
+  var OPERADORES=[];
+  async function pintaClase(){
+    if(!interno)return;
+    $('cardClase').style.display='';
+    if(!OPERADORES.length){
+      OPERADORES=await get('tour_operadores?select=id,nombre_comercial&order=nombre_comercial');
+      $('cvOperador').innerHTML='<option value="">—</option>'+OPERADORES.map(function(o){
+        return '<option value="'+o.id+'">'+esc(o.nombre_comercial)+'</option>';}).join('');
+    }
+    var f=(await get('v_ficha_experiencia?select=clase,operador_nombre,lineas_costeo,guias_del_guia,costeo_archivado,guias_archivadas&id=eq.'+ID+'&limit=1'))[0];
+    if(!f)return;
+    $('claseAhora').innerHTML=
+      '<div><span>Hoy es</span><b>'+(f.clase==='propia'?'tour propio':(f.clase==='tercero'?'de '+esc(f.operador_nombre||'un tercero'):'sin clasificar'))+'</b></div>'+
+      '<div><span>Costeo</span><b>'+f.lineas_costeo+' línea'+(f.lineas_costeo===1?'':'s')+
+        (f.costeo_archivado?' · '+f.costeo_archivado+' archivada'+(f.costeo_archivado===1?'':'s'):'')+'</b></div>'+
+      '<div><span>Guías del guía</span><b>'+f.guias_del_guia+
+        (f.guias_archivadas?' · '+f.guias_archivadas+' archivada'+(f.guias_archivadas===1?'':'s'):'')+'</b></div>';
+    $('cvClase').onchange=function(){
+      $('cvOpWrap').style.display = $('cvClase').value==='tercero' ? '' : 'none';};
+  }
+  $('cvGo').onclick=async function(){
+    var clase=$('cvClase').value;
+    if(!clase){error('Elige en qué la conviertes.');return;}
+    var op=$('cvOperador').value||null;
+    if(clase==='tercero'&&!op){error('Di qué touroperador la opera.');return;}
+    var aviso = clase==='tercero'
+      ? 'Va a pasar a ser de un tercero. El costeo y las guías del guía se archivan: dejan de contar, pero no se borran.'
+      : 'Va a pasar a ser propia. Si tenía costeo o guías archivadas, vuelven.';
+    if(!confirm(aviso+'\n\n¿Seguimos?'))return;
+    var r=await req('rpc/sinc_convertir_experiencia',{method:'POST',body:JSON.stringify({
+      p_id:ID, p_clase:clase, p_operador:op, p_motivo:($('cvMotivo').value||'').trim()||null})});
+    if(!r.ok){var t='';try{t=(await r.json()).message||'';}catch(_){}error('No se pudo convertir. '+t);return;}
+    var d=await r.json();
+    E.tipo = clase==='propia'?'propio':'tercero';
+    E.operador_id = clase==='tercero'?op:null;
+    $('cvClase').value=''; $('cvMotivo').value=''; $('cvOpWrap').style.display='none';
+    await pintaClase(); pinta();
+    toast('Ahora es '+(clase==='propia'?'tour propio':'de terceros')+
+      (d && (d.costeos||d.guias) ? ' · '+(d.costeos||0)+' costeo y '+(d.guias||0)+' guías '+(clase==='tercero'?'archivadas':'recuperadas') : ''));
   };
 
   /* ---------- comisión (interno) ---------- */
