@@ -151,7 +151,13 @@
   .achip{background:var(--surface-3);border:1px solid var(--rule);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:grab;display:flex;gap:7px;align-items:center}
   .achip.dos{border-color:var(--accent)} .achip .x{margin-left:auto;color:var(--muted);cursor:pointer;font-weight:700;padding:0 2px}
   .sqrow{padding:0 14px 2px} .sq{font-size:11px;font-weight:600;padding:4px 8px;border-radius:6px;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--rule);white-space:nowrap}
-  .sq.obl{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)} .sq.r{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)} .sq.c{background:var(--warn-bg);color:var(--warn)}
+  .sq.obl{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)} .sq.r{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)} .sq.c{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)} .sq.p{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
+  .sqgrp{display:inline-flex;gap:2px;background:var(--surface-2);border-radius:8px;padding:2px}
+  .sqgrp button{border:0;background:none;font:inherit;font-size:12px;font-weight:600;color:var(--muted);padding:5px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
+  .sqgrp button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .sqleg{display:inline-flex;gap:12px;align-items:center;font-size:11.5px;color:var(--muted);flex-wrap:wrap}
+  .sqleg b{font-weight:600;color:var(--ink-2)} .sqleg i{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:4px;vertical-align:-1px}
+  .lanzchip{display:inline-flex;align-items:center;gap:6px;background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok);border-radius:999px;padding:5px 11px;font-size:12.5px;font-weight:700}
   .sq.cal{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);cursor:grab} .sq.cal:active{cursor:grabbing}
   .sq.mv{cursor:grab} .sq.mv:hover{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)} .sq.mv:active{cursor:grabbing}
   .sq.mv.drag{opacity:.4}
@@ -1329,12 +1335,13 @@ function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia'
 async function renderProg(){
   const [cfgR,tkR,profR,urgR,catR]=await Promise.all([
     sb.from('mtto_config').select('*').eq('property_id',PROP.id).maybeSingle(),
-    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso']),
+    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso']),
     sb.from('mtto_profundo_plan').select('*, ubic:ubicacion_id(nombre,codigo)').eq('property_id',PROP.id).eq('estado','pendiente'),
     sb.rpc('mtto_urgencias',{p_property:PROP.id}),
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
   ]);
   const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico), sub:subtarea_id(descripcion)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
+  const {data:lanzRow}=await sb.from('mtto_semana_lanzada').select('lanzado_at,veces,lanzado_por').eq('property_id',PROP.id).eq('semana',PROG_WK).maybeSingle();
   const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
   // Config por puesto (48h base) para cada técnico
   const {data:puR}=await sb.from('mtto_puesto').select('*');
@@ -1365,7 +1372,7 @@ async function renderProg(){
   const JUAN_HOME='febfbef6-7fd1-4b45-84d9-13533e8dcb72', SEDE_VIRR='3e10a9ea-4913-4f7c-86ef-0c829caa851d';
   let jefeHomeTk=[], jefeCdmxTk=[], jefePlan=[];
   if(jefe){
-    const {data:jt}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['nuevo','validado','programado','en_proceso']);
+    const {data:jt}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['nuevo','validado','programado','en_proceso']);
     const jall=(jt||[]).filter(r=>r.origen!=='rutina');
     jefeHomeTk=jall.filter(r=>r.property_id===JUAN_HOME);
     jefeCdmxTk=jall.filter(r=>r.property_id!==JUAN_HOME && r.property_id!==SEDE_VIRR);   // CDMX (excluye Virreyes)
@@ -1390,12 +1397,17 @@ async function renderProg(){
                    ...profN.filter(n=>isVenc(n.raw.semana_programada)),
                    ...catN.filter(n=>n.raw._est.k==='venc'), ...otrosN];
   const totPA=reactivos.length+correctivos.length+vencItems.length;
+  const lanzHtml = lanzRow ? `<span class="lanzchip" title="Lanzado ${esc(new Date(lanzRow.lanzado_at).toLocaleString('es-MX'))}${lanzRow.lanzado_por?' por '+esc(lanzRow.lanzado_por):''}${lanzRow.veces>1?' · '+lanzRow.veces+' veces':''}">🚀 Lanzado a mto</span>` : '';
+  const lanzBtn = lanzRow ? '🚀 Re-lanzar (avisar cambios)' : '🚀 Lanzar asignación';
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
+      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--muted);font-weight:600">Agrupar:</span>${sqGroupBar()}</div>
       <div style="flex:1"></div>
-      <button class="btn" onclick="lanzarAsignacion()">🚀 Lanzar asignación</button>
-    </div></div>
+      ${lanzHtml}
+      <button class="btn" onclick="lanzarAsignacion()">${lanzBtn}</button>
+    </div>
+    <div class="pad" style="padding:0 14px 10px"><div class="sqleg"><span><i style="background:var(--bad)"></i>Reactivo</span><span><i style="background:var(--warn)"></i>Correctivo</span><span><i style="background:var(--ok)"></i>Preventivo</span><span class="muted" style="margin-left:auto">Cuadros por color = tipo de trabajo</span></div></div></div>
     <div class="progwrap">
       <div class="cols">${cols}</div>
       <div class="pend">
@@ -1569,6 +1581,18 @@ function sqPlanMenu(idx){const s=(window.PROG_SQPLAN||[])[idx];if(!s)return;
     ${lista?`<div style="margin-bottom:12px">${lista}</div>`:''}
     <button class="btn ghost sm" onclick="quitarPrevGrupo(${idx})">✕ Quitar estos ${s.ids.length} de la semana</button>
     </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
+// ===== Agrupar/colorear los cuadros de trabajos asignados (Lugar / Área / Tipo) =====
+window.PROG_SQGROUP=window.PROG_SQGROUP||'lugar';
+function setSqGroup(v){window.PROG_SQGROUP=v;renderProg();}
+const AREANEG_LBL={cuartos:'🛏️ Cuartos',front:'🛎️ Front',ayb:'🍽️ A&B',generales:'🧰 Generales',sincretico:'🎭 Sincrético'};
+function areaNegLbl(k){return AREANEG_LBL[k]||AREANEG_LBL.generales;}
+function sqTipoCls(arr){ if(arr.every(r=>r.clasificacion==='preventivo'))return 'p'; if(arr.some(r=>r.clasificacion==='reactivo'))return 'r'; if(arr.some(r=>r.clasificacion==='correctivo'))return 'c'; return ''; }
+function sqKeyOf(r){ const g=window.PROG_SQGROUP||'lugar';
+  if(g==='area') return areaNegLbl((r.ubic&&r.ubic.area_negocio)||'generales');
+  if(g==='tipo') return ({reactivo:'🔴 Reactivos',correctivo:'🟠 Correctivos',preventivo:'🟢 Preventivos'}[r.clasificacion]||'Otros');
+  return (r.ubic&&r.ubic.nombre)||'sin área'; }
+function sqGroupBar(){ const g=window.PROG_SQGROUP||'lugar';
+  return `<div class="sqgrp">${[['lugar','📍 Lugar'],['area','🗂️ Área'],['tipo','🎯 Tipo']].map(o=>`<button aria-pressed="${g===o[0]}" onclick="setSqGroup('${o[0]}')">${o[1]}</button>`).join('')}</div>`; }
 function cajonSquares(mine,ndEff,adminH,tecId,planMine){
   planMine=planMine||[]; const nd=ndEff||0;
   const sq=[];
@@ -1580,11 +1604,12 @@ function cajonSquares(mine,ndEff,adminH,tecId,planMine){
   Object.keys(byP).sort((a,b)=>byP[b].length-byP[a].length).forEach(u=>{const arr=byP[u];const idx=window.PROG_SQPLAN.length;
     window.PROG_SQPLAN.push({ids:arr.map(p=>p.id),items:arr,lugar:u});
     sq.push(`<span class="sq cal" draggable="true" data-sqplan="${idx}" onclick="sqPlanMenu(${idx})" title="Preventivos del calendario en ${esc(u)} · clic para ficha o quitar · arrástralo a la derecha para quitarlos de la semana">📅 ${arr.length} en ${esc(u)}</span>`);});
-  const byU={}; mine.forEach(r=>{const k=(r.ubic&&r.ubic.nombre)||'sin área';(byU[k]=byU[k]||[]).push(r);});
+  const gk=window.PROG_SQGROUP||'lugar';
+  const byU={}; mine.forEach(r=>{const k=sqKeyOf(r);(byU[k]=byU[k]||[]).push(r);});
   Object.keys(byU).sort((a,b)=>byU[b].length-byU[a].length).forEach(u=>{const arr=byU[u];const ids=arr.map(r=>r.id);
     window.PROG_SQREG=window.PROG_SQREG||[]; const idx=window.PROG_SQREG.length; window.PROG_SQREG.push({ids,tec:tecId,lugar:u});
-    const cls=arr.every(r=>r.clasificacion==='preventivo')?'':(arr.some(r=>r.clasificacion==='reactivo')?'r':'c');
-    sq.push(`<span class="sq mv ${cls}" draggable="true" data-sq="${idx}" onclick="sqMenu(${idx})" title="Arrastra a otro colaborador para pasárselos, o a la lista para desasignar · o toca para elegir">${arr.length} en ${esc(u)}</span>`);});
+    const cls=sqTipoCls(arr);
+    sq.push(`<span class="sq mv ${cls}" draggable="true" data-sq="${idx}" onclick="sqMenu(${idx})" title="Arrastra a otro colaborador para pasárselos, o a la lista para desasignar · o toca para elegir">${gk==='lugar'?arr.length+' en '+esc(u):esc(u)+' · '+arr.length}</span>`);});
   if(!sq.length) sq.push('<span class="muted" style="font-size:11px">Sin trabajos asignados</span>');
   return sq.join('');
 }
@@ -1827,6 +1852,12 @@ async function lanzarAsignacion(){
   if(!notifs.length)return toast('No hay trabajos asignados esta semana');
   const {error}=await sb.from('notificaciones').insert(notifs);
   if(error)return toast(error.message);
+  // Marca la semana como lanzada (para el 🚀 y para saber si ya se lanzó). No bloquea: se puede seguir asignando y re-lanzar.
+  try{
+    const {data:{user}}=await sb.auth.getUser();
+    const {data:prevL}=await sb.from('mtto_semana_lanzada').select('veces').eq('property_id',PROP.id).eq('semana',PROG_WK).maybeSingle();
+    await sb.from('mtto_semana_lanzada').upsert({property_id:PROP.id,semana:PROG_WK,lanzado_at:new Date().toISOString(),lanzado_por:(user&&user.email)||null,veces:((prevL&&prevL.veces)||0)+1},{onConflict:'property_id,semana'});
+  }catch(_){}
   toast('Asignación lanzada a '+notifs.length+' técnico(s)'); renderProg();
 }
 async function autoPrevAssign(){
