@@ -458,9 +458,16 @@ gmp-place-autocomplete,.gmpac{
       <div class="card">
         <h3>A dónde se va el dinero de esta reserva</h3>
         <div class="porque">La derrama turística es injusta por definición. ¿Si un vaso se derrama cae el agua igual por todos lados? Obviamente no. Por eso una derrama justa es aquella que, desde la administración de los márgenes y el valor del trabajo de los proveedores, está repartida justamente. Aquí te damos la oportunidad de que compartas la ética de tu gestión administrativa, que a veces pasa desapercibida.</div>
-        <div class="hint">Contesta lo que aplique a este tour. Donde digas que sí, pon con quién y cuánto: en pesos por persona, que es como se sabe, o en porcentaje de lo que cobras. Lo que no repartas se entiende como gastos de operación.</div>
+        <div class="hint">Anota aquellos elementos que forman parte de tu tour y qué valor —en pesos o en % del coste del tour— tiene impacto en la comunidad local. Si hay algo que no estamos considerando, no dudes en ponerlo abajo.</div>
         <div id="impTabla" style="margin-top:12px"></div>
         <div id="impResumen"></div>
+      </div>
+
+      <div class="card">
+        <h3>¿Qué otros impactos está generando este tour?</h3>
+        <div class="porque">La lista de arriba nunca va a estar completa. Lo que hace distinto a tu tour suele ser justo lo que no cabe en ninguna casilla: la escuela que sostienes, el transporte que le pagas a los abuelos, la barranca que limpian. Ponlo aquí y dinos a qué objetivo lo alinearías.</div>
+        <div id="xtLista" style="margin-top:12px"></div>
+        <button type="button" class="chip add" id="xtMas" style="margin-top:10px">＋ Impacto</button>
       </div>
 
       <div class="card">
@@ -864,6 +871,96 @@ gmp-place-autocomplete,.gmpac{
     var n=document.querySelector('nav.pasos');if(n)n.style.display='none';
   }
 
+  /* ---------- los impactos que no caben en la lista ----------
+     Una fila por impacto: qué es, cuánto vale —en pesos por persona o en % de
+     lo que cobra— y a qué meta de la ONU lo alinea quien lo escribe. El
+     objetivo se elige por meta, no por objetivo suelto: "ODS 8" no dice nada,
+     "8.5 empleo digno" sí. */
+  var XT=[], XTMETAS=[];
+
+  function xtPinta(){
+    var c=$('xtLista'); if(!c)return;
+    if(!XT.length){
+      c.innerHTML='<div class="mini">Todavía nada. Si hay algo que este tour deja y no salió arriba, añádelo.</div>';
+      return;
+    }
+    c.innerHTML=XT.map(function(x,i){
+      return '<div class="linea" style="align-items:flex-end;margin-bottom:10px">'+
+        '<div class="fld" style="flex:2;min-width:220px"><label>'+(i===0?'¿Qué impacto?':'Y también')+'</label>'+
+          '<input data-xt="'+x.id+'" data-f="texto" value="'+esc(x.texto||'')+
+          '" placeholder="Pagamos el transporte de los abuelos del asilo"></div>'+
+        '<div class="fld"><label>$ por persona</label>'+
+          '<input type="number" min="0" step="10" data-xt="'+x.id+'" data-f="monto_mxn" value="'+
+          (x.monto_mxn!=null?x.monto_mxn:'')+'" placeholder="50"></div>'+
+        '<div class="fld"><label>o % de lo tuyo</label>'+
+          '<input type="number" min="0" max="100" step="1" data-xt="'+x.id+'" data-f="pct" value="'+
+          (x.pct!=null?x.pct:'')+'" placeholder="5"></div>'+
+        '<div class="fld" style="flex:1.4;min-width:220px"><label>¿A qué objetivo lo alineas?</label>'+
+          '<select data-xt="'+x.id+'" data-f="meta">'+
+            '<option value="">—</option>'+
+            XTMETAS.map(function(m){
+              return '<option value="'+esc(m.meta)+'"'+(x.meta===m.meta?' selected':'')+'>'+
+                'ODS '+m.ods+' · '+esc(m.meta)+' — '+esc(m.titulo||'')+'</option>';
+            }).join('')+
+          '</select></div>'+
+        '<div class="fld" style="flex:0"><button type="button" class="chip" data-xtdel="'+x.id+'">Quitar</button></div>'+
+      '</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(c.querySelectorAll('[data-xt]'),function(el){
+      el.onchange=function(){
+        var id=el.getAttribute('data-xt'), f=el.getAttribute('data-f');
+        var v=el.value.trim();
+        if(f==='monto_mxn'||f==='pct')v=v===''?null:Number(v);
+        if(f==='meta')v=v||null;
+        xtGuarda(id,f,v);
+      };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-xtdel]'),function(b){
+      b.onclick=function(){xtQuita(b.getAttribute('data-xtdel'));};});
+  }
+
+  async function xtGuarda(id,campo,valor){
+    var f=XT.filter(function(x){return x.id===id;})[0]; if(!f)return;
+    f[campo]=valor;
+    /* El texto es lo único obligatorio: sin él la fila no significa nada y no
+       se guarda todavía. */
+    if(!f.texto)return;
+    var b={}; b[campo]=valor;
+    if(f._nuevo){
+      var r=await post('sinc_impacto_extra',{
+        ambito:'tour', experiencia_id:ID, texto:f.texto,
+        monto_mxn:f.monto_mxn==null?null:f.monto_mxn,
+        pct:f.pct==null?null:f.pct, meta:f.meta||null,
+        declarado_por:(ses&&ses.user&&ses.user.email)||null},true);
+      if(!r||!r.ok){error('No se pudo guardar ese impacto.');return;}
+      var g=await r.json(); var nuevo=g[0]||g;
+      f.id=nuevo.id; delete f._nuevo; xtPinta();
+      return;
+    }
+    var r2=await patch('sinc_impacto_extra',id,b);
+    if(r2&&!r2.ok)error('No se pudo guardar ese impacto.');
+  }
+
+  async function xtQuita(id){
+    var f=XT.filter(function(x){return x.id===id;})[0];
+    if(f&&!f._nuevo){
+      var r=await del('sinc_impacto_extra','id=eq.'+id);
+      if(r&&!r.ok){error('No se pudo quitar.');return;}
+    }
+    XT=XT.filter(function(x){return x.id!==id;}); xtPinta();
+  }
+
+  async function xtCarga(){
+    XTMETAS=await get('sinc_ods_metas?select=meta,ods,titulo&order=ods,meta');
+    XT=await get('sinc_impacto_extra?select=*&ambito=eq.tour&experiencia_id=eq.'+ID+'&order=orden,created_at');
+    xtPinta();
+    var b=$('xtMas');
+    if(b)b.onclick=function(){
+      XT.push({id:'n'+Date.now(),_nuevo:true,texto:'',monto_mxn:null,pct:null,meta:null});
+      xtPinta();
+    };
+  }
+
   /* ---------- el menú de La Cósmica ----------
      Solo se ve si el tour sale de ahí o termina ahí. Lo que se elige se guarda
      con su momento: no es lo mismo una bienvenida que una despedida, aunque el
@@ -1054,7 +1151,7 @@ gmp-place-autocomplete,.gmpac{
     await detalle();
     pinta();
     cargaMaps();cargaVnum();
-    cxCarga();
+    cxCarga();xtCarga();
   }
 
   function monta(){

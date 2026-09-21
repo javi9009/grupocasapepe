@@ -245,6 +245,13 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         <div id="impArbol"></div>
       </div>
       <div class="card">
+        <h3>¿Qué otros impactos está generando su empresa?</h3>
+        <div class="hint">La lista de preguntas nunca va a estar completa. Lo que hace distinta a una operadora suele ser justo lo que no cabe en ninguna casilla. Anótalo aquí con su valor y a qué objetivo lo alinea.</div>
+        <div id="xtLista"></div>
+        <button type="button" class="btn ghost sm" id="xtMas" style="margin-top:10px">＋ Impacto</button>
+      </div>
+
+      <div class="card">
         <h3>Lo que verá el huésped</h3>
         <div class="hint">Las frases que se publican en la ficha de sus tours, debajo de «¿Qué más estás logrando haciendo el tour con nosotros?».</div>
         <div id="impPublico"></div>
@@ -339,7 +346,7 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     });
     suma();
     pintaCobro();
-    cargaImpacto(id);
+    cargaImpacto(id);xtCarga(id);
     var r1=await fetch(SB+'/rest/v1/tour_operador_usuarios?select=*&operador_id=eq.'+id+'&order=rol',{headers:hdr()});
     var r2=await fetch(SB+'/rest/v1/tour_operador_docs?select=*&operador_id=eq.'+id+'&order=created_at',{headers:hdr()});
     var r3=await fetch(SB+'/rest/v1/experiencias?select=id,sku,nombre,pvp,dias_horario,lugar_salida,estatus&operador_id=eq.'+id,{headers:hdr()});
@@ -500,6 +507,88 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
               return '<span class="tag" style="background:'+esc(m.color||'#E9E4DA')+';color:#fff">ODS '+m.ods+' · '+esc(k)+'</span> ';
             }).join('')+'</div>';
         }).join('');
+  }
+
+  /* ---------- los impactos que no caben en la lista ---------- */
+  var XT=[], XTMETAS=[];
+
+  function xtPinta(){
+    var c=$('xtLista'); if(!c)return;
+    if(!XT.length){
+      c.innerHTML='<div class="mini">Todavía nada.</div>';
+    }else{
+      c.innerHTML='<table><thead><tr><th>¿Qué impacto?</th><th class="n">$ por persona</th>'+
+        '<th class="n">o % de lo suyo</th><th>¿A qué objetivo?</th><th></th></tr></thead><tbody>'+
+        XT.map(function(x){
+          return '<tr>'+
+            '<td><input data-xt="'+x.id+'" data-f="texto" value="'+esc(x.texto||'')+
+              '" placeholder="Sostenemos la escuela del pueblo" style="width:100%;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font:inherit;font-size:13px"></td>'+
+            '<td class="n"><input type="number" min="0" step="10" data-xt="'+x.id+'" data-f="monto_mxn" value="'+
+              (x.monto_mxn!=null?x.monto_mxn:'')+'" style="width:96px;text-align:right;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font:inherit;font-size:13px"></td>'+
+            '<td class="n"><input type="number" min="0" max="100" step="1" data-xt="'+x.id+'" data-f="pct" value="'+
+              (x.pct!=null?x.pct:'')+'" style="width:78px;text-align:right;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font:inherit;font-size:13px"></td>'+
+            '<td><select data-xt="'+x.id+'" data-f="meta" style="width:100%;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font:inherit;font-size:12.5px">'+
+              '<option value="">—</option>'+
+              XTMETAS.map(function(m){
+                return '<option value="'+esc(m.meta)+'"'+(x.meta===m.meta?' selected':'')+'>ODS '+m.ods+
+                  ' · '+esc(m.meta)+' — '+esc(m.titulo||'')+'</option>';}).join('')+
+            '</select></td>'+
+            '<td><button class="btn ghost sm" data-xtdel="'+x.id+'">Quitar</button></td></tr>';
+        }).join('')+'</tbody></table>';
+    }
+    Array.prototype.forEach.call(c.querySelectorAll('[data-xt]'),function(el){
+      el.onchange=function(){
+        var id=el.getAttribute('data-xt'), f=el.getAttribute('data-f'), v=el.value.trim();
+        if(f==='monto_mxn'||f==='pct')v=v===''?null:Number(v);
+        if(f==='meta')v=v||null;
+        xtGuarda(id,f,v);
+      };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-xtdel]'),function(b){
+      b.onclick=function(){xtQuita(b.getAttribute('data-xtdel'));};});
+  }
+
+  async function xtGuarda(id,campo,valor){
+    var f=XT.filter(function(x){return x.id===id;})[0]; if(!f||!cur)return;
+    f[campo]=valor;
+    if(!f.texto)return;
+    if(f._nuevo){
+      var r=await fetch(SB+'/rest/v1/sinc_impacto_extra',
+        {method:'POST',headers:Object.assign(hdr(),{'Prefer':'return=representation'}),
+         body:JSON.stringify({ambito:'empresa',operador_id:cur.id,texto:f.texto,
+           monto_mxn:f.monto_mxn==null?null:f.monto_mxn, pct:f.pct==null?null:f.pct,
+           meta:f.meta||null,
+           declarado_por:(ses&&ses.user&&ses.user.email)||'casa pepe'})});
+      if(!r.ok){toast('No se pudo guardar ese impacto',true);return;}
+      var g=await r.json(); f.id=(g[0]||g).id; delete f._nuevo; xtPinta();
+      return;
+    }
+    var b={}; b[campo]=valor;
+    var r2=await fetch(SB+'/rest/v1/sinc_impacto_extra?id=eq.'+id,
+      {method:'PATCH',headers:hdr(),body:JSON.stringify(b)});
+    if(!r2.ok)toast('No se pudo guardar ese impacto',true);
+  }
+
+  async function xtQuita(id){
+    var f=XT.filter(function(x){return x.id===id;})[0];
+    if(f&&!f._nuevo){
+      var r=await fetch(SB+'/rest/v1/sinc_impacto_extra?id=eq.'+id,{method:'DELETE',headers:hdr()});
+      if(!r.ok){toast('No se pudo quitar',true);return;}
+    }
+    XT=XT.filter(function(x){return x.id!==id;}); xtPinta();
+  }
+
+  async function xtCarga(id){
+    if(!XTMETAS.length){
+      var m=await fetch(SB+'/rest/v1/sinc_ods_metas?select=meta,ods,titulo&order=ods,meta',{headers:hdr()});
+      XTMETAS=m.ok?await m.json():[];
+    }
+    var r=await fetch(SB+'/rest/v1/sinc_impacto_extra?select=*&ambito=eq.empresa&operador_id=eq.'+id+'&order=orden,created_at',{headers:hdr()});
+    XT=r.ok?await r.json():[];
+    xtPinta();
+    var b=$('xtMas');
+    if(b)b.onclick=function(){
+      XT.push({id:'n'+Date.now(),_nuevo:true,texto:'',monto_mxn:null,pct:null,meta:null});
+      xtPinta();};
   }
 
   /* El color del objetivo, muy bajito, detrás de la pregunta: se ve a qué
