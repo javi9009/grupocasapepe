@@ -124,6 +124,13 @@ a{color:var(--naranja-oscuro)}
 
 .chk{display:flex;align-items:flex-start;gap:9px;padding:6px 0;font-size:13.5px;cursor:pointer}
 .chk input{margin-top:3px;flex:0 0 auto}
+.radios{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.radios label{display:flex;align-items:center;gap:7px;border:1.5px solid var(--linea);border-radius:999px;
+  padding:6px 14px;cursor:pointer;background:var(--blanco);font-size:13px}
+.radios label:has(input:checked){background:var(--naranja);border-color:var(--naranja);color:#fff;font-weight:600}
+.radios input{margin:0}
+canvas.pad{width:100%;height:132px;background:#fff;border:1.5px dashed var(--linea);border-radius:10px;
+  touch-action:none;display:block;margin-top:6px}
 .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
 .chip{font-size:12.5px;border:1.5px solid var(--linea);border-radius:999px;padding:5px 13px;cursor:pointer;background:var(--blanco);user-select:none}
 .chip.on{background:var(--naranja);border-color:var(--naranja);color:#fff;font-weight:600}
@@ -396,7 +403,43 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           <div class="card" id="conexDetalle"></div>
         </section>
 
+        <!-- Tu impacto · el árbol vive en ods_cuestionario, no aquí: así se
+             puede cambiar la redacción sin tocar la web, y lo que alguien firmó
+             en 2026 sigue siendo legible aunque las preguntas cambien. -->
         <section class="panel" data-s="6">
+          <div class="card">
+            <h3>Tu impacto</h3>
+            <div class="hint">Lo que contestes aquí sale en la ficha de todos tus tours, debajo de
+              <b>¿Qué más estás logrando haciendo el tour con nosotros?</b> — separado del dinero, que ése
+              se calcula solo de cada venta.</div>
+            <div class="avisos" style="margin-top:12px">
+              No preguntamos por tus números. Preguntamos por lo que haces, que lo sabes sin abrir un libro.
+              <b>Sólo se publica lo que contestes:</b> una pregunta en blanco no se guarda como carencia ni
+              aparece en ningún lado.
+            </div>
+            <div id="odsArbol" style="margin-top:6px"></div>
+          </div>
+          <div class="card" id="odsFirmaCard" style="display:none">
+            <h3>Protesta de decir verdad</h3>
+            <div class="hint">Esto es lo que vas a firmar. Sólo aparece lo que contestaste.</div>
+            <div id="odsResumen" class="desglose" style="margin-top:10px"></div>
+            <div class="fgrid" style="margin-top:14px">
+              <div class="fld"><label>Quién firma · nombre completo</label><input id="odsFNom" autocomplete="off"></div>
+              <div class="fld"><label>Puesto</label><input id="odsFPue" autocomplete="off"></div>
+            </div>
+            <label style="display:block;margin-top:12px">Firma</label>
+            <canvas class="pad" id="odsPad"></canvas>
+            <div class="mini">Firma con el dedo o el ratón · <a href="javascript:void(0)" onclick="odsLimpiaPad()">Borrar</a></div>
+            <div class="mini" style="margin-top:12px">
+              Declaro bajo protesta de decir verdad que lo anterior es cierto, y entiendo que Sincrético
+              puede mostrarlo en la ficha de mis experiencias indicando que es una declaración mía.
+              <b>Caduca en un año.</b>
+            </div>
+            <div class="ft"><button class="btn" id="odsFirmar">Firmar la declaración</button></div>
+          </div>
+        </section>
+
+        <section class="panel" data-s="7">
           <div class="card">
             <h3>El acuerdo</h3>
             <div class="hint">Un contrato marco sobre responsabilidades: tú operas el tour y respondes por él; nosotros lo vendemos y te mandamos al huésped. Cada experiencia que publiques se cuelga de este acuerdo.</div>
@@ -467,7 +510,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   var SB='https://rehophywchakfapivsbh.supabase.co';
   var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   var LS='sinc_op_sesion';
-  var PASOS=['Tu empresa','Contactos','Tu equipo','Lo formal','Cómo te pagamos','Tus tours','El acuerdo'];
+  var PASOS=['Tu empresa','Contactos','Tu equipo','Lo formal','Cómo te pagamos','Tus tours','Tu impacto','El acuerdo'];
   var NUM={poliza_suma:1};
   var BOOL={tiene_poliza:1,tiene_rnt:1};
   var ses=null,cur=null,step=0,U=[],D=[],X=[],edit=null;
@@ -619,6 +662,189 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     GAL=r.ok?await r.json():[];
     pintaGaleria();
   }
+  /* ── Tu impacto ─────────────────────────────────────────────────────────
+     El árbol se lee de la base. Una rama sólo baja cuando alguien dice que sí:
+     decir que no, o dejarlo en blanco, la cierra sin costo y sin rastro. Y lo
+     que no se contesta no se guarda ni se publica. */
+  var ODSQ=[], ODSR={}, ODSV=1, ODSDECL=null;
+
+  function odsGet(p){
+    return fetch(SB+'/rest/v1/'+p,{headers:hdr()})
+      .then(function(r){return r.ok?r.json():[];});
+  }
+  function odsPost(t,body){
+    return fetch(SB+'/rest/v1/'+t,{method:'POST',headers:hdr(),body:JSON.stringify(body)})
+      .then(function(r){ if(!r.ok)return r.text().then(function(t){throw new Error(t.slice(0,120));}); });
+  }
+
+  function odsCarga(){
+    return odsGet('ods_cuestionario?ambito=eq.empresa&activo=is.true&order=orden')
+      .then(function(q){
+        ODSQ=q||[];
+        if(ODSQ.length)ODSV=Math.max.apply(null,ODSQ.map(function(x){return x.version;}));
+        ODSQ=ODSQ.filter(function(x){return x.version===ODSV;});
+        return odsGet('ods_aportacion?ambito=eq.empresa&operador_id=eq.'+cur.id);
+      })
+      .then(function(r){
+        ODSR={}; (r||[]).forEach(function(a){ ODSR[a.clave]=a.respuesta; });
+        return odsGet('ods_declaracion_empresa?operador_id=eq.'+cur.id+'&order=firmado_at.desc&limit=1');
+      })
+      .then(function(d){ ODSDECL=(d||[])[0]||null; odsPinta(); })
+      .catch(function(){ ODSQ=[]; odsPinta(); });
+  }
+
+  // ¿Se abre este hijo con lo que contestó su padre?
+  function odsAbre(q){
+    if(!q.padre_clave)return true;
+    var pr=ODSR[q.padre_clave];
+    if(pr==null||pr===''||pr===false)return false;
+    var c=q.abre_si;
+    if(!c)return true;                                   // basta con que el padre tenga respuesta
+    if(c.igual!=null)   return String(pr)===String(c.igual);
+    if(c.distinto!=null)return String(pr)!==String(c.distinto);
+    return true;
+  }
+  // Un nodo se ve si todos sus ancestros están abiertos.
+  function odsVisible(q){
+    var v=q, guard=0;
+    while(v && guard++<12){
+      if(!odsAbre(v))return false;
+      if(!v.padre_clave)return true;
+      v=ODSQ.filter(function(x){return x.clave===v.padre_clave;})[0];
+    }
+    return true;
+  }
+
+  function odsCampo(q){
+    var val=ODSR[q.clave], id='odsq-'+q.clave;
+    if(q.tipo==='si_no'||q.tipo==='si_no_ns'){
+      var ops=q.tipo==='si_no'?['si','no']:['si','no','ns'];
+      var nom={si:'Sí',no:'No',ns:'No sé'};
+      return '<div class="radios">'+ops.map(function(o){
+        return '<label><input type="radio" name="'+id+'" value="'+o+'" '+
+          (String(val)===o?'checked':'')+' onchange="odsSet(\''+q.clave+'\',this.value)"> <span>'+nom[o]+'</span></label>';
+      }).join('')+'</div>';
+    }
+    if(q.tipo==='opcion'){
+      return '<div class="radios">'+(q.opciones||[]).map(function(o){
+        return '<label><input type="radio" name="'+id+'" value="'+esc(o)+'" '+
+          (String(val)===String(o)?'checked':'')+' onchange="odsSet(\''+q.clave+'\',this.value)"> <span>'+esc(o)+'</span></label>';
+      }).join('')+'</div>';
+    }
+    if(q.tipo==='multi'){
+      var sel=Array.isArray(val)?val:[];
+      return '<div class="chips">'+(q.opciones||[]).map(function(o){
+        return '<button type="button" class="chip'+(sel.indexOf(o)>=0?' on':'')+'" onclick="odsMulti(\''+
+          q.clave+'\',this.getAttribute(\'data-v\'))" data-v="'+esc(o)+'">'+esc(o)+'</button>';
+      }).join('')+'</div>';
+    }
+    var t=(q.tipo==='numero'||q.tipo==='dinero')?'number':'text';
+    return '<input type="'+t+'" value="'+esc(val==null?'':val)+'" oninput="odsSet(\''+q.clave+'\',this.value)">';
+  }
+
+  function odsPinta(){
+    var el=$('odsArbol'); if(!el)return;
+    if(!ODSQ.length){ el.innerHTML='<div class="mini">No se pudo cargar el cuestionario.</div>'; return; }
+    var vis=ODSQ.filter(odsVisible);
+    el.innerHTML=vis.map(function(q){
+      var hondo=0,v=q,g=0;
+      while(v&&v.padre_clave&&g++<12){hondo++;v=ODSQ.filter(function(x){return x.clave===v.padre_clave;})[0];}
+      return '<div class="fld" style="margin-top:14px;padding-left:'+(hondo*16)+'px'+
+             (hondo?';border-left:2px solid var(--linea)':'')+'">'+
+        '<label style="font-weight:600">'+esc(q.pregunta)+
+          (q.opcional?' <span class="mini" style="font-weight:400">· opcional</span>':'')+'</label>'+
+        (q.ayuda?'<div class="mini" style="margin:-2px 0 6px">'+esc(q.ayuda)+'</div>':'')+
+        odsCampo(q)+'</div>';
+    }).join('');
+    var n=Object.keys(ODSR).filter(function(k){var r=ODSR[k];return r!=null&&r!=='';}).length;
+    $('odsFirmaCard').style.display=n?'':'none';
+    if(n)odsResumen();
+  }
+
+  window.odsSet=function(clave,val){ ODSR[clave]=val; odsGuarda(clave,val); odsPinta(); };
+  window.odsMulti=function(clave,val){
+    var a=Array.isArray(ODSR[clave])?ODSR[clave].slice():[];
+    var i=a.indexOf(val); if(i>=0)a.splice(i,1); else a.push(val);
+    ODSR[clave]=a; odsGuarda(clave,a); odsPinta();
+  };
+
+  function odsGuarda(clave,val){
+    var q=ODSQ.filter(function(x){return x.clave===clave;})[0]; if(!q)return;
+    var fila={ambito:'empresa',operador_id:cur.id,version:ODSV,clave:clave,
+              respuesta:val,via:q.via,meta:(q.metas&&q.metas[0])||null,
+              declarado_por:(ses&&ses.user&&ses.user.email)||null};
+    // Sin dinero: una práctica de empresa nunca es peso de una reserva.
+    fetch(SB+'/rest/v1/ods_aportacion?ambito=eq.empresa&operador_id=eq.'+cur.id+'&clave=eq.'+encodeURIComponent(clave),
+      {method:'DELETE',headers:hdr()})
+      .then(function(){ return fetch(SB+'/rest/v1/ods_aportacion',
+        {method:'POST',headers:hdr(),body:JSON.stringify(fila)}); })
+      .catch(function(){});
+  }
+
+  function odsResumen(){
+    var vis=ODSQ.filter(odsVisible).filter(function(q){
+      var r=ODSR[q.clave]; return r!=null&&r!==''&&!(Array.isArray(r)&&!r.length);});
+    $('odsResumen').innerHTML=vis.length
+      ? vis.map(function(q){
+          var r=ODSR[q.clave];
+          var txt=Array.isArray(r)?r.join(' · '):(r==='si'?'Sí':r==='no'?'No':r==='ns'?'No sé':r);
+          return '<div><span>'+esc(q.pregunta)+'</span><b>'+esc(txt)+'</b></div>';
+        }).join('')
+      : '<div><span class="mini">Todavía no has contestado nada.</span><b></b></div>';
+    if(ODSDECL){
+      $('odsResumen').innerHTML='<div><span>Firmada por '+esc(ODSDECL.firmante_nombre)+'</span><b>'+
+        fd(ODSDECL.firmado_at)+'</b></div><div><span>Vigente hasta</span><b>'+fd(ODSDECL.vigencia_hasta)+
+        '</b></div>'+$('odsResumen').innerHTML;
+    }
+  }
+
+  var odsTinta=false;
+  function odsMontaPad(){
+    var c=$('odsPad'); if(!c)return;
+    var r=c.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+    c.width=Math.max(1,r.width*dpr); c.height=Math.max(1,r.height*dpr);
+    var x=c.getContext('2d'); x.scale(dpr,dpr);
+    x.lineWidth=2.2; x.lineCap='round'; x.lineJoin='round'; x.strokeStyle='#16130f';
+    odsTinta=false;
+    var traza=false;
+    function pos(e){var b=c.getBoundingClientRect();var t=e.touches?e.touches[0]:e;return [t.clientX-b.left,t.clientY-b.top];}
+    function ini(e){e.preventDefault();traza=true;odsTinta=true;var p=pos(e);x.beginPath();x.moveTo(p[0],p[1]);}
+    function mov(e){if(!traza)return;e.preventDefault();var p=pos(e);x.lineTo(p[0],p[1]);x.stroke();}
+    function fin(){traza=false;}
+    c.addEventListener('pointerdown',ini); c.addEventListener('pointermove',mov);
+    c.addEventListener('pointerup',fin);   c.addEventListener('pointerleave',fin);
+    c.addEventListener('touchstart',ini,{passive:false}); c.addEventListener('touchmove',mov,{passive:false});
+    c.addEventListener('touchend',fin);
+  }
+  window.odsLimpiaPad=function(){var c=$('odsPad');if(!c)return;c.getContext('2d').clearRect(0,0,c.width,c.height);odsTinta=false;};
+
+  function odsFirma(){
+    var nom=($('odsFNom').value||'').trim();
+    if(!nom)return toast('Falta el nombre de quien firma',1);
+    if(!odsTinta)return toast('Falta la firma',1);
+    var vis=ODSQ.filter(odsVisible).filter(function(q){
+      var r=ODSR[q.clave]; return r!=null&&r!==''&&!(Array.isArray(r)&&!r.length);});
+    // Se firma sólo lo contestado: las ramas cerradas no entran en el acuse.
+    var texto=vis.map(function(q){
+      var r=ODSR[q.clave];
+      return q.pregunta+'\n  '+(Array.isArray(r)?r.join(' · '):r);
+    }).join('\n\n');
+    var c=$('odsPad');
+    c.toBlob(function(blob){
+      var ruta='ods/'+cur.id+'-'+Date.now()+'.png';
+      fetch(SB+'/storage/v1/object/comprobantes/'+ruta,
+        {method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+(ses&&ses.access_token||KEY)},body:blob})
+        .then(function(){ return odsPost('ods_declaracion_empresa',{
+          operador_id:cur.id, version:ODSV, texto_firmado:texto,
+          firmante_nombre:nom, firmante_puesto:($('odsFPue').value||'').trim()||null,
+          firmante_email:(ses&&ses.user&&ses.user.email)||null,
+          firma_url:'comprobantes/'+ruta,
+          vigencia_hasta:new Date(Date.now()+365*864e5).toISOString().slice(0,10)}); })
+        .then(function(){ toast('Declaración firmada. Gracias.'); return odsCarga(); })
+        .catch(function(e){ toast('No se pudo firmar: '+(e.message||''),1); });
+    },'image/png');
+  }
+
   function pintaGaleria(){
     var soloSueltas=$('gFiltro').value==='sueltas';
     var l=GAL.filter(function(m){return soloSueltas?!m.experiencia_id:true;});
