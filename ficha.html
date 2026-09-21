@@ -856,6 +856,7 @@ gmp-place-autocomplete,.gmpac{
           <div class="fld"><label>Nombre de esta versión</label><input id="gvNombre" placeholder="Se pone solo al elegir quién lo cuenta"></div>
           <div class="fld" style="display:flex;align-items:flex-end"><button class="btn" id="gvAdd">Crear la guía</button></div>
         </div>
+        <div id="gvMateria" style="margin-top:10px"></div>
         <div id="gvFicha" class="desglose" style="margin-top:10px;display:none"></div>
         <table style="margin-top:12px"><thead><tr><th>Versión</th><th>Quién la cuenta</th><th class="n">Paradas</th><th>Tronco</th><th></th></tr></thead><tbody id="tbGuias"></tbody></table>
       </div>
@@ -2854,6 +2855,7 @@ gmp-place-autocomplete,.gmpac{
       };
     }
     await recargaGuias();
+    await materia();
   }
 
   async function recargaGuias(){
@@ -2881,10 +2883,41 @@ gmp-place-autocomplete,.gmpac{
 
   function guiaPinta(){ _cargaGuias(); }
 
-  function troncoHTML(p,idea){
+  /* Antes de armar nada: qué materia prima hay. Las paradas casi nunca están
+     en la ficha (13 en todo el catálogo) pero sí en las guías ya escritas
+     (303), así que una versión nueva hereda el esqueleto del mismo tour y
+     solo cambia la voz. Si no hay ni una cosa ni la otra, no se inventa una
+     guía vacía: se dice qué falta. */
+  var MAT=null;
+  async function materia(){
+    MAT=(await get('v_guia_materia?select=*&op_experiencia_id=eq.'+ID+'&limit=1'))[0]||null;
+    var box=$('gvMateria'); if(!box||!MAT)return;
+    var faltan=[];
+    if(!MAT.paradas_ficha&&!MAT.paradas_heredables)faltan.push('las paradas del recorrido');
+    if(!MAT.tiene_storytelling)faltan.push('el storytelling');
+    if(!MAT.tiene_dinamica)faltan.push('la dinámica');
+    if(!MAT.duracion_min)faltan.push('la duración');
+    var heredaDe=MAT.paradas_heredables?('se heredan <b>'+MAT.paradas_heredables+' paradas</b> de la guía que ya tiene este tour'):null;
+    if(!MAT.paradas_ficha&&!MAT.paradas_heredables){
+      box.className='aviso';
+      box.innerHTML='<b>Falta información para armar la guía.</b> Sin paradas no hay itinerario ni imperdibles, '+
+        'y la guía saldría vacía. Antes de crearla hace falta: '+esc(faltan.join(', '))+'. '+
+        'Las paradas se cargan en el paso <b>De dónde sale</b>.';
+      return;
+    }
+    box.className='porque';
+    box.innerHTML='<b>Con qué se va a armar</b><br>'+
+      (MAT.paradas_ficha?('<b>'+MAT.paradas_ficha+' paradas</b> de esta ficha'+(MAT.imperdibles_ficha?(', '+MAT.imperdibles_ficha+' marcadas como imperdible'):'')):heredaDe)+'. '+
+      (MAT.lineas_costeo?('El costeo aporta '+MAT.lineas_costeo+' líneas para el bloque de costos y PVP. '):'Sin costeo, el bloque de costos saldrá vacío. ')+
+      (faltan.length?'<br>Falta todavía: '+esc(faltan.join(', '))+'.':'');
+  }
+
+  function troncoHTML(p,idea,paradasSrc){
     function bloque(t,x){return x?'<h2>'+t+'</h2><p>'+esc(x).replace(/\n+/g,'</p><p>')+'</p>':'';}
-    var paradas=(PAR||[]).map(function(x,n){
-      return '<li><b>'+esc(x.nombre||('Parada '+(n+1)))+'</b>'+(x.descripcion?' — '+esc(x.descripcion):'')+'</li>';}).join('');
+    var paradas=(paradasSrc||[]).map(function(x,n){
+      return '<li><b>'+esc(x.nombre||('Parada '+(n+1)))+'</b>'+
+        (x.imperdible?' <b>· imperdible</b>':'')+
+        (x.descripcion?' — '+esc(x.descripcion):'')+'</li>';}).join('');
     var falta=[];
     if(!E.storytelling)   falta.push('el storytelling');
     if(!E.dinamica)       falta.push('la dinámica');
@@ -2920,18 +2953,60 @@ gmp-place-autocomplete,.gmpac{
   $('gvAdd').onclick=async function(){
     var slug=$('gvProta').value;
     if(!slug){error('Elige quién lo cuenta.');return;}
+    if(MAT&&!MAT.paradas_ficha&&!MAT.paradas_heredables){
+      error('Esta ficha no tiene paradas ni una guía de la que heredarlas. Cárgalas antes.');return;}
     var p=PROTAS.filter(function(x){return String(x.slug||x.id)===slug;})[0];
     var idea=IDEAS.filter(function(x){return String(x.id)===$('gvIdea').value;})[0];
     var nom=(GVTOCADO?($('gvNombre').value||'').trim():'')||(p.nombre+' · '+E.nombre);
+
+    /* El esqueleto: de la guía que ya tiene el tour, o de las paradas de la ficha. */
+    var src=MAT&&MAT.version_mas_completa;
+    var paradas=[], momentos=[], gt=null;
+    if(src){
+      gt      =(await get('guia_tour?select=*&version_id=eq.'+src+'&limit=1'))[0]||null;
+      paradas = await get('guia_paradas?select=*&version_id=eq.'+src+'&order=orden');
+      momentos= await get('guia_momentos?select=*&version_id=eq.'+src+'&order=orden');
+    }else{
+      var pf=await get('op_exp_paradas?select=*&experiencia_id=eq.'+ID+'&order=orden');
+      paradas=pf.map(function(x){return {orden:x.orden,nombre:x.titulo,descripcion:x.descripcion,
+        imperdible:!!x.imperdible,maps_url:null,narrativa:null};});
+    }
+
     var r=await post('guia_versiones',{
       op_experiencia_id:ID, tour_id:E.tour_id||null, nombre:nom, autor:'Ficha del producto',
       protagonista_slug:slug, tipo:'protagonista', es_base:GUI.length===0,
-      descripcion:'Creada desde la ficha'+(idea?' con la idea de '+idea.nombre:'')+'.',
-      documento_html:troncoHTML(p,idea)});
+      descripcion:'Creada desde la ficha'+(idea?' con la idea de '+idea.nombre:'')+
+                  (src?'. Esqueleto heredado de la guía existente del tour.':'.'),
+      documento_html:troncoHTML(p,idea,paradas)}, true);
     if(!r.ok){error('No se pudo crear la guía.');return;}
+    var nv=(await r.json())[0];
+
+    /* El itinerario y la coordinación viajan con el esqueleto: son del tour,
+       no del protagonista. Lo que cambia con el protagonista es la voz. */
+    await post('guia_tour', gt
+      ? {tour_id:E.tour_id||null, version_id:nv.id, itinerario:gt.itinerario, maps_url:gt.maps_url,
+         tiempo_max_min:gt.tiempo_max_min||E.duracion_min||null, coord_transportes:gt.coord_transportes,
+         coord_comidas:gt.coord_comidas, coord_boletos:gt.coord_boletos,
+         coord_protagonista:null, coord_tips:gt.coord_tips}
+      : {tour_id:E.tour_id||null, version_id:nv.id, tiempo_max_min:E.duracion_min||null});
+
+    if(paradas.length){
+      await post('guia_paradas', paradas.map(function(x,i){
+        return {tour_id:E.tour_id||null, version_id:nv.id, orden:x.orden!=null?x.orden:i+1,
+                nombre:x.nombre, descripcion:x.descripcion, narrativa:null,
+                maps_url:x.maps_url||null, hora_aprox:x.hora_aprox||null,
+                imperdible:!!x.imperdible, opcional:x.opcional||false};}));
+    }
+    if(momentos.length){
+      await post('guia_momentos', momentos.map(function(x,i){
+        return {tour_id:E.tour_id||null, version_id:nv.id, orden:x.orden!=null?x.orden:i+1,
+                titulo:x.titulo, descripcion:x.descripcion};}));
+    }
+
     $('gvNombre').value=''; GVTOCADO=false;
-    await recargaGuias(); pinta();
-    toast('Tronco armado con '+p.nombre+'. Ábrelo en Editar para escribirla.');
+    await recargaGuias(); await materia(); pinta();
+    toast('Guía creada con '+paradas.length+' paradas'+(momentos.length?' y '+momentos.length+' momentos':'')+
+          '. Falta escribirla en la voz de '+p.nombre+'.');
   };
 
   /* ---------- Convertir propia <-> de terceros (solo dirección) ----------
