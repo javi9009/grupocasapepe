@@ -61,6 +61,12 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
 .tag.ok{background:var(--ok-bg);color:var(--ok)}
 .tag.warn{background:var(--warn-bg);color:var(--warn)}
 .tag.none{background:var(--none-bg);color:var(--none)}
+.visitas{background:var(--surface-3);border:1px solid var(--rule);border-radius:8px;padding:7px 10px;font-size:12px;line-height:1.5}
+.visitas b{display:block;font-size:11.5px;margin-bottom:3px}
+.visitas .vend{color:var(--ok)}
+.visitas .nov{color:var(--warn);font-weight:400}
+.visitas ul{margin:0;padding-left:16px;color:var(--ink-2)}
+.visitas li{margin:1px 0}
 a.lnk{color:var(--accent);text-decoration:none;font-size:12px;font-weight:600}
 a.lnk:hover{text-decoration:underline}
 .empty{padding:40px;text-align:center;color:var(--muted)}
@@ -85,6 +91,11 @@ a.lnk:hover{text-decoration:underline}
       <option value="">Con y sin coordenadas</option>
       <option value="si">Solo ubicados</option>
       <option value="no">Solo sin ubicar</option>
+    </select>
+    <select id="fAtado">
+      <option value="">Atados y sueltos</option>
+      <option value="si">Solo los que visita un tour</option>
+      <option value="no">Solo los sueltos</option>
     </select>
     <button class="btn ghost sm" id="btnCsv">Exportar CSV</button>
   </div>
@@ -126,6 +137,8 @@ a.lnk:hover{text-decoration:underline}
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
   var PUNTOS=[], TIPOS={}, CAPAS=[], capaSel='', tipoSel='', MAP=null, CAPA_M=null;
+  /* punto_id -> [{nombre, estado, tipo}] · un punto lo visitan muchas experiencias */
+  var VISITAS={};
 
   /* La liga de Google Maps se arma con nombre + dirección + ciudad. Funciona
      aunque el punto todavía no tenga coordenadas, que hoy son todos. */
@@ -143,6 +156,13 @@ a.lnk:hover{text-decoration:underline}
       if(!rt.ok||!rp.ok)throw new Error('No se pudieron leer los puntos ('+rt.status+'/'+rp.status+').');
       (await rt.json()).forEach(function(t){TIPOS[t.codigo]=t; if(CAPAS.indexOf(t.capa)<0)CAPAS.push(t.capa);});
       PUNTOS=await rp.json();
+      var rv=await fetch(SB+'/rest/v1/mapa_punto_experiencias?select=punto_id,origen,'+
+        'op_experiencias(nombre,estado,tipo)',{headers:hdr()});
+      if(rv.ok)(await rv.json()).forEach(function(v){
+        var e=v.op_experiencias; if(!e)return;
+        (VISITAS[v.punto_id]=VISITAS[v.punto_id]||[]).push(
+          {nombre:e.nombre, estado:e.estado, tipo:e.tipo, origen:v.origen});
+      });
     }catch(e){
       $('sub').textContent='No pude leer el mapa: '+e.message;
       $('sinmapa').textContent='Sin datos.';
@@ -154,7 +174,9 @@ a.lnk:hover{text-decoration:underline}
   function pintaKpis(){
     var geo=PUNTOS.filter(function(p){return p.lat!=null;}).length;
     var desc=PUNTOS.filter(function(p){return p.descripcion;}).length;
-    var atado=PUNTOS.filter(function(p){return p.op_experiencia_id||p.sinc_lugar_id;}).length;
+    var atado=PUNTOS.filter(function(p){return (VISITAS[p.id]&&VISITAS[p.id].length)||p.sinc_lugar_id;}).length;
+    var vend=PUNTOS.filter(function(p){
+      return (VISITAS[p.id]||[]).some(function(v){return v.estado==='publicada';});}).length;
     $('sub').innerHTML='Los lugares del <b>Mapa CPP 2026</b>, el que el huésped lleva en la mano. '+
       'Busca, filtra por capa y abre cualquiera en Google Maps.';
     $('kpis').innerHTML=
@@ -162,7 +184,8 @@ a.lnk:hover{text-decoration:underline}
       k(Object.keys(TIPOS).length,'Tipologías','en '+CAPAS.length+' capas','')+
       k(desc,'Con texto propio','la voz de la casa','ok')+
       k(geo,'Ubicados','con coordenadas',geo?'ok':'warn')+
-      k(atado,'Atados al catálogo','llevan a una ficha',atado?'ok':'warn');
+      k(atado,'Atados al catálogo','los visita algún tour',atado?'ok':'warn')+
+      k(vend,'Con tour vendible','la experiencia está publicada',vend?'ok':'warn');
   }
   function k(v,t,p,cls){
     return '<div class="kpi '+(cls||'')+'"><span>'+esc(t)+'</span><b>'+v+'</b>'+
@@ -239,16 +262,38 @@ a.lnk:hover{text-decoration:underline}
     MAP.fitBounds(pts,{padding:[30,30],maxZoom:15});
   }
 
+  /* Qué tours pasan por aquí. Primero las publicadas, que son las que se pueden
+     vender hoy; el resto va contado, no listado. */
+  function visitasHTML(p){
+    var v=VISITAS[p.id]||[];
+    if(!v.length) return '';
+    var pub=v.filter(function(x){return x.estado==='publicada';});
+    var muestra=(pub.length?pub:v).slice(0,3);
+    var resto=v.length-muestra.length;
+    return '<div class="visitas">'+
+      '<b>'+v.length+(v.length===1?' tour pasa por aquí':' tours pasan por aquí')+
+      (pub.length?' · <span class="vend">'+pub.length+' vendible'+(pub.length===1?'':'s')+'</span>':
+                  ' · <span class="nov">ninguno publicado todavía</span>')+'</b>'+
+      '<ul>'+muestra.map(function(x){
+        return '<li>'+esc(x.nombre)+(x.estado==='publicada'?' <span class="tag ok">publicada</span>':'')+'</li>';
+      }).join('')+'</ul>'+
+      (resto>0?'<span class="mini">y '+resto+' más</span>':'')+
+    '</div>';
+  }
+
   function filtrados(){
     var q=($('q').value||'').trim().toLowerCase();
-    var barrio=$('fBarrio').value, geo=$('fGeo').value;
+    var barrio=$('fBarrio').value, geo=$('fGeo').value, atd=$('fAtado').value;
     return PUNTOS.filter(function(p){
       var t=TIPOS[p.tipologia_codigo]||{};
+      var nv=(VISITAS[p.id]||[]).length;
       if(tipoSel && p.tipologia_codigo!==tipoSel) return false;
       if(capaSel && t.capa!==capaSel) return false;
       if(barrio && p.barrio!==barrio) return false;
       if(geo==='si' && p.lat==null) return false;
       if(geo==='no' && p.lat!=null) return false;
+      if(atd==='si' && !nv) return false;
+      if(atd==='no' && nv) return false;
       if(q){
         var heno=[p.nombre,p.direccion,p.barrio,p.descripcion,t.nombre].join(' ').toLowerCase();
         if(heno.indexOf(q)<0) return false;
@@ -273,10 +318,10 @@ a.lnk:hover{text-decoration:underline}
         '</div>'+
         (p.direccion?'<div class="dir">'+esc(p.direccion)+(p.barrio?' · '+esc(p.barrio):'')+'</div>':'')+
         (p.descripcion?'<div class="desc">'+esc(p.descripcion)+'</div>':'')+
+        visitasHTML(p)+
         '<div class="pies">'+
           '<span class="tag" style="background:'+esc(col)+'22;color:'+esc(col)+'">'+esc(t.nombre||p.tipologia_codigo)+'</span>'+
           (p.lat!=null?'<span class="tag ok">ubicado</span>':'<span class="tag warn">sin ubicar</span>')+
-          (p.op_experiencia_id?'<span class="tag ok">lo vende un tour</span>':'')+
           '<a class="lnk" href="'+esc(ligaMaps(p))+'" target="_blank" rel="noopener">Google Maps ↗</a>'+
         '</div>'+
       '</div>';
@@ -285,6 +330,7 @@ a.lnk:hover{text-decoration:underline}
   }
 
   $('q').oninput=pinta; $('fBarrio').onchange=pinta; $('fGeo').onchange=pinta;
+  $('fAtado').onchange=pinta;
 
   $('btnCsv').onclick=function(){
     var arr=filtrados();
