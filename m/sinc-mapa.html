@@ -149,11 +149,32 @@ a.lnk:hover{text-decoration:underline}
     return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(q);
   }
 
+  var SOLO_PUBLICO=false;
+
+  /* Sin sesión del panel la tabla no se puede leer, y antes eso se veía como
+     «0 puntos», que parece que no hay nada cargado. Ahora se cae a la vista
+     pública —la misma que ve el huésped— y se avisa arriba. Javi, 23-sep. */
+  async function cargaPublico(){
+    var r=await fetch(SB+'/rest/v1/v_mapa_publico?select=*&order=orden',
+      {headers:{apikey:KEY, Authorization:'Bearer '+KEY}});
+    if(!r.ok) throw new Error('ni siquiera la vista pública ('+r.status+')');
+    var filas=await r.json();
+    filas.forEach(function(p){
+      p.tipologia_codigo=p.tipologia;
+      if(!TIPOS[p.tipologia]) TIPOS[p.tipologia]={codigo:p.tipologia, nombre:p.tipologia_nombre,
+        capa:p.capa, color:p.color};
+      if(CAPAS.indexOf(p.capa)<0) CAPAS.push(p.capa);
+      if(p.tours_vendibles>0 && p.experiencia_nombre)
+        VISITAS[p.id]=[{nombre:p.experiencia_nombre, estado:'publicada', tipo:'', origen:'vista pública'}];
+    });
+    PUNTOS=filas; SOLO_PUBLICO=true;
+  }
+
   async function carga(){
     try{
       var rt=await fetch(SB+'/rest/v1/mapa_tipologias?select=*&order=orden',{headers:hdr()});
       var rp=await fetch(SB+'/rest/v1/mapa_puntos?select=*&activo=is.true&order=tipologia_codigo,orden',{headers:hdr()});
-      if(!rt.ok||!rp.ok)throw new Error('No se pudieron leer los puntos ('+rt.status+'/'+rp.status+').');
+      if(!rt.ok||!rp.ok)throw new Error('sin sesión del panel ('+rt.status+'/'+rp.status+')');
       (await rt.json()).forEach(function(t){TIPOS[t.codigo]=t; if(CAPAS.indexOf(t.capa)<0)CAPAS.push(t.capa);});
       PUNTOS=await rp.json();
       var rv=await fetch(SB+'/rest/v1/mapa_punto_experiencias?select=punto_id,origen,'+
@@ -164,11 +185,23 @@ a.lnk:hover{text-decoration:underline}
           {nombre:e.nombre, estado:e.estado, tipo:e.tipo, origen:v.origen});
       });
     }catch(e){
-      $('sub').textContent='No pude leer el mapa: '+e.message;
-      $('sinmapa').textContent='Sin datos.';
-      return;
+      try{
+        await cargaPublico();
+      }catch(e2){
+        $('sub').innerHTML='<b>No pude leer el mapa.</b> '+esc(e.message)+'.';
+        $('sinmapa').innerHTML='<b>No hay datos que enseñar.</b><br>'+esc(e2.message);
+        $('lista').innerHTML='<div class="empty"><b>No pude leer el mapa.</b><br>'+
+          'Entra al panel en <code>grupocasapepe.netlify.app</code> y ábrelo desde '+
+          'Experiencias → Sincrético.</div>';
+        return;
+      }
     }
     pintaKpis(); pintaCapas(); pintaMapa(); pintaBarrios(); pinta();
+    if(SOLO_PUBLICO) $('sub').innerHTML=
+      '<b>Estás viendo la versión pública</b> porque esta pestaña no tiene sesión del panel: '+
+      'salen los '+PUNTOS.length+' puntos ubicados, pero no los sueltos ni el detalle de qué '+
+      'tours pasan por cada uno. Para verlo todo, entra en <code>grupocasapepe.netlify.app</code> '+
+      'y ábrelo desde Experiencias → Sincrético.';
   }
 
   function pintaKpis(){
