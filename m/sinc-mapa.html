@@ -119,7 +119,17 @@ a.lnk:hover{text-decoration:underline}
       Google <b>no tiene API</b> para crear estas listas: se hacen una vez a mano en la app de
       Google Maps, se comparten y aquí se pega la liga. A cambio el huésped la abre de un toque y
       le queda en <b>Guardados</b>, sin bajar ningún archivo. Mientras una lista no tenga liga,
-      el huésped ve el botón de descargar el archivo.
+      no le aparece al huésped. Él nunca descarga nada.
+      <br><br>
+      <b>Para crear una:</b> baja aquí el archivo de esa tipología, entra a
+      <b>google.com/mymaps</b> → <b>Crear un mapa nuevo</b> → <b>Importar</b> y suéltalo.
+      Le pones el nombre de la tabla, lo compartes con «cualquiera con el enlace», y pegas la liga
+      en su renglón. Son dos minutos por lista y evita añadir cien lugares a mano.
+    </div>
+    <div style="padding:0 13px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="kmlQue"></select>
+      <button class="btn sm" id="btnKml">⬇ Bajar el archivo para importar</button>
+      <span class="mini" id="kmlDice"></span>
     </div>
     <div id="listas" style="padding:0 13px 13px"></div>
   </div>
@@ -212,7 +222,7 @@ a.lnk:hover{text-decoration:underline}
         return;
       }
     }
-    pintaKpis(); pintaCapas(); pintaMapa(); pintaBarrios(); pinta(); cargaListas();
+    pintaKpis(); pintaCapas(); pintaMapa(); pintaBarrios(); pinta(); pintaKmlQue(); cargaListas();
     if(SOLO_PUBLICO) $('sub').innerHTML=
       '<b>Estás viendo la versión pública</b> porque esta pestaña no tiene sesión del panel: '+
       'salen los '+PUNTOS.length+' puntos ubicados, pero no los sueltos ni el detalle de qué '+
@@ -377,6 +387,71 @@ a.lnk:hover{text-decoration:underline}
     }).join('');
     marca(arr.filter(function(p){return p.lat!=null&&p.lng!=null;}));
   }
+
+
+  /* ---------- el archivo para My Maps ----------
+     Google no tiene API para crear listas, pero My Maps importa KML. Asi se
+     arma una lista de cien lugares en dos minutos en vez de a golpe de dedo.
+     El huesped no ve esto: es la herramienta para construir lo que el luego
+     abre de un toque. */
+  function xml(s){return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+  function pintaKmlQue(){
+    var h='<option value="">Todo · '+PUNTOS.filter(function(p){return p.lat!=null;}).length+' lugares</option>';
+    Object.keys(TIPOS).forEach(function(c){
+      var n=PUNTOS.filter(function(p){return p.tipologia_codigo===c&&p.lat!=null;}).length;
+      if(n)h+='<option value="'+esc(c)+'">'+esc(TIPOS[c].nombre)+' · '+n+'</option>';
+    });
+    $('kmlQue').innerHTML=h;
+  }
+
+  function kml(cod){
+    var arr=PUNTOS.filter(function(p){return p.lat!=null && (!cod||p.tipologia_codigo===cod);});
+    var raiz=location.origin+'/sinc/img/mapa/';
+    var usadas=Object.keys(TIPOS).filter(function(c){
+      return arr.some(function(p){return p.tipologia_codigo===c;});});
+    var out='<?xml version="1.0" encoding="UTF-8"?>\n'+
+      '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'+
+      '<name>'+xml('CDMX con Casa Pepe'+(cod?' · '+TIPOS[cod].nombre:''))+'</name>'+
+      '<description>'+xml(arr.length+' lugares · Mapa CPP 2026 · casapepe.mx')+'</description>';
+    usadas.forEach(function(c){
+      var t=TIPOS[c], col=(t.color||'#F2682A').replace('#','');
+      out+='<Style id="s_'+xml(c)+'"><IconStyle><scale>1.15</scale>'+
+        '<Icon><href>'+xml(raiz+c+'.png')+'</href></Icon>'+
+        '<hotSpot x="0.5" y="0" xunits="fraction" yunits="fraction"/></IconStyle>'+
+        '<LabelStyle><color>ff'+col.slice(4,6)+col.slice(2,4)+col.slice(0,2)+'</color></LabelStyle></Style>';
+    });
+    usadas.forEach(function(c){
+      out+='<Folder><name>'+xml(TIPOS[c].nombre)+'</name>';
+      arr.filter(function(p){return p.tipologia_codigo===c;}).forEach(function(p){
+        var d=[];
+        if(p.descripcion)d.push(p.descripcion);
+        if(p.direccion)d.push(p.direccion+(p.barrio?', '+p.barrio:''));
+        var v=(VISITAS[p.id]||[]).filter(function(x){return x.estado==='publicada';});
+        if(v.length)d.push('Pasamos por aqui en «'+v[0].nombre+'» — casapepe.mx');
+        out+='<Placemark><name>'+xml(p.nombre)+'</name>'+
+          '<description><![CDATA['+d.join('<br><br>').replace(/]]>/g,']]&gt;')+']]></description>'+
+          '<styleUrl>#s_'+xml(c)+'</styleUrl>'+
+          '<Point><coordinates>'+p.lng+','+p.lat+',0</coordinates></Point></Placemark>';
+      });
+      out+='</Folder>';
+    });
+    return out+'</Document></kml>';
+  }
+
+  $('btnKml').onclick=function(){
+    var cod=$('kmlQue').value;
+    var arr=PUNTOS.filter(function(p){return p.lat!=null && (!cod||p.tipologia_codigo===cod);});
+    if(!arr.length){$('kmlDice').textContent='Ahí no hay nada ubicado.';return;}
+    var nom='CDMX con Casa Pepe'+(cod?' - '+TIPOS[cod].nombre:'');
+    var b=new Blob([kml(cod)],{type:'application/vnd.google-earth.kml+xml'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(b); a.download=nom.replace(/[\\/:*?"<>|]/g,'-')+'.kml';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1500);
+    $('kmlDice').textContent=arr.length+' lugares. Ahora impórtalo en google.com/mymaps.';
+  };
 
   /* ---------- las listas de Google Maps ---------- */
   async function cargaListas(){
