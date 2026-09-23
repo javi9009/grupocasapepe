@@ -172,16 +172,36 @@ let TAB='lista', curRol=null, curUser=null, draft={};
 let FQ='', FUBIC='', FAREA='';
 let LEADER=false, MYTEAM=null;
 
+/* PostgREST corta cada respuesta en 1000 filas y .limit() NO sube ese tope:
+   hay que pedir por tramos con .range(). usuario_permisos ya va por 2600 filas
+   y rol_permisos por 1050, así que sin esto la pantalla cargaba poco más de un
+   tercio de los permisos individuales y creía que faltaban asignaciones que sí
+   estaban guardadas — de ahí el aviso de 'páginas sin permiso por rol' que no
+   se iba por mucho que le dieras a Asignar. */
+async function traerTodo(hacerQuery){
+  const PASO=1000; let desde=0, filas=[];
+  for(;;){
+    const r=await hacerQuery().range(desde, desde+PASO-1);
+    if(r.error) return {data:null, error:r.error};
+    const lote=r.data||[];
+    filas=filas.concat(lote);
+    if(lote.length<PASO) break;
+    desde+=PASO;
+    if(desde>100000) break;          // tope de seguridad, nunca deberíamos llegar
+  }
+  return {data:filas, error:null};
+}
+
 async function boot(){
   const s=await sb.auth.getSession();
   if(!s.data||!s.data.session){ $('authmsg').style.display='block'; $('authmsg').textContent='Inicia sesión en el dashboard para gestionar accesos.'; return; }
   const [pg,rp,up,rc,emp,am]=await Promise.all([
-    sb.from('paginas').select('*').eq('activo',true).order('app').order('area_orden').order('orden'),
-    sb.from('rol_permisos').select('rol,pagina_codigo,nivel'),
-    sb.from('usuario_permisos').select('email,pagina_codigo,nivel'),
+    traerTodo(()=>sb.from('paginas').select('*').eq('activo',true).order('app').order('area_orden').order('orden')),
+    traerTodo(()=>sb.from('rol_permisos').select('rol,pagina_codigo,nivel')),
+    traerTodo(()=>sb.from('usuario_permisos').select('email,pagina_codigo,nivel')),
     sb.from('roles_catalogo').select('rol'),
-    sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol,area').not('email','is',null),
-    sb.from('usuario_proyectos').select('employee_id,proyecto')
+    traerTodo(()=>sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol,area').not('email','is',null)),
+    traerTodo(()=>sb.from('usuario_proyectos').select('employee_id,proyecto'))
   ]);
   if(pg.error){ try{ const _eq=await sb.rpc('deleg_mi_equipo'); if(!_eq.error && _eq.data && _eq.data.length){ LEADER=true; MYTEAM=_eq.data; ['tab-lista','tab-rol','tab-rango','tab-user','tab-cat'].forEach(function(id){var bt=$(id); if(bt) bt.style.display='none';}); try{ initPwLeader(); }catch(_){} var _te=$('tab-equipo'); if(_te) _te.className='tab on'; setTab('equipo'); return; } }catch(_){} $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
   PAG=pg.data||[];
