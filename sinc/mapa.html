@@ -57,6 +57,11 @@
   border-radius:9px;padding:8px 11px;font-size:13px;line-height:1.45;color:var(--tinta)}
 .tour b{color:var(--magenta-oscuro)}
 .vacio{padding:34px 16px;text-align:center;color:var(--gris);font-size:14px;line-height:1.6}
+.llevar{background:var(--naranja-suave);border:1px solid var(--naranja);border-radius:var(--radio);
+  padding:14px 15px;margin:18px 0 4px}
+.tit2{font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;font-size:15px;letter-spacing:.02em}
+.llevar .chip[aria-pressed="true"]{background:var(--naranja);color:#fff;border-color:var(--naranja)}
+.llevar summary::-webkit-details-marker{color:var(--naranja)}
 @media(max-width:600px){#mapa{height:260px} .lead h1{font-size:22px}}
 </style>
 </head>
@@ -99,6 +104,28 @@
   <div class="antojo" id="antojo"></div>
 
   <div id="mapa"></div>
+
+  <div class="llevar">
+    <div class="tit2">Llévatelo contigo</div>
+    <p class="mini" style="margin:4px 0 10px">
+      Elige qué te interesa y te lo descargas. Se abre en <b>Google My Maps</b>, en Google Earth
+      y en las apps de mapas sin conexión — útil si te quedas sin datos.
+    </p>
+    <div class="antojo" id="llevo"></div>
+    <div class="fila" style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <button class="btn" id="btnKml">⬇ Descargar «CDMX con Casa Pepe»</button>
+      <span class="mini" id="cuantosLlevo"></span>
+    </div>
+    <details style="margin-top:10px">
+      <summary class="mini" style="cursor:pointer">¿Cómo lo meto en mi Google Maps?</summary>
+      <ol class="mini" style="margin:8px 0 0;padding-left:18px;line-height:1.7">
+        <li>Descarga el archivo.</li>
+        <li>Entra a <b>google.com/mymaps</b> y dale a <b>Crear un mapa nuevo</b>.</li>
+        <li><b>Importar</b> → elige el archivo que acabas de bajar.</li>
+        <li>Listo: te aparece en Google Maps, en <b>Guardados → Mapas</b>.</li>
+      </ol>
+    </details>
+  </div>
 
   <div class="cuenta" id="cuenta"></div>
   <div class="lista" id="lista"></div>
@@ -159,7 +186,7 @@
       if(!TIPOS.some(function(t){return t.codigo===p.tipologia;}))
         TIPOS.push({codigo:p.tipologia, nombre:p.tipologia_nombre, color:p.color});
     });
-    pintaZonas(); pintaAntojo(); arrancaMapa(); pinta();
+    pintaZonas(); pintaAntojo(); pintaLlevo(); arrancaMapa(); pinta();
   }
 
   function pintaZonas(){
@@ -289,6 +316,101 @@
       '</div>';
     }).join('');
   }
+
+  /* ---------- llevárselo ----------
+     Google no deja que una web escriba en el Google Maps de nadie: no existe
+     esa API. Lo que sí entiende es un KML importado en My Maps, y de paso lo
+     abren Google Earth y las apps de mapas sin conexión. Se genera aquí, en el
+     teléfono, para que siempre salga con lo que hay hoy en el catálogo. */
+  var LLEVO={};   /* codigo de tipologia -> true; vacío = todo */
+
+  function pintaLlevo(){
+    var h='<button class="chip" data-l="" aria-pressed="true">Todo</button>';
+    TIPOS.forEach(function(t){
+      h+='<button class="chip" data-l="'+esc(t.codigo)+'" aria-pressed="false">'+
+         '<span class="pt" style="background:'+esc(t.color||'#999')+'"></span>'+esc(t.nombre)+'</button>';
+    });
+    $('llevo').innerHTML=h;
+    Array.prototype.forEach.call($('llevo').children,function(b){
+      b.onclick=function(){
+        var c=b.getAttribute('data-l');
+        if(!c){ LLEVO={}; }
+        else { if(LLEVO[c]) delete LLEVO[c]; else LLEVO[c]=true; }
+        var algo=Object.keys(LLEVO).length>0;
+        Array.prototype.forEach.call($('llevo').children,function(o){
+          var oc=o.getAttribute('data-l');
+          o.setAttribute('aria-pressed', oc ? (LLEVO[oc]?'true':'false') : (algo?'false':'true'));
+        });
+        cuentaLlevo();
+      };
+    });
+    cuentaLlevo();
+  }
+
+  function paraLlevar(){
+    var cods=Object.keys(LLEVO);
+    return cods.length ? TODOS.filter(function(p){return LLEVO[p.tipologia];}) : TODOS.slice();
+  }
+  function cuentaLlevo(){
+    var n=paraLlevar().length;
+    $('cuantosLlevo').textContent = n+' '+(n===1?'lugar':'lugares')+' en el archivo';
+  }
+
+  function xml(s){return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+  function kml(){
+    var arr=paraLlevar();
+    var cods=Object.keys(LLEVO);
+    var sub = cods.length
+      ? TIPOS.filter(function(t){return LLEVO[t.codigo];}).map(function(t){return t.nombre;}).join(' · ')
+      : 'Todo lo que recomendamos';
+    /* KML pide el color en aabbggrr, al reves del #rrggbb de siempre */
+    function estilo(t){
+      var c=(t.color||'#F2682A').replace('#','');
+      var abgr='ff'+c.slice(4,6)+c.slice(2,4)+c.slice(0,2);
+      return '<Style id="s_'+xml(t.codigo)+'"><IconStyle><color>'+abgr+'</color><scale>1.1</scale>'+
+        '<Icon><href>https://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon>'+
+        '</IconStyle><LabelStyle><color>'+abgr+'</color></LabelStyle></Style>';
+    }
+    var usadas=TIPOS.filter(function(t){return arr.some(function(p){return p.tipologia===t.codigo;});});
+    var out='<?xml version="1.0" encoding="UTF-8"?>\n'+
+      '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'+
+      '<name>CDMX con Casa Pepe</name>'+
+      '<description>'+xml(sub+' — '+arr.length+' lugares. Mapa CPP 2026 · casapepe.mx')+'</description>'+
+      usadas.map(estilo).join('');
+    usadas.forEach(function(t){
+      out+='<Folder><name>'+xml(t.nombre)+'</name>';
+      arr.filter(function(p){return p.tipologia===t.codigo;}).forEach(function(p){
+        var d=[];
+        if(p.descripcion)d.push(p.descripcion);
+        if(p.direccion)d.push(p.direccion+(p.barrio?', '+p.barrio:''));
+        if(p.tours_vendibles>0&&p.experiencia_nombre)
+          d.push('Pasamos por aquí en «'+p.experiencia_nombre+'» — casapepe.mx');
+        out+='<Placemark><name>'+xml(p.nombre)+'</name>'+
+          '<description><![CDATA['+d.join('<br><br>').replace(/]]>/g,']]&gt;')+']]></description>'+
+          '<styleUrl>#s_'+xml(t.codigo)+'</styleUrl>'+
+          '<Point><coordinates>'+p.lng+','+p.lat+',0</coordinates></Point></Placemark>';
+      });
+      out+='</Folder>';
+    });
+    return out+'</Document></kml>';
+  }
+
+  $('btnKml').onclick=function(){
+    var arr=paraLlevar();
+    if(!arr.length){ $('cuantosLlevo').textContent='Elige al menos una cosa.'; return; }
+    var cods=Object.keys(LLEVO);
+    var nom='CDMX con Casa Pepe'+(cods.length===1
+      ? ' · '+(TIPOS.filter(function(t){return t.codigo===cods[0];})[0]||{}).nombre : '');
+    var b=new Blob([kml()],{type:'application/vnd.google-earth.kml+xml'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(b);
+    a.download=nom.replace(/[\\/:*?"<>|]/g,'-')+'.kml';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1500);
+    $('cuantosLlevo').textContent='Descargado: '+arr.length+' lugares. Ábrelo en google.com/mymaps.';
+  };
 
   carga();
 })();
