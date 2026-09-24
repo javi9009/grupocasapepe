@@ -258,7 +258,20 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div><span>Total que retenemos</span><input type="number" data-c="comision_pct" readonly tabindex="-1" style="width:70px;text-align:right;background:var(--surface-3);border-style:dashed"></div>
         </div>
         <div class="mini" style="margin:8px 0 14px">Si se acuerda algo distinto para sus tours, se le propone por escrito y queda anotado aquí antes de publicar.</div>
-        <div class="fgrid">
+        <!-- El contrato se genera y se firma en línea: la plantilla sale de
+             op_contrato_plantilla, el cuerpo se congela al firmar y queda el
+             acuse con fecha, IP y navegador. Los tres campos de abajo son el
+             registro de la firma; los rellena sola la función al firmarse. -->
+        <div class="card" style="background:var(--surface-2);padding:14px;border-radius:12px">
+          <b style="font-size:13px">El contrato en línea</b>
+          <div id="ctEstado" class="mini" style="margin-top:6px">—</div>
+          <div class="ft" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="btnCtGenerar" type="button">Generar y mandárselo</button>
+            <a class="btn" id="btnCtVer" target="_blank" rel="noopener" style="display:none">Ver el contrato ↗</a>
+          </div>
+          <div class="mini" style="margin-top:8px">Le llega por correo con su propia liga. Lo lee, corrige sus datos fiscales si hace falta y firma. Al firmar queda activo y sus tours pueden publicarse —cada uno cuando tenga su impacto declarado.</div>
+        </div>
+        <div class="fgrid" style="margin-top:14px">
           <div class="fld"><label>Versión del contrato</label><select data-c="contrato_version"><option value="">Sin firmar</option><option value="v1">v1 · sep 2026</option></select></div>
           <div class="fld"><label>Fecha de firma</label><input type="date" data-c="contrato_firmado_at"></div>
           <div class="fld"><label>Quién firmó</label><input data-c="contrato_firmante"></div>
@@ -402,6 +415,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     suma();
     pintaCobro();
     cargaImpacto(id);xtCarga(id);ceCarga(id);
+    await cargaContrato(id); pintaContrato();
     var r1=await fetch(SB+'/rest/v1/tour_operador_usuarios?select=*&operador_id=eq.'+id+'&order=rol',{headers:hdr()});
     var r2=await fetch(SB+'/rest/v1/tour_operador_docs?select=*&operador_id=eq.'+id+'&order=created_at',{headers:hdr()});
     var r3=await fetch(SB+'/rest/v1/experiencias?select=id,sku,nombre,pvp,dias_horario,lugar_salida,estatus&operador_id=eq.'+id,{headers:hdr()});
@@ -444,6 +458,55 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     if(!mail)return toast('Primero hace falta su correo de notificaciones',true);
     toast('Falta conectar Stripe: en cuanto estén las llaves, este botón le manda la liga a '+mail);
   };
+  /* ---------- el contrato en línea ----------
+     Generar lo autoriza la función edge, no esta pantalla: aquí solo se pide.
+     Si ya hay uno vivo, la función devuelve ese mismo y no duplica. */
+  var CT=null;
+  async function cargaContrato(id){
+    CT=null;
+    try{
+      var r=await fetch(SB+'/rest/v1/op_contratos?operador_id=eq.'+id+
+        '&estado=in.(borrador,enviado,firmado)&select=folio,estado,token,firmado_at,firmante&limit=1',{headers:hdr()});
+      if(r.ok)CT=(await r.json())[0]||null;
+    }catch(_){ /* sin contrato se sigue: el botón lo crea */ }
+  }
+  function pintaContrato(){
+    var e=$('ctEstado'), v=$('btnCtVer'), g=$('btnCtGenerar');
+    if(!e)return;
+    if(!CT){
+      e.innerHTML='<span class="tag bad">sin contrato</span> Todavía no se le ha mandado.';
+      if(v)v.style.display='none';
+      if(g)g.textContent='Generar y mandárselo';
+      return;
+    }
+    var liga='https://casapepe.mx/sincretico/contrato.html?t='+encodeURIComponent(CT.token);
+    if(CT.estado==='firmado'){
+      e.innerHTML='<span class="tag ok">firmado</span> Folio <b>'+esc(CT.folio)+'</b> · '+
+        esc(CT.firmante||'')+' · '+(CT.firmado_at?String(CT.firmado_at).slice(0,10):'');
+      if(g)g.style.display='none';
+    }else{
+      e.innerHTML='<span class="tag">mandado, sin firmar</span> Folio <b>'+esc(CT.folio)+'</b>';
+      if(g)g.textContent='Rehacerlo y volver a mandárselo';
+    }
+    if(v){v.href=liga;v.style.display='';}
+  }
+  var btnCt=$('btnCtGenerar');
+  if(btnCt)btnCt.onclick=async function(){
+    if(!cur)return;
+    if(CT&&CT.estado!=='firmado'&&!confirm('Ya tiene un contrato mandado sin firmar. ¿Lo cancelo y hago uno nuevo con sus datos de hoy?'))return;
+    btnCt.disabled=true;
+    try{
+      var r=await fetch(SB+'/functions/v1/operador-contrato',{
+        method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'generar',operador_id:cur.id,rehacer:!!(CT&&CT.estado!=='firmado')})});
+      var j=await r.json().catch(function(){return {};});
+      if(!r.ok||j.error)throw new Error(j.error||('HTTP '+r.status));
+      await cargaContrato(cur.id); pintaContrato();
+      toast(j.avisado_a&&j.avisado_a.length?('Contrato '+j.folio+' mandado a '+j.avisado_a.join(', ')):('Contrato '+j.folio+' generado'));
+    }catch(x){ toast('No se pudo: '+x.message,true); }
+    btnCt.disabled=false;
+  };
+
   /* ---------- lo que declaró de impacto ----------
      De solo lectura a propósito. La declaración es suya y va bajo protesta de
      decir verdad: si la pudiéramos editar desde aquí dejaría de valer nada. */
@@ -1026,8 +1089,22 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       var g=hechos[p.s];
       return '<div class="mini paso'+(g===2?' ok':(g===1?' medio':''))+'">'+
         (g===2?'✓':(g===1?'◐':'○'))+' '+esc(p.t)+'</div>';}).join('');
-    $('sCheck').innerHTML=[['Datos fiscales y correo de notificaciones',cur.datos_ok],['Un coordinador dado de alta',U.filter(function(u){return u.rol==='coordinador';}).length>0],['Póliza de responsabilidad civil vigente',cur.poliza_ok],['Forma de cobro definida',cur.cobro_ok],['Contrato firmado',cur.contrato_ok]]
-      .map(function(c){return '<div class="chk">'+(c[1]?'<span class="tag ok">listo</span>':'<span class="tag bad">falta</span>')+' <span class="mini">'+c[0]+'</span></div>';}).join('');
+    /* La póliza de RC dejó de ser condición (sep-2026): mientras el operador no
+       tenga la suya, lo que venda por Sincrético va bajo la de Casa Pepe. Se
+       sigue enseñando, pero como dato, no como candado. El impacto de cada tour
+       sí es condición, y ése se revisa ficha por ficha al publicar. */
+    $('sCheck').innerHTML=[
+      ['Datos fiscales y correo de notificaciones',cur.datos_ok,true],
+      ['Un coordinador dado de alta',U.filter(function(u){return u.rol==='coordinador';}).length>0,true],
+      ['Forma de cobro definida',cur.cobro_ok,true],
+      ['Contrato firmado',cur.contrato_ok,true],
+      ['Póliza propia de responsabilidad civil',cur.poliza_ok,false]]
+      .map(function(c){
+        var tag=c[1]?'<span class="tag ok">listo</span>'
+                    :(c[2]?'<span class="tag bad">falta</span>':'<span class="tag">opcional</span>');
+        return '<div class="chk">'+tag+' <span class="mini">'+c[0]+'</span></div>';}).join('')+
+      '<div class="mini" style="margin-top:8px">Cada tour necesita además su <b>impacto declarado</b> para salir a la venta.</div>';
+    pintaContrato();
     $('tbU').innerHTML=U.length?U.map(function(u){
       var prota=u.rol==='guia';
       var cara=prota?('<span style="display:inline-block;width:30px;height:30px;border-radius:50%;background:'+(u.foto_url?"url('"+esc(u.foto_url)+"') center/cover":'var(--surface-2)')+';vertical-align:middle;margin-right:7px"></span>'):'';
