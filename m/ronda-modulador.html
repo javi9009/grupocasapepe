@@ -1180,28 +1180,32 @@ function tile(lb,v,s,cls){
 /* La utilidad distribuible arranca del EBITDA del operador y le quita dos cosas: el fondo
    de caja, que se queda dentro de la empresa, y los impuestos. Las dos se miden
    sobre el mismo EBITDA, no una sobre el remanente de la otra. */
+/* El primer año de operación normal (el 2, porque el 1 es obra) sirve de
+   referencia para los recuadros. `ebitda` sigue siendo el del operador; el
+   fondo, el impuesto y el neto ya vienen del CONSOLIDADO del grupo. */
 function repBase(){
-  var p=proyeccion();
-  var fondo=p.util*(FONDO/100), imp=p.util*(IMPU/100);
-  return {ebitda:p.util, fondo:fondo, imp:imp, neto:p.util-fondo-imp};
+  var S=hotelSerie()[1];
+  return {ebitda:proyeccion().util, cons:S.cons, fondo:S.fondo, imp:S.impPag, neto:S.neto};
 }
 /* La serie del hotel se calcula de corrido porque el crédito fiscal es un saldo
    que se consume: lo que se aplica un año ya no está el siguiente. Por eso no
    basta una fórmula por año — hay que llevar el arrastre. */
 var _serie=null;
+/* El fondo de caja y el impuesto se calculan sobre el EBITDA CONSOLIDADO del grupo
+   —el del operador más Sincrético y Puebla, menos el corporativo—, no solo sobre el
+   del hotel: la sociedad tributa y aparta caja por el conjunto, no por una de sus
+   patas. Por eso la serie se arma entera aquí y `neto` ya es la utilidad distribuible
+   del grupo. En el año de obra, OBRA es el EBITDA que aporta el hotel, no su neto. */
 function hotelSerie(){
   if(_serie) return _serie;
   var b=proyeccion().util, cred=CRED, out=[];
   for(var i=1;i<=10;i++){
-    if(i===1){ /* año de obra: la utilidad distribuible se fija a mano y no consume crédito */
-      out.push({i:i, ebitda:0, fondo:0, impBruto:0, aplic:0, impPag:0, neto:OBRA, cred:cred});
-      continue;
-    }
-    var e=b*Math.pow(1+CREC/100, i-2);
-    var fondo=e*(FONDO/100), impBruto=e*(IMPU/100);
+    var eb = (i===1) ? OBRA : b*Math.pow(1+CREC/100, i-2);
+    var cons = eb + sincUtil(i) + puebUtil(i) - corpCost(i);
+    var fondo=cons*(FONDO/100), impBruto=cons*(IMPU/100);
     var aplic=Math.min(impBruto, cred); cred-=aplic;
-    out.push({i:i, ebitda:e, fondo:fondo, impBruto:impBruto, aplic:aplic,
-              impPag:impBruto-aplic, neto:e-fondo-(impBruto-aplic), cred:cred});
+    out.push({i:i, ebitda:eb, cons:cons, fondo:fondo, impBruto:impBruto, aplic:aplic,
+              impPag:impBruto-aplic, neto:cons-fondo-(impBruto-aplic), cred:cred});
   }
   _serie=out; return out;
 }
@@ -1214,7 +1218,9 @@ function aniosSinImpuesto(){
 function sincUtil(i){ return SINC[Math.min(i,SINC.length)-1]; }
 function puebUtil(i){ return PUEBLA*Math.pow(1+PUEB_G/100, i-1); }
 function corpCost(i){ return CORP*Math.pow(1+CORP_G/100, i-1); }
-function utilSociedad(i){ return hotelUtil(i)+puebUtil(i)+sincUtil(i)-corpCost(i); }
+/* hotelSerie ya consolidó las tres patas y descontó fondo e impuesto, así que
+   aquí no se vuelve a sumar nada: sería contarlo dos veces. */
+function utilSociedad(i){ return hotelUtil(i); }
 function flujo(n){
   var f=[];
   for(var i=1;i<=(n||10);i++)
@@ -1229,22 +1235,24 @@ function pintaFlujo(){
      luego se le suman los otros dos negocios y se le resta el corporativo. */
   document.getElementById('tiles-flujo').innerHTML=
     tile('1 · EBITDA del operador', money(B.ebitda),
-         'La mitad del hotel que le toca al operador, de la sección 2. De aquí sale todo lo demás.')+
+         'La mitad del hotel que le toca al operador, de la sección 2. A esto se le suman Sincrético y '
+         +'Puebla y se le resta el corporativo: el consolidado del grupo es '+money(B.cons)+'.')+
     tile('2 · Menos reserva de caja', '−'+money(B.fondo),
-         FONDO+'% del EBITDA. Se aparta y no se reparte: es la caja con la que arranca el año siguiente '
-         +'antes de que entre el primer peso.','acc')+
+         FONDO+'% del EBITDA consolidado de '+money(B.cons)+'. Se aparta y no se reparte: es la caja con '
+         +'la que arranca el año siguiente antes de que entre el primer peso.','acc')+
     tile('3 · Menos impuestos', (S[1].impPag>0?'−':'')+money(S[1].impPag),
          S[1].aplic>0
-           ? 'Tocaría pagar '+money(S[1].impBruto)+' ('+IMPU+'% del EBITDA), pero el crédito fiscal de '
+           ? 'Tocaría pagar '+money(S[1].impBruto)+' ('+IMPU+'% del consolidado), pero el crédito fiscal de '
              +mdp(CRED)+' los cubre. Alcanza para '+aniosSinImpuesto()+' años.'
-           : IMPU+'% del EBITDA. El crédito fiscal ya se agotó.',
+           : IMPU+'% del EBITDA consolidado. El crédito fiscal ya se agotó.',
          S[1].aplic>0?'acc':'warn')+
     tile('4 · Utilidad distribuible', money(B.neto),
-         'Lo que de verdad queda para repartir: el 1 menos el 2 menos el 3. Es la base de todo lo que '
-         +'ve el socio.','acc')+
+         'Lo que de verdad queda para repartir: al EBITDA del operador se le suman Sincrético y Puebla, '
+         +'se le resta el corporativo, y sobre ese consolidado se descuentan la reserva y el impuesto. '
+         +'Es la base de todo lo que ve el socio.','acc')+
     tile('5 · Toda la sociedad en '+(ANIO0+2), money(utilSociedad(2)),
-         'El hotel no es lo único. A la utilidad distribuible se le suman Puebla y Sincrético y se le resta el '
-         +'corporativo. Este es el número que se reparte entre los socios.','acc')+
+         'El hotel no es lo único: Puebla y Sincrético ya están sumados y el corporativo restado dentro '
+         +'del consolidado. Este es el número que se reparte entre los socios.','acc')+
     tile('6 · La sociedad en '+(ANIO0+5), money(utilSociedad(5)),
          'El mismo cálculo tres años después, con la utilidad distribuible creciendo '+CREC+'% al año.');
 
@@ -1266,9 +1274,11 @@ function pintaFlujo(){
   }).join('');
 
   setNota('nota-flujo',
-    'La utilidad distribuible sale del EBITDA del operador —<b>'+money(B.ebitda)+'</b>, el de la sección 2— menos el '
-    +'reserva de caja del '+FONDO+'% y los impuestos del '+IMPU+'%, los dos medidos sobre ese mismo EBITDA: '
-    +'quedan <b>'+money(B.neto)+'</b>. <b>'+(ANIO0+1)+'</b> es año de obra, pero seguiremos abiertos y '
+    'La utilidad distribuible se arma en dos pasos. Primero se <b>consolida</b>: al EBITDA del operador '
+    +'—<b>'+money(B.ebitda)+'</b>, el de la sección 2— se le suman Sincrético y Puebla y se le resta el '
+    +'corporativo, y quedan <b>'+money(B.cons)+'</b>. Después, sobre ese consolidado, se descuentan la '
+    +'reserva de caja del '+FONDO+'% y el impuesto del '+IMPU+'%: quedan <b>'+money(B.neto)+'</b>. '
+    +'El orden importa — la sociedad aparta caja y tributa por el conjunto, no solo por el hotel. <b>'+(ANIO0+1)+'</b> es año de obra, pero seguiremos abiertos y '
     +'prevemos una utilidad de <b>'+money(OBRA)+'</b>; en <b>'+(ANIO0+2)+'</b> se recupera entera con el '
     +'hotel abierto y de ahí corre el '+CREC+'% anual. Tenemos <b>impuestos a favor por '+mdp(CRED)
     +'</b> aproximadamente.<br><br>'
