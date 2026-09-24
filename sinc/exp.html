@@ -456,6 +456,19 @@ var VEXP=PRUEBA?'v_exp_prueba':'v_exp_publica';
 var VMED=PRUEBA?'v_exp_media_prueba':'v_exp_media_publica';
 var QS=PRUEBA?'&prueba=1':'';
 
+/* El código del QR del concierge. Viene en la liga o quedó guardado cuando el
+   huésped escaneó: la compra es suya aunque la termine tres horas después. */
+var CODIGO=(function(){
+  var q=(new URLSearchParams(location.search).get('c')||'').trim();
+  try{
+    if(q)sessionStorage.setItem('sinc_c',q);
+    else q=sessionStorage.getItem('sinc_c')||'';
+  }catch(_){}
+  return q;
+})();
+var QUIEN=null;      /* quién te atiende, si hay código */
+var PROPINA=0;       /* lo que el huésped decida dejarle */
+
 var E=null,MED=[],GUI=[],PAR=[],IMP=[],DES=[],DISP=[],FOTOS=[],METAS={},PUNTOS=[],IND=[];
 var CFG={},TYC=null;
 function cfg(k,d){var v=CFG[k];return v==null||v===''?d:v;}
@@ -539,6 +552,21 @@ async function arranca(){
   MED=r[0];GUI=r[1];PAR=r[2];IMP=r[3];DES=r[4]||[];
   (r[5]||[]).forEach(function(m){METAS[m.meta]={meta:m.meta,ods:m.ods,color:m.color,
     titulo:m.titulo,texto:m.texto};});
+
+  /* Si llega con el código de un hotel, el precio que le toca es el de ESE
+     trato, no el de la ficha pública. Se pide antes de pintar nada: el huésped
+     tiene que ver el precio de verdad, no descubrirlo en el cargo. */
+  if(CODIGO){
+    try{
+      var pr=(await rpc('sinc_precio_para',{p_op_exp:ID,p_codigo:CODIGO})||[])[0];
+      if(pr&&pr.pvp_adulto){
+        E.pvp_adulto=Number(pr.pvp_adulto);
+        if(pr.pvp_menor!=null)E.pvp_menor=Number(pr.pvp_menor);
+        else E.pvp_menor=Number(pr.pvp_adulto);
+      }
+      QUIEN=(await rpc('sinc_quien_te_atiende',{p_codigo:CODIGO})||[])[0]||null;
+    }catch(_){}
+  }
 
   document.title=E.nombre+' · Sincrético';
   $('cargando').classList.add('oculto');
@@ -1192,7 +1220,16 @@ var DATOS={nombre:'',mail:'',tel:'',idioma:'',pais:'',notas:'',seguro:false,acep
 
 function seguroMxn(){ return cfgn('sinc_seguro_mxn',0); }
 function totalConSeguro(){
-  return total() + (DATOS.seguro && seguroMxn()>0 ? seguroMxn()*1 : 0);
+  return total() + (DATOS.seguro && seguroMxn()>0 ? seguroMxn()*1 : 0) + (PROPINA||0);
+}
+/* Las propinas que se ofrecen: redondeadas, nunca cifras rotas. */
+function opcionesPropina(){
+  var t=total(), l=[0];
+  [0.05,0.10,0.15].forEach(function(p){
+    var v=Math.round(t*p/10)*10;
+    if(v>0 && l.indexOf(v)<0)l.push(v);
+  });
+  return l;
 }
 
 /* Lo que de verdad conviene saber antes de pagar, sacado de la ficha. */
@@ -1294,6 +1331,23 @@ function abreCheckout(){
           ' · +'+money(seg)+'</b>'+esc(cfg('sinc_seguro_texto',''))+'</span></label>'
         : '')+
 
+      /* Quien te atendió en recepción. La propina es suya, íntegra: no le
+         quitamos nada y no espera al día del tour. */
+      (QUIEN&&QUIEN.nombre
+        ? '<div style="border:1px solid var(--linea);border-radius:14px;padding:14px 15px;margin:14px 0">'+
+            '<div style="font-size:14px;margin-bottom:4px">Te atendió <b>'+esc(QUIEN.nombre)+'</b>'+
+            (QUIEN.hotel?' · '+esc(QUIEN.hotel):'')+'</div>'+
+            '<div style="font-size:12.5px;color:var(--tenue);margin-bottom:10px">'+
+              '¿Quieres dejarle algo? Le llega completo.</div>'+
+            '<div style="display:flex;gap:8px;flex-wrap:wrap" id="ckProp">'+
+              opcionesPropina().map(function(v){
+                return '<button type="button" data-v="'+v+'" class="btn plano" '+
+                  'style="padding:8px 14px;font-size:14px'+
+                  (v===PROPINA?';outline:2px solid var(--naranja);outline-offset:-2px':'')+'">'+
+                  (v===0?'Ahora no':money(v))+'</button>';}).join('')+
+            '</div></div>'
+        : '')+
+
       '<label class="acepto"><input type="checkbox" id="ckTyC"'+(DATOS.acepta?' checked':'')+'>'+
         '<span>He leído y acepto las <a href="terminos.html" target="_blank" rel="noopener">'+
         'condiciones de reserva</a>'+
@@ -1310,6 +1364,16 @@ function abreCheckout(){
     $('ckAtras').onclick=paso1;
     if($('ckSeguro'))$('ckSeguro').onchange=function(){
       DATOS.seguro=this.checked; $('ckTotal').textContent=money(totalConSeguro()); };
+    if($('ckProp'))$('ckProp').onclick=function(ev){
+      var b=ev.target.closest('button[data-v]'); if(!b)return;
+      PROPINA=Number(b.getAttribute('data-v'))||0;
+      Array.prototype.forEach.call(this.querySelectorAll('button[data-v]'),function(x){
+        x.style.outline=(Number(x.getAttribute('data-v'))===PROPINA&&PROPINA>0)
+          ?'2px solid var(--naranja)':'';
+        x.style.outlineOffset='-2px';
+      });
+      $('ckTotal').textContent=money(totalConSeguro());
+    };
     $('ckTyC').onchange=function(){DATOS.acepta=this.checked;};
     $('ckPagar').onclick=paga;
   }
@@ -1329,7 +1393,8 @@ function abreCheckout(){
         p_adultos:adultos, p_menores:menores, p_email:DATOS.mail,
         p_telefono:DATOS.tel||null, p_idioma:DATOS.idioma||null,
         p_pais:DATOS.pais||null, p_notas:DATOS.notas||null, p_canal:'web',
-        p_seguro:!!DATOS.seguro, p_terminos:(TYC&&TYC.version)||1
+        p_seguro:!!DATOS.seguro, p_terminos:(TYC&&TYC.version)||1,
+        p_codigo:CODIGO||null, p_propina:PROPINA||0
       });
     }catch(x){
       e.textContent=String(x.message||x);e.style.display='block';
