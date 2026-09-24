@@ -1,6 +1,4 @@
 <title>Modulador de la ronda</title>
-<link rel="icon" type="image/png" href="/dash-192.png">
-<link rel="apple-touch-icon" href="/dash-192.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
 :root{
@@ -229,6 +227,13 @@ thead th.sep{border-bottom:1px solid var(--line)}
 /* Modo edición de textos. Lo que se escribe se guarda en public.deck_textos de
    Supabase, no en el navegador: sobrevive a que se republique la página y se ve
    igual desde cualquier equipo que abra el panel. */
+tr.plg>td{cursor:pointer;user-select:none}
+tr.plg:hover>td{background:var(--raise)}
+.mas{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+  margin-right:7px;border:1px solid var(--line);border-radius:5px;background:var(--card);
+  font:700 .82rem/1 "IBM Plex Mono",monospace;color:var(--ink2);vertical-align:-2px}
+tr.plg[aria-expanded="true"] .mas{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.cuantos{font-weight:400;color:var(--ink3);font-size:.78rem;margin-left:6px}
 .tx-on [data-tx]{outline:1px dashed var(--accent);outline-offset:3px;border-radius:3px;cursor:text}
 .tile .lb.edited,.tile .s.edited{border-left:2px solid var(--new);padding-left:5px;margin-left:-7px}
 .tx-on [data-tx]:focus{outline:2px solid var(--accent);background:var(--raise)}
@@ -280,13 +285,7 @@ footer{margin-top:38px;padding-top:15px;border-top:1px solid var(--line);font-si
   <section>
     <div class="shead"><h2>1 · Lo que hay que sanear</h2>
       <p>Qué paga cada ronda. La Ronda 1 cierra la negociación fuerte; la Ronda 2 entra ya sin pasivos críticos.</p></div>
-    <div class="card"><div class="ctl">
-      <div><p class="q"><b>Qué monto usa el modelo</b></p>
-        <div class="seg" role="group" aria-label="Escenario de deuda">
-          <button id="d-neg" type="button" aria-pressed="true">Negociado</button>
-          <button id="d-lib" type="button" aria-pressed="false">En libros</button>
-        </div></div>
-    </div>
+    <div class="card">
     <div class="tscroll"><table>
       <thead><tr><th>Concepto</th><th>Cuenta de deuda al 31-ago-2026</th><th class="g">Monto negociado</th><th class="g">Ahorro</th></tr></thead>
       <tbody id="tb-deuda"></tbody><tfoot id="tf-deuda"></tfoot>
@@ -638,7 +637,7 @@ function tarifaDe(h){ return h.tar!==null ? h.tar : (h.tipo==='dorm' ? DORM : Ma
 
 
 /* ── Estado ────────────────────────────────────────────────────────────── */
-var ESC='neg', OPCION=1, VAL=40000000, RATCHET=false;
+var OPCION=1, VAL=40000000, RATCHET=false;
 var VAL_BAJA=30000000, VAL_ALTA=50000000, PLAZO_PREMIO=4;
 var RONDA=10000000, PREF=.60, SERV=500000, OCU=.74, ADR=1882, DORM=400, OTROS=6000000;
 /* Flujo futuro: el hotel entrega EBITDA, de ahí salen fondo de caja e impuestos.
@@ -689,15 +688,35 @@ function tir(cf){
 }
 
 /* ── 1 · Deuda ─────────────────────────────────────────────────────────── */
-function valDeuda(d){ return ESC==='libros' ? d.libros : d.neg; }
+/* El modelo siempre corre con el monto negociado; la columna en libros queda
+   como referencia de la cuenta de deuda, no como escenario alternativo. */
+function valDeuda(d){ return d.neg; }
 function totalDeuda(){ return DEUDA.reduce(function(a,d){return a+valDeuda(d);},0); }
+/* ── Listas largas: resumen y un + para abrirlas ────────────────────────────
+   Las tablas agrupadas arrancan plegadas: se ve el total de cada bloque y, si
+   alguien quiere el detalle, lo abre. ABIERTO recuerda qué bloques dejó
+   abiertos el usuario, para que un render no se los cierre. */
+var ABIERTO={};
+function cabGrupo(k, titulo, n, celdas, cls, uni){
+  var ab=!!ABIERTO[k], u=uni||['partida','partidas'];
+  return '<tr class="grp plg'+(cls?' '+cls:'')+'" data-grupo="'+k+'" aria-expanded="'+ab+'">'
+    +'<td><span class="mas">'+(ab?'−':'+')+'</span>'+titulo
+    +'<span class="cuantos">'+n+' '+(n===1?u[0]:u[1])+'</span></td>'+celdas+'</tr>';
+}
+var UNI_ANIO=['año','años'], UNI_TIPO=['tipo','tipos'];
+function abierto(k){ return !!ABIERTO[k]; }
+document.addEventListener('click',function(e){
+  var tr=e.target.closest?e.target.closest('tr.plg'):null; if(!tr) return;
+  if(e.target.closest('input,button,a')) return;
+  var k=tr.getAttribute('data-grupo'); ABIERTO[k]=!ABIERTO[k]; render();
+});
+
 function pintaDeuda(){
   /* La tabla de arriba es la de la NEGOCIACIÓN: cada partida con su rango y lo
      que vale en el escenario elegido. Es donde se ve qué está cerrado y qué no. */
-  document.getElementById('tb-deuda').innerHTML=DEUDA.map(function(d,i){
-    var i=DEUDA.indexOf(d), ah=d.fuera?0:d.libros-d.neg;
-    return '<tr><td><span class="pill '+(d.r===0?'inter':(d.r===1?'new':'res'))+'">'
-      +(d.r===0?'Compraventa':'Ronda '+d.r)+'</span> '+d.n+' '
+  function filaDeuda(d){
+    var i=DEUDA.indexOf(d), ah=d.libros-d.neg;
+    return '<tr><td class="ind">'+d.n+' '
       +(d.mora?'<sup class="mora" title="El saldo no incluye intereses moratorios">*</sup> ':'')
       +(d.pag
         ? '<span class="pill pagado">pagado</span>'
@@ -707,7 +726,23 @@ function pintaDeuda(){
       +'<td><input class="negin" data-neg="'+i+'" value="'+nfmt(d.neg)+'"></td>'
       +'<td class="'+(ah>0?'g pos':(ah<0?'g neg':'dim'))+'">'
         +(ah>0?'−'+money(ah):(ah<0?'+'+money(-ah):'—'))+'</td></tr>';
-  }).join('');
+  }
+  function bloqueDeuda(k, titulo, filtro, cls){
+    var g=DEUDA.filter(filtro);
+    var lib=g.reduce(function(a,d){return a+d.libros;},0);
+    var neg=g.reduce(function(a,d){return a+d.neg;},0);
+    var aho=lib-neg;
+    var celdas='<td class="dim"><b>'+money(lib)+'</b></td>'
+      +'<td class="g"><b>'+money(neg)+'</b></td>'
+      +'<td class="'+(aho>0?'g pos':(aho<0?'g neg':'dim'))+'"><b>'
+        +(aho>0?'−'+money(aho):(aho<0?'+'+money(-aho):'—'))+'</b></td>';
+    return cabGrupo(k, titulo, g.length, celdas, cls)
+      + (abierto(k) ? g.map(filaDeuda).join('') : '');
+  }
+  document.getElementById('tb-deuda').innerHTML=
+     bloqueDeuda('d1','Ronda 1 · Refundación', function(d){return d.r===1;})
+    +bloqueDeuda('d0','Fuera de las rondas · compraventa', function(d){return d.r===0;}, 'inter')
+    +bloqueDeuda('d2','Ronda 2 · Remodelación', function(d){return d.r===2;});
 
   function sumD(f,c){ return DEUDA.filter(f).reduce(function(a,d){return a+d[c];},0); }
   function sumV(f){ return DEUDA.filter(f).reduce(function(a,d){return a+valDeuda(d);},0); }
@@ -733,20 +768,18 @@ function pintaDeuda(){
       +(d.pag?'<span class="pill pagado">pagado</span>':'')+'</td>'
       +'<td class="g"><b>'+money(valDeuda(d))+'</b></td></tr>';
   }
+  function bloqueRes(k, titulo, filas, total, cls, nota){
+    var celdas='<td class="g"><b>'+money(total)+'</b></td>';
+    return cabGrupo(k, titulo+(nota?' <span class="grpnota">'+nota+'</span>':''), filas.length, celdas, cls)
+      + (abierto(k) ? filas.join('') : '');
+  }
   document.getElementById('tb-resumen').innerHTML=
-     '<tr class="grp"><td colspan="2">Ronda 1 · Refundación</td></tr>'
-    +DEUDA.filter(es1).map(fil).join('')
-    +'<tr class="sub"><td>Subtotal Ronda 1</td><td class="g"><b>'+money(r1)+'</b></td></tr>'
-    +'<tr class="grp inter"><td colspan="2">Fuera de las rondas · va en la compraventa '
-      +'<span class="grpnota">(se compensa con mejoras a la propiedad)</span></td></tr>'
-    +DEUDA.filter(es0).map(fil).join('')
-    +'<tr class="sub"><td>Subtotal fuera de rondas</td><td class="g"><b>'+money(sumV(es0))+'</b></td></tr>'
-    +'<tr class="grp"><td colspan="2">Ronda 2 · Remodelación</td></tr>'
-    +'<tr class="grp2"><td colspan="2">Pasivos</td></tr>'
-    +DEUDA.filter(es2).map(fil).join('')
-    +'<tr class="grp2"><td colspan="2">Remodelación</td></tr>'
-    +'<tr><td class="ind">La obra</td><td class="g"><b>'+money(REMOD)+'</b></td></tr>'
-    +'<tr class="sub"><td>Subtotal Ronda 2</td><td class="g"><b>'+money(r2)+'</b></td></tr>';
+     bloqueRes('r1','Ronda 1 · Refundación', DEUDA.filter(es1).map(fil), r1)
+    +bloqueRes('r0','Fuera de las rondas · va en la compraventa', DEUDA.filter(es0).map(fil),
+       sumV(es0), 'inter', '(se compensa con mejoras a la propiedad)')
+    +bloqueRes('r2','Ronda 2 · Remodelación',
+       DEUDA.filter(es2).map(fil).concat(
+         ['<tr><td class="ind">La obra</td><td class="g"><b>'+money(REMOD)+'</b></td></tr>']), r2);
 
   document.getElementById('tf-resumen').innerHTML=
      '<tr><td>Total · las dos rondas <small>(sin la compraventa)</small></td>'
@@ -822,21 +855,35 @@ function proyeccion(){
           arrendador: arr, util: ope};
 }
 function pintaU86(){
-  document.getElementById('tb-hab').innerHTML=HAB.map(function(h,i){
-    return '<tr><td>'+h.n+(h.tipo==='dorm'?' <span class="pill res">por cama</span>':'')+'</td>'
+  function filaHab(h){
+    var i=HAB.indexOf(h);
+    return '<tr><td class="ind">'+h.n+(h.tipo==='dorm'?' <span class="pill res">por cama</span>':'')+'</td>'
       +'<td class="dim">'+h.hoy+'</td>'
       +'<td><input type="number" min="0" step="1" value="'+h.cuartos+'" data-hab="'+i+'" data-f="cuartos"></td>'
       +'<td>'+(h.tipo==='dorm'?'<input type="number" min="1" step="1" value="'+h.camas+'" data-hab="'+i+'" data-f="camas">':'<span class="dim">—</span>')+'</td>'
       +'<td><input type="text" inputmode="numeric" value="'+nfmt(tarifaDe(h))+'" data-hab="'+i+'" data-f="tar"></td>'
       +'<td><input type="number" min="0" max="100" step="1" value="'+h.ocu+'" data-hab="'+i+'" data-f="ocu" style="width:64px"></td>'
       +'<td class="g"><b>'+money(ingresoHab(h))+'</b></td></tr>';
-  }).join('')
-  + HAB_HOY.map(function(h){
-      return '<tr class="dim"><td>'+h.n+' <span class="pill res">desaparece</span></td>'
-        +'<td class="dim">'+h.hoy+'</td><td>—</td><td>'+h.camas+'</td>'
-        +'<td>—</td><td>—</td><td class="g">—</td></tr>';
-    }).join('')
-  ;
+  }
+  function bloqueHab(k, titulo, g, extras){
+    var hoy=g.reduce(function(a,h){return a+h.hoy;},0)+(extras||[]).reduce(function(a,h){return a+h.hoy;},0);
+    var cu=g.reduce(function(a,h){return a+h.cuartos;},0);
+    var ing=g.reduce(function(a,h){return a+ingresoHab(h);},0);
+    var celdas='<td class="dim"><b>'+hoy+'</b></td><td><b>'+cu+'</b></td>'
+      +'<td class="dim">—</td><td class="dim">—</td><td class="dim">—</td>'
+      +'<td class="g"><b>'+money(ing)+'</b></td>';
+    var det = abierto(k)
+      ? g.map(filaHab).join('')
+        +(extras||[]).map(function(h){
+            return '<tr class="dim"><td class="ind">'+h.n+' <span class="pill res">desaparece</span></td>'
+              +'<td class="dim">'+h.hoy+'</td><td>—</td><td>'+h.camas+'</td>'
+              +'<td>—</td><td>—</td><td class="g">—</td></tr>'; }).join('')
+      : '';
+    return cabGrupo(k, titulo, g.length+(extras||[]).length, celdas, null, UNI_TIPO) + det;
+  }
+  document.getElementById('tb-hab').innerHTML=
+     bloqueHab('h1','Privadas', HAB.filter(function(h){return h.tipo!=='dorm';}))
+    +bloqueHab('h2','Dormitorios', HAB.filter(function(h){return h.tipo==='dorm';}), HAB_HOY);
   var nc=HAB.reduce(function(a,h){return a+h.cuartos;},0);
   var nb=HAB.reduce(function(a,h){return a+h.cuartos*h.camas;},0);
   var nhoy=HAB.reduce(function(a,h){return a+h.hoy;},0)
@@ -1151,14 +1198,21 @@ function pintaFlujo(){
     tile('6 · La sociedad en '+(ANIO0+5), money(utilSociedad(5)),
          'El mismo cálculo tres años después, con la repartible creciendo '+CREC+'% al año.');
 
-  document.getElementById('tb-flujo').innerHTML=F.map(function(d){
-    return '<tr'+(d.anio===2030?' class="hi30"':'')+'><td>'+d.anio
+  var tH=F.reduce(function(a,d){return a+d.hot;},0), tP=F.reduce(function(a,d){return a+d.pue;},0),
+      tS=F.reduce(function(a,d){return a+d.sin;},0), tC=F.reduce(function(a,d){return a+d.corp;},0),
+      tU=F.reduce(function(a,d){return a+d.u;},0);
+  document.getElementById('tb-flujo').innerHTML=
+    cabGrupo('fl','Año por año · '+F[0].anio+'–'+F[F.length-1].anio, F.length,
+      '<td><b>'+money(tH)+'</b></td><td><b>'+money(tP)+'</b></td><td><b>'+money(tS)+'</b></td>'
+      +'<td class="neg"><b>−'+money(tC)+'</b></td><td class="g"><b>'+money(tU)+'</b></td>', null, UNI_ANIO)
+    + (!abierto('fl') ? '' : F.map(function(d){
+    return '<tr'+(d.anio===2030?' class="hi30"':'')+'><td class="ind">'+d.anio
       +(d.i===1?' <span class="pill res">obra</span>':'')
       +(d.anio===2030?' <span class="pill hit">valuación 60 mdp</span>':'')+'</td>'
       +'<td>'+money(d.hot)+'</td><td>'+money(d.pue)+'</td><td>'+money(d.sin)+'</td>'
       +'<td class="neg">−'+money(d.corp)+'</td>'
       +'<td class="g"><b>'+money(d.u)+'</b></td></tr>';
-  }).join('');
+  }).join(''));
 
   setNota('nota-flujo',
     'La repartible sale del EBITDA del operador —<b>'+money(B.ebitda)+'</b>, el de la sección 2— menos el '
@@ -1715,12 +1769,21 @@ function pintaRet(){
     tile('Se queda con', pc(R.pnFinal*100),
          R.premio?'baja de '+pc(RONDA/VAL_BAJA*100)+' al dispararse el premio':'de la sociedad');
 
-  document.getElementById('tb-ret').innerHTML=R.det.map(function(d){
-    return '<tr><td>'+d.anio+'</td><td>'+money(d.u)+'</td>'
+  var D=R.det, ult=D[D.length-1]||{acum:0};
+  document.getElementById('tb-ret').innerHTML=
+    cabGrupo('rt','Año por año · '+(D[0]?D[0].anio:'')+'–'+(ult.anio||''), D.length,
+      '<td><b>'+money(D.reduce(function(a,d){return a+d.u;},0))+'</b></td>'
+      +'<td class="g"><b>'+money(D.reduce(function(a,d){return a+d.p;},0))+'</b></td>'
+      +'<td><b>'+money(D.reduce(function(a,d){return a+d.pro;},0))+'</b></td>'
+      +'<td><b>'+money(SERV*D.length)+'</b></td>'
+      +'<td><b>'+money(D.reduce(function(a,d){return a+d.tot;},0))+'</b></td>'
+      +'<td class="g"><b>'+money(ult.acum||0)+'</b></td>', null, UNI_ANIO)
+    + (!abierto('rt') ? '' : D.map(function(d){
+    return '<tr><td class="ind">'+d.anio+'</td><td>'+money(d.u)+'</td>'
       +'<td class="g">'+(d.p>0?money(d.p):'<span class="dim">—</span>')+'</td>'
       +'<td>'+money(d.pro)+'</td><td>'+money(SERV)+'</td>'
       +'<td><b>'+money(d.tot)+'</b></td><td class="g">'+money(d.acum)+'</td></tr>';
-  }).join('');
+  }).join(''));
 
 }
 
@@ -1869,15 +1932,12 @@ function render(){ _serie=null;
 
 
 function press(id,on){ var e=document.getElementById(id); if(e) e.setAttribute('aria-pressed',on?'true':'false'); }
-function setEsc(v){ ESC=v; press('d-neg',v==='neg'); press('d-lib',v==='libros'); render(); }
 function setVal(rat){ RATCHET=!!rat; VAL=rat?VAL_BAJA:CAP_ACTAS+FOBJ+RONDA; press('v40',!rat); press('vrat',!!rat); render(); }
 
 document.getElementById('tb-deuda').addEventListener('click',function(e){
   var b=e.target.closest?e.target.closest('[data-deuda]'):null; if(!b) return;
   var d=DEUDA[+b.getAttribute('data-deuda')]; d.cerr=d.cerr?0:1; render();
 });
-document.getElementById('d-neg').addEventListener('click',function(){ setEsc('neg'); });
-document.getElementById('d-lib').addEventListener('click',function(){ setEsc('libros'); });
 
 function setRenta(m){ RENTA_MODO=m; press('r-mayor',m==='mayor'); press('r-suma',m==='suma'); render(); }
 document.getElementById('r-mayor').addEventListener('click',function(){ setRenta('mayor'); });
