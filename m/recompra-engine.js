@@ -134,6 +134,22 @@ function corridaCon(SALEN, QUEDAN, cfg){
   return {filas:filas, est:est, qest:qest};
 }
 
+function socioFn(clave, vehiculo, cfg){
+  var idx=-1;
+  for(var i=0;i<SALEN.length;i++){
+    if(SALEN[i].k!==clave && SALEN[i].n!==clave) continue;
+    if(vehiculo && SALEN[i].v!==vehiculo) continue;
+    idx=i; break;
+  }
+  if(idx<0) return null;
+  var R=corridaCon(SALEN,QUEDAN,cfg), e=R.est[idx], filas=[];
+  R.filas.forEach(function(f){
+    if(f.pago[idx]==null) return;
+    filas.push({anio:f.anio, flc:f.flc, n:f.n, bote:f.bote, tasa:f.tasa[idx],
+                pago:f.pago[idx], saldo:f.saldo[idx]});
+  });
+  return {i:idx, socio:SALEN[idx], cobra:e.cobra, liq:e.liq, filas:filas};
+}
 function simularFn(h, cfg){
   if(!h || !h.cap) return null;
   var nuevo={k:'__sim', n:h.n, v:h.v||'hipótesis', cap:h.cap, acc:h.acc, tot:h.tot||h.cap};
@@ -161,20 +177,29 @@ function simularFn(h, cfg){
    SALIRSE   · recompra al 100% del capital exhibido, sin prima ni dividendo.
    Los múltiplos son NOMINALES: no descuentan la depreciación del dinero. */
 function comparativaFn(h, cfg){
-  if(!h || !(h.quita||h.dentroDe)) return null;
+  if(!h || !(h.quita||h.dentroDe||h.enSalen)) return null;
+  /* Tres situaciones distintas:
+     · quita      — socio directo de HBR que hoy se queda (está en QUEDAN)
+     · dentroDe   — socio de un vehículo; la suscripción la decide el vehículo
+     · enSalen    — socio que YA pidió la salida (Joaquín, Aldo y los F&F):
+                    su puerta real es salirse, y quedarse o refundar son el
+                    escenario. El plan del resto no se toca. */
   var clave=h.quita||h.dentroDe, iq=-1;
-  QUEDAN.forEach(function(q,i){ if(q.n===clave) iq=i; });
-  if(iq<0) return null;
+  if(clave) QUEDAN.forEach(function(q,i){ if(q.n===clave) iq=i; });
+  if(!h.enSalen && iq<0) return null;
   /* Socio DENTRO de un vehículo: no decide la suscripción —la decide el
      vehículo— así que sus puertas son dos: quedarse con lo que tiene o salirse.
      Su dividendo es la parte del vehículo que le toca por capital aportado. */
-  var dentro=!!h.dentroDe, troz=dentro?(h.cap/(QUEDAN[iq].cap||h.cap)):1;
+  var dentro=!!h.dentroDe, sale=!!h.enSalen, troz=dentro?(h.cap/(QUEDAN[iq].cap||h.cap)):1;
+  var suelto=dentro||sale;   // no es refundador: cobra prorrata intacta
 
   var base=corridaCon(SALEN,QUEDAN,cfg);
   var Qd=QUEDAN.map(function(q){ return {n:q.n, acc:q.acc, frac:q.frac, ref:q.ref, cap:q.cap}; });
-  if(!dentro){ Qd[iq].acc=h.acc; Qd[iq].ref=0; }
-  var dil=dentro?base:corridaCon(SALEN,Qd,cfg);
-  var sal=simularFn(h,cfg), pag={};
+  if(!suelto){ Qd[iq].acc=h.acc; Qd[iq].ref=0; }
+  var dil=suelto?base:corridaCon(SALEN,Qd,cfg);
+  /* Quien ya pidió la salida tiene su corrida real en la lista; el resto se
+     simula añadiéndolo a los que salen. */
+  var sal=sale?socioFn(h.enSalen,null,cfg):simularFn(h,cfg), pag={};
   if(sal) sal.filas.forEach(function(r){ pag[r.anio]=r.pago; });
 
   var invRef=(h.cap||0)+(h.susc||0), invDil=h.cap||0;
@@ -204,7 +229,19 @@ function comparativaFn(h, cfg){
        vehículo por la parte de capital que puso. Usar las del vehículo entero
        multiplicaría su participación por diez. */
     var accDil=dentro ? (h.acc||0)*(h.cap/(h.tot||h.cap)) : (h.acc||0);
-    var vRef=valorAcc(h.accTot||0, hasta), vDil=valorAcc(accDil, hasta);
+    /* Refundar para un socio de vehículo: aportar por la ronda lo justo para
+       volver a las acciones que tendría con su % de 2022. Suscribe al precio
+       del acta y entra como accionista sin más: cobra prorrata, no es
+       refundador —el pacto define quién lo es— y su parte vale su trozo del
+       EBITDA. Si ya está por encima de su objetivo, no hay nada que aportar. */
+    var accRef=suelto ? Math.max(accDil, h.accObj||0) : (h.accTot||0);
+    var suscD =suelto ? Math.max(0, accRef-accDil)*22.19343 : (h.susc||0);
+    var divRefD=0, divDilD=0;
+    if(suelto) for(var j=0;j<n && j<ANIOS.length;j++){
+      var pro=(1-PN/100)*base.filas[j].flc/BASE;
+      divRefD += accRef*pro; divDilD += accDil*pro;
+    }
+    var vRef=valorAcc(accRef, hasta), vDil=valorAcc(accDil, hasta);
     /* Lo que rinde cada peso nuevo que se aporte a la ronda, al precio del acta.
        Entra como acción sin más: cobra prorrata y vale su parte del EBITDA. */
     var accU=100000/22.19343, divU=0;
@@ -216,12 +253,13 @@ function comparativaFn(h, cfg){
       return {cobra:cobra, inv:inv, anio:cobra/n, valor:valor,
               mult:inv?cobra/inv:0, total:cobra+valor, multTot:inv?(cobra+valor)/inv:0};
     }
-    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:dentro,
+    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:suelto,
       unidad:{monto:100000, acc:accU, div:divU, valor:valorAcc(accU,hasta),
               total:divU+valorAcc(accU,hasta), mult:(divU+valorAcc(accU,hasta))/100000},
       ebitda:EB[hasta]||0, multEb:MULT_EB, accTotal:totalEn(hasta),
-      ref:dentro?null:caja(r, invRef, vRef),
-      dil:caja(d, invDil, vDil),
+      ref:suelto ? caja(divRefD, (h.cap||0)+suscD, vRef) : caja(r, invRef, vRef),
+      susc:suelto?suscD:(h.susc||0), accRef:accRef, accDil:accDil, sale:sale,
+      dil:suelto ? caja(divDilD, invDil, vDil) : caja(d, invDil, vDil),
       sal:caja(x, invDil, 0)};
   });
 }
@@ -243,7 +281,15 @@ window.RECOMPRA={
     'PITAO, S.A.P.I. de C.V.':        {n:'PITAO · Jordi Sastre',        cap:6034057, acc:15539, tot:6034057, quita:'PITAO · Jordi Sastre',         susc:628407,  accSusc:28315, accTot:43854},
     'AE Future, S.A. de C.V.':        {n:'AE Future · Estanislao Masiá',cap:3128193, acc:8061,  tot:3128193, quita:'AE Future · Estanislao Masiá', susc:325553,  accSusc:14668, accTot:22729},
     'Juan José Cué de la Fuente':     {n:'Juan José Cué de la Fuente',  cap:1150000, acc:51815, tot:1150000, quita:'Juan José Cué de la Fuente',    susc:500000,  accSusc:22531, accTot:74346},
-    'Luis Javier Cué de la Fuente':   {n:'Luis Javier Cué de la Fuente',cap:500000,  acc:22529, tot:500000,  quita:'Luis Javier Cué de la Fuente',  susc:0,       accSusc:0, accTot:22529}
+    'Luis Javier Cué de la Fuente':   {n:'Luis Javier Cué de la Fuente',cap:500000,  acc:22529, tot:500000,  quita:'Luis Javier Cué de la Fuente',  susc:0,       accSusc:0, accTot:22529},
+    /* Los dos que ya pidieron la salida. Su puerta real es salirse; refundar y
+       quedarse son el escenario. accObj = las acciones con las que volverían a
+       su % de 2022: Starseeker las trae del acta (7.05% = 24,576); Aldo sale de
+       la nota de su propio compromiso, 11.63% del capital suscrito. */
+    'Starseeker, S.L.U.':             {n:'Starseeker · Joaquín Canals', cap:3384307, acc:8907,  enSalen:'Starseeker, S.L.U.',
+                                       accObj:24576, objTxt:'7.05% de la sociedad, como en 2022'},
+    'Aldo Gelover Escamilla':         {n:'Aldo Gelover Escamilla',      cap:5579666, acc:14416, enSalen:'Aldo Gelover Escamilla',
+                                       accObj:Math.round(0.1163*278880), objTxt:'11.63% del capital suscrito, como dice su compromiso'}
   },
   /* h = {n,cap,acc,tot} + quita (sale entero de QUEDAN) o dentroDe (baja la
      fracción que le queda al vehículo). Devuelve lo mismo que socio(). */
@@ -267,7 +313,8 @@ window.RECOMPRA={
     return {i:idx, socio:nuevo, cobra:e.cobra, liq:e.liq, filas:filas, hipotetico:true, h:h};
   },
   /* La corrida de un socio concreto, por nombre. Devuelve null si no sale. */
-  socio:function(clave, vehiculo, cfg){
+  socio:socioFn,
+  __socio:function(clave, vehiculo, cfg){
     var idx=-1;
     for(var i=0;i<SALEN.length;i++){
       if(SALEN[i].k!==clave && SALEN[i].n!==clave) continue;
