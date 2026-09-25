@@ -161,14 +161,19 @@ function simularFn(h, cfg){
    SALIRSE   · recompra al 100% del capital exhibido, sin prima ni dividendo.
    Los múltiplos son NOMINALES: no descuentan la depreciación del dinero. */
 function comparativaFn(h, cfg){
-  if(!h || !h.quita) return null;
-  var iq=-1; QUEDAN.forEach(function(q,i){ if(q.n===h.quita) iq=i; });
+  if(!h || !(h.quita||h.dentroDe)) return null;
+  var clave=h.quita||h.dentroDe, iq=-1;
+  QUEDAN.forEach(function(q,i){ if(q.n===clave) iq=i; });
   if(iq<0) return null;
+  /* Socio DENTRO de un vehículo: no decide la suscripción —la decide el
+     vehículo— así que sus puertas son dos: quedarse con lo que tiene o salirse.
+     Su dividendo es la parte del vehículo que le toca por capital aportado. */
+  var dentro=!!h.dentroDe, troz=dentro?(h.cap/(QUEDAN[iq].cap||h.cap)):1;
 
   var base=corridaCon(SALEN,QUEDAN,cfg);
   var Qd=QUEDAN.map(function(q){ return {n:q.n, acc:q.acc, frac:q.frac, ref:q.ref, cap:q.cap}; });
-  Qd[iq].acc=h.acc; Qd[iq].ref=0;
-  var dil=corridaCon(SALEN,Qd,cfg);
+  if(!dentro){ Qd[iq].acc=h.acc; Qd[iq].ref=0; }
+  var dil=dentro?base:corridaCon(SALEN,Qd,cfg);
   var sal=simularFn(h,cfg), pag={};
   if(sal) sal.filas.forEach(function(r){ pag[r.anio]=r.pago; });
 
@@ -191,18 +196,31 @@ function comparativaFn(h, cfg){
   function acum(n, get){ var t=0; for(var i=0;i<n && i<ANIOS.length;i++) t+=get(i)||0; return t; }
   return [4,6,8].map(function(n){
     var flc=acum(n,function(i){ return base.filas[i].flc; });
-    var r=acum(n,function(i){ return base.filas[i].div[iq]; });
-    var d=acum(n,function(i){ return dil.filas[i].div[iq]; });
+    var r=acum(n,function(i){ return base.filas[i].div[iq]; })*troz;
+    var d=acum(n,function(i){ return dil.filas[i].div[iq]; })*troz;
     var x=acum(n,function(i){ return pag[ANIOS[i]]; });
     var hasta=ANIOS[Math.min(n,ANIOS.length)-1];
-    var vRef=valorAcc(h.accTot||0, hasta), vDil=valorAcc(h.acc||0, hasta);
+    /* Dentro de un vehículo, las acciones que le tocan a la persona son las del
+       vehículo por la parte de capital que puso. Usar las del vehículo entero
+       multiplicaría su participación por diez. */
+    var accDil=dentro ? (h.acc||0)*(h.cap/(h.tot||h.cap)) : (h.acc||0);
+    var vRef=valorAcc(h.accTot||0, hasta), vDil=valorAcc(accDil, hasta);
+    /* Lo que rinde cada peso nuevo que se aporte a la ronda, al precio del acta.
+       Entra como acción sin más: cobra prorrata y vale su parte del EBITDA. */
+    var accU=100000/22.19343, divU=0;
+    for(var j=0;j<n && j<ANIOS.length;j++){
+      var f=base.filas[j];
+      divU += (accU/BASE)*(1-PN/100)*f.flc;
+    }
     function caja(cobra, inv, valor){
       return {cobra:cobra, inv:inv, anio:cobra/n, valor:valor,
               mult:inv?cobra/inv:0, total:cobra+valor, multTot:inv?(cobra+valor)/inv:0};
     }
-    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n,
+    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:dentro,
+      unidad:{monto:100000, acc:accU, div:divU, valor:valorAcc(accU,hasta),
+              total:divU+valorAcc(accU,hasta), mult:(divU+valorAcc(accU,hasta))/100000},
       ebitda:EB[hasta]||0, multEb:MULT_EB, accTotal:totalEn(hasta),
-      ref:caja(r, invRef, vRef),
+      ref:dentro?null:caja(r, invRef, vRef),
       dil:caja(d, invDil, vDil),
       sal:caja(x, invDil, 0)};
   });
