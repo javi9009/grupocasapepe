@@ -40,6 +40,16 @@ td.num,th.num{font-variant-numeric:tabular-nums}
 .note{background:var(--surface3);border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:9px;padding:12px 14px;font-size:.84rem;color:var(--ink2);margin-top:12px;line-height:1.55}
 .note b{color:var(--ink)}
 .scroll{overflow-x:auto}
+.sel{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.sel button{border:1px solid var(--rule2);background:#fff;border-radius:9px;padding:6px 11px;font:inherit;font-size:.78rem;cursor:pointer;color:var(--ink2)}
+.sel button[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:600}
+.esc{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:11px;margin:12px 0 0}
+.escc{border:1px solid var(--rule);border-radius:12px;padding:13px 14px;background:var(--surface)}
+.escc.mejor{border-color:var(--accent);background:var(--accentS)}
+.escc h4{margin:0 0 2px;font-size:.8rem;color:var(--ink2)}
+.escc .big{font-size:1.45rem;font-weight:700;line-height:1.15}
+.escc .x{font-size:.88rem;font-weight:700;color:var(--muted)}
+.escc p{margin:6px 0 0;font-size:.74rem;color:var(--muted);line-height:1.4}
 @media(max-width:620px){table{font-size:.72rem}th,td{padding:5px 5px}}
 </style></head><body>
 <div class="bar"><a href="/?ir=socios">‹ Panel</a><span class="t">Plan de recompra y dividendos</span></div>
@@ -70,6 +80,14 @@ cantidad de bote, más su propio porcentaje de dividendo.</p>
 <h2>Lo que cobra cada socio</h2>
 <p class="sub">Ordenado por vehículo. El capital a recuperar es el exhibido por cada persona.</p>
 <div class="card pad scroll"><table id="t-pagos"></table></div>
+
+<h2>La cuenta de cada socio</h2>
+<p class="sub">Propuesta tentativa de salida sobre la proyección, contra lo que cobraría si se quedara.
+Elige un socio.</p>
+<div class="sel" id="sel"></div>
+<div class="esc" id="esc"></div>
+<div class="card pad scroll" style="margin-top:11px"><table id="t-detalle"></table></div>
+<div class="note" id="nota-soc"></div>
 
 <h2>Saldo pendiente al cierre</h2>
 <div class="card pad scroll"><table id="t-saldo"></table></div>
@@ -142,7 +160,11 @@ var QUEDAN=[
  {n:'Struchture (Cejudo y Javier)',                acc:3386,  frac:145000/STR_TODO,  ref:0, cap:145000}
 ];
 
-var BOTE=0.25, PNv=22.89, DEUDA=750000;
+/* Valuación de referencia a 2030, la misma que usa el panel de gobierno. Sirve
+   para valorar lo que conserva el socio que NO vende: su participación sigue
+   viva y eso no aparece en el dividendo. */
+var VALFUT=60000000;
+var BOTE=0.25, PNv=22.89, DEUDA=750000, FOCO=0;
 var money=function(v){ return '$'+Math.round(v).toLocaleString('es-MX'); };
 var mC=function(v){ var a=Math.abs(v);
   return a>=1e6 ? '$'+(v/1e6).toFixed(2)+' M' : a>=1e3 ? '$'+Math.round(v/1e3)+' k' : money(v); };
@@ -233,6 +255,62 @@ function pinta(){
         return '<td class="num">'+money(f.usado)+'</td>'; }).join('')+'<td>—</td></tr>';
   document.getElementById('t-pagos').innerHTML=th2+'<tbody>'+cuerpo+'</tbody>';
 
+  /* ── la cuenta de un socio: salir contra quedarse ── */
+  document.getElementById('sel').innerHTML=SALEN.map(function(s,i){
+    return '<button data-f="'+i+'" aria-pressed="'+(i===FOCO)+'">'+s.n.split(' ').slice(0,2).join(' ')
+      +(s.v==='El Pontigu'||s.v==='Struchture'?' <span class="liq">·'+s.v.slice(0,4)+'</span>':'')+'</button>';
+  }).join('');
+  var S=SALEN[FOCO], pct=E[FOCO].pct;
+  var divT=pct*flcT, resid=pct*VALFUT, queda=divT+resid, saleT=E[FOCO].cobra;
+  var mejor=Math.max(saleT,queda);
+  document.getElementById('esc').innerHTML=
+     '<div class="escc'+(saleT>=mejor-1?' mejor':'')+'"><h4>Si sale</h4><div class="big">'+mC(saleT)+'</div>'
+    +'<div class="x">×'+(saleT/S.cap).toFixed(2)+' sobre '+mC(S.cap)+'</div>'
+    +'<p>Recupera el 100% de lo que puso, sin prima. Queda liquidado en <b>'+(E[FOCO].liq||'—')
+    +'</b> y deja de participar.</p></div>'
+    +'<div class="escc'+(queda>=mejor-1?' mejor':'')+'"><h4>Si se queda</h4><div class="big">'+mC(queda)+'</div>'
+    +'<div class="x">×'+(queda/S.cap).toFixed(2)+' sobre '+mC(S.cap)+'</div>'
+    +'<p><b>'+mC(divT)+'</b> de dividendo en diez años más <b>'+mC(resid)
+    +'</b> de su participación, valorada a los '+mC(VALFUT)+' de referencia de 2030. '
+    +'No cobra recompra: conserva el activo.</p></div>';
+
+  var thD='<thead><tr><th>Año</th><th class="num">FLC</th><th class="num">Bote c/u</th>'
+    +'<th class="num">+ propio</th><th class="num">= tasa</th><th class="num">Le daría</th>'
+    +'<th class="num">PAGA</th><th class="num">Saldo</th>'
+    +'<th class="num" style="border-left:2px solid var(--rule2)">Si se queda</th></tr></thead>';
+  document.getElementById('t-detalle').innerHTML=thD+'<tbody>'+F.map(function(f){
+    var tiene=f.pago[FOCO]!==undefined, daria=tiene?f.tasa[FOCO]*f.flc:0;
+    return '<tr><td>'+f.anio+'</td><td class="num">'+money(f.flc)+'</td>'
+      +'<td class="num">'+(tiene?pc(f.bote,3):'<span class="liq">—</span>')+'</td>'
+      +'<td class="num">'+(tiene?pc(pct,3):'<span class="liq">—</span>')+'</td>'
+      +'<td class="num">'+(tiene?pc(f.tasa[FOCO],3):'<span class="liq">—</span>')+'</td>'
+      +'<td class="num">'+(tiene?money(daria):'<span class="liq">—</span>')+'</td>'
+      +'<td class="num"><b>'+(tiene?money(f.pago[FOCO]):'<span class="liq">—</span>')+'</b></td>'
+      +'<td class="num">'+(!tiene?'<span class="ok">liquidado</span>'
+          : f.saldo[FOCO]>1?money(f.saldo[FOCO]):'<span class="ok">liquidado</span>')+'</td>'
+      +'<td class="num" style="border-left:2px solid var(--rule2)">'+money(pct*f.flc)+'</td></tr>';
+  }).join('')
+    +'<tr class="tot"><td>Total</td><td class="num">'+money(flcT)+'</td><td class="num">—</td>'
+    +'<td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+    +'<td class="num">'+money(saleT)+'</td><td class="num">—</td>'
+    +'<td class="num" style="border-left:2px solid var(--rule2)">'+money(divT)+'</td></tr></tbody>';
+
+  var gana = queda>saleT;
+  document.getElementById('nota-soc').innerHTML=
+     '<b>'+S.n+'</b> puso <b>'+money(S.cap)+'</b> y le corresponde el <b>'+pc(pct,3)+'</b> del flujo.<br><br>'
+    +'<b>Saliendo</b> recupera '+money(saleT)+' —su capital exacto— repartido hasta <b>'+(E[FOCO].liq||'—')
+    +'</b>. El bote sube conforme cierran los demás; su '+pc(pct,3)+' no se mueve nunca y se apaga cuando termina: '
+    +'no lo hereda nadie.<br><br>'
+    +'<b>Quedándose</b> cobra '+money(divT)+' de dividendo en diez años y conserva una participación que a los '
+    +mC(VALFUT)+' de 2030 vale '+money(resid)+'. '
+    +(gana ? 'Le sale <b>mejor quedarse</b>: ×'+(queda/S.cap).toFixed(2)+' contra ×'
+              +(saleT/S.cap).toFixed(2)+'. El dividendo solo no le devuelve lo que puso — lo que paga es el activo.'
+           : 'Le sale <b>mejor salir</b>: ×'+(saleT/S.cap).toFixed(2)+' contra ×'+(queda/S.cap).toFixed(2)
+              +'. Su vehículo carga pocas acciones de HBR por peso aportado, así que quedarse no le rinde.')
+    +'<br><br><b>Ojo con el residual.</b> Los '+mC(VALFUT)+' de 2030 son la valuación de referencia del panel, '
+    +'no un precio pactado ni un comprador. El que sale cobra en efectivo y sin riesgo; el que se queda cobra '
+    +'menos ahora y apuesta a esa valuación.';
+
   /* ── saldo pendiente ── */
   var th3='<thead><tr><th>Socio</th><th class="num">A recuperar</th>'
     +cols.map(function(a){ return '<th class="num">'+a+'</th>'; }).join('')+'</tr></thead>';
@@ -286,5 +364,9 @@ function slider(id,out,set,fmt){
 slider('bote','bote-v',  function(v){ BOTE=v/100; }, function(v){ return v+'%'; });
 slider('pn','pn-v',      function(v){ PNv=v; },      function(v){ return v.toFixed(2)+'%'; });
 slider('deuda','deuda-v',function(v){ DEUDA=v; },    function(v){ return money(v); });
+document.addEventListener('click',function(e){
+  var b=e.target.closest?e.target.closest('[data-f]'):null;
+  if(b){ FOCO=+b.getAttribute('data-f'); pinta(); }
+});
 pinta();
 </script></body></html>
