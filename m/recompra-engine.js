@@ -11,8 +11,8 @@
    Sincrético entra con el EBITDA de su modelo financiero (escenario base) al
    51% que le toca a HBR — versión del modelo del 25-sep-2026 (gerente general
    desde el mes 13; tours por hotel bajando de 3.46 a 2.03 hasta los 100 hoteles). */
-var U={2027:1824090,2028:5811870,2029:6952193,2030:7494023,2031:7660114,
-       2032:8453954,2033:9337794,2034:10322215,2035:11419057,2036:12641570};
+var U={2027:2310813,2028:6852099,2029:8516809,2030:8802970,2031:9610322,
+       2032:10491921,2033:11467470,2034:12547727,2035:13744716,2036:15071884};
 var ANIOS=Object.keys(U).map(Number).sort(function(a,b){return a-b;});
 
 /* Cuadro post-refundación: 348,600 acciones.
@@ -128,27 +128,82 @@ function corridaCon(SALEN, QUEDAN, cfg){
   return {filas:filas, est:est, qest:qest};
 }
 
+function simularFn(h, cfg){
+  if(!h || !h.cap) return null;
+  var nuevo={k:'__sim', n:h.n, v:h.v||'hipótesis', cap:h.cap, acc:h.acc, tot:h.tot||h.cap};
+  var S2=SALEN.concat([nuevo]);
+  var Q2=QUEDAN.map(function(q){ return {n:q.n, acc:q.acc, frac:q.frac, ref:q.ref, cap:q.cap}; });
+  if(h.quita) Q2=Q2.filter(function(q){ return q.n!==h.quita; });
+  else if(h.dentroDe) Q2.forEach(function(q){
+    if(q.n===h.dentroDe) q.frac=Math.max(0, q.frac - h.cap/(h.tot||h.cap)); });
+  var idx=S2.length-1, R=corridaCon(S2,Q2,cfg), e=R.est[idx], filas=[];
+  R.filas.forEach(function(f){
+    if(f.pago[idx]==null) return;
+    filas.push({anio:f.anio, flc:f.flc, n:f.n, bote:f.bote, tasa:f.tasa[idx],
+                pago:f.pago[idx], saldo:f.saldo[idx]});
+  });
+  return {i:idx, socio:nuevo, cobra:e.cobra, liq:e.liq, filas:filas, hipotetico:true, h:h};
+}
+
+/* ── Las tres puertas ───────────────────────────────────────────────────────
+   REFUNDAR  · exhibe su compromiso, conserva todas sus acciones y sigue siendo
+               refundador: cobra su parte de la bolsa que queda tras pagar la
+               recompra. Invierte lo exhibido MÁS la suscripción.
+   DILUIRSE  · se queda pero no suscribe: sus acciones son solo las vigentes y
+               deja de ser refundador, así que cobra prorrata intacta —ni paga
+               la recompra ni participa del sobrante. Invierte solo lo exhibido.
+   SALIRSE   · recompra al 100% del capital exhibido, sin prima ni dividendo.
+   Los múltiplos son NOMINALES: no descuentan la depreciación del dinero. */
+function comparativaFn(h, cfg){
+  if(!h || !h.quita) return null;
+  var iq=-1; QUEDAN.forEach(function(q,i){ if(q.n===h.quita) iq=i; });
+  if(iq<0) return null;
+
+  var base=corridaCon(SALEN,QUEDAN,cfg);
+  var Qd=QUEDAN.map(function(q){ return {n:q.n, acc:q.acc, frac:q.frac, ref:q.ref, cap:q.cap}; });
+  Qd[iq].acc=h.acc; Qd[iq].ref=0;
+  var dil=corridaCon(SALEN,Qd,cfg);
+  var sal=simularFn(h,cfg), pag={};
+  if(sal) sal.filas.forEach(function(r){ pag[r.anio]=r.pago; });
+
+  var invRef=(h.cap||0)+(h.susc||0), invDil=h.cap||0;
+  function acum(n, get){ var t=0; for(var i=0;i<n && i<ANIOS.length;i++) t+=get(i)||0; return t; }
+  return [4,6,8].map(function(n){
+    var flc=acum(n,function(i){ return base.filas[i].flc; });
+    var r=acum(n,function(i){ return base.filas[i].div[iq]; });
+    var d=acum(n,function(i){ return dil.filas[i].div[iq]; });
+    var x=acum(n,function(i){ return pag[ANIOS[i]]; });
+    return {anios:n, hasta:ANIOS[Math.min(n,ANIOS.length)-1], flc:flc, flcAnio:flc/n,
+      ref:{cobra:r, inv:invRef, mult:invRef?r/invRef:0, anio:r/n},
+      dil:{cobra:d, inv:invDil, mult:invDil?d/invDil:0, anio:d/n},
+      sal:{cobra:x, inv:invDil, mult:invDil?x/invDil:0, anio:x/n}};
+  });
+}
+
 /* Lo que se ve desde fuera. Todo lo demás queda encerrado aquí dentro para no
    pisar los globales de los módulos que cargan este archivo. */
 window.RECOMPRA={
   SALEN:SALEN, QUEDAN:QUEDAN, U:U, ANIOS:ANIOS, BASE:BASE, TOTDIL:TOTDIL,
   VALFUT:VALFUT, DESC:DESC, SERIE_D:SERIE_D, SERIE_D_VIVA:SERIE_D_VIVA, VEST:VEST,
   PON_TODO:PON_TODO, STR_TODO:STR_TODO, ACC:ACC,
-  money:money, mC:mC, pc:pc, corrida:corrida,
+  money:money, mC:mC, pc:pc, corrida:corrida, REFTOT:348600, REFPPS:22.19343,
   /* ── Escenario: ¿y si saliera un socio que hoy se queda? ─────────────────
      Lo que recupera es lo EXHIBIDO, no lo comprometido: si no suscribe, esa
      parte ni se le devuelve ni le cuenta para el dividendo. Por eso cada
      hipótesis lleva sus acciones y su capital ya netos de la suscripción
      pendiente. Es una estimación para ese socio: el plan del resto no se toca. */
   HIPOTESIS:{
-    'PITAO, S.A.P.I. de C.V.':        {n:'PITAO · Jordi Sastre',        cap:6034057, acc:15539, tot:6034057, quita:'PITAO · Jordi Sastre',         susc:628407,  accSusc:28315},
-    'AE Future, S.A. de C.V.':        {n:'AE Future · Estanislao Masiá',cap:3128193, acc:8061,  tot:3128193, quita:'AE Future · Estanislao Masiá', susc:325553,  accSusc:14668},
-    'Juan José Cué de la Fuente':     {n:'Juan José Cué de la Fuente',  cap:1150000, acc:51815, tot:1150000, quita:'Juan José Cué de la Fuente',    susc:500000,  accSusc:22531},
-    'Luis Javier Cué de la Fuente':   {n:'Luis Javier Cué de la Fuente',cap:500000,  acc:22529, tot:500000,  quita:'Luis Javier Cué de la Fuente',  susc:0,       accSusc:0}
+    'PITAO, S.A.P.I. de C.V.':        {n:'PITAO · Jordi Sastre',        cap:6034057, acc:15539, tot:6034057, quita:'PITAO · Jordi Sastre',         susc:628407,  accSusc:28315, accTot:43854},
+    'AE Future, S.A. de C.V.':        {n:'AE Future · Estanislao Masiá',cap:3128193, acc:8061,  tot:3128193, quita:'AE Future · Estanislao Masiá', susc:325553,  accSusc:14668, accTot:22729},
+    'Juan José Cué de la Fuente':     {n:'Juan José Cué de la Fuente',  cap:1150000, acc:51815, tot:1150000, quita:'Juan José Cué de la Fuente',    susc:500000,  accSusc:22531, accTot:74346},
+    'Luis Javier Cué de la Fuente':   {n:'Luis Javier Cué de la Fuente',cap:500000,  acc:22529, tot:500000,  quita:'Luis Javier Cué de la Fuente',  susc:0,       accSusc:0, accTot:22529}
   },
   /* h = {n,cap,acc,tot} + quita (sale entero de QUEDAN) o dentroDe (baja la
      fracción que le queda al vehículo). Devuelve lo mismo que socio(). */
-  simular:function(h, cfg){
+  simular:simularFn,
+  /* Las tres puertas de un socio de HBR, medidas a 4, 6 y 8 años. */
+  comparativa:comparativaFn,
+  __simular:function(h, cfg){
     if(!h || !h.cap) return null;
     var nuevo={k:'__sim', n:h.n, v:h.v||'hipótesis', cap:h.cap, acc:h.acc, tot:h.tot||h.cap};
     var S2=SALEN.concat([nuevo]);
