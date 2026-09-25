@@ -543,9 +543,87 @@ async function renderComms(s){
   const pend=g.items.filter(n=>n.estado==='pendiente'||n.estado==='en_proceso').length;
   const cell = resp.length ? '<span style="color:var(--ok,#137A56);font-weight:600">✓ '+resp.map(gobEsc).join(' · ')+'</span>'
              : (pend ? '<span style="color:#b45309">pendiente de responder</span>' : '—');
-  return '<tr><td style="white-space:nowrap">'+commsFecha(g.fecha)+'</td><td>'+gobEsc(g.asamblea)+'</td><td>'+cell+'</td></tr>';
+  const env=(g.items.find(n=>n.ref&&n.ref.envio_id)||{}).ref;
+  const ver=env&&env.envio_id
+   ? '<button class="btn ghost sm" onclick="verEnvio(\''+env.envio_id+'\',\''+gobEsc(em)+'\')">Ver correo</button>'
+   : '<span class="mini" style="color:var(--faint,#999)">sin copia guardada</span>';
+  return '<tr><td style="white-space:nowrap">'+commsFecha(g.fecha)+'</td><td>'+gobEsc(g.asamblea)+'</td><td>'+cell+'</td>'
+   +'<td style="text-align:right">'+ver+'</td></tr>';
  }).join('');
- box.innerHTML='<table><thead><tr><th>Fecha</th><th>Asunto / Asamblea</th><th>Tu respuesta</th></tr></thead><tbody>'+rows+'</tbody></table>';
+ box.innerHTML='<table><thead><tr><th>Fecha</th><th>Asunto / Asamblea</th><th>Tu respuesta</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+/* ── Ver el correo que se envió, y reenviarlo ──────────────────────────────
+   La copia vive en gob_envios (asunto, cuerpo y destinatarios). El reenvío
+   vuelve a llamar a la función asamblea-enviar con el mismo cuerpo y la lista
+   de destinatarios que se edite aquí. Por seguridad arranca en MODO PRUEBA:
+   así un clic de más no sale a los socios. El adjunto NO se reenvía: el PDF no
+   se guarda en la copia, y mandar el mismo correo sin su anexo sería peor que
+   no mandarlo — para eso está «Asambleas → Enviar convocatoria». */
+let ENVIO_ACT=null;
+async function verEnvio(id, emailSocio){
+ let e=null;
+ try{ const r=await notifApi('GET','gob_envios?select=*&id=eq.'+encodeURIComponent(id)); e=Array.isArray(r)&&r[0]; }
+ catch(err){ alert('No se pudo leer el correo: '+err); return; }
+ if(!e){ alert('No se encontró la copia de este correo.'); return; }
+ ENVIO_ACT=e;
+ const puede=CORP.includes((viewerEmail()||'').toLowerCase());
+ const dest=(e.destinatarios||[]).map(d=>d.email).filter(Boolean);
+ const prefill=emailSocio&&dest.includes(emailSocio)?emailSocio:dest.join(', ');
+ const m=document.createElement('div'); m.id='env-modal';
+ m.style.cssText='position:fixed;inset:0;z-index:99998;background:rgba(20,16,12,.45);display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto';
+ m.innerHTML=`<div style="background:var(--surface,#fff);border-radius:14px;max-width:760px;width:100%;padding:18px 20px;box-shadow:0 18px 60px rgba(0,0,0,.28)">
+   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+     <div><h3 style="margin:0 0 3px;font-size:1rem">${gobEsc(e.asunto||'(sin asunto)')}</h3>
+       <div class="mini" style="color:var(--muted)">${commsFecha(e.enviado_at||e.created_at)} · ${gobEsc(e.tipo||'')} ·
+       ${e.prueba?'<b style="color:#b45309">fue una prueba</b>':gobEsc(e.estado||'')} ·
+       ${dest.length} destinatario(s)</div></div>
+     <button class="btn ghost sm" onclick="document.getElementById('env-modal').remove()">Cerrar</button>
+   </div>
+   <div style="margin-top:12px;border:1px solid var(--rule2);border-radius:10px;padding:14px;background:#fff;max-height:46vh;overflow:auto;font-size:.86rem;line-height:1.6">
+     ${e.cuerpo_html||'<i>Sin cuerpo guardado.</i>'}
+   </div>
+   <details style="margin-top:10px"><summary class="mini" style="cursor:pointer">A quién se envió (${dest.length})</summary>
+     <div class="mini" style="color:var(--muted);margin-top:6px;word-break:break-all">${gobEsc(dest.join(' · '))||'—'}</div></details>
+   ${puede?`
+   <div style="margin-top:14px;border-top:1px solid var(--rule2);padding-top:12px">
+     <label class="mini" style="font-weight:700">Reenviar a</label>
+     <textarea id="env-to" style="width:100%;min-height:58px;margin-top:5px;padding:8px;border:1px solid var(--rule2);border-radius:8px;font:inherit;font-size:.82rem">${gobEsc(prefill)}</textarea>
+     <div class="mini" style="color:var(--muted);margin-top:4px">Correos separados por coma. Se reenvía el mismo asunto y el mismo cuerpo; <b>sin el PDF adjunto</b> — si hace falta el anexo, reenvíalo desde Asambleas.</div>
+     <label style="display:flex;gap:7px;align-items:center;margin-top:9px;font-size:.82rem">
+       <input type="checkbox" id="env-prueba" checked>
+       <span><b>Modo prueba</b> — se manda solo a tu correo. Desmárcalo para enviarlo de verdad.</span></label>
+     <div style="display:flex;gap:8px;align-items:center;margin-top:11px">
+       <button class="btn sm" onclick="reenviarEnvio()">Reenviar</button>
+       <span id="env-msg" class="mini" style="color:var(--muted)"></span>
+     </div>
+   </div>`:'<div class="note" style="margin-top:12px">Solo la dirección puede reenviar correos.</div>'}
+ </div>`;
+ m.addEventListener('click',ev=>{ if(ev.target===m) m.remove(); });
+ document.body.appendChild(m);
+}
+async function reenviarEnvio(){
+ const e=ENVIO_ACT; if(!e) return;
+ const st=document.getElementById('env-msg');
+ const prueba=document.getElementById('env-prueba').checked;
+ const emails=(document.getElementById('env-to').value||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
+ if(!emails.length){ st.textContent='Pon al menos un correo.'; return; }
+ if(!prueba && !confirm('Se va a reenviar «'+(e.asunto||'')+'» DE VERDAD a '+emails.length+' destinatario(s):\n\n'+emails.join('\n')+'\n\n¿Continuar?')) return;
+ const porMail={}; (e.destinatarios||[]).forEach(d=>{ if(d&&d.email) porMail[String(d.email).toLowerCase()]=d; });
+ st.textContent='Enviando…';
+ try{
+  const tok=(typeof gobTok==='function'&&gobTok())||GOB_KEY;
+  const r=await fetch(GOB_SB+'/functions/v1/asamblea-enviar',{method:'POST',
+    headers:{apikey:GOB_KEY,Authorization:'Bearer '+tok,'Content-Type':'application/json'},
+    body:JSON.stringify({
+      tipo:e.tipo, sociedad:e.sociedad, borrador_id:e.borrador_id, titulo:e.asunto,
+      asunto:e.asunto, cuerpo_html:e.cuerpo_html||'',
+      socios:emails.map(m=>({socio_id:(porMail[m]||{}).socio_id||null, nombre:(porMail[m]||{}).nombre||m, email:m, modo:'to'})),
+      cc:[], cco:[], adjunto:null, enlaces:[], prueba, prueba_to:null })});
+  const j=await r.json();
+  if(!r.ok||j.error) throw new Error(j.error||('HTTP '+r.status));
+  st.innerHTML='<b style="color:var(--ok,#137A56)">✓ '+(prueba?'Prueba enviada a tu correo':'Reenviado a '+(j.enviados||emails.length)+' destinatario(s)')+'</b>';
+ }catch(err){ st.innerHTML='<b style="color:var(--bad)">No se pudo: '+gobEsc(String(err.message||err))+'</b>'; }
 }
 
 async function guardarDecision(){
