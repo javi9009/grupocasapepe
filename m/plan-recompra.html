@@ -75,6 +75,8 @@ proyección de utilidad del modelo ya con la remodelación de Casa Pepe. Mueve l
       <div class="slid"><input id="bote" type="range" min="0" max="50" step="1" value="25"><output id="bote-v">25%</output></div></div>
     <div><label>Deuda comprometida al año</label>
       <div class="slid"><input id="deuda" type="range" min="0" max="2000000" step="50000" value="750000"><output id="deuda-v">$750,000</output></div></div>
+    <div><label>Ronda Remodelación — % que se lleva el socio nuevo</label>
+      <div class="slid"><input id="pn" type="range" min="0" max="50" step="0.1" value="22.9"><output id="pn-v">22.89%</output></div></div>
     <div><label>Crecimiento anual de la utilidad</label>
       <div class="slid"><input id="crec" type="range" min="0" max="20" step="0.5" value="12"><output id="crec-v">12%</output></div></div>
   </div>
@@ -134,11 +136,11 @@ var SERIE_D = 69720, PENDIENTE = 69302, TOTAL = 348600;
 var BASE = TOTAL - SERIE_D - PENDIENTE;          // el capital con derechos económicos
 
 var SOCIOS = [
-  {k:'jj',         n:'Juan José Cué',        corto:'Juan José',  cap:1650000,          sale:0},
-  {k:'pitao',      n:'PITAO · Jordi Sastre', corto:'Jordi',      cap:6034057+628407,   sale:0},
-  {k:'ae',         n:'AE Future · Estanis',  corto:'Estanis',    cap:3128193+325553,   sale:0},
-  {k:'lj',         n:'Luis Javier Cué',      corto:'Luis Javier',cap:500000,           sale:0},
-  {k:'pontigu',    n:'El Pontigu',           corto:'Pontigu',    cap:7378290,          sale:0.3, parcial:1},
+  {k:'jj', ref:1,         n:'Juan José Cué',        corto:'Juan José',  cap:1650000,          sale:0},
+  {k:'pitao', ref:1,      n:'PITAO · Jordi Sastre', corto:'Jordi',      cap:6034057+628407,   sale:0},
+  {k:'ae', ref:1,         n:'AE Future · Estanis',  corto:'Estanis',    cap:3128193+325553,   sale:0},
+  {k:'lj', ref:1,         n:'Luis Javier Cué',      corto:'Luis Javier',cap:500000,           sale:0},
+  {k:'pontigu',    n:'El Pontigu · F&F',     corto:'Pontigu F&F',cap:7378290,          sale:FF_PON/7378290, parcial:1},
   {k:'aldo',       n:'Aldo Gelover',         corto:'Aldo',       cap:5579666,          sale:1},
   {k:'starseeker', n:'Starseeker · Joaquín', corto:'Joaquín',    cap:3384307,          sale:1,
                    suscribe:347730, accSusc:24576},
@@ -146,7 +148,16 @@ var SOCIOS = [
 ];
 var IX={}; SOCIOS.forEach(function(s){ IX[s.k]=s; });
 
-var BOTE=0.25, DEUDA=750000, CREC=12, FOCO='starseeker';
+/* Lo que pusieron los F&F de El Pontigu. Javier Puente no vende: al salir ellos se
+   queda con el 100% del vehículo, y la posición de Pontigu en HBR baja en esa
+   proporción. Sale por CAPITAL EXHIBIDO —lo que cada uno puso— no por tenencia,
+   que es lo que dice el Pacto: recuperar hasta el 100% del capital exhibido. */
+var FF_PON=3819924;
+/* La Ronda Remodelación: $10,150,000 sobre el post-money de $44,340,466 del capital
+   reconocido. El socio nuevo se lleva ese % del flujo desde el primer año y NO paga
+   la recompra: no estaba cuando se acordó. */
+var PN=10150000/44340466;
+var BOTE=0.25, DEUDA=750000, CREC=12, PNv=PN*100, FOCO='starseeker';
 
 var money=function(v){ return '$'+Math.round(v).toLocaleString('es-MX'); };
 var mCorto=function(v){ var a=Math.abs(v);
@@ -173,11 +184,12 @@ function corrida(){
   SOCIOS.forEach(function(s){
     var acc = (s.k==='starseeker' && s.sale===0 && s.suscSi) ? s.accSusc : ACC[s.k];
     var base= (s.k==='starseeker' && s.sale===0 && s.suscSi) ? BASE + (s.accSusc-ACC[s.k]) : BASE;
-    est[s.k]={pct:acc/base, deuda:s.cap*s.sale, saldo:s.cap*s.sale, cobrado:0, div:0, liq:null};
+    est[s.k]={pct:(acc/base)*(1-PNv/100), deuda:s.cap*s.sale, saldo:s.cap*s.sale, cobrado:0, div:0, liq:null};
   });
   /* si Joaquín suscribe, el remanente baja y la base sube para todos por igual */
   var extra = (IX.starseeker.sale===0 && IX.starseeker.suscSi) ? (IX.starseeker.accSusc-ACC.starseeker) : 0;
-  if(extra) SOCIOS.forEach(function(s){ if(s.k!=='starseeker') est[s.k].pct = ACC[s.k]/(BASE+extra); });
+  if(extra) SOCIOS.forEach(function(s){ if(s.k!=='starseeker') est[s.k].pct = (ACC[s.k]/(BASE+extra))*(1-PNv/100); });
+  var refP = SOCIOS.reduce(function(t,s){ return t + (s.ref?est[s.k].pct:0); }, 0);
 
   var filas=[];
   ANIOS.forEach(function(a){
@@ -194,14 +206,17 @@ function corrida(){
       if(est[s.k].saldo < 1 && est[s.k].liq===null) est[s.k].liq = a;
       f.pagos[s.k]={pago:pago, tasa:tasa, saldo:est[s.k].saldo, bote:bote, propio:propio};
     });
-    var resto = flc - usado;
-    var pQueda = SOCIOS.reduce(function(t,s){ return t + est[s.k].pct*(1-s.sale); }, 0);
-    SOCIOS.forEach(function(s){
-      var w = est[s.k].pct*(1-s.sale);
-      f.div[s.k] = pQueda>0 ? resto*(w/pQueda) : 0;
-      est[s.k].div += f.div[s.k];
-    });
-    f.resto=resto; f.usado=usado;
+    /* El socio de la remodelación cobra su % completo y no paga la recompra.
+       Los que siguen dentro y NO refundaron cobran su prorrata normal. Los
+       refundadores absorben todo lo que queda: de su bolsa sale la recompra. */
+    f.remod = (PNv/100)*flc;
+    var noRef = 0;
+    SOCIOS.forEach(function(s){ if(s.ref || s.sale>=1) return;
+      var d = est[s.k].pct*(1-s.sale)*flc; f.div[s.k]=d; est[s.k].div+=d; noRef+=d; });
+    var bolsa = flc - usado - f.remod - noRef;
+    SOCIOS.forEach(function(s){ if(!s.ref) return;
+      var d = refP>0 ? bolsa*(est[s.k].pct/refP) : 0; f.div[s.k]=d; est[s.k].div+=d; });
+    f.resto = bolsa + noRef; f.usado=usado; f.bolsa=bolsa; f.noRef=noRef;
     filas.push(f);
   });
   return {filas:filas, est:est, U:U};
@@ -385,6 +400,7 @@ function slider(id, out, set, fmt){
 slider('bote','bote-v', function(v){ BOTE=v/100; }, function(v){ return v+'%'; });
 slider('deuda','deuda-v', function(v){ DEUDA=v; }, function(v){ return money(v); });
 slider('crec','crec-v', function(v){ CREC=v; }, function(v){ return v+'%'; });
+slider('pn','pn-v',     function(v){ PNv=v;  }, function(v){ return v.toFixed(2)+'%'; });
 
 document.addEventListener('click', function(e){
   var c=e.target.closest ? e.target.closest('.chip[data-k]') : null;
