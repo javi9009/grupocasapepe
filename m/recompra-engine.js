@@ -14,6 +14,12 @@
 var U={2027:2310813,2028:6852099,2029:8516809,2030:8802970,2031:9610322,
        2032:10491921,2033:11467470,2034:12547727,2035:13744716,2036:15071884};
 var ANIOS=Object.keys(U).map(Number).sort(function(a,b){return a-b;});
+/* EBITDA CONSOLIDADO del grupo (operador + Sincrético + Puebla − corporativo),
+   antes de la reserva de caja y del impuesto. Es la base con la que se valora
+   una participación: el mercado paga un múltiplo de EBITDA, no de dividendo. */
+var EB={2027:2718604,2028:8061293,2029:10019775,2030:12274542,2031:13535665,
+        2032:14777354,2033:16151367,2034:17672854,2035:19358755,2036:21228005};
+var MULT_EB=5.5;
 
 /* Cuadro post-refundación: 348,600 acciones.
    La Serie D SÍ cobra dividendo. El supuesto: vestea el 75% de su tope de 69,720
@@ -96,7 +102,7 @@ function corrida(cfg){ return corridaCon(SALEN, QUEDAN, cfg); }
 function corridaCon(SALEN, QUEDAN, cfg){
   cfg=cfg||{};
   var BOTE=cfg.BOTE!=null?cfg.BOTE:0.25,
-      PNv =cfg.PNv !=null?cfg.PNv :25.82,   /* $11,900,000 sobre $46,090,466 */
+      PNv =cfg.PNv !=null?cfg.PNv :22.89,   /* $10,150,000 sobre $44,340,466 */
       DEUDA=cfg.DEUDA!=null?cfg.DEUDA:750000;
   var dil=1-PNv/100;
   var est=SALEN.map(function(s){
@@ -167,16 +173,38 @@ function comparativaFn(h, cfg){
   if(sal) sal.filas.forEach(function(r){ pag[r.anio]=r.pago; });
 
   var invRef=(h.cap||0)+(h.susc||0), invDil=h.cap||0;
+  /* Cuántas acciones hay en la sociedad en cada momento: las de después de la
+     remodelación, menos las que se van cancelando conforme cada socio que sale
+     queda liquidado. Quien se queda no solo cobra dividendo: su trozo del
+     pastel crece cada vez que se recompra a alguien. */
+  var PN=(cfg&&cfg.PNv!=null)?cfg.PNv:22.89;
+  var TOTPOST=TOTDIL/(1-PN/100);
+  var accSale=SALEN.map(function(x){ return x.acc*(x.cap/x.tot); });
+  function totalEn(anio){
+    var fuera=0;
+    base.est.forEach(function(e,i){ if(e.liq && e.liq<=anio) fuera+=accSale[i]; });
+    return TOTPOST-fuera;
+  }
+  function valorAcc(acc, anio){
+    return (acc/totalEn(anio))*MULT_EB*(EB[anio]||0);
+  }
   function acum(n, get){ var t=0; for(var i=0;i<n && i<ANIOS.length;i++) t+=get(i)||0; return t; }
   return [4,6,8].map(function(n){
     var flc=acum(n,function(i){ return base.filas[i].flc; });
     var r=acum(n,function(i){ return base.filas[i].div[iq]; });
     var d=acum(n,function(i){ return dil.filas[i].div[iq]; });
     var x=acum(n,function(i){ return pag[ANIOS[i]]; });
-    return {anios:n, hasta:ANIOS[Math.min(n,ANIOS.length)-1], flc:flc, flcAnio:flc/n,
-      ref:{cobra:r, inv:invRef, mult:invRef?r/invRef:0, anio:r/n},
-      dil:{cobra:d, inv:invDil, mult:invDil?d/invDil:0, anio:d/n},
-      sal:{cobra:x, inv:invDil, mult:invDil?x/invDil:0, anio:x/n}};
+    var hasta=ANIOS[Math.min(n,ANIOS.length)-1];
+    var vRef=valorAcc(h.accTot||0, hasta), vDil=valorAcc(h.acc||0, hasta);
+    function caja(cobra, inv, valor){
+      return {cobra:cobra, inv:inv, anio:cobra/n, valor:valor,
+              mult:inv?cobra/inv:0, total:cobra+valor, multTot:inv?(cobra+valor)/inv:0};
+    }
+    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n,
+      ebitda:EB[hasta]||0, multEb:MULT_EB, accTotal:totalEn(hasta),
+      ref:caja(r, invRef, vRef),
+      dil:caja(d, invDil, vDil),
+      sal:caja(x, invDil, 0)};
   });
 }
 
@@ -187,6 +215,7 @@ window.RECOMPRA={
   VALFUT:VALFUT, DESC:DESC, SERIE_D:SERIE_D, SERIE_D_VIVA:SERIE_D_VIVA, VEST:VEST,
   PON_TODO:PON_TODO, STR_TODO:STR_TODO, ACC:ACC,
   money:money, mC:mC, pc:pc, corrida:corrida, REFTOT:348600, REFPPS:22.19343,
+  EB:EB, MULT_EB:MULT_EB,
   /* ── Escenario: ¿y si saliera un socio que hoy se queda? ─────────────────
      Lo que recupera es lo EXHIBIDO, no lo comprometido: si no suscribe, esa
      parte ni se le devuelve ni le cuenta para el dividendo. Por eso cada
