@@ -96,7 +96,7 @@ function corrida(cfg){ return corridaCon(SALEN, QUEDAN, cfg); }
 function corridaCon(SALEN, QUEDAN, cfg){
   cfg=cfg||{};
   var BOTE=cfg.BOTE!=null?cfg.BOTE:0.25,
-      PNv =cfg.PNv !=null?cfg.PNv :22.89,
+      PNv =cfg.PNv !=null?cfg.PNv :25.82,   /* $11,900,000 sobre $46,090,466 */
       DEUDA=cfg.DEUDA!=null?cfg.DEUDA:750000;
   var dil=1-PNv/100;
   var est=SALEN.map(function(s){
