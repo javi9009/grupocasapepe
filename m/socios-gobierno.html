@@ -231,6 +231,12 @@ const VALFUT=60000000, EXITY=2030;
 // aparece solo en la evolución para que se vea la dilución que viene después.
 // Salda los pasivos que quedan fuera de la etapa 1 y paga la obra de Uruguay 86.
 const REMODPAS=1950000, REMODOBRA=8200000, REMODRONDA=REMODPAS+REMODOBRA;
+/* Post-money de la Ronda de Remodelación = capital reconocido. La gráfica de la
+   sociedad lo recalcula del libro; este es el valor de respaldo. Para un socio
+   que ya estaba, diluirse el 22.89% sobre el post equivale a valer su % del
+   PRE-money, que es lo que pinta la columna 2026·remod. */
+let REMODPOST=44340466;
+const remodPre=()=>REMODPOST-REMODRONDA;
 // Participación de cada vehículo en HBR. Arranca con el acta y refCapLoad la recalcula desde la tabla.
 const HBRSHARE={hbr:1,pontigu:0.055683,struchture:0.009713};
 // El Pontigu y Struchture NO tienen valor propio: el suyo es el que arrastran de HBR.
@@ -241,17 +247,21 @@ const VEHVAL={
   {lb:'oct 2022', pctHBR:0.1369, valHBR:100000000, tt:'oct 2022 · entrada de Zeltek (37.5%, base acciones) · El Pontigu quedó en 13.69% de HBR · valuación de referencia $100 mdp'},
   {lb:'2024·dil',fijo:8629909, pctHBR:0.1538, valHBR:55119909,  tt:'2024 · El Pontigu tiene 15.38% de VOTO de HBR (valuación $55.1M tras diluirse Zeltek 37.5%→30.77% por EBITDA no alcanzado + no exhibición). Como la Serie C de Struchture está reconocida a su valor real depreciado (no participa del upside de la valuación), el valor económico de El Pontigu sube a $8.63M (×1.17 sobre su capital). El ajuste se reconoció en enero 2026 con la salida de Zeltek.'},
   {lb:'2026·ref',ref:1,         valHBR:null,      tt:'2026 · tras la refundación de HBR, a la valuación de la ronda'},
+  {lb:'2026·remod',ref:1,remod:1, tt:'2026 · tras la Ronda de Remodelación: entran $10,150,000 y te diluyes un 22.89%, pero la sociedad se valora a su capital reconocido ($44,340,466), no a la valuación de la refundación'},
   {lb:EXITY,     ref:1,         valHBR:VALFUT, objv:1, tt:EXITY+' · proyección con HBR de vuelta a $60 mdp'}
  ],
  struchture:[
   {lb:'oct 2022', fijo:4500000, tt:'oct 2022 · Struchture entró con Serie C sin prima. Su valor real = lo aportado ($4,500,000) · representaba el 9.55% de HBR'},
   {lb:'2024·dil',fijo:4043952, tt:'2024 · Valor REAL de Struchture: $4,043,952. Es lo aportado ($4,500,000) menos ~10% de depreciación por las 242 acciones que no exhibió ($456,048). No es un valor "a la par": es el reconocido real tras esa depreciación. Valuación de la empresa $55.1 mdp; ajuste reconocido en 2026 con la salida de Zeltek.'},
   {lb:'2026·ref',ref:1, valHBR:null, tt:'2026 · tras la refundación de HBR, a la valuación de la ronda'},
+  {lb:'2026·remod',ref:1,remod:1, tt:'2026 · tras la Ronda de Remodelación: entran $10,150,000 y te diluyes un 22.89%, pero la sociedad se valora a su capital reconocido ($44,340,466), no a la valuación de la refundación'},
   {lb:EXITY,     ref:1, valHBR:VALFUT, objv:1, tt:EXITY+' · proyección con HBR de vuelta a $60 mdp'}
  ]
 };
 function valorVehiculo(soc,e){
  if(e.fijo!=null) return e.fijo;
+ /* Diluirse el % de la ronda sobre el post-money da exactamente el % del pre. */
+ if(e.remod) return (HBRSHARE[soc]||0)*remodPre();
  const pct=e.ref?(HBRSHARE[soc]||0):e.pctHBR;
  const val=e.valHBR!=null?e.valHBR:VALREF;
  return pct*val;
@@ -860,17 +870,46 @@ const DECISION={
    los que salen, no se pinta nada. */
 function bloqueRecompra(s){
  const R=window.RECOMPRA; if(!R||!s) return '';
- const x = R.socio(s.clv||'') || R.socio(s.n||'');
+ let x = R.socio(s.clv||'') || R.socio(s.n||'');   // ¿ya está en la lista de los que salen?
+ if(!x){                                           // si no, se estima el escenario de su salida
+  let h=null;
+  if(SOC==='hbr') h=R.HIPOTESIS[s.n]||null;
+  else if(s.inv>0){
+   const veh = SOC==='pontigu'
+     ? {acc:19411, tot:R.PON_TODO, dentroDe:'El Pontigu (Javier, Estanis, Borchi, Óscar)'}
+     : (SOC==='struchture' ? {acc:3386, tot:R.STR_TODO, dentroDe:'Struchture (Cejudo y Javier)'} : null);
+   if(veh) h={n:s.n, cap:s.inv, acc:veh.acc, tot:veh.tot, dentroDe:veh.dentroDe, v:DATA[SOC].etiqueta};
+  }
+  if(h) x=R.simular(h);
+ }
  if(!x || !x.filas.length) return '';
- const f=x.filas, ultima=f[f.length-1];
+ const hip=!!x.hipotetico, h=x.h||{}, f=x.filas, ultima=f[f.length-1];
  const rows=f.map(r=>`<tr><td>${r.anio}</td><td class="n">${money(r.flc)}</td>`
    +`<td class="n">${r.n}</td><td class="n">${(r.tasa*100).toFixed(2)}%</td>`
    +`<td class="n"><b>${money(r.pago)}</b></td>`
    +`<td class="n">${r.saldo<1?'<span style="color:var(--ok,#137A56)">liquidado</span>':money(r.saldo)}</td></tr>`).join('');
+ const cab = hip
+  ? `<p style="margin:0 0 7px;font-size:.82rem"><b>Escenario: si decidieras salir.</b> Recuperarías
+      <b>${money(x.socio.cap)}</b> y quedarías liquidado en <b>${x.liq||'después de 2036'}</b>.</p>`
+  : `<p style="margin:0 0 7px;font-size:.82rem"><b>Tu flujo estimado año por año</b> — recuperas
+      <b>${money(x.socio.cap)}</b>, el 100% de tu capital exhibido, y quedas liquidado en
+      <b>${x.liq||'—'}</b>.</p>`;
+ // Lo que se recupera es lo EXHIBIDO. Si el socio tiene suscripción pendiente, al salir
+ // ni la aporta ni cuenta: hay que decírselo, porque su % de hoy la da por hecha.
+ const nota_susc = (hip && h.susc>0)
+  ? `<br><br><b>Ojo con tu suscripción.</b> El cálculo parte de lo que tienes <b>exhibido</b>
+     (${money(h.cap)}), no de tu capital reconocido: al salir no aportarías los ${money(h.susc)}
+     de tu compromiso, así que esas ${Number(h.accSusc||0).toLocaleString('es-MX')} acciones no se
+     emiten, no te cuentan para el dividendo y no se te devuelven.`
+  : '';
+ const nota_ref = (hip && h.quita)
+  ? `<br><br><b>Lo que dejarías atrás.</b> Hoy eres <b>refundador</b>: la recompra de los que salen
+     se paga con la bolsa de dividendo de los refundadores, y lo que sobra se reparte entre ellos.
+     Saliendo cobras el 100% de lo que pusiste, ni un peso más; quedándote cobras dividendo mientras
+     dure la sociedad y participas del residual. <b>Son dos apuestas distintas, no dos versiones de la misma.</b>`
+  : '';
  return `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--rule2)">
-  <p style="margin:0 0 7px;font-size:.82rem"><b>Tu flujo estimado año por año</b> — recuperas
-   <b>${money(x.socio.cap)}</b>, el 100% de tu capital exhibido, y quedas liquidado en
-   <b>${x.liq||'—'}</b>.</p>
+  ${cab}
   <div style="overflow-x:auto"><table style="font-size:.76rem"><thead><tr>
     <th>Año</th><th class="n">Flujo libre</th><th class="n">Socios cobrando</th>
     <th class="n">Tu tasa</th><th class="n">Cobras</th><th class="n">Saldo</th>
@@ -881,11 +920,14 @@ function bloqueRecompra(s){
    de dividendo</b>. Conforme cada quien queda liquidado, el bote se divide entre menos y los que quedan
    cobran más rápido${f[0].n===ultima.n?`: mientras cobras lo compartes entre ${f[0].n} personas`:`: empiezas compartiéndolo entre ${f[0].n} personas y terminas entre ${ultima.n}`}.<br><br>
    <b>Es un techo, no un monto.</b> El pago se topa a lo que te falta: nadie cobra un peso más de lo que puso.
-   No hay prima.<br><br>
+   No hay prima.${nota_susc}${nota_ref}<br><br>
    <b>De dónde sale el flujo.</b> Proyección del hotel remodelado más Puebla y Sincrético —con el EBITDA de su
    modelo financiero al 51% que le toca a la sociedad— menos el corporativo, la reserva de caja, el impuesto y
    ${money(750000)} al año de deuda comprometida. <b>Es una estimación, no un compromiso de fecha:</b> si el
-   flujo llega antes cobras antes, y si llega después, después.
+   flujo llega antes cobras antes, y si llega después, después.${hip?`<br><br>
+   <b>Esto es un escenario, no un plan.</b> Nadie ha acordado tu salida: el cuadro supone que sales tú y que
+   los ${R.SALEN.length} que ya la pidieron siguen igual. Si además saliera alguien más, el bote se reparte
+   entre más y todos cobran más despacio.`:''}
   </div></div>`;
 }
 function optionsFor(s){
@@ -1131,7 +1173,9 @@ async function renderValorChart(s){
     :'2024 · Valuación intermedia derivada del convenio de accionistas 2022 por no aportación y no logro de objetivos, no reconocida en asamblea hasta 2026 (salida de Zeltek). Valor de la empresa $55.1 mdp'});
  }
  if(SOC==='hbr' && pctPart!=null){
-  serie.push({dual:1,inv:invFin,val:pctPart*VALREF,lb:'2026·ref',tt:'2026 · refundación'});
+  serie.push({dual:1,inv:invFin,val:pctPart*VALREF,lb:'2026·ref',tt:'2026 · refundación · tu '+(pctPart*100).toFixed(2)+'% sobre el post-money de la ronda ('+money(VALREF)+')'});
+  serie.push({dual:1,inv:invFin,val:pctPart*remodPre(),lb:'2026·remod',
+    tt:'2026 · Ronda de Remodelación · entran '+money(REMODRONDA)+' y te diluyes un '+((REMODRONDA/REMODPOST)*100).toFixed(2)+'%, hasta el '+(pctPart*(1-REMODRONDA/REMODPOST)*100).toFixed(2)+'%. La sociedad se valora a su capital reconocido ('+money(REMODPOST)+'), no a la valuación de la refundación: por eso tu participación sube aunque tu % baje'});
   serie.push({dual:1,inv:invFin,val:obj,objv:1,lb:EXITY,tt:EXITY+' · proyección (valuación $60 mdp de regreso)'});
  }
  // Momento «Salida GP» (ene 2026): tu capital invertido se mantiene, tu valuación cae a $0.
@@ -1211,7 +1255,7 @@ async function renderValorSociedad(){
   /* La ronda de Remodelación se valora al CAPITAL RECONOCIDO: valuación = inversión.
      Es lo que hace que los $10,150,000 compren el 22.89% (10.15 / 44.34) y no el
      56.75% que saldrían si entrara sobre el post-money de la refundación. */
-  const REMODPOST=capFin+REFCASH+REMODRONDA;
+  REMODPOST=capFin+REFCASH+REMODRONDA;
   serie.push({dual:1,orden:190,inv:REMODPOST,val:REMODPOST,lb:'2026·remod',
     tt:'Ronda de Remodelación · '+mCorto(REMODRONDA)+' ('+money(REMODPAS)+' de pasivos que quedan fuera de la etapa 1 + '+money(REMODOBRA)+' de obra) · post-money '+money(REMODPOST)+', igual al capital reconocido: el socio entrante compra el '+((REMODRONDA/REMODPOST)*100).toFixed(2)+'% — asamblea POSTERIOR: no forma parte del acta de refundación y diluye a todos a prorrata'});
   serie.push({dual:1,orden:999,inv:capFin,val:VALFUT,objv:1,lb:EXITY,tt:EXITY+' · objetivo de valuación $60 mdp'});

@@ -9,9 +9,10 @@
    ese CONSOLIDADO se descuentan la reserva del 15% y el impuesto del 14% neto
    del crédito fiscal. El FLC es esa utilidad menos la deuda comprometida.
    Sincrético entra con el EBITDA de su modelo financiero (escenario base) al
-   51% que le toca a HBR — actualizado el 25-sep-2026. */
-var U={2027:1824090,2028:6012511,2029:6121834,2030:6981860,2031:7614547,
-       2032:8406336,2033:9288033,2034:10270215,2035:11364716,2036:12584784};
+   51% que le toca a HBR — versión del modelo del 25-sep-2026 (gerente general
+   desde el mes 13; tours por hotel bajando de 3.46 a 2.03 hasta los 100 hoteles). */
+var U={2027:1824090,2028:5811870,2029:6952193,2030:7494023,2031:7660114,
+       2032:8453954,2033:9337794,2034:10322215,2035:11419057,2036:12641570};
 var ANIOS=Object.keys(U).map(Number).sort(function(a,b){return a-b;});
 
 /* Cuadro post-refundación: 348,600 acciones.
@@ -89,7 +90,10 @@ var pc=function(v,d){ return (v*100).toFixed(d==null?2:d)+'%'; };
 /* El motor. Cada año: el bote se divide entre los socios que todavía tienen
    saldo, cada uno le suma su % de dividendo, y el pago se topa al saldo que le
    falta. Lo que sobra va a dividendo; los refundadores absorben la recompra. */
-function corrida(cfg){
+function corrida(cfg){ return corridaCon(SALEN, QUEDAN, cfg); }
+/* El mismo motor, pero sobre listas cualesquiera: así se puede simular qué
+   pasaría si un socio que hoy se queda decidiera salir. */
+function corridaCon(SALEN, QUEDAN, cfg){
   cfg=cfg||{};
   var BOTE=cfg.BOTE!=null?cfg.BOTE:0.25,
       PNv =cfg.PNv !=null?cfg.PNv :22.89,
@@ -131,6 +135,35 @@ window.RECOMPRA={
   VALFUT:VALFUT, DESC:DESC, SERIE_D:SERIE_D, SERIE_D_VIVA:SERIE_D_VIVA, VEST:VEST,
   PON_TODO:PON_TODO, STR_TODO:STR_TODO, ACC:ACC,
   money:money, mC:mC, pc:pc, corrida:corrida,
+  /* ── Escenario: ¿y si saliera un socio que hoy se queda? ─────────────────
+     Lo que recupera es lo EXHIBIDO, no lo comprometido: si no suscribe, esa
+     parte ni se le devuelve ni le cuenta para el dividendo. Por eso cada
+     hipótesis lleva sus acciones y su capital ya netos de la suscripción
+     pendiente. Es una estimación para ese socio: el plan del resto no se toca. */
+  HIPOTESIS:{
+    'PITAO, S.A.P.I. de C.V.':        {n:'PITAO · Jordi Sastre',        cap:6034057, acc:15539, tot:6034057, quita:'PITAO · Jordi Sastre',         susc:628407,  accSusc:28315},
+    'AE Future, S.A. de C.V.':        {n:'AE Future · Estanislao Masiá',cap:3128193, acc:8061,  tot:3128193, quita:'AE Future · Estanislao Masiá', susc:325553,  accSusc:14668},
+    'Juan José Cué de la Fuente':     {n:'Juan José Cué de la Fuente',  cap:1150000, acc:51815, tot:1150000, quita:'Juan José Cué de la Fuente',    susc:500000,  accSusc:22531},
+    'Luis Javier Cué de la Fuente':   {n:'Luis Javier Cué de la Fuente',cap:500000,  acc:22529, tot:500000,  quita:'Luis Javier Cué de la Fuente',  susc:0,       accSusc:0}
+  },
+  /* h = {n,cap,acc,tot} + quita (sale entero de QUEDAN) o dentroDe (baja la
+     fracción que le queda al vehículo). Devuelve lo mismo que socio(). */
+  simular:function(h, cfg){
+    if(!h || !h.cap) return null;
+    var nuevo={k:'__sim', n:h.n, v:h.v||'hipótesis', cap:h.cap, acc:h.acc, tot:h.tot||h.cap};
+    var S2=SALEN.concat([nuevo]);
+    var Q2=QUEDAN.map(function(q){ return {n:q.n, acc:q.acc, frac:q.frac, ref:q.ref, cap:q.cap}; });
+    if(h.quita) Q2=Q2.filter(function(q){ return q.n!==h.quita; });
+    else if(h.dentroDe) Q2.forEach(function(q){
+      if(q.n===h.dentroDe) q.frac=Math.max(0, q.frac - h.cap/(h.tot||h.cap)); });
+    var idx=S2.length-1, R=corridaCon(S2,Q2,cfg), e=R.est[idx], filas=[];
+    R.filas.forEach(function(f){
+      if(f.pago[idx]==null) return;
+      filas.push({anio:f.anio, flc:f.flc, n:f.n, bote:f.bote, tasa:f.tasa[idx],
+                  pago:f.pago[idx], saldo:f.saldo[idx]});
+    });
+    return {i:idx, socio:nuevo, cobra:e.cobra, liq:e.liq, filas:filas, hipotetico:true, h:h};
+  },
   /* La corrida de un socio concreto, por nombre. Devuelve null si no sale. */
   socio:function(clave, vehiculo, cfg){
     var idx=-1;
