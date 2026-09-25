@@ -219,7 +219,9 @@ function comparativaFn(h, cfg){
     return (acc/totalEn(anio))*MULT_EB*(EB[anio]||0);
   }
   function acum(n, get){ var t=0; for(var i=0;i<n && i<ANIOS.length;i++) t+=get(i)||0; return t; }
+  var accU=100000/22.19343;   /* lo que compra una aportación de referencia */
   return [4,6,8].map(function(n){
+    var divU=0;
     var flc=acum(n,function(i){ return base.filas[i].flc; });
     var r=acum(n,function(i){ return base.filas[i].div[iq]; })*troz;
     var d=acum(n,function(i){ return dil.filas[i].div[iq]; })*troz;
@@ -234,7 +236,12 @@ function comparativaFn(h, cfg){
        del acta y entra como accionista sin más: cobra prorrata, no es
        refundador —el pacto define quién lo es— y su parte vale su trozo del
        EBITDA. Si ya está por encima de su objetivo, no hay nada que aportar. */
+    /* Todos tienen puerta de refundar. Si su % de 2022 ya lo tienen cubierto no
+       hay nada que reponer, así que la fila se calcula con una aportación de
+       referencia de $100,000 —capital nuevo— para que la opción exista igual. */
     var accRef=suelto ? Math.max(accDil, h.accObj||0) : (h.accTot||0);
+    var refRef=false;
+    if(suelto && accRef<=accDil+0.5){ accRef=accDil+accU; refRef=true; }
     var suscD =suelto ? Math.max(0, accRef-accDil)*22.19343 : (h.susc||0);
     var divRefD=0, divDilD=0;
     if(suelto) for(var j=0;j<n && j<ANIOS.length;j++){
@@ -244,7 +251,6 @@ function comparativaFn(h, cfg){
     var vRef=valorAcc(accRef, hasta), vDil=valorAcc(accDil, hasta);
     /* Lo que rinde cada peso nuevo que se aporte a la ronda, al precio del acta.
        Entra como acción sin más: cobra prorrata y vale su parte del EBITDA. */
-    var accU=100000/22.19343, divU=0;
     for(var j=0;j<n && j<ANIOS.length;j++){
       var f=base.filas[j];
       divU += (accU/BASE)*(1-PN/100)*f.flc;
@@ -253,12 +259,12 @@ function comparativaFn(h, cfg){
       return {cobra:cobra, inv:inv, anio:cobra/n, valor:valor,
               mult:inv?cobra/inv:0, total:cobra+valor, multTot:inv?(cobra+valor)/inv:0};
     }
-    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:suelto,
+    return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:dentro, suelto:suelto,
       unidad:{monto:100000, acc:accU, div:divU, valor:valorAcc(accU,hasta),
               total:divU+valorAcc(accU,hasta), mult:(divU+valorAcc(accU,hasta))/100000},
       ebitda:EB[hasta]||0, multEb:MULT_EB, accTotal:totalEn(hasta),
       ref:suelto ? caja(divRefD, (h.cap||0)+suscD, vRef) : caja(r, invRef, vRef),
-      susc:suelto?suscD:(h.susc||0), accRef:accRef, accDil:accDil, sale:sale,
+      susc:suelto?suscD:(h.susc||0), accRef:accRef, accDil:accDil, sale:sale, refRef:refRef,
       dil:suelto ? caja(divDilD, invDil, vDil) : caja(d, invDil, vDil),
       sal:caja(x, invDil, 0)};
   });
