@@ -47,6 +47,9 @@ select,input{padding:10px;border:1px solid var(--line);border-radius:9px;backgro
 .sede{border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:600}
 .sede.seon{background:var(--gold);color:#241a09;border-color:var(--gold)}
 .sede.todas.seon{background:var(--ok);color:#06170f;border-color:var(--ok)}
+/* Tercer estado del chip: líder de ese negocio. Ve todo lo operativo de su
+   ubicación sin que haya que darle pantalla por pantalla. Javi, 26-sep. */
+.sede.lider{background:#2f6b4f;color:#eafff3;border-color:#2f6b4f}
 .fbtn{padding:7px 12px;font-size:12.5px}
 .lfilter{flex:1;min-width:180px}
 .fbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
@@ -165,7 +168,7 @@ const SB_URL='https://rehophywchakfapivsbh.supabase.co';
 const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=supabase.createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
-let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], PROJMAP={}, AREAS=[];
+let PAG=[], ROLPERM={}, USERPERM={}, ROLES=[], USERS=[], PROJMAP={}, PROJLID={}, AREAS=[];
 // Las claves ('virreyes','sincretico'...) son las que guarda usuario_proyectos
 // y con las que filtra el dashboard: NO se tocan. Sólo cambian las etiquetas.
 // Ateneo y Virreyes son lo mismo, por eso va con los dos nombres.
@@ -203,7 +206,7 @@ async function boot(){
     traerTodo(()=>sb.from('usuario_permisos').select('email,pagina_codigo,nivel')),
     sb.from('roles_catalogo').select('rol'),
     traerTodo(()=>sb.from('employees').select('id,nombre,apellido,nombre_display,email,rol,area').not('email','is',null)),
-    traerTodo(()=>sb.from('usuario_proyectos').select('employee_id,proyecto'))
+    traerTodo(()=>sb.from('usuario_proyectos').select('employee_id,proyecto,lider'))
   ]);
   if(pg.error){ try{ const _eq=await sb.rpc('deleg_mi_equipo'); if(!_eq.error && _eq.data && _eq.data.length){ LEADER=true; MYTEAM=_eq.data; ['tab-lista','tab-rol','tab-rango','tab-user','tab-cat'].forEach(function(id){var bt=$(id); if(bt) bt.style.display='none';}); try{ initPwLeader(); }catch(_){} var _te=$('tab-equipo'); if(_te) _te.className='tab on'; setTab('equipo'); return; } }catch(_){} $('authmsg').style.display='block'; $('authmsg').textContent='Sin permiso de admin: '+pg.error.message; return; }
   PAG=pg.data||[];
@@ -213,7 +216,7 @@ async function boot(){
   ROLES=[...set].sort();
   USERS=(emp.data||[]).sort((a,b)=>((a.nombre_display||a.nombre||'')+'').localeCompare(b.nombre_display||b.nombre||''));
   AREAS=[...new Set(USERS.map(u=>u.area).filter(Boolean))].sort();
-  PROJMAP={}; (am.data||[]).forEach(r=>{ (PROJMAP[r.employee_id]=PROJMAP[r.employee_id]||[]).push(r.proyecto); });
+  PROJMAP={}; PROJLID={}; (am.data||[]).forEach(r=>{ (PROJMAP[r.employee_id]=PROJMAP[r.employee_id]||[]).push(r.proyecto); if(r.lider) (PROJLID[r.employee_id]=PROJLID[r.employee_id]||[]).push(r.proyecto); });
   $('fubic').innerHTML='<option value="">Todas las ubicaciones</option>'+PROJS_DEF.map(p=>'<option value="'+p[0]+'">'+p[1]+'</option>').join('');
   $('farea').innerHTML='<option value="">Todas las áreas</option>'+AREAS.map(a=>'<option value="'+a.replace(/"/g,'&quot;')+'">'+a+'</option>').join('');
   fillRolSel(); fillUserSel(); fillRangoSel();
@@ -322,9 +325,16 @@ function renderLista(){
     const cur=PROJMAP[u.id]||[];
     const allOn=PROJS_DEF.every(p=>cur.includes(p[0]));
     let chips='<button class="sede todas'+(allOn?' seon':'')+'" onclick="toggleProj(\''+u.id+'\',\'__all\')">Todas</button>';
+    const lid=PROJLID[u.id]||[];
+    /* Tres estados por clic: apagado → acceso → líder → apagado. Líder es la
+       jerarquía informal: ve todo lo operativo de ese negocio sin darle
+       pantalla por pantalla. Javi, 26-sep. */
     chips+=PROJS_DEF.map(p=>{
-      const on=cur.includes(p[0]);
-      return '<button class="sede'+(on?' seon':'')+'" onclick="toggleProj(\''+u.id+'\',\''+p[0]+'\')">'+p[1]+'</button>';
+      const on=cur.includes(p[0]), es=lid.indexOf(p[0])>=0;
+      return '<button class="sede'+(on?' seon':'')+(es?' lider':'')+'" title="'
+        +(es?'Líder de este negocio: ve todo lo operativo de su ubicación'
+            :(on?'Con acceso. Vuelve a tocar para hacerle líder':'Sin acceso'))
+        +'" onclick="toggleProj(\''+u.id+'\',\''+p[0]+'\')">'+p[1]+(es?' ★':'')+'</button>';
     }).join('');
     h+='<div class="urow"><div class="uinfo"><div class="pname">'+(u.nombre_display||u.nombre||'—')
       +'<small>'+(u.rol||'sin rol')+' · '+(u.email||'sin correo')+'</small></div></div>'
@@ -336,22 +346,29 @@ function renderLista(){
 async function toggleProj(empId, proj){
   const admin=(await sb.auth.getSession()).data.session.user.email;
   let cur=(PROJMAP[empId]||[]).slice();
+  let lid=(PROJLID[empId]||[]).slice();
   let error=null;
   if(proj==='__all'){
     const allOn=PROJS_DEF.every(p=>cur.includes(p[0]));
-    if(allOn){ ({error}=await sb.from('usuario_proyectos').delete().eq('employee_id',empId)); if(!error) cur=[]; }
+    if(allOn){ ({error}=await sb.from('usuario_proyectos').delete().eq('employee_id',empId)); if(!error){ cur=[]; lid=[]; } }
     else {
       const faltan=PROJS_DEF.map(p=>p[0]).filter(k=>!cur.includes(k));
       ({error}=await sb.from('usuario_proyectos').insert(faltan.map(k=>({employee_id:empId,proyecto:k,granted_by:admin}))));
       if(!error) cur=PROJS_DEF.map(p=>p[0]);
     }
+  } else if(lid.indexOf(proj)>=0){
+    // era líder: el tercer toque lo deja fuera del negocio
+    ({error}=await sb.from('usuario_proyectos').delete().eq('employee_id',empId).eq('proyecto',proj));
+    if(!error){ cur=cur.filter(x=>x!==proj); lid=lid.filter(x=>x!==proj); }
   } else if(cur.includes(proj)){
-    ({error}=await sb.from('usuario_proyectos').delete().eq('employee_id',empId).eq('proyecto',proj)); if(!error) cur=cur.filter(x=>x!==proj);
+    // tenía acceso: el segundo toque lo hace líder del negocio
+    ({error}=await sb.from('usuario_proyectos').update({lider:true}).eq('employee_id',empId).eq('proyecto',proj));
+    if(!error) lid=lid.concat([proj]);
   } else {
     ({error}=await sb.from('usuario_proyectos').insert({employee_id:empId,proyecto:proj,granted_by:admin})); if(!error) cur=cur.concat([proj]);
   }
   if(error){ alert('No se pudo guardar: '+error.message); return; }
-  PROJMAP[empId]=cur; renderLista();
+  PROJMAP[empId]=cur; PROJLID[empId]=lid; renderLista();
 }
 function verFunciones(id){ setTab('user'); $('userSel').value=id; loadUser(); }
 
