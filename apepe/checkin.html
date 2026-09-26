@@ -528,11 +528,42 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
       img.src=URL.createObjectURL(file);
     }catch(e){ resolve(file); }
   });}
+  // Lector principal: visión de Claude (Edge Function apepe-ocr)
+  function ocrVision(file){
+    return new Promise(function(resolve){
+      downscale(file,1500,function(dataurl){
+        if(!dataurl) return resolve(null);
+        fetch(SB+'/functions/v1/apepe-ocr',{method:'POST',
+          headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+          body:JSON.stringify({image_b64:dataurl,media_type:'image/jpeg'})})
+          .then(function(r){return r.json();}).then(resolve).catch(function(){resolve(null);});
+      });
+    });
+  }
   async function leerDoc(file){
     avisoDoc('wait','⏳ Leyendo tu documento…'); window._docOK=false; window._docData=null;
     $('docCampos').style.display='block'; $('cTipo').value='Pasaporte';
+    // 1) VISIÓN (Claude) — el lector bueno
     try{
-      // 1º intento con imagen preprocesada; si no cuadra el dígito de control, 2º con la original
+      var v=await ocrVision(file);
+      if(v && v.ok && v.legible && v.nombre){
+        $('cNombre').value=v.nombre;
+        if(v.nacionalidad && PAISES.indexOf(v.nacionalidad)>=0) $('cNac').value=v.nacionalidad;
+        if(v.numero) $('cNum').value=v.numero;
+        if(v.nacimiento && /^\d{4}-\d{2}-\d{2}$/.test(v.nacimiento)) $('cNacim').value=v.nacimiento;
+        if(v.tipo){ var tt=(v.tipo==='Cédula'?'Cédula profesional':v.tipo); if(['Pasaporte','INE','Cédula profesional'].indexOf(tt)>=0) $('cTipo').value=tt; }
+        window._docOK=true; window._docData={ vision:true, pais:v.pais||'' };
+        avisoDoc('ok','✓ Leímos tu documento. Revisa que tus datos estén bien, sobre todo tu fecha de nacimiento.');
+        return;
+      }
+      if(v && v.ok && v.legible===false){
+        window._docOK=true; window._docData={ manual:true };
+        avisoDoc('wait','No pudimos leer bien el documento. Enfócalo completo y con buena luz, o escribe tus datos a mano aquí.');
+        return;
+      }
+    }catch(e){}
+    // 2) RESPALDO: Tesseract MRZ (si la visión no respondió o no hay red)
+    try{
       var m=parseMRZ(await ocr(await preprocesa(file)));
       if(!(m&&m.confia)){ var m2=parseMRZ(await ocr(file)); if(m2&&(m2.confia||!m)) m=m2; }
       if(m && m.confia && m.nombre){
@@ -542,19 +573,11 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
         if(m.nacimiento) $('cNacim').value=m.nacimiento;
         window._docOK=true; window._docData=m;
         avisoDoc('ok','✓ Leímos tu pasaporte. Revisa que tus datos estén bien.');
-      } else if(m){
-        // parece un pasaporte pero la lectura no es fiable → nada de basura, se completa a mano
-        window._docOK=true; window._docData={ mrz:true };
-        avisoDoc('wait','Vemos que es un documento válido, pero no leímos bien tus datos desde la foto. Complétalos a mano aquí abajo; son solo 30s.');
-      } else {
-        // no encontramos la zona de lectura → puede reintentar o escribir a mano
-        window._docOK=true; window._docData={ manual:true };
-        avisoDoc('wait','No pudimos leer los datos desde la foto. Intenta de nuevo con buena luz (que se vea la franja de letras y números de la parte de abajo) o escríbelos a mano aquí.');
+        return;
       }
-    }catch(e){
-      window._docOK=true; window._docData={ manual:true };
-      avisoDoc('wait','No pudimos leer la imagen. Escribe tus datos a mano aquí abajo; son solo 30s.');
-    }
+    }catch(e){}
+    window._docOK=true; window._docData={ manual:true };
+    avisoDoc('wait','No pudimos leer los datos desde la foto. Escríbelos a mano aquí abajo; son solo 30s.');
   }
   // Dígito de control MRZ (pesos 7-3-1; A=10..Z=35, '<'=0)
   function mrzChk(s){ var w=[7,3,1],sum=0,c,v; for(var i=0;i<s.length;i++){ c=s.charAt(i);
