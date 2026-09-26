@@ -215,12 +215,16 @@ function comparativaFn(h, cfg){
     base.est.forEach(function(e,i){ if(e.liq && e.liq<=anio) fuera+=accSale[i]; });
     return TOTPOST-fuera;
   }
+  /* El múltiplo de EBITDA con el que se valora una participación es un supuesto,
+     así que viaja en cfg: el portal usa 5.5 y el deck de la asamblea 5.4. */
+  var ME=(cfg&&cfg.multEb!=null)?cfg.multEb:MULT_EB;
   function valorAcc(acc, anio){
-    return (acc/totalEn(anio))*MULT_EB*(EB[anio]||0);
+    return (acc/totalEn(anio))*ME*(EB[anio]||0);
   }
   function acum(n, get){ var t=0; for(var i=0;i<n && i<ANIOS.length;i++) t+=get(i)||0; return t; }
   var accU=100000/22.19343;   /* lo que compra una aportación de referencia */
-  return [4,6,8].map(function(n){
+  var HOR=(cfg&&cfg.anios)||[4,6,8];
+  return HOR.map(function(n){
     var divU=0;
     var flc=acum(n,function(i){ return base.filas[i].flc; });
     var r=acum(n,function(i){ return base.filas[i].div[iq]; })*troz;
@@ -262,7 +266,7 @@ function comparativaFn(h, cfg){
     return {anios:n, hasta:hasta, flc:flc, flcAnio:flc/n, dentro:dentro, suelto:suelto,
       unidad:{monto:100000, acc:accU, div:divU, valor:valorAcc(accU,hasta),
               total:divU+valorAcc(accU,hasta), mult:(divU+valorAcc(accU,hasta))/100000},
-      ebitda:EB[hasta]||0, multEb:MULT_EB, accTotal:totalEn(hasta),
+      ebitda:EB[hasta]||0, multEb:ME, accTotal:totalEn(hasta),
       ref:suelto ? caja(divRefD, (h.cap||0)+suscD, vRef) : caja(r, invRef, vRef),
       susc:suelto?suscD:(h.susc||0), accRef:accRef, accDil:accDil, sale:sale, refRef:refRef,
       dil:suelto ? caja(divDilD, invDil, vDil) : caja(d, invDil, vDil),
