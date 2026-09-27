@@ -214,6 +214,14 @@ footer .marca{font-family:Oswald,sans-serif;font-weight:600;font-size:11.5px;
 .tarj .odse i{font-style:normal;font-family:Oswald,sans-serif;font-weight:700;font-size:10px;
   letter-spacing:.04em;color:#fff;border-radius:4px;padding:2px 7px;}
 
+/* ---------- sale hoy / sale mañana ---------- */
+.diabtns{display:flex;gap:7px;flex:0 0 auto;}
+.grande .horas{display:flex;gap:5px;flex-wrap:wrap;padding:0 14px 14px;}
+.grande .horas i{font-style:normal;font-family:Oswald,sans-serif;font-weight:600;font-size:12px;
+  background:var(--hueso);border:1px solid var(--linea);border-radius:99px;padding:3px 10px;
+  color:var(--tinta-2);white-space:nowrap;}
+.grande .horas i.poco{background:var(--alerta-bg);border-color:transparent;color:var(--alerta);}
+
 /* ---------- filtros ---------- */
 .filtros{display:flex;gap:8px;overflow-x:auto;padding:14px 20px 4px;margin:0 -20px;
   scrollbar-width:none;align-items:center;}
@@ -316,7 +324,16 @@ footer .marca{font-family:Oswald,sans-serif;font-weight:600;font-size:11.5px;
     </div>
   </div>
 
-  <!-- 2 · los diez de la casa -->
+  <!-- 2 · lo que sale hoy -->
+  <div class="seccion oculto" id="sDia">
+    <div class="cab"><h2 id="diaTit">Sale hoy</h2>
+      <div class="diabtns" id="diaBtns"></div>
+      <div class="mini" id="diaNota"></div></div>
+    <p class="dice" id="diaDice"></p>
+    <div class="carril" id="carrilDia"></div>
+  </div>
+
+  <!-- 3 · los diez de la casa -->
   <div class="seccion" id="sTop">
     <div class="cab"><h2>Los diez de la casa</h2><div class="mini" id="topNota"></div></div>
     <p class="dice">No es un ranking de ventas: es lo que pondríamos delante si solo pudiéramos
@@ -324,7 +341,7 @@ footer .marca{font-family:Oswald,sans-serif;font-weight:600;font-size:11.5px;
     <div class="carril" id="carrilTop"></div>
   </div>
 
-  <!-- 3 · cómo ser un buen turista -->
+  <!-- 4 · cómo ser un buen turista -->
   <div class="seccion" id="sOds">
     <div class="cab"><h2>Cómo ser un buen turista</h2><div class="mini" id="odsNota"></div></div>
     <p class="dice">Los objetivos de ONU Turismo, resumidos en tres. Toca uno y se encienden
@@ -335,14 +352,14 @@ footer .marca{font-family:Oswald,sans-serif;font-weight:600;font-size:11.5px;
     <div class="vacio oculto" id="vacioOds"></div>
   </div>
 
-  <!-- 4 · talleres -->
+  <!-- 5 · talleres -->
   <div class="seccion" id="sTalleres">
     <div class="cab"><h2>Talleres</h2><div class="mini" id="talNota"></div></div>
     <p class="dice">Las que se hacen con las manos: el maíz, el barro, la chaquira, el albur.</p>
     <div class="carril" id="carrilTal"></div>
   </div>
 
-  <!-- 5 · por lo que te late -->
+  <!-- 6 · por lo que te late -->
   <div class="seccion" id="sFam">
     <div class="cab"><h2>Por lo que te late</h2><div class="mini" id="famNota"></div></div>
     <p class="dice">Lo mismo, ordenado por el tipo de plan.</p>
@@ -351,7 +368,7 @@ footer .marca{font-family:Oswald,sans-serif;font-weight:600;font-size:11.5px;
     <div class="vacio oculto" id="vacioFam"><b>Nada en esta familia</b>Prueba con otra.</div>
   </div>
 
-  <!-- 6 · el listado entero, al final -->
+  <!-- 7 · el listado entero, al final -->
   <div class="seccion">
     <div class="cab"><h2>Todas las experiencias</h2><div class="mini" id="cuentaLista"></div></div>
     <div class="filtros" id="filtros"></div>
@@ -500,6 +517,7 @@ async function arranca(){
   pintaAtiende();
   try{ CAT=await rpc(PRUEBA?'sinc_catalogo_prueba':'sinc_catalogo',{p_dias:90})||[]; }
   catch(x){ $('cargando').textContent='No pudimos cargar las experiencias. '+x.message; return; }
+  await cargaDias();
   try{
     var r=await fetch(SB+'/rest/v1/v_ods_publico?select=*&order=ods',
       {headers:{'apikey':KEY,'Authorization':'Bearer '+KEY}});
@@ -512,6 +530,7 @@ async function arranca(){
 
   pintaPromos();
   pintaAviso();
+  pintaDia();
   pintaTop();
   pintaOds();
   pintaTalleres();
@@ -580,7 +599,100 @@ function pintaAviso(){
     'borradores y prefichas. Las promociones y los objetivos de la ONU son demo.';
 }
 
-/* ---------- 2 · los diez de la casa ---------- */
+/* ---------- 2 · lo que sale hoy ---------- */
+/* El catálogo solo trae la próxima fecha de cada experiencia, y eso no sirve
+   para "qué sale mañana": un tour que sale hoy y mañana se quedaría fuera del
+   mañana. Por eso el día se pide aparte, con sus horas y sus lugares libres. */
+var SAL={0:[],1:[]}, diaSel=0;
+function ymd(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+
+         String(d.getDate()).padStart(2,'0');
+}
+function ahoraHM(){
+  var n=new Date();
+  return String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
+}
+/* Las filas sueltas —una por hora— se juntan por experiencia y se cruzan con
+   el catálogo, que es quien tiene la foto, el nombre y el precio. */
+function agrupaSalidas(filas){
+  var porId={}, orden=[];
+  (filas||[]).forEach(function(f){
+    var e=CAT.filter(function(c){return c.id===f.experiencia_id;})[0];
+    if(!e)return;
+    if(!porId[f.experiencia_id]){ porId[f.experiencia_id]={e:e,horas:[]}; orden.push(f.experiencia_id); }
+    porId[f.experiencia_id].horas.push({hora:String(f.hora||'').slice(0,5),libres:f.libres});
+  });
+  return orden.map(function(k){return porId[k];});
+}
+async function cargaDias(){
+  var hoy=new Date(); hoy.setHours(0,0,0,0);
+  var man=new Date(hoy.getTime()+86400000);
+  var r=await Promise.all([
+    rpc('sinc_salidas_dia',{p_fecha:ymd(hoy)}).catch(function(){return [];}),
+    rpc('sinc_salidas_dia',{p_fecha:ymd(man)}).catch(function(){return [];})
+  ]);
+  SAL[0]=agrupaSalidas(r[0]); SAL[1]=agrupaSalidas(r[1]);
+}
+/* Lo de hoy que ya salió no es una oferta: a las siete de la tarde el tour de
+   las diez de la mañana no se puede alcanzar. Se cae solo. */
+function salidasDe(k){
+  var l=SAL[k]||[];
+  if(k!==0)return l;
+  var hm=ahoraHM();
+  return l.map(function(x){
+    return {e:x.e, horas:x.horas.filter(function(h){return h.hora>=hm;})};
+  }).filter(function(x){return x.horas.length;});
+}
+function pintaDia(){
+  var hoy=salidasDe(0), man=salidasDe(1);
+  if(!hoy.length&&!man.length){ $('sDia').classList.add('oculto'); return; }
+  /* Si hoy ya no queda nada que alcanzar, se abre directamente en mañana. */
+  if(!hoy.length)diaSel=1;
+  $('sDia').classList.remove('oculto');
+
+  var l=diaSel===0?hoy:man;
+  $('diaTit').textContent=diaSel===0?'Sale hoy':'Sale mañana';
+  $('diaDice').textContent=diaSel===0
+    ? 'Salidas de hoy con lugar libre, a la hora que todavía las alcanzas.'
+    : 'Lo que sale mañana, para el que ya no llega a lo de hoy.';
+  $('diaNota').textContent=l.length+(l.length===1?' salida':' salidas');
+
+  $('diaBtns').innerHTML=
+    '<button class="chip'+(diaSel===0?' on':'')+'" data-d="0"'+(hoy.length?'':' disabled')+'>'+
+      'Hoy <b>'+hoy.length+'</b></button>'+
+    '<button class="chip'+(diaSel===1?' on':'')+'" data-d="1"'+(man.length?'':' disabled')+'>'+
+      'Mañana <b>'+man.length+'</b></button>';
+  Array.prototype.forEach.call($('diaBtns').querySelectorAll('.chip'),function(b){
+    b.onclick=function(){ diaSel=Number(b.getAttribute('data-d')); pintaDia(); };
+  });
+
+  /* Primero las que tienen foto: una tarjeta con degradado al lado de una con
+     foto se lee como un hueco. Pero aquí ninguna se esconde, porque esto no es
+     escaparate: es la agenda del día. */
+  l=l.filter(function(x){return !!x.e.portada;}).concat(l.filter(function(x){return !x.e.portada;}));
+
+  $('carrilDia').innerHTML=l.map(function(x){
+    var e=x.e;
+    return '<a class="grande" href="'+liga(e)+'">'+
+      '<div class="marco">'+marco(e,660)+
+        '<div class="velo">'+
+          '<div class="cuando">'+(diaSel===0?'Hoy':'Mañana')+
+            (e.salida_desde?' · '+esc(e.salida_desde):'')+'</div>'+
+          '<div class="nom">'+esc(e.nombre)+'</div>'+
+        '</div></div>'+
+      '<div class="horas">'+x.horas.slice(0,6).map(function(h){
+        var poco=h.libres!=null&&h.libres<=4;
+        return '<i class="'+(poco?'poco':'')+'" title="'+
+               (h.libres!=null?esc(h.libres)+' lugares libres':'')+'">'+esc(h.hora)+
+               (poco?' · '+esc(h.libres):'')+'</i>';
+      }).join('')+(x.horas.length>6?'<i>+'+(x.horas.length-6)+'</i>':'')+'</div>'+
+      '<div class="pie"><span class="quien">'+esc(e.tipologia||'Experiencia')+
+        (e.duracion_min?'<br>'+dur(e.duracion_min):'')+'</span>'+
+        precioHTML(e)+'</div></a>';
+  }).join('');
+}
+
+/* ---------- 3 · los diez de la casa ---------- */
 /* Los dias, en una sola inicial. La posicion dice cual es, asi no se confunden
    martes y miercoles. Si salen los siete, se dice con palabras. Si no hay dato
    no se inventa nada: la fila entera desaparece. */
@@ -773,14 +885,20 @@ $('mas').onclick=function(){tope+=24;pintaRenglones();};
 
 /* ---------- 4 · talleres ---------- */
 function pintaTalleres(){
-  var l=conFoto(CAT.filter(function(e){return fams(e).indexOf('Talleres')>=0;}))
-           .sort(function(a,b){
-             var d=(a.proxima_fecha?0:1)-(b.proxima_fecha?0:1);
-             return d||(esPropia(b)-esPropia(a));
-           }).slice(0,14);
-  if(!l.length){ $('sTalleres').classList.add('oculto'); return; }
-  $('talNota').textContent=l.length+' con foto · '+
-    CAT.filter(function(e){return fams(e).indexOf('Talleres')>=0;}).length+' en total';
+  /* Aquí no se esconde ninguno por no tener foto. La regla del escaparate vale
+     para las promos y para los diez, que son una selección; los talleres son
+     una categoría, y de catorce solo tres traen foto: filtrarlos dejaba la
+     sección casi vacía y parecía que no había talleres. */
+  var todos=CAT.filter(function(e){return fams(e).indexOf('Talleres')>=0;});
+  if(!todos.length){ $('sTalleres').classList.add('oculto'); return; }
+  function ordena(a,b){
+    var d=(a.proxima_fecha?0:1)-(b.proxima_fecha?0:1);
+    return d||(esPropia(b)-esPropia(a));
+  }
+  var l=conFoto(todos).sort(ordena)
+          .concat(todos.filter(function(e){return !e.portada;}).sort(ordena))
+          .slice(0,14);
+  $('talNota').textContent=todos.length+(todos.length===1?' taller':' talleres');
   $('carrilTal').innerHTML=l.map(function(e){
     var c=cuando(e.proxima_fecha,e.proxima_hora);
     return '<a class="grande" href="'+liga(e)+'">'+
@@ -797,7 +915,7 @@ function pintaTalleres(){
   }).join('');
 }
 
-/* ---------- 3 · cómo ser un buen turista ---------- */
+/* ---------- 4 · cómo ser un buen turista ---------- */
 /* Los diecisiete objetivos de la ONU, resumidos en los tres que de verdad
    distinguen una experiencia. Solo se enseñan los que tenemos ubicados: un
    objetivo que nadie toca no pinta nada en una pantalla de venta. */
@@ -835,7 +953,7 @@ function deIndicador(e,ind){
 function pintaOds(){
   var base=CAT.filter(function(e){return odsDe(e).length;});
   if(!base.length){ $('sOds').classList.add('oculto'); return; }
-  $('odsNota').textContent=base.length+' de '+CAT.length+' con objetivo declarado';
+  $('odsNota').textContent=base.length+' con impacto medido';
 
   /* Los tres indicadores salen siempre, aunque alguno esté hoy a cero: los
      diecisiete objetivos viven dentro de estos tres y mañana puede haber un
