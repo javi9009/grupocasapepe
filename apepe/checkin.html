@@ -341,9 +341,16 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
 <div class="pop" id="pop"><div class="inner">
   <h3 data-i18n="popH">Tu 15% de descuento</h3>
   <p style="color:var(--gris);font-size:14px;margin:0 0 12px" data-i18n="popP">Usa el código <b>SUPERPEPE</b> en <b>casapepe.mx</b> para tu próxima reserva y llévate 15%.</p>
-  <div id="popHotelCollect" style="display:none;border-top:1px dashed var(--linea);padding-top:12px;margin-top:4px">
-    <p style="font-size:14px;margin:0 0 10px">¿Y para <b>esta</b> reserva? Si reservaste por Booking/Expedia, podemos pasarte a tarifa directa con 15% menos.</p>
-    <button class="btn" onclick="alert('En cuanto conectemos Cloudbeds + winback, aquí arranca el cambio de fuente.');">¡Quiero el descuento para esta reserva!</button>
+  <div id="popHotelCollect" style="display:none;border-top:1px dashed var(--linea);padding-top:12px;margin-top:6px">
+    <p style="font-size:14px;margin:0 0 8px" id="wbLead">¿Y para <b>esta</b> reserva? Si la hiciste por un canal (Booking/Expedia), puedes pasarte a tarifa directa con <b>15% menos</b> ahora.</p>
+    <div id="wbPlan" style="display:none;background:#fff;border:1px solid var(--linea);border-radius:12px;padding:12px;margin:8px 0">
+      <div style="display:flex;gap:0;text-align:center">
+        <div style="flex:1;border-right:1px solid var(--linea);padding:2px 6px"><div style="font-size:11px;color:var(--gris)">Tu tarifa</div><div id="wbOta" style="font-size:17px;font-weight:700;text-decoration:line-through;color:var(--gris)">—</div></div>
+        <div style="flex:1;padding:2px 6px"><div style="font-size:11px;color:var(--gris)">Directa −15%</div><div id="wbDir" style="font-size:20px;font-weight:800;color:var(--magenta,#E2188E)">—</div></div>
+      </div>
+    </div>
+    <button class="btn mag" id="wbBtn" style="display:none">Solicitar descuento</button>
+    <div id="wbMsg" style="font-size:13px;color:var(--gris);margin-top:8px"></div>
   </div>
   <button class="btn sec" style="margin-top:12px" onclick="pop(false)" data-i18n="popClose">Cerrar</button>
 </div></div>
@@ -483,7 +490,40 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
     $('trans').classList.add('on');
     setTimeout(function(){ $('trans').classList.remove('on'); go(3); },1700);
   };
-  window.pop=function(on){ $('pop').classList.toggle('on',on); };
+  window.pop=function(on){ $('pop').classList.toggle('on',on); if(on) cargarWinback(); };
+  var WB=null, wbCargado=false;
+  function moneyMx(n){ try{ return '$'+Number(n).toLocaleString('es-MX',{maximumFractionDigits:0}); }catch(e){ return '$'+n; } }
+  function cargarWinback(){
+    if(!RESV || wbCargado) return; wbCargado=true;
+    fetch(SB+'/functions/v1/apepe-winback-huesped',{method:'POST',headers:{apikey:KEY,'Content-Type':'application/json'},body:JSON.stringify({token:RESV,op:'check'})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok||!d.elegible||!d.plan){ return; }
+        WB=d;
+        $('popHotelCollect').style.display='block';
+        $('wbLead').innerHTML=(LANG==='en'
+          ? 'And for <b>this</b> booking? If you booked through a channel (Booking/Expedia), you can switch to our direct rate with <b>15% off</b> now.'
+          : '¿Y para <b>esta</b> reserva? Como la hiciste por '+esc(d.plan.fuente||'un canal')+', puedes pasarte a tarifa directa con <b>15% menos</b> ahora.');
+        $('wbOta').textContent=moneyMx(d.plan.precio_ota);
+        $('wbDir').textContent=moneyMx(d.plan.precio_directo);
+        $('wbPlan').style.display='block';
+        var b=$('wbBtn'); b.style.display='block'; b.textContent=(LANG==='en'?'Request the discount':'Solicitar descuento');
+        b.onclick=solicitarWinback;
+      }).catch(function(){});
+  }
+  function solicitarWinback(){
+    var b=$('wbBtn'), msg=$('wbMsg'); b.disabled=true; b.textContent=(LANG==='en'?'Sending…':'Solicitando…');
+    fetch(SB+'/functions/v1/apepe-winback-huesped',{method:'POST',headers:{apikey:KEY,'Content-Type':'application/json'},body:JSON.stringify({token:RESV,op:'solicitar'})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok){ b.disabled=false; b.textContent=(LANG==='en'?'Request the discount':'Solicitar descuento'); msg.textContent=(d&&d.error)||(LANG==='en'?'Could not process.':'No se pudo procesar.'); return; }
+        b.style.display='none'; $('wbPlan').style.display='block';
+        var t=d.textos||{};
+        msg.innerHTML='<div style="background:var(--ok-bg);color:var(--ok);border-radius:10px;padding:11px 13px;line-height:1.5">'+
+          '<b>✓ '+(LANG==='en'?'Your rate is pre-confirmed at ':'Tu reserva quedó preconfirmada por ')+moneyMx(d.precio_directo)+'</b><br>'+
+          esc(t.recomendacion||'')+'<br><b>'+esc(t.sin_penalidad||'')+'</b>'+
+          (d.correo&&d.correo.ok?('<br><span style="opacity:.8">'+(LANG==='en'?'We sent you the details by email.':'Te mandamos el detalle por correo.')+'</span>'):'')+
+          '</div>';
+      }).catch(function(){ b.disabled=false; b.textContent=(LANG==='en'?'Request the discount':'Solicitar descuento'); msg.textContent='Error.'; });
+  }
 
   /* precarga */
   async function prefill(){
