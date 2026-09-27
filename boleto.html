@@ -1,0 +1,157 @@
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tu boleto · Sincrético</title>
+<meta name="theme-color" content="#1F1B16">
+<style>
+:root{--ground:#F4F1EA;--surface:#FFFFFF;--ink:#1F1B16;--muted:#6B6459;--faint:#A49B8C;
+--rule:#E2DCCF;--accent:#C9501A;--accent-soft:#FDE7DC;--ok:#1D6B4A;--ok-bg:#E1F0E7;
+--bad:#9E3B2E;--bad-bg:#F4E2DE;--warn:#8C6212;--warn-bg:#F3EAD6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:15px;
+  padding:18px 14px 60px;display:flex;flex-direction:column;align-items:center;gap:16px}
+.marca{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12.5px;
+  letter-spacing:.14em;text-transform:uppercase;margin-top:6px}
+.boleto{background:var(--surface);border-radius:18px;width:100%;max-width:400px;
+  box-shadow:0 1px 2px rgba(31,27,22,.05),0 22px 48px -30px rgba(31,27,22,.5);overflow:hidden}
+.cab{padding:22px 22px 18px;border-bottom:2px dashed var(--rule);position:relative}
+.cab:before,.cab:after{content:'';position:absolute;bottom:-11px;width:22px;height:22px;
+  background:var(--ground);border-radius:999px}
+.cab:before{left:-11px}.cab:after{right:-11px}
+.exp{font-size:21px;font-weight:800;line-height:1.2;margin:0 0 4px}
+.quien{color:var(--muted);font-size:14px}
+.datos{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+.dato label{display:block;font-size:10.5px;color:var(--faint);font-weight:700;
+  text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
+.dato b{font-size:15.5px;font-weight:700}
+.dato.ancho{grid-column:1/-1}
+.qr{padding:22px;text-align:center}
+.qr canvas,.qr img{width:200px;height:200px;image-rendering:pixelated}
+.cod{font-family:ui-monospace,Menlo,monospace;font-size:23px;letter-spacing:.24em;
+  font-weight:700;margin-top:12px}
+.pie{padding:0 22px 22px;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.5}
+.aviso{border-radius:12px;padding:14px 16px;font-size:14px;line-height:1.5;max-width:400px;width:100%}
+.aviso.warn{background:var(--warn-bg);color:var(--warn)}
+.aviso.bad{background:var(--bad-bg);color:var(--bad)}
+.aviso b{display:block;font-size:16px;margin-bottom:3px}
+.nav{display:flex;gap:8px;max-width:400px;width:100%}
+.nav button{flex:1;font:inherit;font-size:13px;font-weight:600;padding:9px;border-radius:9px;
+  border:1px solid var(--rule);background:var(--surface);color:var(--muted);cursor:pointer}
+.nav button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.cargando{color:var(--muted);padding:40px 0}
+</style>
+<link rel="icon" type="image/png" href="/dash-192.png">
+</head><body>
+
+<div class="marca">Sincrético · Casa Pepe</div>
+<div id="app" class="cargando">Buscando tu boleto…</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+(function(){
+  var SB='https://rehophywchakfapivsbh.supabase.co';
+  var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  var $=function(i){return document.getElementById(i);};
+  function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  var q=new URLSearchParams(location.search);
+  var COD=(q.get('c')||'').trim().toUpperCase();
+  var FOL=(q.get('f')||'').trim().toUpperCase();
+
+  async function rpc(f,b){
+    var r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',
+      headers:{'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json'},
+      body:JSON.stringify(b||{})});
+    if(!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+
+  var MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+             'septiembre','octubre','noviembre','diciembre'];
+  function fecha(f){
+    if(!f) return '—';
+    var p=String(f).split('-');
+    var d=new Date(+p[0],+p[1]-1,+p[2]);
+    var dd=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'][d.getDay()];
+    return dd+' '+(+p[2])+' de '+MESES[+p[1]-1];
+  }
+  function hhmm(h){return (h||'').slice(0,5)||'—';}
+
+  function pinta(B){
+    if(!B.length){ $('app').className=''; $('app').innerHTML=
+      '<div class="aviso bad"><b>No encontramos ese boleto</b>Revisa el enlace del correo, o '+
+      'escríbenos y lo buscamos por tu nombre.</div>'; return; }
+
+    var h='';
+    if(B.length>1){
+      h+='<div class="nav" id="nav">'+B.map(function(b,i){
+        return '<button data-i="'+i+'" aria-pressed="'+(i===0)+'">Persona '+b.numero+'</button>';
+      }).join('')+'</div>';
+    }
+    h+='<div id="uno"></div>';
+    $('app').className=''; $('app').innerHTML=h;
+
+    function uno(b){
+      var cancel = b.motivo==='cancelada';
+      var html='';
+      if(cancel){
+        html+='<div class="aviso bad" style="margin-bottom:14px"><b>Esta reserva está cancelada</b>'+
+              'Si crees que es un error, escríbenos antes de venir.</div>';
+      } else if(b.usado){
+        html+='<div class="aviso warn" style="margin-bottom:14px"><b>Este boleto ya se usó</b>'+
+              'Si todavía no has entrado, enséñaselo a quien te recibe.</div>';
+      }
+      html+='<div class="boleto">'+
+        '<div class="cab">'+
+          '<h1 class="exp">'+esc(b.experiencia)+'</h1>'+
+          '<div class="quien">'+esc(b.titular||'')+
+            (b.de>1?' · persona '+b.numero+' de '+b.de:'')+'</div>'+
+          '<div class="datos">'+
+            '<div class="dato ancho"><label>Cuándo</label><b>'+esc(fecha(b.fecha))+'</b>'+
+              '<div class="quien">a las '+esc(hhmm(b.hora))+'</div></div>'+
+            (b.punto?'<div class="dato ancho"><label>Dónde</label><b>'+esc(b.punto)+'</b></div>':'')+
+            '<div class="dato"><label>Folio</label><b>'+esc(b.folio||'—')+'</b></div>'+
+            '<div class="dato"><label>Boleto</label><b>'+(b.tipo==='menor'?'Menor':'Adulto')+'</b></div>'+
+          '</div>'+
+        '</div>'+
+        '<div class="qr"><div id="qr"></div><div class="cod">'+esc(b.codigo)+'</div></div>'+
+        '<div class="pie">Enseña este código al llegar. Si no carga la imagen, sirve leerlo en voz alta: '+
+          'no lleva ni ceros ni oes ni unos ni íes, para que no haya confusión.</div>'+
+      '</div>';
+      $('uno').innerHTML=html;
+      try{
+        new QRCode(document.getElementById('qr'),
+          {text:b.codigo, width:200, height:200, correctLevel:QRCode.CorrectLevel.M,
+           colorDark:'#1F1B16', colorLight:'#FFFFFF'});
+      }catch(_){}
+    }
+
+    uno(B[0]);
+    var nav=$('nav');
+    if(nav) Array.prototype.forEach.call(nav.querySelectorAll('button'),function(b){
+      b.onclick=function(){
+        Array.prototype.forEach.call(nav.querySelectorAll('button'),function(x){
+          x.setAttribute('aria-pressed', x===b ? 'true':'false');});
+        uno(B[+b.getAttribute('data-i')]);
+      };});
+  }
+
+  (async function(){
+    try{
+      if(FOL){ pinta((await rpc('sinc_boletos_de_folio',{p_folio:FOL})||[]).filter(Boolean)); }
+      else if(COD){ var b=await rpc('sinc_boleto_publico',{p_codigo:COD}); pinta(b&&b.codigo?[b]:[]); }
+      else {
+        $('app').className='';
+        $('app').innerHTML='<div class="aviso warn"><b>Falta el código</b>'+
+          'Abre el enlace que te llegó por correo, o escribe la dirección con tu código al final.</div>';
+      }
+    }catch(e){
+      $('app').className='';
+      $('app').innerHTML='<div class="aviso bad"><b>No pudimos cargarlo</b>'+
+        'Inténtalo de nuevo en un momento.</div>';
+    }
+  })();
+})();
+</script>
+</body></html>
