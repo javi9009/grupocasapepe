@@ -29,6 +29,11 @@
       }
       if(!tk)return;
       if(/\/operador\.html/.test(location.pathname))return;
+      /* El escáner de boletos es de quien recibe al huésped, y ése puede ser
+         del touroperador. Quién valida qué lo decide la base
+         (sinc_puede_validar), así que aquí no se le cierra la puerta.
+         Javi, 27-sep. */
+      if(/\/m\/sinc-verificar\.html/.test(location.pathname))return;
       fetch(SB+'/rest/v1/rpc/es_operador_externo',{method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+tk,'Content-Type':'application/json'},body:'{}'})
       .then(function(r){return r.ok?r.json():null;})
       .then(function(x){ if(x===true) location.replace('/operador.html'); })
