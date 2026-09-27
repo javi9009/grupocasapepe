@@ -6,19 +6,39 @@
 // El chat tiene su propia función (push-chat) porque no pasa por esa tabla.
 //
 // Body: { employee_id?, user_id?, titulo, cuerpo, icono?, url?, tag? }
-// Cabecera: x-cpp-secret (el mismo valor que manda el trigger).
+// Cabecera: x-integracion-token (el trigger lo lee de privado.tokens_integracion,
+// nombre 'push'); también pasa service_role en Authorization.
+//
+// Contención 27-sep-2026: se retiró el secreto fijo 'cpp-push-2026' (estaba en
+// GitHub). Las llaves VAPID se leen de VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY si
+// existen como secretos de la función; mientras no se roten, queda el par actual.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3.6.7'
+import { quienLlama } from './equipo.ts'
 
-const VAPID_PUBLIC = 'BE1A8YAVdUnW0_y7zFiURL0As5fTFkbYy2Z0A30KnOOYQI5w4MF-LLUGk5saVuscA0991BGXKiM57BHshQQdKFQ'
-const VAPID_PRIVATE = '6Xle19H6n6DsFIwr460G1Y8er_Uea0nxFV7QGZt_wwo'
-const SECRET = 'cpp-push-2026'
+const VAPID_PUBLIC = Deno.env.get('VAPID_PUBLIC_KEY') || 'BE1A8YAVdUnW0_y7zFiURL0As5fTFkbYy2Z0A30KnOOYQI5w4MF-LLUGk5saVuscA0991BGXKiM57BHshQQdKFQ'
+const VAPID_PRIVATE = Deno.env.get('VAPID_PRIVATE_KEY') || '6Xle19H6n6DsFIwr460G1Y8er_Uea0nxFV7QGZt_wwo'
 try { webpush.setVapidDetails('mailto:javi@casapepe.mx', VAPID_PUBLIC, VAPID_PRIVATE) } catch (_e) { /* noop */ }
+
+const SB_URL = Deno.env.get('SUPABASE_URL')!
+const SRV = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+// ¿Trae el token de integración 'push'? Se compara en la base (trae_token_integracion
+// lee la cabecera de ESTA llamada REST), así el valor nunca vive en el código.
+async function tokenValido(req: Request): Promise<boolean> {
+  const t = req.headers.get('x-integracion-token') || ''
+  if (!t) return false
+  return await fetch(`${SB_URL}/rest/v1/rpc/trae_token_integracion`, {
+    method: 'POST',
+    headers: { apikey: SRV, Authorization: `Bearer ${SRV}`, 'Content-Type': 'application/json', 'x-integracion-token': t },
+    body: JSON.stringify({ p_nombre: 'push' }),
+  }).then((r) => r.ok ? r.json() : false).then((v) => v === true).catch(() => false)
+}
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cpp-secret',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-integracion-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 function json(o: unknown, st = 200) {
@@ -28,7 +48,8 @@ function json(o: unknown, st = 200) {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
-    if (req.headers.get('x-cpp-secret') !== SECRET) return json({ error: 'no autorizado' }, 401)
+    const q = await quienLlama(req)
+    if (!q.servidor && !(await tokenValido(req))) return json({ error: 'no autorizado' }, 401)
 
     const b = await req.json().catch(() => ({} as Record<string, unknown>))
     const employeeId = b.employee_id ? String(b.employee_id) : null

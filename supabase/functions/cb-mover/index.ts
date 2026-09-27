@@ -28,6 +28,10 @@
 //  accion=intercambiar  cambia de cuarto a dos llegadas entre sí (exige confirmar:true)
 //
 // body: { prop:'cdmx'|'puebla'|<uuid>, fecha, accion, ... }
+//
+// Contención 27-sep-2026: solo el equipo (o servidor). Antes cualquiera con la
+// clave pública podía reasignar cuartos en Cloudbeds.
+import { quienLlama, noAutorizado } from "./equipo.ts";
 
 const BASE = 'https://hotels.cloudbeds.com/api/v1.2';
 const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
@@ -214,6 +218,8 @@ function rastro(cfg: { supaId: string }, fecha: string, d: Obj) {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  const q = await quienLlama(req);
+  if (!q.equipo) return noAutorizado();
   try {
     let prop = 'cdmx', fecha = hoyTZ(), accion = 'diag';
     const b = await req.json().catch(() => ({})) as Obj;

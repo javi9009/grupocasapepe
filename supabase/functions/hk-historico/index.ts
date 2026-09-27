@@ -1,7 +1,10 @@
 // hk-historico: trae de Cloudbeds la ocupación noche a noche del año pasado y la guarda
 // en hk_ocupacion_hist, que es la base de la previsión de personal.
 //   accion=ingesta  -> body {prop, desde, hasta}  (tramos de 1-2 meses, por el tiempo de la función)
-//   accion=probe    -> devuelve la forma cruda de una página de getReservations
+//
+// Contención 27-sep-2026: solo el equipo (o servidor). Se retiró accion=probe,
+// que devolvía reservas crudas de Cloudbeds a cualquiera.
+import { quienLlama, noAutorizado } from "./equipo.ts";
 
 const BASE = Deno.env.get('CLOUDBEDS_BASE_URL') ?? 'https://hotels.cloudbeds.com/api/v1.2';
 const SUPA_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -27,8 +30,6 @@ async function rest(path: string, init: RequestInit = {}) {
 const dia = (d: string) => d.slice(0, 10);
 const suma = (f: string, n: number) => new Date(Date.parse(f + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
-// Cloudbeds pagina de 100 en 100. Se pide por rango de salida para no perder
-// las reservas que empezaron antes del tramo.
 async function cbReservas(key: string, pid: string, desde: string, hasta: string) {
   const out: Array<Record<string, unknown>> = [];
   for (let page = 1; page <= 60; page++) {
@@ -49,8 +50,6 @@ async function cbReservas(key: string, pid: string, desde: string, hasta: string
   return out;
 }
 
-// De cada reserva sacamos qué cuartos y cuántas unidades ocupó cada noche.
-// El detalle de habitaciones viene en `rooms` cuando se pide includeAllRooms.
 interface Area { id: string; tipo: string; parent_id: string | null }
 interface Noche { ocupadas: number; llegadas: number; salidas: number; privadas: number; camas: number; priv_salidas: number; cama_salidas: number; dorms: Set<string> }
 
@@ -71,7 +70,6 @@ function acumular(res: Array<Record<string, unknown>>, porCb: Map<string, Area>,
       const a = porCb.get(String(h.roomID ?? ''));
       const tipo = a?.tipo ?? 'privada';
       const dorm = a?.parent_id ?? null;
-      // Noches ocupadas: de la llegada (incluida) a la salida (excluida)
       for (let f = ini; f < fin; f = suma(f, 1)) {
         if (f < desde || f > hasta) continue;
         const n = g(f);
@@ -79,7 +77,6 @@ function acumular(res: Array<Record<string, unknown>>, porCb: Map<string, Area>,
         if (tipo === 'cama') { n.camas++; if (dorm) n.dorms.add(dorm); } else n.privadas++;
         if (f === ini) n.llegadas++;
       }
-      // El día de salida deja trabajo aunque ya no cuente como ocupado
       if (fin >= desde && fin <= hasta) {
         const n = g(fin);
         n.salidas++;
@@ -117,25 +114,13 @@ async function ingesta(propKey: string, desde: string, hasta: string) {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  const q = await quienLlama(req);
+  if (!q.equipo) return noAutorizado();
   try {
-    let prop = 'cdmx', accion = 'ingesta', desde = '', hasta = '';
-    try { const u = new URL(req.url); prop = u.searchParams.get('prop') ?? prop; accion = u.searchParams.get('accion') ?? accion; desde = u.searchParams.get('desde') ?? desde; hasta = u.searchParams.get('hasta') ?? hasta; } catch { /* noop */ }
-    try { const b = await req.json(); if (b?.prop) prop = b.prop; if (b?.accion) accion = b.accion; if (b?.desde) desde = b.desde; if (b?.hasta) hasta = b.hasta; } catch { /* noop */ }
+    let prop = 'cdmx', desde = '', hasta = '';
+    try { const u = new URL(req.url); prop = u.searchParams.get('prop') ?? prop; desde = u.searchParams.get('desde') ?? desde; hasta = u.searchParams.get('hasta') ?? hasta; } catch { /* noop */ }
+    try { const b = await req.json(); if (b?.prop) prop = b.prop; if (b?.desde) desde = b.desde; if (b?.hasta) hasta = b.hasta; } catch { /* noop */ }
     if (!PROPS[prop]) return J({ ok: false, error: 'propiedad inválida' }, 400);
-
-    if (accion === 'probe') {
-      const cfg = PROPS[prop];
-      const key = Deno.env.get(cfg.keyEnv);
-      const pid = cfg.id ?? Deno.env.get(cfg.idEnv ?? '') ?? '';
-      const url = new URL(`${BASE}/getReservations`);
-      url.searchParams.set('propertyID', pid);
-      url.searchParams.set('pageSize', '3');
-      url.searchParams.set('checkOutFrom', desde || '2025-08-01');
-      url.searchParams.set('checkInTo', hasta || '2025-08-07');
-      url.searchParams.set('includeAllRooms', 'true');
-      const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${key}` } });
-      return J(await r.json());
-    }
     if (!desde || !hasta) return J({ ok: false, error: 'faltan desde y hasta' }, 400);
     return J(await ingesta(prop, desde, hasta));
   } catch (e) {
