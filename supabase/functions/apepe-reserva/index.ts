@@ -57,6 +57,16 @@ async function notasReserva(key: string, pid: string, rid: string) {
   } catch { return []; }
 }
 
+async function checkinHecho(tok: string) {
+  try {
+    const u = `${SB_URL}/rest/v1/apepe_checkin?select=id,estado,created_at&doc_datos->>reserva_token=eq.${encodeURIComponent(tok)}&order=created_at.desc&limit=1`;
+    const r = await fetch(u, { headers: { apikey: SRV, Authorization: `Bearer ${SRV}` } });
+    const j = await r.json().catch(()=>[]);
+    if (Array.isArray(j) && j[0]) return { id: j[0].id, estado: j[0].estado, fecha: j[0].created_at };
+  } catch { /* best-effort */ }
+  return null;
+}
+
 function mapear(d: any) {
   const gl = d.guestList && typeof d.guestList==="object" ? Object.values(d.guestList) as any[] : [];
   const main = gl.find((g:any)=>g.isMainGuest) || gl[0] || {};
@@ -120,10 +130,11 @@ Deno.serve(async (req) => {
   const d = dj?.data ?? dj;
   if (!d || (dj && dj.success === false)) return J({ ok:false, error: String(dj?.message ?? "no se pudo leer la reserva") }, 502);
   const reserva = mapear(d);
-  const [loyalty, notas, resenas] = await Promise.all([
+  const [loyalty, notas, resenas, ya_checkin] = await Promise.all([
     historial(reserva.nombre, reserva.reservation_id),
     notasReserva(key, String(pid), reservationId),
     resenasPrevias(reserva.nombre, propKey),
+    tok ? checkinHecho(tok) : Promise.resolve(null),
   ]);
-  return J({ ok:true, reserva, loyalty, notas, resenas });
+  return J({ ok:true, reserva, ya_checkin, loyalty, notas, resenas });
 });
