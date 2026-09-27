@@ -93,6 +93,25 @@ Deno.serve(async (req) => {
   const prop = String(body.prop ?? "cdmx");
   if (!PROPS[prop]) return J({ ok: false, error: "sede desconocida" }, 400);
 
+  // Búsqueda en otras fechas: si viene un rango válido, devuelve todas las llegadas
+  // de ese rango (sin lógica de No-show), para buscar por nombre o número de reserva.
+  const desdeIn = String(body.desde || "").slice(0, 10);
+  const hastaIn = String(body.hasta || "").slice(0, 10);
+  const esRango = /^\d{4}-\d{2}-\d{2}$/.test(desdeIn) && /^\d{4}-\d{2}-\d{2}$/.test(hastaIn) && hastaIn >= desdeIn;
+  if (esRango) {
+    const capHasta = masDias(desdeIn, 92);
+    const hastaR = hastaIn > capHasta ? capHasta : hastaIn;
+    let cr: any[] = [];
+    try { cr = await llegadasProp(prop, desdeIn, hastaR); }
+    catch { return J({ ok: false, error: "no pudimos leer llegadas" }, 502); }
+    const lista = cr.map((x: any) => { const { ad, ni } = cuentaPax(x); return {
+      reservation_id: String(x.reservationID), nombre: String(x.guestName || "").trim(),
+      habitacion: habDe(x), adultos: ad, ninos: ni, desde: String(x.startDate || "").slice(0, 10),
+      checked_in: String(x.status) === "checked_in", ns: false }; });
+    lista.sort((a, b) => String(a.desde).localeCompare(String(b.desde)) || String(a.nombre).localeCompare(String(b.nombre), "es"));
+    return J({ ok: true, rango: true, desde: desdeIn, hasta: hastaR, prop, total: lista.length, llegadas: lista });
+  }
+
   const hoy = hoyMx();
   const ayer = masDias(hoy, -1);
 
