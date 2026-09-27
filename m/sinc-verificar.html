@@ -1,0 +1,183 @@
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sincrético · Verificar boleto</title>
+<style>
+:root{--ground:#F4F1EA;--surface:#FFFFFF;--ink:#1F1B16;--muted:#6B6459;--faint:#A49B8C;
+--rule:#E2DCCF;--accent:#C9501A;--ok:#1D6B4A;--ok-bg:#E1F0E7;--warn:#8C6212;--warn-bg:#F3EAD6;
+--bad:#9E3B2E;--bad-bg:#F4E2DE;--shadow:0 1px 1px rgba(31,27,22,.04),0 10px 26px -20px rgba(31,27,22,.35)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:14px}
+.top{padding:14px 16px 6px;max-width:640px;margin:0 auto}
+.top h1{margin:0;font-size:20px;font-weight:800}
+.top .sub{color:var(--muted);font-size:12.5px;margin-top:3px;line-height:1.5}
+.wrap{max-width:640px;margin:0 auto;padding:14px 16px 90px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);padding:16px 18px;margin-bottom:12px}
+.btn{font:inherit;font-weight:600;border-radius:9px;cursor:pointer;padding:11px 18px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-size:14px}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.sm{padding:7px 12px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:default}
+#lector{width:100%;margin-top:10px;border-radius:12px;overflow:hidden;background:#000;min-height:4px}
+.res{margin-top:14px;border-radius:12px;padding:18px;border:1px solid}
+.res .big{font-size:23px;font-weight:800;line-height:1.15}
+.res .det{font-size:14px;margin-top:8px;line-height:1.5}
+.res .pie{font-size:12.5px;margin-top:8px;opacity:.85}
+.res.ok{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
+.res.warn{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+.res.bad{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
+.res .det,.res .pie{color:var(--ink)}
+.fila{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+label{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em}
+input{flex:1;min-width:150px;padding:11px 12px;border:1px solid var(--rule);border-radius:9px;font:inherit;
+ font-size:19px;letter-spacing:.16em;text-transform:uppercase;font-variant-numeric:tabular-nums;background:var(--surface)}
+.mini{font-size:11.5px;color:var(--muted);line-height:1.45}
+.hist{margin-top:10px;font-size:12.5px}
+.hist div{padding:7px 0;border-top:1px solid var(--rule);display:flex;gap:8px;justify-content:space-between}
+.pill{border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.no{background:var(--bad-bg);color:var(--bad)}
+.pill.rep{background:var(--warn-bg);color:var(--warn)}
+</style>
+<link rel="icon" type="image/png" href="/dash-192.png">
+</head><body>
+
+<div class="top">
+  <h1>Verificar boleto</h1>
+  <div class="sub">Sirve para todo lo que se vende en Sincrético: tours, eventos y funciones. Apunta la
+    cámara al QR del huésped; al leerlo se valida y se marca como usado. Un boleto por persona.</div>
+</div>
+
+<div class="wrap">
+  <div class="card">
+    <div class="fila">
+      <button class="btn" id="bStart">▶ Encender cámara</button>
+      <button class="btn ghost" id="bStop" style="display:none">⏹ Apagar</button>
+      <span class="mini" id="camNota" style="flex:1"></span>
+    </div>
+    <div id="lector"></div>
+    <div id="res"></div>
+  </div>
+
+  <div class="card">
+    <label>Sin cámara: escribe el código</label>
+    <div class="fila">
+      <input id="man" placeholder="ABCD2345" autocapitalize="characters" autocomplete="off" maxlength="12">
+      <button class="btn ghost" id="bMan">Verificar</button>
+    </div>
+    <div class="mini" style="margin-top:7px">Ocho caracteres. No lleva ni O ni I ni ceros ni unos, para que
+      no se confundan al dictarlo por teléfono.</div>
+  </div>
+
+  <div class="card" id="cardHist" style="display:none">
+    <b style="font-size:13.5px">Lo que llevas escaneado</b>
+    <div class="hist" id="hist"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="/cp-acceso.js"></script>
+<script>if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
+<script>
+(function(){
+  var SB='https://rehophywchakfapivsbh.supabase.co';
+  var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  var sb=supabase.createClient(SB,KEY);
+  var $=function(i){return document.getElementById(i);};
+  function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function hhmm(h){return (h||'').slice(0,5);}
+
+  /* La sesión del panel se reusa: quien está en la puerta no vuelve a entrar. */
+  (function(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
+    if(k&&/sb-.*-auth-token/.test(k)){var v=JSON.parse(localStorage.getItem(k)||'null');
+    var s=v&&(v.currentSession||v);
+    if(s&&s.access_token){sb.auth.setSession({access_token:s.access_token,refresh_token:s.refresh_token});break;}}}}catch(_){}})();
+
+  var HIST=[], SCAN=null, ultimo='', ultimoAt=0;
+
+  function pintaHist(){
+    if(!HIST.length)return;
+    $('cardHist').style.display='';
+    $('hist').innerHTML=HIST.slice(0,12).map(function(h){
+      return '<div><span>'+esc(h.codigo)+' · '+esc(h.quien||'—')+'</span>'+
+             '<span class="pill '+h.cls+'">'+esc(h.txt)+'</span></div>';}).join('');
+  }
+
+  function pinta(r){
+    var el=$('res');
+    if(r&&r.ok){
+      el.className='res ok';
+      el.innerHTML='<div class="big">✅ Adelante</div>'+
+        '<div class="det"><b>'+esc(r.titular||'—')+'</b><br>'+esc(r.experiencia||'')+
+        (r.fecha?'<br>'+esc(r.fecha)+' · '+esc(hhmm(r.hora)):'')+'</div>'+
+        '<div class="pie">Persona '+esc(r.numero)+' de '+esc(r.de)+' · '+esc(r.tipo)+
+        ' · folio '+esc(r.folio||'')+'</div>';
+      HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'ok',txt:'entró'});
+    } else if(r&&r.motivo==='ya_usado'){
+      el.className='res warn';
+      el.innerHTML='<div class="big">⚠️ Ya se usó</div>'+
+        '<div class="det"><b>'+esc(r.titular||'—')+'</b><br>'+esc(r.experiencia||'')+'</div>'+
+        '<div class="pie">Se escaneó el '+esc((r.usado_at||'').replace('T',' ').slice(0,16))+
+        (r.usado_por?' · '+esc(r.usado_por):'')+'</div>';
+      HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'rep',txt:'repetido'});
+    } else if(r&&r.motivo==='reserva_cancelada'){
+      el.className='res bad';
+      el.innerHTML='<div class="big">⛔ Reserva cancelada</div>'+
+        '<div class="det"><b>'+esc(r.titular||'—')+'</b><br>'+esc(r.experiencia||'')+'</div>'+
+        '<div class="pie">Este boleto existió, pero la reserva se canceló.</div>';
+      HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'no',txt:'cancelada'});
+    } else {
+      el.className='res bad';
+      el.innerHTML='<div class="big">⛔ No es de aquí</div>'+
+        '<div class="pie">Ese código no existe en Sincrético. Revisa que no sea de otro sitio.</div>';
+      HIST.unshift({codigo:(r&&r.codigo)||'—',quien:'',cls:'no',txt:'no existe'});
+    }
+    pintaHist();
+  }
+
+  async function verifica(codigo){
+    codigo=String(codigo||'').trim().toUpperCase();
+    if(!codigo)return;
+    /* El lector dispara varias veces sobre el mismo QR mientras lo enfoca:
+       sin esto, el segundo disparo diría "ya usado" del boleto que uno mismo
+       acaba de validar medio segundo antes. */
+    var ahora=Date.now();
+    if(codigo===ultimo && ahora-ultimoAt<4000) return;
+    ultimo=codigo; ultimoAt=ahora;
+
+    $('res').className='res'; $('res').style.borderColor='var(--rule)';
+    $('res').innerHTML='<div class="mini">Comprobando…</div>';
+    try{
+      var r=await sb.rpc('sinc_verificar_boleto',{p_codigo:codigo});
+      if(r.error)throw r.error;
+      pinta(r.data);
+    }catch(e){
+      $('res').className='res bad';
+      $('res').innerHTML='<div class="big">No se pudo comprobar</div>'+
+        '<div class="pie">'+esc(e.message||e)+'</div>';
+    }
+  }
+
+  $('bMan').onclick=function(){ var c=$('man').value.trim(); if(c){ verifica(c); $('man').value=''; } };
+  $('man').onkeydown=function(ev){ if(ev.key==='Enter') $('bMan').click(); };
+
+  $('bStart').onclick=async function(){
+    if(typeof Html5Qrcode==='undefined'){
+      $('camNota').textContent='No cargó el lector. Revisa la conexión y recarga.'; return; }
+    try{
+      SCAN=new Html5Qrcode('lector');
+      $('bStart').style.display='none'; $('bStop').style.display='';
+      $('camNota').textContent='Apunta al QR.';
+      await SCAN.start({facingMode:'environment'},{fps:10,qrbox:240},function(txt){ verifica(txt); },function(){});
+    }catch(e){
+      $('camNota').textContent='No se pudo abrir la cámara: '+(e.message||e);
+      $('bStart').style.display=''; $('bStop').style.display='none';
+    }
+  };
+  $('bStop').onclick=async function(){
+    if(SCAN){ try{await SCAN.stop();}catch(_){} try{SCAN.clear();}catch(_){} SCAN=null; }
+    $('bStart').style.display=''; $('bStop').style.display='none'; $('camNota').textContent='';
+  };
+})();
+</script>
+</body></html>
