@@ -35,9 +35,14 @@ window.sincCargando = (function () {
     huesped: [
       [ST+'hola-perrito.png','Hay viajeros de paz y viajeros de guerra. Esto está hecho para los primeros.','Hospitalidad Original'],
       [ST+'maguey.webp','Lo llamaron el árbol de las maravillas: da techo, hilo, aguja, papel y de beber.','El agave']
+    ],
+    huesped_en: [
+      [ST+'hola-perrito.png','There are travellers of peace and travellers of war. This place was built for the first kind.','Original Hospitality'],
+      [ST+'maguey.webp','They called the agave the tree of wonders: a roof, thread, a needle, paper and something to drink.','The agave']
     ]
   };
   SEMILLA.estancia = SEMILLA.huesped;
+  SEMILLA.ficha_en = SEMILLA.ficha;   /* la ficha es pantalla de equipo: va en español */
 
   var cache = null, pidiendo = null;
 
@@ -45,7 +50,7 @@ window.sincCargando = (function () {
     if (cache) return Promise.resolve(cache);
     if (pidiendo) return pidiendo;
     pidiendo = fetch(SB + '/rest/v1/sinc_cargando' +
-        '?select=ambito,sticker,frase,pie,dias,meses&activo=is.true&order=orden',
+        '?select=ambito,sticker,frase,pie,frase_en,pie_en,dias,meses&activo=is.true&order=orden',
         { headers: { apikey: KEY, Authorization: 'Bearer ' + KEY } })
       .then(function (r) { return r.ok ? r.json() : []; })
       .then(function (l) { cache = l || []; return cache; })
@@ -118,39 +123,50 @@ window.sincCargando = (function () {
     return true;
   }
 
-  function arma(filas, set, ventana) {
-    var l = (filas || []).filter(function (f) {
-      if (set === 'ficha') return f.ambito === 'ficha';
-      /* huésped: sus ideas siempre, y lo de la ciudad sólo si encaja con sus días */
-      if (f.ambito === 'huesped') return true;
-      if (f.ambito === 'estancia') return cabe(f, ventana);
-      return false;
-    }).map(function (f) { return [f.sticker, f.frase, f.pie]; });
+  /* Una frase sin traducir NO se enseña en inglés a medias: se deja fuera.
+     Es preferible que el inglés tenga menos frases a que tenga una en español. */
+  function di(f, en) {
+    if (en) return f.frase_en ? [f.sticker, f.frase_en, f.pie_en || ''] : null;
+    return [f.sticker, f.frase, f.pie || ''];
+  }
 
-    if (!l.length) return baraja(SEMILLA[set] || SEMILLA.huesped);
+  function arma(filas, set, ventana, en) {
+    function toma(cond) {
+      var out = [];
+      (filas || []).forEach(function (f) {
+        if (!cond(f)) return;
+        var x = di(f, en); if (x) out.push(x);
+      });
+      return out;
+    }
+
+    if (set === 'ficha') {
+      var lf = toma(function (f) { return f.ambito === 'ficha'; });
+      return lf.length ? baraja(lf) : baraja(SEMILLA.ficha);
+    }
 
     /* Lo accionable primero: si sabemos sus fechas, que lo primero que lea sea
        algo que puede hacer esta semana, no una idea bonita. */
+    var deCasa = toma(function (f) { return f.ambito === 'huesped'; });
     if (ventana) {
-      var deCiudad = [], deCasa = [];
-      (filas || []).forEach(function (f) {
-        if (f.ambito === 'estancia' && cabe(f, ventana)) deCiudad.push([f.sticker, f.frase, f.pie]);
-        else if (f.ambito === 'huesped') deCasa.push([f.sticker, f.frase, f.pie]);
-      });
+      var deCiudad = toma(function (f) { return f.ambito === 'estancia' && cabe(f, ventana); });
       if (deCiudad.length) return baraja(deCiudad).concat(baraja(deCasa));
     }
-    return baraja(l);
+    if (deCasa.length) return baraja(deCasa);
+    return baraja(SEMILLA[en ? 'huesped_en' : 'huesped']);
   }
 
   function monta(el, opts) {
     if (typeof el === 'string') el = document.getElementById(el);
-    if (!el) return { para: function () {}, pie: function () {}, fechas: function () {} };
+    if (!el) return { para: function () {}, pie: function () {}, fechas: function () {}, idioma: function () {} };
     opts = opts || {};
     estilos();
 
     var set = opts.set === 'ficha' ? 'ficha' : 'huesped';
+    /* Si la página no dice el idioma, se mira el del documento. */
+    var en = /^en/i.test(opts.idioma || document.documentElement.lang || 'es');
     var ventana = dias(opts.fechas);
-    var lista = baraja(SEMILLA[set] || SEMILLA.huesped);
+    var lista = baraja(SEMILLA[(en ? set + '_en' : set)] || SEMILLA[set] || SEMILLA.huesped);
     var i = 0, vivo = true;
 
     el.innerHTML =
@@ -179,7 +195,7 @@ window.sincCargando = (function () {
        las imágenes para que el cambio no parpadee. */
     pide().then(function (filas) {
       if (!vivo) return;
-      var nueva = arma(filas, set, ventana);
+      var nueva = arma(filas, set, ventana, en);
       if (!nueva.length) return;
       lista = nueva; i = 0; pon();
       nueva.slice(0, 4).forEach(function (f) { if (f[0]) { var im = new Image(); im.src = f[0]; } });
@@ -203,7 +219,16 @@ window.sincCargando = (function () {
         ventana = dias(f);
         pide().then(function (filas) {
           if (!vivo) return;
-          var nueva = arma(filas, set, ventana);
+          var nueva = arma(filas, set, ventana, en);
+          if (nueva.length) { lista = nueva; i = 0; pon(); }
+        });
+      },
+      /* El huésped cambia de idioma a media pantalla: se repinta, no se recarga. */
+      idioma: function (l) {
+        en = /^en/i.test(l || 'es');
+        pide().then(function (filas) {
+          if (!vivo) return;
+          var nueva = arma(filas, set, ventana, en);
           if (nueva.length) { lista = nueva; i = 0; pon(); }
         });
       }
