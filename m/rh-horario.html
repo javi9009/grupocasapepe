@@ -155,7 +155,7 @@ const DOW=['DOM','LUN','MAR','MIÉ','JUE','VIE','SÁB'];
 let tab=TABS[0], weekStart=mondayOf(new Date()), puestos=[], asigs=[], roster=[], modalCtx=null, asisMap={}, projEmpIds=null;
 let ASIS_OK=false;
 // §perm — Edición de horarios acotada a jefes de área + Director/Socio + admin. El resto entra en solo-lectura.
-let READONLY=false, MYEMAIL='', MYROL='';
+let READONLY=false, MYEMAIL='', MYROL='', SOLO_SINC=false;
 const HOR_ADMIN_EMAILS=['javi@casapepe.mx','contabilidad@casapepe.mx','administracion@casapepe.mx','administracion.puebla@casapepe.mx','hola.puebla@casapepe.mx'];
 const HOR_EDIT_ROLES=['Gerente Operativo','Gerente Administrativo','Jefe de Front','Ama de llaves','Director','Socio','Socio Consejero'];
 
@@ -190,13 +190,33 @@ if(email) break;
 MYEMAIL=email;
 if(!email){ READONLY=false; return; } // no se pudo identificar: no bloquear
 if(HOR_ADMIN_EMAILS.includes(email)){ READONLY=false; return; }
+const pidePerm=async(pag)=>{const r=await sb('/rpc/permiso_efectivo',{method:'POST',body:JSON.stringify({p_email:email,p_pagina:pag})}); return (typeof r==='string')?r:(Array.isArray(r)?(r[0]||''):((r&&r.permiso_efectivo)||''));};
 let nivel='';
-try{const r=await sb('/rpc/permiso_efectivo',{method:'POST',body:JSON.stringify({p_email:email,p_pagina:'PAG-RH-HOR'})}); nivel=(typeof r==='string')?r:(Array.isArray(r)?(r[0]||''):((r&&r.permiso_efectivo)||''));}catch(_){ nivel='editar'; }
+try{ nivel=await pidePerm('PAG-RH-HOR'); }catch(_){ nivel='editar'; }
+// §perm-sinc — Quien no tiene la página general de Horarios puede tener SOLO el tablero
+// de Guías y voluntarios (PAG-RH-HOR-SINC): edita el proyecto 'sincretico' y nada más.
+// Si el selector del panel lo manda a otro proyecto, se le devuelve aquí.
+if(nivel!=='editar'){
+let nsinc='';
+try{ nsinc=await pidePerm('PAG-RH-HOR-SINC'); }catch(_){ nsinc=''; }
+if(nsinc==='editar'||nsinc==='ver'){
+SOLO_SINC=true;
+if(PROJ!=='sincretico'){
+const q=new URLSearchParams(location.search); q.set('proyecto','sincretico'); q.set('tab','sincretico');
+location.replace(location.pathname+'?'+q.toString()); return;
+}
+MYROL=nsinc; READONLY=(nsinc!=='editar'); return;
+}
+}
 MYROL=nivel;
 READONLY = (nivel==='ver'||nivel==='none');
 }catch(e){ READONLY=false; }
 }
 function applyReadonlyChrome(){
+if(SOLO_SINC && !READONLY){
+const hs=$('ro-banner-holder');
+if(hs) hs.innerHTML='<div class="ro-banner">\u{1F5D3} Tablero de <b>Gu\u00edas y voluntarios</b>. Aqu\u00ed editas solo a este equipo; los horarios de las dem\u00e1s \u00e1reas los lleva su jefe.</div>';
+}
 if(!READONLY) return;
 ['copy','newweek','clearweek','import'].forEach(id=>{const b=$(id); if(b)b.style.display='none';});
 const h=$('ro-banner-holder');
@@ -206,7 +226,7 @@ if(h) h.innerHTML='<div class="ro-banner">👁 Solo lectura · no tienes permiso
 function tabFromUrl(){const p=new URLSearchParams(location.search).get('tab');return TABS.find(t=>t.id===p)||TABS[0]}
 
 async function loadRoster(){
-try{roster=await sb('/v_empleados_publico?select=id,empleado_id,nombre,area,puesto&estatus=eq.activo&order=nombre');}catch(e){roster=[]}
+try{roster=await sb('/v_empleados_publico?select=id,empleado_id,nombre,area,puesto,colab_tipo&estatus=eq.activo&order=nombre');}catch(e){roster=[]}
 // Ámbito: solo gente del proyecto seleccionado (con +Cubre se abre el listado general)
 try{
 const up=await sb('/usuario_proyectos?select=employee_id&proyecto=eq.'+PROJ);
@@ -215,7 +235,14 @@ projEmpIds=new Set((up||[]).map(x=>x.employee_id));
 }
 function rosterProj(){
 if(!projEmpIds||!projEmpIds.size)return roster.slice();
-const list=roster.filter(r=>projEmpIds.has(r.id));
+let list=roster.filter(r=>projEmpIds.has(r.id));
+// §vol — Los voluntarios no se dan de alta en usuario_proyectos a propósito (esa tabla
+// mueve ubicaciones y permisos). En el tablero de Guías y voluntarios salen siempre,
+// sin tener que abrir el listado general con +Cubre.
+if(tab && tab.id==='sincretico'){
+const vol=roster.filter(r=>r.colab_tipo==='voluntario'&&!projEmpIds.has(r.id));
+if(vol.length) list=list.concat(vol).sort((x,y)=>String(x.nombre||'').localeCompare(String(y.nombre||''),'es'));
+}
 return list.length?list:roster.slice();
 }
 
