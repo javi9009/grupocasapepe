@@ -225,6 +225,20 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div class="fld"><label>¿Quién factura al huésped?</label><select data-c="quien_factura"><option value="operador">El operador</option><option value="casa_pepe">Casa Pepe</option></select></div>
         </div>
       </div>
+
+      <!-- Cobro dividido: sólo nuestra comisión por Stripe, el resto al llegar -->
+      <div class="card" style="border-color:var(--accent)">
+        <h3>Cobro dividido (sólo nuestra comisión por Stripe)</h3>
+        <div class="hint">Para proveedores que <b>no cobran por su Stripe</b>. El huésped ve el
+          <b>PVP completo</b> al elegir, y al pagar cobramos por Stripe <b>sólo la comisión de Casa Pepe</b>;
+          el resto lo liquida <b>al llegar al tour</b>, directo con el operador. Lo enciende Joseph por operador.</div>
+        <label class="chk" style="font-size:14px"><input type="checkbox" data-c="cobro_comision_anticipada">
+          <b>Cobrar sólo la comisión por Stripe y liquidar el resto al llegar</b></label>
+        <div id="cobroPrev" style="margin-top:12px"></div>
+        <div class="aviso" style="margin-top:10px">Con esto <b>no</b> hace falta que el operador tenga su Stripe:
+          el cobro de la comisión cae en el Stripe de Casa Pepe. Si el operador sí cobra el 100% por su Stripe,
+          deja esta casilla apagada.</div>
+      </div>
     </section>
 
     <section class="panel" data-s="5">
@@ -258,6 +272,20 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div><span>Total que retenemos</span><input type="number" data-c="comision_pct" readonly tabindex="-1" style="width:70px;text-align:right;background:var(--surface-3);border-style:dashed"></div>
         </div>
         <div class="mini" style="margin:8px 0 14px">Si se acuerda algo distinto para sus tours, se le propone por escrito y queda anotado aquí antes de publicar.</div>
+
+        <!-- Reparto automático: de un precio de ejemplo y lo que se queda el operador,
+             saca el 5% hotel / 10% colaborador / resto Casa Pepe. Si Casa Pepe no da
+             para más del 10%, recorta a los tres en proporción 5/10/10. -->
+        <div class="card" style="background:var(--surface-3);padding:14px;border-radius:12px;margin-bottom:6px">
+          <b style="font-size:13px">Calcular el reparto desde un precio</b>
+          <div class="mini" style="margin:4px 0 10px">Sólo tú o Joseph mueven esto: el operador nunca ve estas casillas.</div>
+          <div class="fgrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+            <div class="fld"><label>PVP de ejemplo</label><input type="number" min="0" step="1" id="calcPvp" placeholder="1000"></div>
+            <div class="fld"><label>Se queda el operador</label><input type="number" min="0" step="1" id="calcOp" placeholder="600"></div>
+          </div>
+          <div class="ft" style="justify-content:flex-start;margin-top:8px"><button type="button" class="btn ghost sm" id="calcBtn">Calcular y llenar el reparto ↑</button></div>
+          <div id="calcOut" class="mini" style="margin-top:8px"></div>
+        </div>
         <!-- El contrato se genera y se firma en línea: la plantilla sale de
              op_contrato_plantilla, el cuerpo se congela al firmar y queda el
              acuse con fecha, IP y navegador. Los tres campos de abajo son el
@@ -414,6 +442,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     });
     suma();
     pintaCobro();
+    pintaCobroDiv();
     cargaImpacto(id);xtCarga(id);ceCarga(id);
     await cargaContrato(id); pintaContrato();
     var r1=await fetch(SB+'/rest/v1/tour_operador_usuarios?select=*&operador_id=eq.'+id+'&order=rol',{headers:hdr()});
@@ -443,6 +472,70 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     $('cTot').textContent=String(Math.round(t*100)/100);
   }
   Array.prototype.forEach.call(document.querySelectorAll('[data-c^="com_"]'),function(el){el.oninput=suma;});
+
+  /* ---------- reparto automático 5/10/10 ----------
+     De un PVP de ejemplo y lo que se queda el operador, saca cuánto retiene Casa
+     Pepe y lo parte: hotel 5% del PVP, colaborador 10% del PVP, resto Casa Pepe.
+     Si la comisión no llega al 25% del PVP (Casa Pepe no daría ni un 10% propio),
+     recorta a los tres en proporción 5:10:10 para que el colaborador no pase del
+     10% ni el hotel del 5%, y Casa Pepe quede recortado igual que el resto. */
+  function reparto(pvp, comision){
+    pvp=Number(pvp)||0; comision=Number(comision)||0;
+    if(pvp<=0||comision<=0) return null;
+    if(comision>pvp) return {error:'la comisión no puede pasar del PVP'};
+    var r3=function(x){return Math.round(x*1000)/1000;};
+    var hotel, vend, plat;
+    if(comision >= 0.25*pvp){                 // normal: hay para el 10% propio de Casa Pepe
+      hotel = 5; vend = 10;
+      plat  = r3(comision/pvp*100 - 15);
+    }else{                                    // recorte proporcional 5:10:10
+      var esc = comision/(0.25*pvp);
+      hotel = r3(5*esc); vend = r3(10*esc); plat = r3(10*esc);
+    }
+    return {hotel:hotel, vend:vend, plat:plat, comPct:r3(comision/pvp*100),
+            comMxn:Math.round(comision), opMxn:Math.round(pvp-comision), pvp:Math.round(pvp)};
+  }
+  (function(){
+    var b=$('calcBtn'); if(!b) return;
+    b.onclick=function(){
+      var pvp=Number($('calcPvp').value)||0, op=Number($('calcOp').value)||0;
+      var out=$('calcOut');
+      if(pvp<=0){ out.innerHTML='<span style="color:var(--bad)">Pon el PVP de ejemplo.</span>'; return; }
+      if(op<0||op>pvp){ out.innerHTML='<span style="color:var(--bad)">Lo del operador no puede pasar del PVP.</span>'; return; }
+      var r=reparto(pvp, pvp-op);
+      if(!r){ out.innerHTML='<span style="color:var(--bad)">Revisa los números.</span>'; return; }
+      var setv=function(c,v){ var el=document.querySelector('[data-c="'+c+'"]'); if(el){ el.value=v; } };
+      setv('com_hotel_pct', r.hotel); setv('com_vendedor_pct', r.vend); setv('com_plataforma_pct', r.plat);
+      suma();
+      out.innerHTML='Sobre $'+pvp.toLocaleString('es-MX')+': operador <b>$'+r.opMxn.toLocaleString('es-MX')+
+        '</b> · Casa Pepe <b>$'+r.comMxn.toLocaleString('es-MX')+'</b> ('+r.comPct+'%). '+
+        'Reparto → hotel '+r.hotel+'% · colaborador '+r.vend+'% · Casa Pepe '+r.plat+'%. '+
+        '<span style="color:var(--accent)">Casillas llenadas ↑ — dale a Guardar.</span>';
+    };
+  })();
+
+  /* ---------- cobro dividido: sólo la comisión por Stripe ---------- */
+  function pintaCobroDiv(){
+    var e=$('cobroPrev'); if(!e) return;
+    var chk=document.querySelector('[data-c="cobro_comision_anticipada"]');
+    var on = chk && chk.checked;
+    if(!on){ e.innerHTML='<span class="mini">Apagado: el huésped paga el 100% del PVP (por el Stripe del operador).</span>'; return; }
+    var pct = (cur && cur.comision_pct!=null) ? Number(cur.comision_pct)
+              : (n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct'));
+    var pvp = Number(($('calcPvp')&&$('calcPvp').value)) || 1000;
+    var x = Math.round(pvp*pct/100), y = pvp - x;
+    e.innerHTML='<div class="desglose"><div><span>El huésped ve (PVP)</span><b>$'+pvp.toLocaleString('es-MX')+'</b></div>'+
+      '<div><span>Ahora paga por Stripe (nuestra comisión '+(Math.round(pct*100)/100)+'%)</span><b>$'+x.toLocaleString('es-MX')+'</b></div>'+
+      '<div><span>Al llegar al tour liquida al operador</span><b>$'+y.toLocaleString('es-MX')+'</b></div></div>'+
+      '<div class="mini" style="margin-top:6px">Al huésped se le dirá: «Ahora pagas $'+x.toLocaleString('es-MX')+
+      ' y al llegar al tour liquidas los $'+y.toLocaleString('es-MX')+' restantes.» '+
+      '(ejemplo con PVP $'+pvp.toLocaleString('es-MX')+'; usa el PVP de arriba para probar otro).</div>';
+  }
+  (function(){
+    var chk=document.querySelector('[data-c="cobro_comision_anticipada"]');
+    if(chk) chk.addEventListener('change', pintaCobroDiv);
+    var cp=$('calcPvp'); if(cp) cp.addEventListener('input', pintaCobroDiv);
+  })();
 
   /* Una sola forma de cobro: 100% al reservar, directo a su Stripe. El estado se
      deriva de si hay cuenta conectada — no hay forma de marcar "vinculado" a
