@@ -97,7 +97,9 @@ img{max-width:100%}
 .ov{position:fixed;inset:0;background:var(--tinta);display:none;flex-direction:column;z-index:70}
 .ov.on{display:flex}
 .ovbar{background:var(--tinta);color:#fff;display:flex;align-items:center;gap:10px;padding:9px 14px}
-.ovbar button{background:#fff;color:var(--tinta);border:0;border-radius:11px;font-family:'Oswald',sans-serif;font-weight:600;text-transform:uppercase;letter-spacing:.04em;font-size:12px;padding:10px 15px;cursor:pointer}
+.ovbar button{background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:50%;
+  font:inherit;font-size:16px;line-height:1;width:34px;height:34px;cursor:pointer;flex:0 0 auto}
+.ovbar button:hover{background:rgba(255,255,255,.28)}
 .ovbar .nm{font-family:'Oswald',sans-serif;text-transform:uppercase;font-size:14px}
 .ov iframe{flex:1;border:0;width:100%;background:var(--papel)}
 .foot{text-align:center;color:var(--tenue);font-size:12px;margin-top:22px}
@@ -127,6 +129,10 @@ img{max-width:100%}
   <div class="fechas">
     <button class="fbtn" id="btnFechas" type="button">📅 Buscar en otras fechas</button>
     <button class="fbtn hoy" id="btnHoy" type="button" style="display:none">← Volver a hoy</button>
+    <!-- Lo que pidieron los chicos: después de registrar a alguien, poder volver
+         a sacarle su QR para que siga en su celular. Si son dos, lo escanean los
+         dos: el QR no se gasta. Javi, 28-sep. -->
+    <button class="fbtn" id="btnHechos" type="button">✓ Check-ins de hoy</button>
   </div>
   <div class="fpanel" id="fpanel">
     <div class="frow">
@@ -155,10 +161,10 @@ img{max-width:100%}
       <div class="m" id="sMeta">—</div>
     </div>
     <div class="qrbox">
-      <img id="qr" alt="Código de check-in">
-      <div class="qrcap">Escanea con la cámara de tu celular<br>y haz tu check-in en 2 minutos</div>
+      <img id="qr" alt="Código">
+      <div class="qrcap" id="qrcap">Escanea con la cámara de tu celular<br>y haz tu check-in en 2 minutos</div>
     </div>
-    <div class="o">o si prefieres</div>
+    <div class="o" id="sOtra">o si prefieres</div>
     <button class="btn" id="btnTablet">📝 Hacer el check-in en esta tablet</button>
     <button class="btn sec" id="btnCopiar">🔗 Copiar el link para enviarlo</button>
     <div class="avsheet" id="avSheet"></div>
@@ -167,7 +173,11 @@ img{max-width:100%}
 
 <!-- overlay wizard -->
 <div class="ov" id="ov">
-  <div class="ovbar"><button id="ovBack">← Volver</button><span class="nm" id="ovNom"></span></div>
+  <!-- Aquí ya no dice «Volver»: para volver está la flecha de la propia app, al
+       lado de cada título. Esto es otra cosa —cerrar la ventana y soltar al
+       huésped—, así que es una ✕ a la derecha y el nombre manda. Javi, 28-sep. -->
+  <div class="ovbar"><span class="nm" id="ovNom"></span><span style="flex:1"></span>
+    <button id="ovBack" title="Cerrar" aria-label="Cerrar">✕</button></div>
   <iframe id="ovFrame" title="Check-in"></iframe>
 </div>
 
@@ -204,7 +214,15 @@ img{max-width:100%}
       .then(function(r){ authFail=(r.status===401); return r.json(); }).then(function(d){
         if(!d||!d.ok){
           if(authFail || (d&&/recepci|llave|sesi/i.test(d.error||''))){
-            $('saludoSub').innerHTML='🔒 Esta tablet necesita su <b>llave de acceso</b>. Ábrela con el link que te compartió Javi (el que termina en <b>?k=…</b>); queda guardada en este dispositivo y ya no la pide más.';
+            /* Zuzu se quedó sin poder registrar a nadie porque la tablet perdió
+               la llave y el mensaje sólo ofrecía una salida que depende de Javi.
+               Hay una segunda, que ella misma puede hacer. Javi, 28-sep. */
+            $('saludoSub').innerHTML='🔒 Esta tablet necesita su <b>llave de acceso</b>.<br><br>'+
+              'Ábrela con el link que te compartió Javi (el que termina en <b>?k=…</b>): queda guardada '+
+              'en este dispositivo y ya no la pide más.<br><br>'+
+              '<b>O, si tienes cuenta de Casa Pepe:</b> entra en '+
+              '<a href="/" target="_blank" rel="noopener" style="color:var(--naranja,#E1622F);font-weight:700">grupocasapepe.netlify.app</a> '+
+              'con tu correo en este mismo navegador y vuelve a esta pantalla. Con tu sesión también abre.';
           } else { $('saludoSub').textContent='No pudimos cargar las llegadas. Intenta de nuevo.'; }
           return;
         }
@@ -251,8 +269,67 @@ img{max-width:100%}
 
   function pintarQR(link){ try{ var qr=qrcode(0,'M'); qr.addData(link); qr.make(); $('qr').src=qr.createDataURL(6,2); $('qr').style.display=''; }catch(e){ $('qr').style.display='none'; } }
 
+  /* Los que ya se registraron hoy. Mismo listado, otro filtro: no hace falta
+     pedirle nada más al servidor porque `checked_in` ya viene en cada llegada. */
+  var SOLOHECHOS=false;
+  function pintarHechos(){
+    var box=$('lista');
+    var arr=DATOS.filter(function(g){ return g.checked_in && !g.ns; });
+    $('saludo').style.display='none';
+    if(!arr.length){ box.innerHTML='<div class="vacio">Todavía no se ha registrado nadie hoy.</div>'; return; }
+    box.innerHTML='<div class="vacio" style="padding:10px 4px;text-align:left">Tócalo y le sale su código: '+
+      'que lo escanee con su celular para seguir desde ahí. Si son dos, lo escanean los dos.</div>'+
+      arr.map(function(g){
+        var hab=g.habitacion?('<span>'+esc(g.habitacion)+'</span>'):'';
+        return '<button class="g done" data-app="'+esc(g.reservation_id)+'">'+
+          '<span class="ini">'+esc(iniciales(g.nombre))+'</span>'+
+          '<span><span class="gnom">'+esc(g.nombre||'Huésped')+'</span>'+
+          '<span class="gsub"><span class="chip ya">✓ Ya se registró</span>'+hab+'</span></span>'+
+          '<span class="flecha">›</span></button>';
+      }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('[data-app]'),function(b){
+      b.onclick=function(){ abrirApp(b.getAttribute('data-app')); };
+    });
+  }
+
+  /* El QR de su app, no el del check-in: ése ya lo hizo. */
+  function abrirApp(rid){
+    CUR=null; $('avSheet').textContent=''; $('sheet').className='sheet on';
+    var g=DATOS.filter(function(x){return String(x.reservation_id)===String(rid);})[0]||{};
+    $('sNom').textContent=g.nombre||'Huésped';
+    $('sMeta').textContent='Su check-in ya está hecho.';
+    $('qrcap').innerHTML='Que lo escanee con su celular<br>y sigue desde ahí: su cuarto, el mapa y sus experiencias';
+    $('qr').style.display='none';
+    $('btnTablet').style.display='none'; $('sOtra').style.display='none';
+    $('btnCopiar').textContent='🔗 Copiar el link de su app';
+    function pinta(d){
+      var tok=''; try{ tok=new URL(d.link, location.origin).searchParams.get('resv')||''; }catch(_){}
+      var liga=location.origin+'/apepe/'+(tok?('?resv='+encodeURIComponent(tok)):'');
+      CUR={link:liga, app:true};
+      $('sMeta').textContent=[g.habitacion,'Su check-in ya está hecho.'].filter(Boolean).join(' · ');
+      pintarQR(liga);
+    }
+    if(tokCache[rid]){ pinta(tokCache[rid]); return; }
+    fetch(SB+'/functions/v1/apepe-checkin-token',{method:'POST',headers:cab(),body:JSON.stringify({reservation_id:rid,prop:PROP})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok){ $('sMeta').textContent=(d&&d.error)||'No pudimos sacar su código.'; return; }
+        tokCache[rid]=d; pinta(d);
+      }).catch(function(){ $('sMeta').textContent='Error de conexión.'; });
+  }
+
+  $('btnHechos').onclick=function(){
+    SOLOHECHOS=!SOLOHECHOS;
+    this.classList.toggle('hoy', SOLOHECHOS);
+    this.textContent = SOLOHECHOS ? '← Volver a buscar' : '✓ Check-ins de hoy';
+    $('q').value='';
+    if(SOLOHECHOS) pintarHechos(); else { $('lista').innerHTML=''; $('saludo').style.display='block'; }
+  };
+
   function abrir(rid){
     CUR=null; $('avSheet').textContent=''; $('sheet').className='sheet on';
+    $('btnTablet').style.display=''; $('sOtra').style.display='';
+    $('btnCopiar').textContent='🔗 Copiar el link para enviarlo';
+    $('qrcap').innerHTML='Escanea con la cámara de tu celular<br>y haz tu check-in en 2 minutos';
     var g=DATOS.filter(function(x){return String(x.reservation_id)===String(rid);})[0]||{};
     $('sNom').textContent=g.nombre||'Huésped';
     $('sMeta').textContent='Preparando tu check-in…';
@@ -271,8 +348,23 @@ img{max-width:100%}
   $('sclose').onclick=function(){ $('sheet').className='sheet'; };
   $('sheet').addEventListener('click',function(e){ if(e.target===$('sheet')) $('sheet').className='sheet'; });
   $('btnCopiar').onclick=function(){ if(!CUR) return; try{ navigator.clipboard.writeText(CUR.link); $('avSheet').textContent='Link copiado ✓'; }catch(e){ prompt('Copia el link:', CUR.link); } };
-  $('btnTablet').onclick=function(){ if(!CUR) return; $('ovNom').textContent=CUR.nombre||''; $('ovFrame').src=CUR.link; $('ov').className='ov on'; };
-  $('ovBack').onclick=function(){ $('ov').className='ov'; $('ovFrame').src='about:blank'; $('sheet').className='sheet'; cargar(); };
+  $('btnTablet').onclick=function(){ if(!CUR) return; $('ovNom').textContent=CUR.nombre||'';
+    /* `front=1` para que al terminar no se meta en la app del huésped: le saca
+       su QR y ofrece empezar con el siguiente. */
+    var u=CUR.link+(CUR.link.indexOf('?')>=0?'&':'?')+'front=1';
+    $('ovFrame').src=u; $('ov').className='ov on'; };
+  function cierraOv(){ $('ov').className='ov'; $('ovFrame').src='about:blank'; $('sheet').className='sheet';
+    /* Volver deja la pantalla lista para el siguiente, que es lo que pidió Zuzu. */
+    SOLOHECHOS=false; $('btnHechos').classList.remove('hoy'); $('btnHechos').textContent='✓ Check-ins de hoy';
+    cargar(); }
+  $('ovBack').onclick=cierraOv;
+  /* Las pantallas de dentro avisan cuando terminan —el upgrade al confirmarse—
+     para que Liz no tenga que cerrar a mano lo que ya acabó. Javi, 28-sep. */
+  window.addEventListener('message',function(ev){
+    if(ev.origin!==location.origin) return;
+    var d=ev.data||{};
+    if(d && d.tipo==='apepe-cerrar') cierraOv();
+  });
 
   cargar();
 })();
