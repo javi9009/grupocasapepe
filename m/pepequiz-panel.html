@@ -140,6 +140,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <button type="button" data-t="inc" class="on">Incidencias <span class="pill cero" id="pill-inc">0</span></button>
   <button type="button" data-t="banco">Banco</button>
   <button type="button" data-t="premios">Premios</button>
+  <button type="button" data-t="dia">Premio del día</button>
   <button type="button" data-t="pesos">Pepepesos</button>
 </div></nav>
 
@@ -1368,9 +1369,105 @@ function formAjuste(cont){
 }
 
 /* ============================================================
+   PREMIO DEL DÍA · el del huésped (APePe), no el de la semana
+   ------------------------------------------------------------
+   El de la semana premia al colaborador; este premia al huésped que más
+   puntos haga en UN día, y la carta le cae sola en su billetera de Vnums a
+   medianoche. Cada día de la semana tiene su premio y se cambia aquí: si
+   viviera escrito dentro del HTML del quiz habría que desplegar para mover
+   una margarita de día.
+   ============================================================ */
+var DIAS_NOM = { 1:"Lunes", 2:"Martes", 3:"Miércoles", 4:"Jueves", 5:"Viernes", 6:"Sábado", 0:"Domingo" };
+
+function pintaPremioDia(){
+  var v = document.getElementById("vista");
+  v.innerHTML = '<div class="cargando">Cargando el calendario…</div>';
+  rpc("pq_premio_calendario", {}).then(function(c){
+    dibujaPremioDia(c || {});
+  }).catch(function(e){
+    v.innerHTML = '<div class="card"><div class="vacio">No se pudo cargar el calendario.</div></div>';
+    fallo("cargar el calendario de premios", e);
+  });
+}
+
+function dibujaPremioDia(c){
+  var v = document.getElementById("vista");
+  v.innerHTML = "";
+  var puede = c.puede === true;
+  var cartas = c.cartas || [], dias = c.dias || [], gan = c.ganadores || [];
+
+  if(!puede){
+    v.appendChild(nodo('<div class="aviso-linea"><b>Sin permiso.</b> ' +
+      'Puedes ver el calendario, no cambiarlo (PAG-EXP-QUIZ).</div>'));
+  }
+
+  var hoyDow = new Date(String(c.hoy) + "T12:00:00").getDay();
+
+  var caja = nodo('<div class="card"></div>');
+  caja.innerHTML =
+    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">' +
+      'El premio de cada día · se lo lleva quien más puntos haga ese día</div>' +
+    '<div class="small muted" style="margin-top:4px">La carta entra sola en su billetera de Vnums ' +
+      'poco después de medianoche, hora de Ciudad de México. Se cierra por sede: uno en CDMX y otro en Puebla.</div>' +
+    '<hr class="sep"><div id="pd-lista"></div>';
+  v.appendChild(caja);
+
+  var lista = caja.querySelector("#pd-lista");
+  dias.forEach(function(d){
+    var fila = nodo('<div class="row" style="align-items:flex-end;flex-wrap:wrap;gap:10px;padding:10px 0;border-bottom:1px solid var(--linea)"></div>');
+    var opts = cartas.map(function(x){
+      return '<option value="' + esc(x.slug) + '"' + (x.slug === d.slug ? " selected" : "") + ">" + esc(x.nombre) + "</option>";
+    }).join("");
+    fila.innerHTML =
+      '<div style="width:104px"><div style="font-weight:800' + (d.dow === hoyDow ? ";color:var(--oro,#C9501A)" : "") + '">' +
+        esc(DIAS_NOM[d.dow]) + (d.dow === hoyDow ? " · hoy" : "") + "</div></div>" +
+      '<div style="width:58px"><label class="f">Emoji</label><input id="pd-e-' + d.dow + '" maxlength="4" value="' + esc(d.emoji || "") + '"></div>' +
+      '<div style="min-width:220px;flex:1"><label class="f">Carta de Vnums</label><select id="pd-s-' + d.dow + '">' + opts + "</select></div>" +
+      '<div style="min-width:200px;flex:1"><label class="f">Título</label><input id="pd-t-' + d.dow + '" value="' + esc(d.titulo || "") + '"></div>' +
+      '<div style="min-width:240px;flex:2"><label class="f">Letra chica</label><input id="pd-d-' + d.dow + '" value="' + esc(d.detalle || "") + '"></div>' +
+      '<div><button class="btn oro" id="pd-g-' + d.dow + '">Guardar</button></div>';
+    lista.appendChild(fila);
+
+    var b = fila.querySelector("#pd-g-" + d.dow);
+    b.disabled = !puede;
+    b.onclick = function(){
+      b.disabled = true;
+      rpc("pq_premio_dia_guardar", {
+        p_dow: d.dow,
+        p_slug: fila.querySelector("#pd-s-" + d.dow).value,
+        p_titulo: fila.querySelector("#pd-t-" + d.dow).value,
+        p_detalle: fila.querySelector("#pd-d-" + d.dow).value,
+        p_emoji: fila.querySelector("#pd-e-" + d.dow).value,
+        p_activo: true
+      }).then(function(r){
+        b.disabled = false;
+        if(r && r.ok === false){ fallo("guardar el premio", new Error(r.motivo || "")); return; }
+        ok("Premio de " + DIAS_NOM[d.dow] + " guardado");
+      }).catch(function(e){ b.disabled = false; fallo("guardar el premio", e); });
+    };
+  });
+
+  /* --- quién se lo llevó --- */
+  var h = nodo('<div class="card"></div>');
+  h.innerHTML =
+    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Últimos ganadores</div>' +
+    (gan.length
+      ? '<div style="margin-top:8px">' + gan.map(function(g){
+          return '<div class="row" style="justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--linea)">' +
+            "<span>" + esc(fechaCorta(g.fecha)) + ' · <span class="muted">' + esc(g.sede) + "</span></span>" +
+            '<span class="grow" style="font-weight:700">' + esc(g.nombre || "—") + "</span>" +
+            "<span>" + (g.pts == null ? "" : g.pts + " pts") +
+            (g.nota ? ' · <span class="muted">' + esc(g.nota) + "</span>" : "") + "</span></div>";
+        }).join("") + "</div>"
+      : '<div class="vacio" style="margin-top:8px">Todavía no se ha cerrado ningún día.</div>');
+  v.appendChild(h);
+}
+
+/* ============================================================
    ARRANQUE Y PESTAÑAS
    ============================================================ */
-var PINTORES = { inc: pintaIncidencias, banco: pintaBanco, premios: pintaPremios, pesos: pintaPepepesos };
+var PINTORES = { inc: pintaIncidencias, banco: pintaBanco, premios: pintaPremios,
+                 dia: pintaPremioDia, pesos: pintaPepepesos };
 var TAB = "inc";
 
 function irA(t){
