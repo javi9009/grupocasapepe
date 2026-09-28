@@ -271,6 +271,14 @@ const SBU='https://rehophywchakfapivsbh.supabase.co';
 const SBK='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 let UMBRAL=20;   // lo confirma el servidor (vol_umbral) en la primera pregunta
 let TOK='';
+/* Liga personal por token (?vol=...): identifica al voluntario por su solicitud,
+   sin contraseña. Se guarda para que al volver sin el parámetro siga entrando. */
+let VOLTOK='';
+try{
+  const u=new URLSearchParams(location.search).get('vol');
+  if(u){ VOLTOK=u; try{localStorage.setItem('cp_vol_token',u)}catch(e){} }
+  else { VOLTOK=localStorage.getItem('cp_vol_token')||''; }
+}catch(e){ VOLTOK=''; }
 
 /* ---------- idioma ---------- */
 let LANG='en';
@@ -309,9 +317,10 @@ const T={
       cartaOkTit:'✓ Check-in confirmed',
       cartaOkTxt:(d,h)=>'Your stay is booked from <b>'+d+'</b> to <b>'+h+'</b>. See you at Casa Pepe!',
       cartaErr:'We could not save it. Check your connection and press the button again — if it keeps failing, tell us and we will sort it out.',
-      logTit:'Sign in', logLead:'Enter with the email and password from your sign-up to keep going.',
-      logEmail:'Email', logPass:'Password', logBtn:'Sign in', logWait:'Signing in…',
-      logErr:'We could not sign you in. Check your email and password.',
+      altaTit:'Sign up to start', altaLead:'Just your name, WhatsApp, email and Instagram — no password. We use it to save your progress and get back to you.',
+      altaNom:'Name', altaCel:'WhatsApp', altaMail:'Email', altaIg:'Instagram', altaNac:'Where are you from?',
+      altaBtn:'Start', altaWait:'Setting up…', altaErr:'We could not set you up. Add at least your name and email.',
+      hola:n=>'Hi '+n+' 👋',
       entra:''},
   es:{cargando:'Cargando…', pregunta:'Pregunta', hecho:'Listo',
       finTxt:'Ya contestaste todas las preguntas que tenemos para los tours que te faltan.',
@@ -341,9 +350,10 @@ const T={
       cartaOkTit:'✓ Check-in confirmado',
       cartaOkTxt:(d,h)=>'Tu estancia queda del <b>'+d+'</b> al <b>'+h+'</b>. ¡Nos vemos en Casa Pepe!',
       cartaErr:'No pudimos guardarlo. Revisa tu conexión y vuelve a darle al botón — si sigue fallando, avísanos y lo resolvemos.',
-      logTit:'Inicia sesión', logLead:'Entra con el correo y la contraseña de tu alta para continuar.',
-      logEmail:'Correo', logPass:'Contraseña', logBtn:'Entrar', logWait:'Entrando…',
-      logErr:'No pudimos iniciar tu sesión. Revisa tu correo y contraseña.',
+      altaTit:'Date de alta para empezar', altaLead:'Solo tu nombre, WhatsApp, correo e Instagram — sin contraseña. Nos sirve para guardar tu avance y para volver a contactarte.',
+      altaNom:'Nombre', altaCel:'WhatsApp', altaMail:'Correo', altaIg:'Instagram', altaNac:'¿De dónde eres?',
+      altaBtn:'Empezar', altaWait:'Creando…', altaErr:'No pudimos darte de alta. Pon al menos tu nombre y correo.',
+      hola:n=>'Hola '+n+' 👋',
       entra:''}
 };
 const tx=k=>T[LANG][k];
@@ -369,7 +379,7 @@ function setLang(l){
   if(l===LANG) return;
   LANG=l; try{localStorage.setItem('cp_vol_lang',l)}catch(e){}
   aplicaIdioma();
-  if(!TOK){ if(typeof pintaLogin==='function') pintaLogin(); return; }
+  if(!VOLTOK && !TOK){ if(typeof pintaAlta==='function') pintaAlta(); return; }
   if(typeof pintaProgreso==='function') pintaProgreso();
   const qp=document.getElementById('p-quiz');
   if(qp&&qp.classList.contains('on')) siguiente();
@@ -403,6 +413,11 @@ async function rest(path,opt){
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
+/* rq: en modo token llama la variante _tok inyectando p_token; si no, la RPC normal. */
+async function rq(fn,body){
+  if(VOLTOK) return rpc(fn+'_tok', Object.assign({p_token:VOLTOK}, body||{}));
+  return rpc(fn, body||{});
+}
 
 // tabs
 function vePestana(p){
@@ -420,7 +435,7 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>vePestana(b.dataset.p
 // carta compromiso: si fue aceptado, la lee y la acepta aqui — eso es su check-in
 async function pintaCarta(){
   const box=document.getElementById('carta-box'); if(!box) return;
-  let c=null; try{ c=await rpc('vol_carta_mia'); }catch(e){ return; }
+  let c=null; try{ c=await rq('vol_carta_mia'); }catch(e){ return; }
   if(!c||!c.id){ box.innerHTML=''; return; }
   if(c.estatus==='aceptada'){
     box.innerHTML='<div class="card" style="border:2px solid #6f9a63"><h2>'+tx('cartaOkTit')+'</h2>'+
@@ -454,7 +469,7 @@ async function aceptaCarta(id){
   if(si){ si.disabled=true; }
   if(m){ m.textContent=tx('cartaWait'); }
   let r=null;
-  try{ r=await rpc('vol_carta_aceptar',{p_id:id,p_device:(navigator.userAgent||'').slice(0,170)}); }
+  try{ r=await rq('vol_carta_aceptar',{p_id:id,p_device:(navigator.userAgent||'').slice(0,170)}); }
   catch(e){ r=null; }
   if(r&&r.ok){ pintaCarta(); return; }
   /* Si falla, se dice. Antes fallaba en silencio y el voluntario creía haber firmado. */
@@ -465,7 +480,7 @@ async function aceptaCarta(id){
 async function pintaProgreso(){
   try{ pintaCarta(); }catch(e){}
   try{
-    const [tours,estado]=await Promise.all([rpc('vol_progreso'),rpc('vol_puede_fechas')]);
+    const [tours,estado]=await Promise.all([rq('vol_progreso'),rq('vol_puede_fechas')]);
     const c=document.getElementById('tours'); c.innerHTML='';
     tours.forEach(t=>{
       const pct=Math.min(100,(t.puntos/UMBRAL)*100);
@@ -557,7 +572,7 @@ async function siguiente(){
   document.getElementById('q-text').textContent=tx('cargando');
   document.getElementById('q-opts').innerHTML='';
   try{
-    const q=await rpc('vol_siguiente',{p_idioma:LANG});
+    const q=await rq('vol_siguiente',{p_idioma:LANG});
     if(q.fin && BLOQUE.length){ muestraRepaso(); BLOQUE=[]; return; }
     if(q.fin){
       document.getElementById('q-foco').hidden=true;
@@ -594,7 +609,7 @@ async function responde(i,btn){
   paraReloj();
   document.querySelectorAll('#q-opts .opt').forEach(x=>x.disabled=true);
   try{
-    const r=await rpc('vol_responder',{pregunta:QA.id,elegida:i});
+    const r=await rq('vol_responder',{pregunta:QA.id,elegida:i});
     const opts=document.querySelectorAll('#q-opts .opt');
     opts[r.indice_correcto].classList.add('ok');
     if(!r.correcta) btn.classList.add('bad');
@@ -619,10 +634,13 @@ async function guardaWS(){
   const b=document.getElementById('w-btn'), err=document.getElementById('w-err');
   b.disabled=true; err.textContent='';
   try{
-    await rest('vol_workshop',{method:'POST',body:JSON.stringify({
+    if(VOLTOK){ await rpc('vol_workshop_tok',{p_token:VOLTOK,p_titulo:v('w-titulo'),p_gastro:v('w-gastro'),
+      p_objeto:v('w-objeto'),p_dinamica:v('w-dinamica'),p_teoria:v('w-teoria'),p_protagonista:v('w-prota'),
+      p_duracion_min:+v('w-dur')||null,p_costo_estimado:+v('w-costo')||null}); }
+    else { await rest('vol_workshop',{method:'POST',body:JSON.stringify({
       titulo:v('w-titulo'),gastro:v('w-gastro'),objeto:v('w-objeto'),dinamica:v('w-dinamica'),
       teoria:v('w-teoria'),protagonista:v('w-prota'),
-      duracion_min:+v('w-dur')||null,costo_estimado:+v('w-costo')||null})});
+      duracion_min:+v('w-dur')||null,costo_estimado:+v('w-costo')||null})}); }
     document.getElementById('w-ok').hidden=false; pintaProgreso();
   }catch(e){ err.textContent=tx('noEnvia'); b.disabled=false; }
 }
@@ -630,9 +648,11 @@ async function guardaJG(){
   const b=document.getElementById('j-btn'), err=document.getElementById('j-err');
   b.disabled=true; err.textContent='';
   try{
-    await rest('vol_juego',{method:'POST',body:JSON.stringify({
+    if(VOLTOK){ await rpc('vol_juego_tok',{p_token:VOLTOK,p_nombre:v('j-nombre'),p_como_se_juega:v('j-como'),
+      p_materiales:v('j-mat'),p_duracion_min:+v('j-dur')||null,p_por_que:v('j-por')}); }
+    else { await rest('vol_juego',{method:'POST',body:JSON.stringify({
       nombre:v('j-nombre'),como_se_juega:v('j-como'),materiales:v('j-mat'),
-      duracion_min:+v('j-dur')||null,por_que:v('j-por')})});
+      duracion_min:+v('j-dur')||null,por_que:v('j-por')})}); }
     document.getElementById('j-ok').hidden=false; pintaProgreso();
   }catch(e){ err.textContent=tx('noEnvia'); b.disabled=false; }
 }
@@ -640,66 +660,73 @@ async function guardaFX(){
   const b=document.getElementById('f-btn'), err=document.getElementById('f-err');
   b.disabled=true; err.textContent='';
   try{
-    await rest('vol_fechas',{method:'POST',body:JSON.stringify({
-      desde:v('f-desde'),hasta:v('f-hasta'),propuesta_libre:v('f-nota')})});
+    if(VOLTOK){ await rpc('vol_fechas_tok',{p_token:VOLTOK,p_desde:v('f-desde')||null,
+      p_hasta:v('f-hasta')||null,p_propuesta_libre:v('f-nota')}); }
+    else { await rest('vol_fechas',{method:'POST',body:JSON.stringify({
+      desde:v('f-desde'),hasta:v('f-hasta'),propuesta_libre:v('f-nota')})}); }
     document.getElementById('f-ok').hidden=false;
   }catch(e){ err.textContent=tx('noEnvia'); b.disabled=false; }
 }
 const v=id=>document.getElementById(id).value.trim();
 
-/* ---------- login propio (sin pasar por Soy Pepe) ---------- */
-function pintaLogin(){
-  document.querySelector('.wrap').innerHTML=
-    '<div class="card" style="max-width:420px;margin:0 auto">'
-    +'<h2 id="lg-tit"></h2>'
-    +'<p id="lg-lead" style="color:#555;margin:.2rem 0 1rem"></p>'
-    +'<label id="lg-le" style="display:block;margin-bottom:.7rem;font-weight:600">'
-      +'<span></span>'
-      +'<input id="lg-email" type="email" autocomplete="username" inputmode="email" '
-      +'style="width:100%;box-sizing:border-box;margin-top:.3rem;padding:.7rem;border:1px solid #ccc;border-radius:10px;font-size:1rem"></label>'
-    +'<label id="lg-lp" style="display:block;margin-bottom:1rem;font-weight:600">'
-      +'<span></span>'
-      +'<input id="lg-pass" type="password" autocomplete="current-password" '
-      +'style="width:100%;box-sizing:border-box;margin-top:.3rem;padding:.7rem;border:1px solid #ccc;border-radius:10px;font-size:1rem"></label>'
-    +'<button class="btn" id="lg-btn" style="width:100%"></button>'
-    +'<p class="err" id="lg-err" style="margin-top:.6rem"></p>'
-    +'</div>';
-  const setTxt=(id,k)=>{ const e=document.getElementById(id); if(e) e.textContent=tx(k); };
-  setTxt('lg-tit','logTit'); setTxt('lg-lead','logLead');
-  document.querySelector('#lg-le span').textContent=tx('logEmail');
-  document.querySelector('#lg-lp span').textContent=tx('logPass');
-  setTxt('lg-btn','logBtn');
-  const btn=document.getElementById('lg-btn');
-  btn.onclick=iniciarSesion;
-  document.getElementById('lg-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') iniciarSesion(); });
+/* ---------- alta propia (voluntario nuevo, sin contraseña) ----------
+   Los que llegan desde la página abierta de voluntariado se dan de alta aquí
+   con nombre, WhatsApp, correo e Instagram; el servidor les crea su solicitud
+   y devuelve su token personal, con el que siguen entrando. */
+function inp(id,ph,type){
+  return '<input id="'+id+'" '+(type?('type="'+type+'" '):'')+'placeholder="'+ph+'" '
+    +'style="width:100%;box-sizing:border-box;margin-top:.3rem;padding:.7rem;border:1px solid #ccc;border-radius:10px;font-size:1rem">';
 }
-async function iniciarSesion(){
-  const err=document.getElementById('lg-err'), btn=document.getElementById('lg-btn');
-  const email=v('lg-email'), pass=document.getElementById('lg-pass').value;
+function pintaAlta(){
+  document.querySelector('.wrap').innerHTML=
+    '<div class="card" style="max-width:440px;margin:0 auto">'
+    +'<h2 id="al-tit"></h2>'
+    +'<p id="al-lead" style="color:#555;margin:.2rem 0 1rem"></p>'
+    +'<label style="display:block;margin-bottom:.6rem;font-weight:600"><span id="al-lnom"></span>'+inp('al-nom','')+'</label>'
+    +'<label style="display:block;margin-bottom:.6rem;font-weight:600"><span id="al-lcel"></span>'+inp('al-cel','+52…','tel')+'</label>'
+    +'<label style="display:block;margin-bottom:.6rem;font-weight:600"><span id="al-lmail"></span>'+inp('al-mail','','email')+'</label>'
+    +'<label style="display:block;margin-bottom:.6rem;font-weight:600"><span id="al-lig"></span>'+inp('al-ig','@')+'</label>'
+    +'<label style="display:block;margin-bottom:1rem;font-weight:600"><span id="al-lnac"></span>'+inp('al-nac','')+'</label>'
+    +'<button class="btn" id="al-btn" style="width:100%"></button>'
+    +'<p class="err" id="al-err" style="margin-top:.6rem"></p>'
+    +'</div>';
+  const T2=(id,k)=>{ const e=document.getElementById(id); if(e) e.textContent=tx(k); };
+  T2('al-tit','altaTit'); T2('al-lead','altaLead');
+  T2('al-lnom','altaNom'); T2('al-lcel','altaCel'); T2('al-lmail','altaMail');
+  T2('al-lig','altaIg'); T2('al-lnac','altaNac'); T2('al-btn','altaBtn');
+  document.getElementById('al-btn').onclick=enviarAlta;
+}
+async function enviarAlta(){
+  const err=document.getElementById('al-err'), btn=document.getElementById('al-btn');
+  const nom=v('al-nom'), mail=v('al-mail');
   err.textContent='';
-  if(!email||!pass){ err.textContent=tx('logErr'); return; }
-  btn.disabled=true; btn.textContent=tx('logWait');
+  if(!nom||!mail){ err.textContent=tx('altaErr'); return; }
+  btn.disabled=true; btn.textContent=tx('altaWait');
   try{
-    const r=await fetch(SBU+'/auth/v1/token?grant_type=password',{method:'POST',
-      headers:{'Content-Type':'application/json','apikey':SBK},
-      body:JSON.stringify({email,password:pass})});
-    const s=await r.json();
-    if(!r.ok||!s.access_token) throw new Error('login');
-    try{ localStorage.setItem('sb-rehophywchakfapivsbh-auth-token',JSON.stringify(s)); }catch(e){}
-    location.reload();
+    const r=await rpc('vol_alta_tok',{p_nombre:nom,p_email:mail,
+      p_whatsapp:v('al-cel')||null,p_instagram:v('al-ig')||null,p_nacionalidad:v('al-nac')||null});
+    if(!r||!r.token) throw new Error('alta');
+    try{ localStorage.setItem('cp_vol_token',r.token); }catch(e){}
+    location.replace('/soypepe/quiero-ser-pepe.html?vol='+encodeURIComponent(r.token));
   }catch(e){
-    err.textContent=tx('logErr'); btn.disabled=false; btn.textContent=tx('logBtn');
+    err.textContent=tx('altaErr'); btn.disabled=false; btn.textContent=tx('altaBtn');
   }
 }
 
+async function saludo(){
+  if(!VOLTOK) return;
+  try{
+    const p=await rpc('vol_perfil_tok',{p_token:VOLTOK});
+    if(p&&p.nombre){ const h=document.getElementById('saludo'); if(h) h.textContent=tx('hola')(p.nombre); }
+  }catch(e){}
+}
+
 (function init(){
-  TOK=tok();
   aplicaIdioma();
-  if(!TOK){
-    pintaLogin();
-    return;
-  }
-  pintaProgreso();
+  if(VOLTOK){ pintaProgreso(); saludo(); return; }   // liga personal por token
+  TOK=tok();
+  if(TOK){ pintaProgreso(); return; }                // sesión existente (staff / cuentas viejas)
+  pintaAlta();                                        // voluntario nuevo: se da de alta aquí
 })();
 </script>
 </body>
