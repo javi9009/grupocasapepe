@@ -89,6 +89,29 @@
 .volver{background:none;border:0;color:var(--muted);font:inherit;font-weight:700;font-size:22px;
   line-height:1;cursor:pointer;padding:6px 8px 6px 0;flex:0 0 auto}
 .barra .head{flex:1;min-width:0;text-align:left}
+/* firma */
+.fmb{padding:20px 18px 18px}
+.fmb h3{margin:0 0 3px;font-size:19px}
+.fmsub{margin:0 0 14px;color:var(--muted);font-size:13.5px;line-height:1.5}
+.resum{border:1px solid var(--line,#E2DCCF);border-radius:12px;overflow:hidden;margin-bottom:16px}
+.resum .r{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;font-size:13.5px;border-bottom:1px solid var(--line,#E2DCCF)}
+.resum .r:last-child{border-bottom:0}
+.resum .r span{color:var(--muted);flex:0 0 auto}
+.resum .r b{text-align:right;font-weight:700}
+.resum .r.tot{background:#F7F3EA}
+.resum .r.tot b{font-size:16px}
+.fmlab{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700;margin-bottom:6px}
+#fmfirma{width:100%;height:150px;border:1.5px dashed var(--line,#E2DCCF);border-radius:14px;background:#fff;touch-action:none;display:block}
+/* El verde es para "Acepto y firmo". Si "Ahora no" y "Borrar" van igual de verdes,
+   los tres piden lo mismo y el dedo duda. */
+.fmb .ghost{background:#EFEAE0;color:var(--ink)}
+.btn.sm{padding:6px 12px;font-size:12.5px;margin-top:8px}
+.fmb .acts{display:flex;gap:9px;margin-top:14px}
+.fmb .acts .btn{flex:1;justify-content:center}
+.fmlegal{font-size:11.5px;line-height:1.5;color:var(--muted);margin:12px 0 0}
+.fmmsg{font-size:13px;line-height:1.5;margin-top:10px;display:none}
+.fmmsg.on{display:block}
+.fmmsg.bad{color:#9E3B2E}
 </style><script src="/apepe/resv.js"></script>
 </head>
 <body><div class="wrap">
@@ -115,6 +138,21 @@
   <p id="cmroom"></p>
   <div class="price" id="cmprice"></div>
   <div class="acts"><button class="btn ghost" id="cmno">Ahora no</button><button class="btn" id="cmyes">Confirmar</button></div>
+</div></div></div>
+
+<!-- Tu nueva reserva + firma. La tarjeta que dejaste al reservar es la que paga,
+     así que lo que autoriza el cargo es esta firma y no un pase por recepción. -->
+<div class="ov" id="fm"><div class="sheet"><div class="fmb">
+  <h3>Tu nueva reserva</h3>
+  <p class="fmsub">Revísala y fírmala para aceptarla. En cuanto firmes, la habitación es tuya.</p>
+  <div class="resum" id="fmres"></div>
+  <div class="fmlab">Firma con tu dedo</div>
+  <canvas id="fmfirma"></canvas>
+  <button class="btn ghost sm" id="fmborrar" type="button">Borrar firma</button>
+  <p class="fmlegal">Al firmar acepto el cambio de habitación y autorizo el cargo del extra
+    a la tarjeta que dejé como garantía en mi reserva.</p>
+  <div id="fmmsg" class="fmmsg"></div>
+  <div class="acts"><button class="btn ghost" id="fmno">Ahora no</button><button class="btn" id="fmyes">Acepto y firmo</button></div>
 </div></div></div>
 
 <script>
@@ -220,7 +258,7 @@
   var cm=document.getElementById('cm'), cmPending=null;
   function openConfirm(i, perNight){ var t=(OPS[i]||{}).target||{}; cmPending={i:i, perNight:perNight};
     document.getElementById('cmroom').textContent='Confirmar tu cambio a '+(t.nombre||'tu nueva habitación')+'.';
-    document.getElementById('cmprice').innerHTML='+'+porNoche(perNight)+'<small>Es un extra por noche, además de lo que ya pagaste. Se cobra en recepción al llegar.</small>';
+    document.getElementById('cmprice').innerHTML='+'+porNoche(perNight)+'<small>Es un extra por noche, además de lo que ya pagaste. Se carga a la tarjeta de tu reserva.</small>';
     cm.classList.add('on');
   }
   document.getElementById('cmno').onclick=function(){ cm.classList.remove('on'); cmPending=null; };
@@ -228,18 +266,78 @@
   document.getElementById('cmyes').onclick=function(){ if(!cmPending) return; var i=cmPending.i, op=OPS[i]; var yes=document.getElementById('cmyes'); yes.disabled=true; yes.textContent='…';
     var body=base({accion:'confirmar',target_id:op.target.id}); if(op.tipo!=='fijo') body.bid=cmPending.perNight;
     api(body).then(function(r){ yes.disabled=false; yes.textContent='Confirmar'; cm.classList.remove('on');
-      if(r&&r.ok&&r.decision==='confirmado'){
-        /* El cambio de cuarto lo hace recepción cuando cobra: aquí se cierra el
-           trato, no se toca el PMS. Decirlo es lo que evita que el huésped llegue
-           creyendo que ya está hecho. Javi, 28-sep. */
-        showMsg(i,'ok','🎉 '+esc(r.mensaje)+'<br><br><b>Se paga en recepción al llegar</b>, junto con lo demás. '+
-          'Ahí te entregan la llave de tu nueva habitación.');
-        lockCard(i);
-        setTimeout(meVoy, 3200);
+      /* El precio ya está cerrado; lo que falta es que lea su nueva reserva y la
+         firme. Esa firma es la que autoriza el cargo a la tarjeta que ya dejó en
+         garantía — por eso desde aquí el upgrade se aplica solo, sin pasar por
+         recepción. Javi, 28-sep. */
+      if(r&&r.ok&&r.decision==='por_firmar'){ openFirma(i, op, cmPending.perNight, r.resumen); }
+      else if(r&&r.ok&&(r.decision==='aplicado'||r.decision==='confirmado')){
+        showMsg(i,'ok','🎉 '+esc(r.mensaje)); lockCard(i); setTimeout(meVoy, 3200);
       }
       else { showMsg(i,'warn',(r&&r.mensaje)||'No se pudo confirmar. Intenta de nuevo.'); }
       cmPending=null;
     }).catch(function(){ yes.disabled=false; yes.textContent='Confirmar'; cm.classList.remove('on'); showMsg(i,'warn','Error de conexión.'); });
+  };
+
+  // ---- Firma ----
+  var fm=document.getElementById('fm'), fmPending=null;
+  var fcv=document.getElementById('fmfirma'), fctx=null, dib=false, firmado=false;
+  function initFirma(){ var r=fcv.getBoundingClientRect(); if(!r.width) return;
+    fcv.width=r.width*2; fcv.height=r.height*2; fctx=fcv.getContext('2d');
+    fctx.scale(2,2); fctx.lineWidth=2.2; fctx.lineCap='round'; fctx.strokeStyle='#1E1A16'; }
+  function fpos(e){ var r=fcv.getBoundingClientRect(); var t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left,y:t.clientY-r.top}; }
+  function fst(e){ if(!fctx) initFirma(); dib=true; firmado=true; var p=fpos(e); fctx.beginPath(); fctx.moveTo(p.x,p.y); e.preventDefault(); }
+  function fmv(e){ if(!dib) return; var p=fpos(e); fctx.lineTo(p.x,p.y); fctx.stroke(); e.preventDefault(); }
+  fcv.addEventListener('mousedown',fst); fcv.addEventListener('touchstart',fst,{passive:false});
+  fcv.addEventListener('mousemove',fmv); fcv.addEventListener('touchmove',fmv,{passive:false});
+  ['mouseup','touchend','mouseleave'].forEach(function(ev){ fcv.addEventListener(ev,function(){ dib=false; }); });
+  document.getElementById('fmborrar').onclick=function(){ if(fctx) fctx.clearRect(0,0,fcv.width,fcv.height); firmado=false; };
+
+  function fila(k,v,cls){ return '<div class="r'+(cls?' '+cls:'')+'"><span>'+esc(k)+'</span><b>'+v+'</b></div>'; }
+  function fecha(s){ if(!s) return '—'; var p=String(s).split('-'); return p.length===3?(p[2]+'/'+p[1]+'/'+p[0]):s; }
+  function openFirma(i, op, perNight, res){
+    res=res||{}; fmPending={i:i, op:op, perNight:perNight};
+    firmado=false; if(fctx) fctx.clearRect(0,0,fcv.width,fcv.height);
+    var m=document.getElementById('fmmsg'); m.className='fmmsg'; m.innerHTML='';
+    document.getElementById('fmres').innerHTML=
+      fila('Habitación','<b>'+esc(res.a||(op.target||{}).nombre||'')+'</b>')+
+      fila('Antes', esc(res.de||''))+
+      fila('Entrada', fecha(res.desde))+
+      fila('Salida', fecha(res.hasta))+
+      fila('Noches', String(res.noches||''))+
+      fila('Extra por noche', money(res.precio_noche||perNight))+
+      fila('Total del upgrade', money(res.extra_total||0), 'tot');
+    fm.classList.add('on');
+    setTimeout(initFirma, 60);
+  }
+  document.getElementById('fmno').onclick=function(){ fm.classList.remove('on'); fmPending=null; };
+  fm.onclick=function(e){ if(e.target===fm){ fm.classList.remove('on'); fmPending=null; } };
+
+  document.getElementById('fmyes').onclick=function(){
+    if(!fmPending) return;
+    var m=document.getElementById('fmmsg');
+    if(!firmado){ m.className='fmmsg on bad'; m.textContent='Falta tu firma.'; return; }
+    var i=fmPending.i, op=fmPending.op, btn=this;
+    btn.disabled=true; var old=btn.textContent; btn.textContent='Firmando…';
+    m.className='fmmsg on'; m.textContent='Estamos cerrando tu habitación…';
+    var body=base({accion:'firmar',target_id:op.target.id,firma:fcv.toDataURL('image/png')});
+    if(op.tipo!=='fijo') body.bid=fmPending.perNight;
+    api(body).then(function(r){
+      btn.disabled=false; btn.textContent=old;
+      if(r&&r.ok&&r.decision==='aplicado'){
+        fm.classList.remove('on');
+        showMsg(i,'ok','🎉 '+esc(r.mensaje)+'<br><br>Te esperamos con la llave lista.');
+        lockCard(i); setTimeout(meVoy, 3600);
+      } else if(r&&r.decision==='pendiente_recepcion'){
+        fm.classList.remove('on');
+        showMsg(i,'warn',esc(r.mensaje||'Recepción lo termina y te confirma al llegar.'));
+        lockCard(i);
+      } else {
+        m.className='fmmsg on bad'; m.textContent=(r&&(r.mensaje||r.error))||'No se pudo cerrar. Inténtalo de nuevo.';
+      }
+      fmPending=null;
+    }).catch(function(){ btn.disabled=false; btn.textContent=old;
+      m.className='fmmsg on bad'; m.textContent='Error de conexión. Inténtalo de nuevo.'; });
   };
   function lockCard(i){ var card=document.querySelector('.card[data-i="'+i+'"]'); if(!card) return;
     var b=card.querySelector('[data-puja],[data-fijo]');
