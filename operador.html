@@ -671,6 +671,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 .gAzul i{font-style:normal;flex:0 0 3px;align-self:stretch;background:#1D4ED8;border-radius:2px}
 </style>
 <div class="toast" id="toast"></div>
+<script src="/sinc-crop.js"></script>
 <script>
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
@@ -1452,12 +1453,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           '<div class="fila">'+
             '<select data-getq="'+m.id+'" style="flex:1">'+ETIQ.map(function(e){
               return '<option value="'+e[0]+'"'+(m.etiqueta===e[0]?' selected':'')+'>'+esc(e[1])+'</option>';}).join('')+'</select>'+
+            (m.tipo==='video'?'':'<button class="quitar" data-gcrop="'+m.id+'" title="Acomodar la foto">⤢</button>')+
             '<button class="quitar" data-gdel="'+m.id+'" title="Borrar">✕</button>'+
           '</div>'+
           (x?'<div class="asignada">✓ en '+esc(x.nombre)+'</div>':'')+
         '</div></div>';
     }).join('');
 
+    Array.prototype.forEach.call($('ggaleria').querySelectorAll('[data-gcrop]'),function(b){
+      b.onclick=function(){reacomodaGal(b.getAttribute('data-gcrop'));};});
     Array.prototype.forEach.call($('ggaleria').querySelectorAll('[data-gexp]'),function(s){
       s.onchange=async function(){
         var id=s.getAttribute('data-gexp');
@@ -1494,27 +1498,71 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   $('gzona').ondrop=function(e){e.preventDefault();this.classList.remove('hot');subeGaleria(e.dataTransfer.files);};
   $('gfile').onchange=function(){subeGaleria(this.files);};
 
+  /* Cada foto pasa por el recortador: se acomoda una vez y quedan las dos
+     versiones, vertical para las tarjetas y horizontal para la portada. El
+     video se sube tal cual. */
+  function rutaGal(){ return 'op-'+cur.id+'/galeria'; }
+  function recortaSube(fuente,titulo){
+    return new Promise(function(res){
+      sincCrop.subir(fuente,{sb:SB,key:KEY,token:(ses&&ses.access_token)||KEY,
+        bucket:'sincretico',ruta:rutaGal(),titulo:titulo||'Acomoda la foto'},
+        function(err,r){ res(err?null:r); });
+    });
+  }
+
   async function subeGaleria(files){
     if(!files||!files.length||!cur)return;
-    var ok=0,mal=0;
-    for(var i=0;i<files.length;i++){
-      var f=files[i];
+    files=Array.prototype.slice.call(files);
+    var videos=files.filter(function(f){return (f.type||'').indexOf('video')===0;});
+    var fotos =files.filter(function(f){return (f.type||'').indexOf('video')!==0;});
+    var ok=0,mal=0,n=GAL.length;
+
+    for(var i=0;i<videos.length;i++){
+      var f=videos[i];
       if(f.size>25*1024*1024){mal++;continue;}
-      toast('Subiendo… '+(i+1)+' de '+files.length);
-      var ext=(f.name.split('.').pop()||'jpg').toLowerCase();
-      var ruta='op-'+cur.id+'/galeria/'+Date.now()+'-'+i+'.'+ext;
+      toast('Subiendo video… '+(i+1)+' de '+videos.length);
+      var ext=(f.name.split('.').pop()||'mp4').toLowerCase();
+      var ruta=rutaGal()+'/'+Date.now()+'-'+i+'.'+ext;
       var r=await fetch(SB+'/storage/v1/object/sincretico/'+ruta,{method:'POST',
-        headers:{'apikey':KEY,'Authorization':'Bearer '+(ses&&ses.access_token||KEY),'Content-Type':f.type||'application/octet-stream'},body:f});
+        headers:{'apikey':KEY,'Authorization':'Bearer '+((ses&&ses.access_token)||KEY),
+        'Content-Type':f.type||'application/octet-stream'},body:f});
       if(!r.ok){mal++;continue;}
       var w=await fetch(SB+'/rest/v1/sinc_media',{method:'POST',headers:hdr(),body:JSON.stringify({
-        operador_id:cur.id,experiencia_id:null,
-        tipo:(f.type||'').indexOf('video')===0?'video':'foto',
+        operador_id:cur.id,experiencia_id:null,tipo:'video',
         url:SB+'/storage/v1/object/public/sincretico/'+ruta,storage_path:ruta,
-        etiqueta:'general',bytes:f.size,origen:'subida',orden:GAL.length+i})});
+        etiqueta:'general',bytes:f.size,origen:'subida',orden:n++})});
       if(w.ok)ok++; else mal++;
     }
+
+    for(var j=0;j<fotos.length;j++){
+      var g=fotos[j];
+      if(g.size>25*1024*1024){mal++;continue;}
+      var cr=await recortaSube(g, fotos.length>1?('Foto '+(j+1)+' de '+fotos.length):'Acomoda la foto');
+      if(!cr||!cr.vUrl){mal++;continue;}
+      var w2=await fetch(SB+'/rest/v1/sinc_media',{method:'POST',headers:hdr(),body:JSON.stringify({
+        operador_id:cur.id,experiencia_id:null,tipo:'foto',
+        url:cr.vUrl,storage_path:cr.vPath,url_h:cr.hUrl||null,storage_path_h:cr.hPath||null,
+        etiqueta:'general',bytes:g.size,origen:'subida',orden:n++})});
+      if(w2.ok)ok++; else mal++;
+    }
+
     await cargaGaleria();
-    toast(ok+' archivo'+(ok===1?'':'s')+' en tu galería'+(mal?' · '+mal+' no entraron (máx 25 MB)':''),mal>0);
+    if(ok||mal)toast(ok+' archivo'+(ok===1?'':'s')+' en tu galería'+
+      (mal?' · '+mal+' no entraron (máx 25 MB, o cancelaste el recorte)':''),mal>0);
+  }
+
+  /* Volver a acomodar una foto ya subida. */
+  async function reacomodaGal(id){
+    var m=GAL.filter(function(x){return x.id===id;})[0];
+    if(!m||m.tipo==='video')return;
+    var cr=await recortaSube(m.url,'Acomoda la foto');
+    if(!cr||!cr.vUrl)return;
+    var r=await fetch(SB+'/rest/v1/sinc_media?id=eq.'+id,{method:'PATCH',headers:hdr(),
+      body:JSON.stringify({url:cr.vUrl,storage_path:cr.vPath,
+        url_h:cr.hUrl||null,storage_path_h:cr.hPath||null,foco_x:0.5,foco_y:0.5})});
+    if(!r.ok){toast('No se pudo guardar el recorte.',true);return;}
+    toast('Foto acomodada');
+    await cargaGaleria();
   }
 
   $('gBtnLigas').onclick=async function(){

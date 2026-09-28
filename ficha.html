@@ -725,7 +725,7 @@ gmp-place-autocomplete,.gmpac{
     <section class="panel" data-s="6">
       <div class="card">
         <h3>Fotos y video</h3>
-        <div class="hint">Tres fotos como mínimo. Arrastra dentro de cada imagen para reencuadrarla: se mueve, no se recorta.</div>
+        <div class="hint">Tres fotos como mínimo. Al subir cada una la acomodas, y se guardan dos versiones: vertical para las tarjetas y horizontal para la portada. Con <b>⤢</b> la vuelves a acomodar cuando quieras.</div>
         <div class="zona" id="zona">
           <b>Arrastra tus fotos aquí</b> o haz clic para elegirlas<div class="mini" style="margin-top:4px">JPG, PNG, WEBP o MP4 · hasta 25 MB cada una · puedes soltar varias a la vez</div>
         </div>
@@ -975,6 +975,7 @@ gmp-place-autocomplete,.gmpac{
   <div class="ft"><button class="btn fantasma" id="ptCancel">Cancelar</button><button class="btn" id="ptOk">Crear</button></div>
 </div></div>
 
+<script src="/sinc-crop.js"></script>
 <script>
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
@@ -2722,6 +2723,7 @@ gmp-place-autocomplete,.gmpac{
         '<div class="vis" style="'+fondo+'" data-foco="'+m.id+'">'+(m.tipo==='video'?'<div style="display:flex;height:100%;align-items:center;justify-content:center;font-size:28px">▶</div>':'')+'</div>'+
         '<div class="pie"><select data-etq="'+m.id+'">'+ETIQ.map(function(e){
           return '<option value="'+e[0]+'"'+(m.etiqueta===e[0]?' selected':'')+'>'+esc(e[1])+'</option>';}).join('')+'</select>'+
+        (m.tipo==='video'?'':'<button class="x" data-crop="'+m.id+'" title="Acomodar la foto" style="width:auto;padding:0 7px;font-size:12px">⤢</button>')+
         '<button class="x" data-delm="'+m.id+'">✕</button></div></div>';
     }).join('')||'<div class="mini">Sin fotos todavía.</div>';
 
@@ -2731,6 +2733,8 @@ gmp-place-autocomplete,.gmpac{
         await del('sinc_media','id=eq.'+b.getAttribute('data-delm'));
         MED=await get('sinc_media?select=*&experiencia_id=eq.'+ID+'&order=etiqueta,orden');
     IMP=await get('op_exp_impacto?select=*&experiencia_id=eq.'+ID);pintaMedia();};});
+    Array.prototype.forEach.call($('galeria').querySelectorAll('[data-crop]'),function(b){
+      b.onclick=function(){reacomoda(b.getAttribute('data-crop'));};});
     Array.prototype.forEach.call($('galeria').querySelectorAll('[data-etq]'),function(s){
       s.onchange=async function(){
         var r=await patch('sinc_media',s.getAttribute('data-etq'),{etiqueta:s.value});
@@ -2762,27 +2766,70 @@ gmp-place-autocomplete,.gmpac{
   $('zona').ondrop=function(e){e.preventDefault();this.classList.remove('hot');sube(e.dataTransfer.files);};
   $('file').onchange=function(){sube(this.files);};
 
+  /* Cada foto pasa por el recortador antes de subir: se acomoda una vez y se
+     guardan las dos versiones, la vertical para las tarjetas y la horizontal
+     para la portada. El video se sube tal cual, ahi no hay nada que encuadrar. */
+  function carpetaMedia(){ return (E.operador_id?('op-'+E.operador_id):'casa-pepe')+'/'+ID; }
+
+  function recorta(fuente,titulo){
+    return new Promise(function(res){
+      sincCrop.subir(fuente,{sb:SB,key:KEY,token:tok(),bucket:'sincretico',
+        ruta:carpetaMedia(),titulo:titulo||'Acomoda la foto'},
+        function(err,r){ res(err?null:r); });
+    });
+  }
+
   async function sube(files){
     if(!files||!files.length)return;
-    var carpeta=E.operador_id?('op-'+E.operador_id):'casa-pepe';
-    var ok=0,mal=0;
-    for(var i=0;i<files.length;i++){
-      var f=files[i];
+    files=Array.prototype.slice.call(files);
+    var videos=files.filter(function(f){return (f.type||'').indexOf('video')===0;});
+    var fotos =files.filter(function(f){return (f.type||'').indexOf('video')!==0;});
+    var ok=0,mal=0,n=MED.length;
+
+    for(var i=0;i<videos.length;i++){
+      var f=videos[i];
       if(f.size>25*1024*1024){mal++;continue;}
-      var ext=(f.name.split('.').pop()||'jpg').toLowerCase();
-      var ruta=carpeta+'/'+ID+'/'+Date.now()+'-'+i+'.'+ext;
+      toast('Subiendo video… '+(i+1)+' de '+videos.length);
+      var ext=(f.name.split('.').pop()||'mp4').toLowerCase();
+      var ruta=carpetaMedia()+'/'+Date.now()+'-'+i+'.'+ext;
       var r=await fetch(SB+'/storage/v1/object/sincretico/'+ruta,{
-        method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':f.type||'application/octet-stream'},body:f});
+        method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),
+        'Content-Type':f.type||'application/octet-stream'},body:f});
       if(!r.ok){mal++;continue;}
-      var url=SB+'/storage/v1/object/public/sincretico/'+ruta;
       await post('sinc_media',{operador_id:E.operador_id||null,experiencia_id:ID,
-        tipo:(f.type||'').indexOf('video')===0?'video':'foto',url:url,storage_path:ruta,
-        etiqueta:'general',bytes:f.size,origen:'subida',orden:MED.length+i});
+        tipo:'video',url:SB+'/storage/v1/object/public/sincretico/'+ruta,storage_path:ruta,
+        etiqueta:'general',bytes:f.size,origen:'subida',orden:n++});
       ok++;
-      toast('Subiendo… '+(i+1)+' de '+files.length);
     }
+
+    for(var j=0;j<fotos.length;j++){
+      var g=fotos[j];
+      if(g.size>25*1024*1024){mal++;continue;}
+      var cr=await recorta(g, fotos.length>1?('Foto '+(j+1)+' de '+fotos.length):'Acomoda la foto');
+      if(!cr||!cr.vUrl){mal++;continue;}
+      await post('sinc_media',{operador_id:E.operador_id||null,experiencia_id:ID,
+        tipo:'foto',url:cr.vUrl,storage_path:cr.vPath,
+        url_h:cr.hUrl||null,storage_path_h:cr.hPath||null,
+        etiqueta:'general',bytes:g.size,origen:'subida',orden:n++});
+      ok++;
+    }
+
     await recargaMedia();
-    toast(ok+' archivo'+(ok===1?'':'s')+' arriba'+(mal?' · '+mal+' no cupieron (máx 25 MB)':''),mal>0);
+    if(ok||mal)toast(ok+' archivo'+(ok===1?'':'s')+' arriba'+
+      (mal?' · '+mal+' no entraron (máx 25 MB, o cancelaste el recorte)':''),mal>0);
+  }
+
+  /* Volver a acomodar una foto ya subida, sin tener que resubirla. */
+  async function reacomoda(id){
+    var m=MED.filter(function(x){return x.id===id;})[0];
+    if(!m||m.tipo==='video')return;
+    var cr=await recorta(m.url,'Acomoda la foto');
+    if(!cr||!cr.vUrl)return;
+    var r=await patch('sinc_media',id,{url:cr.vUrl,storage_path:cr.vPath,
+      url_h:cr.hUrl||null,storage_path_h:cr.hPath||null,foco_x:0.5,foco_y:0.5});
+    if(!r.ok){error('No se pudo guardar el recorte.');return;}
+    toast('Foto acomodada');
+    await recargaMedia();
   }
 
   $('btnLigas').onclick=async function(){
