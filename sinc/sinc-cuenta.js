@@ -15,6 +15,10 @@
  * Necesita supabase-js cargado antes. Lo demás —estilos incluidos— va aquí.
  */
 window.sincCuenta = (function () {
+  /* El idioma del huésped. Si esta pantalla no trae sinc-i18n.js, T() devuelve
+     el español y todo sigue funcionando. */
+  function T(x){ try{ return window.sincI18n ? sincI18n.t(x) : x; }catch(_){ return x; } }
+
   'use strict';
 
   var SB  = 'https://rehophywchakfapivsbh.supabase.co';
@@ -187,18 +191,17 @@ window.sincCuenta = (function () {
       /* ---- quién eres ---- */
       function paso1() {
         $('cuHoja').innerHTML =
-          '<h2>' + esc(opts.titulo || 'Entra para reservar') + '</h2>' +
-          '<p>' + esc(opts.dice || 'Tu boleto lleva un QR y te llega por correo: por eso ' +
-            'necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.') + '</p>' +
+          '<h2>' + esc(opts.titulo || T('Entra para reservar')) + '</h2>' +
+          '<p>' + esc(opts.dice || T('Tu boleto lleva un QR y te llega por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.')) + '</p>' +
           '<div class="cuErr" id="cuErr"></div>' +
-          '<button class="cuBtn google" id="cuGoogle">' + GOOGLE_SVG + ' Continuar con Google</button>' +
-          '<div class="cuO">o con tu correo</div>' +
-          '<label for="cuMail">Tu correo</label>' +
+          '<button class="cuBtn google" id="cuGoogle">' + GOOGLE_SVG + ' ' + esc(T('Continuar con Google')) + '</button>' +
+          '<div class="cuO">' + esc(T('o con tu correo')) + '</div>' +
+          '<label for="cuMail">' + esc(T('Tu correo')) + '</label>' +
           '<input id="cuMail" type="email" inputmode="email" autocomplete="email" ' +
             'placeholder="tu@correo.com" value="' + esc(correo) + '">' +
-          '<button class="cuBtn" id="cuManda">Mandarme un código</button>' +
-          '<button class="cuBtn plano" id="cuNo">Ahora no</button>' +
-          '<p class="cuPie">Con Google no hay que confirmar nada: tu correo ya viene verificado.</p>';
+          '<button class="cuBtn" id="cuManda">' + esc(T('Mandarme un código')) + '</button>' +
+          '<button class="cuBtn plano" id="cuNo">' + esc(T('Ahora no')) + '</button>' +
+          '<p class="cuPie">' + esc(T('Con Google no hay que confirmar nada: tu correo ya viene verificado.')) + '</p>';
 
         $('cuNo').onclick = function () { cierra(); listo(null); };
         $('cuMail').focus();
@@ -215,7 +218,7 @@ window.sincCuenta = (function () {
             if (r.error) throw r.error;
           } catch (x) {
             this.disabled = false;
-            err('Entrar con Google todavía no está encendido. Usa tu correo, que funciona igual.');
+            err(T('Entrar con Google todavía no está encendido. Usa tu correo, que funciona igual.'));
             console.error('google', x);
           }
         };
@@ -223,14 +226,14 @@ window.sincCuenta = (function () {
         $('cuManda').onclick = async function () {
           err('');
           var m = $('cuMail').value.trim();
-          if (m.indexOf('@') < 1 || m.indexOf('.') < 0) { err('Ese correo no se ve bien escrito.'); return; }
-          this.disabled = true; this.textContent = 'Mandando…';
+          if (m.indexOf('@') < 1 || m.indexOf('.') < 0) { err(T('Ese correo no se ve bien escrito.')); return; }
+          this.disabled = true; this.textContent = T('Mandando…');
           try {
             var j = await fn('sinc-identidad', { accion: 'enviar', email: m });
             correo = m;
             paso2(j && j.enviado_a);
           } catch (x) {
-            this.disabled = false; this.textContent = 'Mandarme un código';
+            this.disabled = false; this.textContent = T('Mandarme un código');
             err(String(x.message || x));
           }
         };
@@ -239,16 +242,16 @@ window.sincCuenta = (function () {
       /* ---- las seis cifras ---- */
       function paso2(tapado) {
         $('cuHoja').innerHTML =
-          '<h2>Mira tu correo</h2>' +
-          '<p>Mandamos seis cifras a <b>' + esc(tapado || correo) + '</b>. Vale diez minutos. ' +
-            'Si no lo ves, asómate a la carpeta de spam.</p>' +
+          '<h2>' + esc(T('Mira tu correo')) + '</h2>' +
+          '<p>' + esc(T('Mandamos seis cifras a')) + ' <b>' + esc(tapado || correo) + '</b>. ' +
+            esc(T('Vale diez minutos. Si no lo ves, asómate a la carpeta de spam.')) + '</p>' +
           '<div class="cuErr" id="cuErr"></div>' +
-          '<label for="cuCod">El código</label>' +
+          '<label for="cuCod">' + esc(T('El código')) + '</label>' +
           '<input id="cuCod" class="cifras" inputmode="numeric" autocomplete="one-time-code" ' +
             'maxlength="6" placeholder="······">' +
-          '<button class="cuBtn" id="cuVer">Confirmar</button>' +
-          '<button class="cuBtn plano" id="cuOtro">Usar otro correo</button>' +
-          '<p class="cuPie"><button class="cuLink" id="cuRe">Mandármelo otra vez</button></p>';
+          '<button class="cuBtn" id="cuVer">' + esc(T('Confirmar')) + '</button>' +
+          '<button class="cuBtn plano" id="cuOtro">' + esc(T('Usar otro correo')) + '</button>' +
+          '<p class="cuPie"><button class="cuLink" id="cuRe">' + esc(T('Mandármelo otra vez')) + '</button></p>';
 
         var c = $('cuCod');
         c.focus();
@@ -260,16 +263,16 @@ window.sincCuenta = (function () {
         $('cuOtro').onclick = paso1;
         $('cuRe').onclick = async function () {
           err('');
-          this.textContent = 'Mandando…';
-          try { await fn('sinc-identidad', { accion: 'enviar', email: correo }); this.textContent = 'Va de nuevo ✓'; }
-          catch (x) { this.textContent = 'Mandármelo otra vez'; err(String(x.message || x)); }
+          this.textContent = T('Mandando…');
+          try { await fn('sinc-identidad', { accion: 'enviar', email: correo }); this.textContent = T('Va de nuevo ✓'); }
+          catch (x) { this.textContent = T('Mandármelo otra vez'); err(String(x.message || x)); }
         };
 
         $('cuVer').onclick = async function () {
           err('');
           var cod = c.value.replace(/\D/g, '');
-          if (cod.length !== 6) { err('El código son seis cifras.'); return; }
-          this.disabled = true; this.textContent = 'Comprobando…';
+          if (cod.length !== 6) { err(T('El código son seis cifras.')); return; }
+          this.disabled = true; this.textContent = T('Comprobando…');
           var b = this;
           try {
             var j = await fn('sinc-identidad', { accion: 'verificar', email: correo, codigo: cod });
@@ -283,7 +286,7 @@ window.sincCuenta = (function () {
             if (!yo || !String(yo.nombre || '').trim()) { paso3(); return; }
             cierra(); listo(yo);
           } catch (x) {
-            b.disabled = false; b.textContent = 'Confirmar';
+            b.disabled = false; b.textContent = T('Confirmar');
             c.value = ''; c.focus();
             err(String(x.message || x));
           }
@@ -293,26 +296,26 @@ window.sincCuenta = (function () {
       /* ---- cómo te llamas (solo la primera vez) ---- */
       function paso3() {
         $('cuHoja').innerHTML =
-          '<h2>¿A nombre de quién?</h2>' +
-          '<p>Es lo que verá quien te reciba el día del tour.</p>' +
+          '<h2>' + esc(T('¿A nombre de quién?')) + '</h2>' +
+          '<p>' + esc(T('Es lo que verá quien te reciba el día del tour.')) + '</p>' +
           '<div class="cuErr" id="cuErr"></div>' +
-          '<label for="cuNom">Nombre y apellido</label>' +
-          '<input id="cuNom" autocomplete="name" placeholder="Nombre y apellido">' +
-          '<label for="cuTel">WhatsApp <span style="text-transform:none;letter-spacing:0">(por si hay que avisarte algo)</span></label>' +
+          '<label for="cuNom">' + esc(T('Nombre y apellido')) + '</label>' +
+          '<input id="cuNom" autocomplete="name" placeholder="' + esc(T('Nombre y apellido')) + '">' +
+          '<label for="cuTel">WhatsApp <span style="text-transform:none;letter-spacing:0">' + esc(T('(por si hay que avisarte algo)')) + '</span></label>' +
           '<input id="cuTel" type="tel" autocomplete="tel" placeholder="+52 55 …">' +
-          '<button class="cuBtn" id="cuGuarda">Listo</button>';
+          '<button class="cuBtn" id="cuGuarda">' + esc(T('Listo')) + '</button>';
         $('cuNom').focus();
         $('cuNom').onkeydown = function (e) { if (e.key === 'Enter') $('cuGuarda').click(); };
         $('cuGuarda').onclick = async function () {
           err('');
           var n = $('cuNom').value.trim();
-          if (n.length < 2) { err('Dinos cómo te llamas.'); return; }
-          this.disabled = true; this.textContent = 'Un momento…';
+          if (n.length < 2) { err(T('Dinos cómo te llamas.')); return; }
+          this.disabled = true; this.textContent = T('Un momento…');
           try {
             var yo = await fichaje({ p_nombre: n, p_telefono: $('cuTel').value.trim() || null });
             cierra(); listo(yo);
           } catch (x) {
-            this.disabled = false; this.textContent = 'Listo';
+            this.disabled = false; this.textContent = T('Listo');
             err(String(x.message || x));
           }
         };
@@ -327,8 +330,8 @@ window.sincCuenta = (function () {
   async function miPerfil() {
     var yo = YO || await yaEntrado();
     if (!yo) {
-      return await entra({ titulo: 'Tu cuenta',
-        dice: 'Con una cuenta guardas tus boletos y no vuelves a escribir tus datos en cada compra.' });
+      return await entra({ titulo: T('Tu cuenta'),
+        dice: T('Con una cuenta guardas tus boletos y no vuelves a escribir tus datos en cada compra.') });
     }
     estilos();
     return new Promise(function (listo) {
@@ -339,35 +342,35 @@ window.sincCuenta = (function () {
       capa.onclick = function (e) { if (e.target === capa) { cierra(); listo(yo); } };
       function cierra() { if (capa.parentNode) document.body.removeChild(capa); }
 
-      var de = { google: 'Entraste con Google', hotel: 'Entraste desde tu reserva de Casa Pepe',
-                 correo: 'Entraste con tu correo' }[yo.origen] || '';
+      var de = { google: T('Entraste con Google'), hotel: T('Entraste desde tu reserva de Casa Pepe'),
+                 correo: T('Entraste con tu correo') }[yo.origen] || '';
       document.getElementById('cuHoja').innerHTML =
-        '<h2>' + esc(yo.nombre || 'Tu cuenta') + '</h2>' +
+        '<h2>' + esc(yo.nombre || T('Tu cuenta')) + '</h2>' +
         '<p>' + esc(yo.email) + (de ? '<br>' + esc(de) : '') + '</p>' +
         '<div class="cuErr" id="cuErr"></div>' +
         '<a class="cuBtn" style="display:block;text-align:center;text-decoration:none" ' +
-          'href="/boleto">Mis boletos</a>' +
-        '<button class="cuBtn plano" id="cuEdita">Cambiar mi nombre o teléfono</button>' +
-        '<button class="cuBtn plano" id="cuSalir">Cerrar sesión</button>' +
-        '<p class="cuPie">Tus boletos viajan a este correo. Si te equivocaste, cierra sesión y entra con el bueno.</p>';
+          'href="/boleto">' + esc(T('Mis boletos')) + '</a>' +
+        '<button class="cuBtn plano" id="cuEdita">' + esc(T('Cambiar mi nombre o teléfono')) + '</button>' +
+        '<button class="cuBtn plano" id="cuSalir">' + esc(T('Cerrar sesión')) + '</button>' +
+        '<p class="cuPie">' + esc(T('Tus boletos viajan a este correo. Si te equivocaste, cierra sesión y entra con el bueno.')) + '</p>';
 
       document.getElementById('cuEdita').onclick = function () {
         document.getElementById('cuHoja').innerHTML =
-          '<h2>Tus datos</h2><p>Es lo que verá quien te reciba el día del tour.</p>' +
+          '<h2>' + esc(T('Tus datos')) + '</h2><p>' + esc(T('Es lo que verá quien te reciba el día del tour.')) + '</p>' +
           '<div class="cuErr" id="cuErr"></div>' +
-          '<label for="cuNom">Nombre y apellido</label>' +
+          '<label for="cuNom">' + esc(T('Nombre y apellido')) + '</label>' +
           '<input id="cuNom" autocomplete="name" value="' + esc(yo.nombre || '') + '">' +
           '<label for="cuTel">WhatsApp</label>' +
           '<input id="cuTel" type="tel" autocomplete="tel" value="' + esc(yo.telefono || '') + '">' +
-          '<button class="cuBtn" id="cuOk">Guardar</button>';
+          '<button class="cuBtn" id="cuOk">' + esc(T('Guardar')) + '</button>';
         document.getElementById('cuOk').onclick = async function () {
-          this.disabled = true; this.textContent = 'Guardando…';
+          this.disabled = true; this.textContent = T('Guardando…');
           try {
             yo = await fichaje({ p_nombre: document.getElementById('cuNom').value.trim() || null,
                                  p_telefono: document.getElementById('cuTel').value.trim() || null });
             cierra(); listo(yo);
           } catch (x) {
-            this.disabled = false; this.textContent = 'Guardar';
+            this.disabled = false; this.textContent = T('Guardar');
             var e = document.getElementById('cuErr');
             e.textContent = String(x.message || x); e.style.display = 'block';
           }
