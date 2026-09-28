@@ -118,13 +118,17 @@
       if(!tr) continue;
       for(var campo in tr){
         if(!Object.prototype.hasOwnProperty.call(tr,campo)) continue;
+        /* La pantalla no siempre llama al campo como la tabla: el escaparate
+           sirve la promo pegada a la experiencia y la llama promo_etiqueta.
+           `campos` traduce ese nombre. */
+        var destino = (opc.campos && opc.campos[campo]) || campo;
         /* Solo se pisa lo que la fila ya traía: si la pantalla no muestra ese
            campo, no se le inventa uno. Y se guarda el español al lado, por si
            alguien quiere enseñar el original. */
-        if(fila[campo]===undefined) continue;
+        if(fila[destino]===undefined) continue;
         if(fila.__es===undefined) fila.__es={};
-        fila.__es[campo]=fila[campo];
-        fila[campo]=tr[campo];
+        fila.__es[destino]=fila[destino];
+        fila[destino]=tr[campo];
       }
       fila.__idioma=idi;
     }
