@@ -293,9 +293,93 @@ window.sincCuenta = (function () {
     });
   }
 
+  /* La pantalla de la cuenta. Antes esto era un confirm() que dependía de la
+     ficha en memoria, y si todavía no había llegado le volvía a pedir entrar a
+     alguien que ya estaba dentro. Ahora primero se comprueba la sesión de
+     verdad, y solo se pide entrar a quien no la tiene. */
+  async function miPerfil() {
+    var yo = YO || await yaEntrado();
+    if (!yo) {
+      return await entra({ titulo: 'Tu cuenta',
+        dice: 'Con una cuenta guardas tus boletos y no vuelves a escribir tus datos en cada compra.' });
+    }
+    estilos();
+    return new Promise(function (listo) {
+      var capa = document.createElement('div');
+      capa.className = 'cuCapa';
+      capa.innerHTML = '<div class="cuHoja" id="cuHoja"></div>';
+      document.body.appendChild(capa);
+      capa.onclick = function (e) { if (e.target === capa) { cierra(); listo(yo); } };
+      function cierra() { if (capa.parentNode) document.body.removeChild(capa); }
+
+      var de = { google: 'Entraste con Google', hotel: 'Entraste desde tu reserva de Casa Pepe',
+                 correo: 'Entraste con tu correo' }[yo.origen] || '';
+      document.getElementById('cuHoja').innerHTML =
+        '<h2>' + esc(yo.nombre || 'Tu cuenta') + '</h2>' +
+        '<p>' + esc(yo.email) + (de ? '<br>' + esc(de) : '') + '</p>' +
+        '<div class="cuErr" id="cuErr"></div>' +
+        '<a class="cuBtn" style="display:block;text-align:center;text-decoration:none" ' +
+          'href="/boleto">Mis boletos</a>' +
+        '<button class="cuBtn plano" id="cuEdita">Cambiar mi nombre o teléfono</button>' +
+        '<button class="cuBtn plano" id="cuSalir">Cerrar sesión</button>' +
+        '<p class="cuPie">Tus boletos viajan a este correo. Si te equivocaste, cierra sesión y entra con el bueno.</p>';
+
+      document.getElementById('cuEdita').onclick = function () {
+        document.getElementById('cuHoja').innerHTML =
+          '<h2>Tus datos</h2><p>Es lo que verá quien te reciba el día del tour.</p>' +
+          '<div class="cuErr" id="cuErr"></div>' +
+          '<label for="cuNom">Nombre y apellido</label>' +
+          '<input id="cuNom" autocomplete="name" value="' + esc(yo.nombre || '') + '">' +
+          '<label for="cuTel">WhatsApp</label>' +
+          '<input id="cuTel" type="tel" autocomplete="tel" value="' + esc(yo.telefono || '') + '">' +
+          '<button class="cuBtn" id="cuOk">Guardar</button>';
+        document.getElementById('cuOk').onclick = async function () {
+          this.disabled = true; this.textContent = 'Guardando…';
+          try {
+            yo = await fichaje({ p_nombre: document.getElementById('cuNom').value.trim() || null,
+                                 p_telefono: document.getElementById('cuTel').value.trim() || null });
+            cierra(); listo(yo);
+          } catch (x) {
+            this.disabled = false; this.textContent = 'Guardar';
+            var e = document.getElementById('cuErr');
+            e.textContent = String(x.message || x); e.style.display = 'block';
+          }
+        };
+      };
+
+      document.getElementById('cuSalir').onclick = async function () {
+        await salir();
+        cierra(); listo(null);
+      };
+    });
+  }
+
   /* Lo normal: si ya entró, sigue; si no, se le pide. Devuelve la ficha o null. */
+  /* El huésped que llega con la liga de su reserva no teclea nada: la liga ya
+     dice quién es. Si falla —liga vieja, reserva sin correo— se cae al camino
+     normal sin decir nada raro. */
+  async function comoHuesped() {
+    var t = (new URLSearchParams(location.search).get('resv') || '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(t)) return null;
+    try { if (sessionStorage.getItem('sinc_resv_no') === t) return null; } catch (_) {}
+    try {
+      var j = await fn('sinc-identidad', { accion: 'huesped', token: t });
+      var s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'email' });
+      if (s.error) s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'magiclink' });
+      if (s.error) throw s.error;
+      return await fichaje({ p_nombre: j.nombre || null, p_telefono: j.telefono || null,
+                             p_hotel: j.hotel_id || null, p_origen: 'hotel' });
+    } catch (x) {
+      /* Que no lo vuelva a intentar en cada pantalla de la sesión. */
+      try { sessionStorage.setItem('sinc_resv_no', t); } catch (_) {}
+      return null;
+    }
+  }
+
   async function exige(opts) {
     var yo = await yaEntrado();
+    if (yo) return yo;
+    yo = await comoHuesped();
     if (yo) return yo;
     return await entra(opts);
   }
@@ -303,5 +387,6 @@ window.sincCuenta = (function () {
   return {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
+    miPerfil: miPerfil, comoHuesped: comoHuesped,
   };
 })();

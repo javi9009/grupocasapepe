@@ -2,12 +2,16 @@
 //
 // Antes de pagar un tour hay que tener una cuenta, y el correo de esa cuenta
 // tiene que estar confirmado: el boleto viaja con un QR y si el correo está mal
-// escrito nadie entra a ningún lado. Hay dos caminos:
+// escrito nadie entra a ningún lado. Hay tres caminos:
 //
 //   Google  — no pasa por aquí. Lo resuelve Supabase Auth en el navegador, y
 //             el correo viene confirmado de origen.
 //   Correo  — pasa por aquí. Mandamos seis cifras, y cuando las teclea le
 //             devolvemos una sesión de verdad.
+//   Huésped — el que ya duerme en la casa no teclea nada: la liga de su reserva
+//             demuestra quién es, y su correo lo escribió él al reservar el
+//             hotel. Pedirle un código encima sería pedirle que demuestre dos
+//             veces lo mismo. Vale lo que vale la liga, igual que el check-in.
 //
 // El código NUNCA se guarda: se guarda su huella (SHA-256 del correo, el código
 // y un secreto del proyecto). Quien lea la tabla no puede entrar en la cuenta
@@ -22,6 +26,15 @@ const SRK    = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND = Deno.env.get("RESEND_API_KEY") || "";
 const FROM   = Deno.env.get("SINCRETICO_FROM") || "Sincrético <no-reply@casapepe.mx>";
 const REPLY  = Deno.env.get("SINCRETICO_REPLY_TO") || "javi@casapepe.mx";
+
+/* Cloudbeds, para el atajo del huésped de la casa. */
+const CB = "https://hotels.cloudbeds.com/api/v1.2";
+const PROP: Record<string, { keyEnv: string; id?: string; idEnv?: string; slug: string }> = {
+  cdmx:   { keyEnv: "CLOUDBEDS_API_KEY", id: "10668", slug: "casa-pepe-cdmx" },
+  puebla: { keyEnv: "CLOUDBEDS_API_KEY_PUEBLA", idEnv: "CLOUDBEDS_PROPERTY_ID_PUEBLA", slug: "casa-pepe-puebla" },
+};
+/* Una liga de reserva vieja no puede seguir siendo una llave para siempre. */
+const LIGA_VIVE_DIAS = 60;
 
 /* Cuánto aguanta cada cosa. */
 const VIVE_MIN      = 10;  // minutos que vale el código
@@ -100,6 +113,37 @@ async function enviar(to: string, asunto: string, html: string) {
   return { ok: true };
 }
 
+/* Abre sesión para un correo: se asegura de que la cuenta existe y devuelve el
+   pase que el navegador cambia por una sesión de verdad con verifyOtp. Aquí no
+   viaja ninguna contraseña, ni de ida ni de vuelta. */
+async function abreSesion(email: string, origen: string) {
+  const ex = await admin(`admin/users?filter=${encodeURIComponent(email)}`);
+  const lista = ex.ok ? ((await ex.json())?.users ?? []) : [];
+  const ya = lista.find((u: { email?: string }) => (u.email ?? "").toLowerCase() === email);
+  if (!ya) {
+    const c = await admin("admin/users", {
+      method: "POST",
+      body: JSON.stringify({ email, email_confirm: true, user_metadata: { origen } }),
+    });
+    if (!c.ok) {
+      console.error("alta", (await c.text()).slice(0, 200));
+      return { ok: false as const, error: "No pudimos abrir tu cuenta. Inténtalo otra vez." };
+    }
+  }
+  const g = await admin("admin/generate_link", {
+    method: "POST",
+    body: JSON.stringify({ type: "magiclink", email }),
+  });
+  if (!g.ok) {
+    console.error("generate_link", (await g.text()).slice(0, 200));
+    return { ok: false as const, error: "No pudimos abrirte la sesión. Inténtalo otra vez." };
+  }
+  const link = await g.json();
+  const token_hash = link?.hashed_token ?? link?.properties?.hashed_token;
+  if (!token_hash) return { ok: false as const, error: "No pudimos abrirte la sesión. Inténtalo otra vez." };
+  return { ok: true as const, token_hash };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "usa POST" }, 405);
@@ -108,6 +152,60 @@ Deno.serve(async (req: Request) => {
   try { b = await req.json(); } catch { return json({ error: "json inválido" }, 400); }
 
   const accion = String(b.accion ?? "").trim();
+
+  /* ---------- el huésped de la casa entra sin teclear nada ----------
+     Ya sabemos quién es: la liga de su reserva lo demuestra, y su correo lo
+     escribió él mismo al reservar el hotel. Pedirle un código encima sería
+     pedirle que demuestre dos veces lo mismo. Vale lo que vale la liga: quien
+     la tenga es él, igual que en el check-in. */
+  if (accion === "huesped") {
+    const token = String(b.token ?? "").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(token)) return json({ error: "Esa liga no vale" }, 400);
+
+    const t = await rest(`apepe_reserva_token?select=reservation_id,property&token=eq.${token}&limit=1`);
+    const fila = t.ok ? (await t.json())[0] : null;
+    if (!fila) return json({ error: "Esa liga no vale" }, 404);
+
+    const prop = String(fila.property ?? "cdmx").toLowerCase() === "puebla" ? "puebla" : "cdmx";
+    const cfg = PROP[prop];
+    const key = Deno.env.get(cfg.keyEnv);
+    const pid = cfg.id ?? Deno.env.get(cfg.idEnv ?? "");
+    if (!key || !pid) return json({ error: "No pudimos comprobar tu reserva" }, 502);
+
+    const gr = await fetch(
+      `${CB}/getReservation?reservationID=${encodeURIComponent(fila.reservation_id)}&propertyID=${pid}`,
+      { headers: { Authorization: "Bearer " + key } },
+    ).then((r) => r.json()).catch(() => ({}));
+    const d = gr?.data ?? gr;
+    if (!d?.reservationID) return json({ error: "No encontramos tu reserva" }, 404);
+
+    /* Una liga de hace dos años no puede seguir abriendo la cuenta de nadie. */
+    const fin = Date.parse(String(d.endDate ?? "") + "T23:59:59Z");
+    if (fin && Date.now() - fin > LIGA_VIVE_DIAS * 86400_000) {
+      return json({ error: "Esa liga ya caducó" }, 410);
+    }
+
+    const gl = d.guestList && typeof d.guestList === "object" ? Object.values(d.guestList) as any[] : [];
+    const main = gl.find((g: any) => g.isMainGuest) || gl[0] || {};
+    const correo = String(main.guestEmail ?? d.guestEmail ?? "").trim().toLowerCase();
+    /* Sin correo no hay a dónde mandar el boleto: que entre por el camino
+       normal y nos lo dé él. */
+    if (!correoValido(correo)) return json({ error: "Tu reserva no trae correo" }, 404);
+
+    const nombre = [main.guestFirstName, main.guestLastName].filter(Boolean).join(" ") || d.guestName || null;
+    const tel = String(main.guestPhone ?? d.guestPhone ?? "").trim() || null;
+
+    const pase = await abreSesion(correo, "hotel");
+    if (!pase.ok) return json({ error: pase.error }, 500);
+
+    /* Se le deja anotado de qué hotel viene, para el reparto y para saludarlo
+       por su nombre sin preguntárselo. */
+    const h = await rest(`hoteles?select=id&slug=eq.${cfg.slug}&limit=1`);
+    const hotel = h.ok ? (await h.json())[0]?.id ?? null : null;
+
+    return json({ ok: true, token_hash: pase.token_hash, nombre, telefono: tel, hotel_id: hotel, hotel: prop });
+  }
+
   const email  = String(b.email ?? "").trim().toLowerCase();
   if (!correoValido(email)) return json({ error: "Ese correo no se ve bien escrito" }, 400);
 
@@ -182,37 +280,9 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({ usado_at: new Date().toISOString() }),
     });
 
-    /* La cuenta: si no existe, nace aquí y nace con el correo confirmado —
-       acaba de demostrarlo tecleando el código. */
-    const ex = await admin(`admin/users?filter=${encodeURIComponent(email)}`);
-    const lista = ex.ok ? ((await ex.json())?.users ?? []) : [];
-    const ya = lista.find((u: { email?: string }) => (u.email ?? "").toLowerCase() === email);
-    if (!ya) {
-      const c = await admin("admin/users", {
-        method: "POST",
-        body: JSON.stringify({ email, email_confirm: true, user_metadata: { origen: "sincretico" } }),
-      });
-      if (!c.ok) {
-        console.error("alta", (await c.text()).slice(0, 200));
-        return json({ error: "No pudimos abrir tu cuenta. Inténtalo otra vez." }, 500);
-      }
-    }
-
-    /* El pase de entrada. El navegador lo cambia por una sesión de verdad con
-       verifyOtp; aquí no viaja ninguna contraseña. */
-    const g = await admin("admin/generate_link", {
-      method: "POST",
-      body: JSON.stringify({ type: "magiclink", email }),
-    });
-    if (!g.ok) {
-      console.error("generate_link", (await g.text()).slice(0, 200));
-      return json({ error: "No pudimos abrirte la sesión. Inténtalo otra vez." }, 500);
-    }
-    const link = await g.json();
-    const token_hash = link?.hashed_token ?? link?.properties?.hashed_token;
-    if (!token_hash) return json({ error: "No pudimos abrirte la sesión. Inténtalo otra vez." }, 500);
-
-    return json({ ok: true, token_hash });
+    const pase = await abreSesion(email, "sincretico");
+    if (!pase.ok) return json({ error: pase.error }, 500);
+    return json({ ok: true, token_hash: pase.token_hash });
   }
 
   return json({ error: "acción desconocida" }, 400);
