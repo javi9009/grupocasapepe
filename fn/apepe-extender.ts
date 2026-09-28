@@ -1,23 +1,26 @@
 // apepe-extender — "¿me puedo quedar una noche más?", contestado en serio.
 //
-// La pregunta del huésped no es si hay cuartos: es si puede quedarse SIN MOVERSE de
-// su cama. Por eso esto no se resuelve mirando disponibilidad y ya. Hay tres capas:
+// Lo que el huésped pregunta no es si hay camas: es si tiene que hacer la maleta.
+// Así que el motor no devuelve "sí/no", devuelve una ESCALERA de sitios donde puede
+// dormir, ordenada por lo que le cuesta —primero en comodidad, luego en dinero:
 //
-//   1) ¿Hay sitio? Se lo preguntamos a getAvailableRoomTypes, que es el motor de
-//      disponibilidad de Cloudbeds. Es la única fuente que no se equivoca.
-//   2) ¿Hay sitio EN SU CAMA? Eso ya es cosa nuestra: hay que mirar cama por cama
-//      quién duerme dónde cada noche. Lo sacamos de las reservas con detalle de
-//      tarifa, que traen roomID y las noches exactas.
-//   3) Si su cama la tiene ocupada alguien que LLEGA, todavía se puede: movemos al
-//      que llega a otra cama libre del mismo dormitorio. Pero respetando alta o baja
-//      —las pares son bajas y las impares altas—, porque a nadie le hace gracia
-//      reservar una baja y encontrarse arriba.
+//   1. Su misma cama. Cero mudanza.
+//   2. Su misma cama, moviendo al que llegaba a ella (sólo si LLEGA ese día: al que
+//      ya viene durmiendo ahí no se le toca).
+//   3. Otra cama de su mismo dormitorio. Mismo precio. Prefiere su nivel —las pares
+//      son bajas y las impares altas— pero si no hay, la alta también vale.
+//   4. Otro dormitorio al mismo precio.
+//   5. Otro tipo de dormitorio, o una privada, por precio de menor a mayor.
 //
-// Cuando la capa 2 no alcanza para estar seguros, NO inventamos: le decimos que
-// puede extender pero que a lo mejor le cambiamos de cama. Prometerle su cama y luego
-// moverlo es peor que avisarle antes.
+// LA REGLA DE LAS PERSONAS: mover de cama está bien cuando la reserva es de UNO. Si
+// son dos o más, se mueve la reserva ENTERA o no se mueve: no se parte un grupo por
+// dormitorios distintos. Por eso todo se calcula pidiendo tantas camas libres como
+// camas tiene la reserva, y las mismas todas las noches del tramo.
 //
-// Precio: la tarifa viva de Cloudbeds de esa noche, con el 15% de SuperPepe.
+// Y todo lo que no sea su misma cama lleva el mismo aviso: que deje sus cosas
+// juntas, porque quien lo muda es Housekeeping y no puede andar recogiendo.
+//
+// Precio: tarifa viva de Cloudbeds de esa noche, con el 15% de SuperPepe.
 // Ventana: desde 2 días antes de su salida hasta las 12:00 del día de salida. Pasada
 // esa hora ya no es extensión, es late checkout, y eso lo decide recepción.
 // Javi, 28-sep.
@@ -28,29 +31,29 @@ const H = { apikey: SRK, Authorization: "Bearer " + SRK, "Content-Type": "applic
 const PROP: Record<string,{keyEnv:string;id?:string;idEnv?:string}> = { cdmx:{keyEnv:"CLOUDBEDS_API_KEY",id:"10668"}, puebla:{keyEnv:"CLOUDBEDS_API_KEY_PUEBLA",idEnv:"CLOUDBEDS_PROPERTY_ID_PUEBLA"} };
 const cors = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS" };
 const J = (o: unknown, s=200) => new Response(JSON.stringify(o), { status:s, headers:{ ...cors, "Content-Type":"application/json" } });
-const SUPERPEPE = 0.15;          // el mismo 15% de siempre
-const MAX_NOCHES = 7;            // hasta dónde ofrecemos
-const ABRE_DIAS_ANTES = 2;       // "dos días antes de su checkout" — Javi
-const CIERRA_HORA = 12;          // a las 12:00 deja de ser extensión
+const SUPERPEPE = 0.15;
+const MAX_NOCHES = 7;
+const ABRE_DIAS_ANTES = 2;
+const CIERRA_HORA = 12;
+const AVISO_MUDANZA = "Deja tus cosas juntas y listas: te las mueve Housekeeping.";
 
-async function rest(path: string, init: RequestInit = {}) { const r=await fetch(SB+"/rest/v1/"+path,{ ...init, headers:{ ...H, ...(init.headers||{}) } }); const t=await r.text(); if(!r.ok) throw new Error(path+" "+r.status+" "+t.slice(0,140)); return t?JSON.parse(t):null; }
+async function rest(p: string, init: RequestInit = {}) { const r=await fetch(SB+"/rest/v1/"+p,{ ...init, headers:{ ...H, ...(init.headers||{}) } }); const t=await r.text(); if(!r.ok) throw new Error(p+" "+r.status+" "+t.slice(0,140)); return t?JSON.parse(t):null; }
 async function tokenLookup(tok: string){ try{ const j=await rest(`apepe_reserva_token?token=eq.${encodeURIComponent(tok)}&select=reservation_id,property&limit=1`); return Array.isArray(j)&&j[0]?j[0]:null; }catch{ return null; } }
+async function cfgv(c:string){ try{ const x=await rest(`apepe_config?clave=eq.${c}&select=valor&limit=1`); return Array.isArray(x)&&x[0]?String(x[0].valor||""):""; }catch{ return ""; } }
 async function cbGet(key: string, path: string){ const r=await fetch(`${CB}/${path}`,{headers:{Authorization:`Bearer ${key}`}}); return await r.json().catch(()=>({})); }
+// putReservation SOLO contesta a PUT; postAdjustment es POST. Por eso el verbo es parámetro.
+async function cbForm(key:string, ep:string, form:Record<string,string>, method="POST"){ const body=new URLSearchParams(form).toString(); const r=await fetch(`${CB}/${ep}`,{method,headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/x-www-form-urlencoded"},body}); const t=await r.text(); let j:any={}; try{ j=JSON.parse(t); }catch{ j={raw:t.slice(0,200)}; } return {status:r.status, ok:r.ok&&j?.success!==false, j}; }
 
-/* Hora de la Ciudad de México sin librerías: el servidor corre en UTC y aquí la
-   diferencia manda, porque el corte de las 12:00 decide si esto es una extensión o
-   un late checkout. */
 function ahoraMX(){ const d=new Date(Date.now()-6*3600*1000); return { fecha:d.toISOString().slice(0,10), hora:d.getUTCHours(), min:d.getUTCMinutes() }; }
 function masDias(iso:string, n:number){ const d=new Date(iso+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 function diffDias(a:string,b:string){ try{ return Math.round((new Date(b+"T12:00:00Z").getTime()-new Date(a+"T12:00:00Z").getTime())/86400000); }catch{ return 0; } }
 
-/* El número de cama vive dentro del nombre del cuarto en Cloudbeds: "4MD(241)".
-   De ahí sale todo lo demás: la paridad dice si es alta o baja. */
-function camaDe(roomName:string){ const m=/\((\d+)\)/.exec(String(roomName||"")); if(!m) return null; const n=Number(m[1]); if(!isFinite(n)) return null; return n; }
-function nivelDe(cama:number|null){ if(cama==null) return ""; return (cama%2===0) ? "baja" : "alta"; }
+/* El número de cama vive dentro del nombre del cuarto: "4MD(241)". La paridad dice
+   si es alta o baja. */
+function camaDe(rn:string){ const m=/\((\d+)\)/.exec(String(rn||"")); if(!m) return null; const n=Number(m[1]); return isFinite(n)?n:null; }
+function nivelDe(c:number|null){ if(c==null) return ""; return (c%2===0)?"baja":"alta"; }
 
-/* getRooms viene paginado y sin paginar miente: devuelve un solo tipo de cuarto y
-   parece que la casa tiene veinte camas. */
+/* getRooms viene paginado y sin paginar miente: devuelve un solo tipo de cuarto. */
 async function inventario(key:string, pid:string){
   const out:any[]=[];
   for(let p=1;p<=8;p++){
@@ -64,26 +67,21 @@ async function inventario(key:string, pid:string){
             .filter((r:any)=>r.roomID);
 }
 
-/* Quién duerme en qué cama y qué noches. detailedRoomRates trae las noches exactas
-   de cada cuarto de cada reserva, que es justo el grano que hace falta. */
+/* Quién duerme en qué cama y qué noches. detailedRoomRates trae las noches exactas. */
 async function ocupacion(key:string, pid:string, desde:string, hasta:string){
-  const mapa:Record<string,Record<string,any>>={};  // roomID -> fecha -> {rid, llega}
-  let incompleto=false;
+  const mapa:Record<string,Record<string,any>>={}; let incompleto=false;
   for(let p=1;p<=6;p++){
     let j:any={};
     try{ j=await cbGet(key, `getReservationsWithRateDetails?propertyID=${pid}&resultsFrom=${desde}&resultsTo=${hasta}&pageSize=100&pageNumber=${p}`); }
     catch{ incompleto=true; break; }
     const d=Array.isArray(j?.data)?j.data:[];
     for(const r of d){
-      const st=String(r.status||"");
-      if(/cancel|no_show|void/i.test(st)) continue;      // esas no ocupan
-      const rooms=Array.isArray(r.rooms)?r.rooms:[];
-      for(const rm of rooms){
+      if(/cancel|no_show|void/i.test(String(r.status||""))) continue;
+      for(const rm of (Array.isArray(r.rooms)?r.rooms:[])){
         const roomID=String(rm.roomID||""); if(!roomID) continue;
-        const det=rm.detailedRoomRates||{};
-        for(const f of Object.keys(det)){
+        for(const f of Object.keys(rm.detailedRoomRates||{})){
           if(!mapa[roomID]) mapa[roomID]={};
-          mapa[roomID][f]={ rid:String(r.reservationID||""), llega:String(r.startDate||""), sale:String(r.endDate||""), nombre:String(r.guestName||"") };
+          mapa[roomID][f]={ rid:String(r.reservationID||""), llega:String(r.startDate||""), sale:String(r.endDate||"") };
         }
       }
     }
@@ -110,117 +108,216 @@ Deno.serve(async (req)=>{
     const rooms=[...(Array.isArray(d.assigned)?d.assigned:[]),...(Array.isArray(d.unassigned)?d.unassigned:[])];
     const r0=rooms[0]||{};
     const miTipo=String(r0.roomTypeID||""); const miTipoNombre=String(r0.roomTypeName||"");
-    const miCuarto=String(r0.roomID||"");   const miCuartoNombre=String(r0.roomName||"");
-    const miCama=camaDe(miCuartoNombre);    const miNivel=nivelDe(miCama);
-    const salida=String(d.endDate||"");     const llegada=String(d.startDate||"");
-    const adults=Number(r0.adults||1)||1;   const children=Number(r0.children||0)||0;
+    const misCuartos=rooms.map((r:any)=>String(r.roomID||"")).filter(Boolean);
+    const miCuartoNombre=String(r0.roomName||"");
+    const miNivel=nivelDe(camaDe(miCuartoNombre));
+    const salida=String(d.endDate||""); const llegada=String(d.startDate||"");
+
+    /* Cuántas camas ocupa la reserva. Es lo que hay que reservar junto si hay que
+       moverlos: la regla de Javi es que un grupo no se parte. */
+    const camasReserva = Math.max(1, rooms.length);
+    const paxTotal = rooms.reduce((s:number,r:any)=>s+Number(r.adults||0)+Number(r.children||0),0) || 1;
+    const soloUno = camasReserva===1 && paxTotal===1;
+
+    /* El dormitorio femenino no se le ofrece a quien no puede dormir ahí. El upgrade
+       ya filtraba por esto y aquí se me había pasado: la primera prueba contra la
+       casa le ofreció a un huésped una cama en el femenino. El mapa de géneros es el
+       mismo que usa el upgrade, para que no haya dos verdades. */
+    const gl=d.guestList&&typeof d.guestList==="object"?Object.values(d.guestList) as any[]:[];
+    const main=gl.find((g:any)=>g.isMainGuest)||gl[0]||{};
+    const esFem=/^f/i.test(String(main.guestGender||""));
+    let cfgUp:any={}; try{ cfgUp=JSON.parse(await cfgv(`apepe_upgrade_${prop}`)||"{}"); }catch{}
+    const generoDe=(tid:string)=>String(((cfgUp.dorms||{})[String(tid)]||{}).gen||"");
+    function puedeDormir(tid:string){
+      const g=generoDe(tid);
+      if(g==="fem") return esFem;            // femenino: sólo ellas
+      return true;                            // mixto y queer: abiertos
+    }
 
     const hoy=ahoraMX();
     const faltan=diffDias(hoy.fecha, salida);
     const abierto = faltan<=ABRE_DIAS_ANTES && (faltan>0 || (faltan===0 && hoy.hora<CIERRA_HORA));
-    const base = {
-      ok:true, reserva:{ id:rid, property:prop, llegada, salida, estado:status,
-        cuarto:{ tipo:miTipo, tipo_nombre:miTipoNombre, unidad:miCuarto, unidad_nombre:miCuartoNombre, cama:miCama, nivel:miNivel } },
-      ventana:{ abierta:abierto, faltan_dias:faltan, abre_el:masDias(salida,-ABRE_DIAS_ANTES), cierra:`${CIERRA_HORA}:00 del ${salida}`, ahora:`${hoy.fecha} ${String(hoy.hora).padStart(2,"0")}:${String(hoy.min).padStart(2,"0")}` },
-    };
+    const base = { ok:true, reserva:{ id:rid, property:prop, llegada, salida, estado:status,
+        pax:paxTotal, camas:camasReserva, solo_uno:soloUno,
+        cuarto:{ tipo:miTipo, tipo_nombre:miTipoNombre, unidad:misCuartos[0]||"", unidad_nombre:miCuartoNombre, nivel:miNivel } },
+      ventana:{ abierta:abierto, faltan_dias:faltan, abre_el:masDias(salida,-ABRE_DIAS_ANTES), cierra:`${CIERRA_HORA}:00 del ${salida}`, ahora:`${hoy.fecha} ${String(hoy.hora).padStart(2,"0")}:${String(hoy.min).padStart(2,"0")}` } };
 
+    if(/cancel|no_show/i.test(status)) return J({ ...base, alternativas:[], motivo:"reserva_no_activa", mensaje:"Esta reserva ya no está activa." });
     if(!abierto){
       const tarde = faltan===0 && hoy.hora>=CIERRA_HORA;
-      return J({ ...base, opciones:[],
-        motivo: tarde ? "tarde" : "pronto",
+      return J({ ...base, alternativas:[], motivo: tarde?"tarde":"pronto",
         mensaje: tarde
           ? "Ya pasaron las 12:00 de tu día de salida, así que esto ya no es una extensión. Pregúntanos en recepción por un late checkout."
           : `Podrás pedir tu extensión desde el ${masDias(salida,-ABRE_DIAS_ANTES)}.` });
     }
 
-    /* === 1) ¿HAY SITIO Y A CUÁNTO? UNA CONSULTA POR NOCHE. ===
-       getAvailableRoomTypes devuelve el roomRate del RANGO ENTERO, no el de una noche.
-       Pedidas las siete noches de golpe contestaba 3150 para una cama de dormitorio —que
-       son los siete días a 450— y con eso le habríamos cobrado siete noches por una.
-       Igual con la disponibilidad: el número del rango es el de las camas libres LAS
-       SIETE noches, así que una sola noche llena tapaba las otras seis. */
+    /* UNA CONSULTA POR NOCHE. getAvailableRoomTypes devuelve el roomRate del RANGO
+       ENTERO: pidiendo siete noches de golpe contestaba 3150 para una cama de
+       dormitorio —los siete días a 450— y le habríamos cobrado siete por una. La
+       disponibilidad igual: el número del rango son las camas libres LAS SIETE
+       noches, así que una noche llena tapaba las otras seis. */
     const hasta = masDias(salida, MAX_NOCHES);
-    const nochesCand:string[]=[]; for(let k=0;k<MAX_NOCHES;k++) nochesCand.push(masDias(salida,k));
-    const porNoche = await Promise.all(nochesCand.map(async (n)=>{
-      const av = await cbGet(key, `getAvailableRoomTypes?propertyID=${pid}&startDate=${n}&endDate=${masDias(n,1)}&rooms=1&adults=1`);
-      const ad=av?.data??av; let lista:any[]=[];
-      if(Array.isArray(ad)){ for(const p of ad){ if(Array.isArray(p.propertyRooms)) lista=lista.concat(p.propertyRooms); else if(p.roomTypeID) lista.push(p); } }
+    const cand:string[]=[]; for(let k=0;k<MAX_NOCHES;k++) cand.push(masDias(salida,k));
+    const porNoche = await Promise.all(cand.map(async (n)=>{
+      const av=await cbGet(key, `getAvailableRoomTypes?propertyID=${pid}&startDate=${n}&endDate=${masDias(n,1)}&rooms=1&adults=1`);
+      const ad=av?.data??av; let l:any[]=[];
+      if(Array.isArray(ad)){ for(const p of ad){ if(Array.isArray(p.propertyRooms)) l=l.concat(p.propertyRooms); else if(p.roomTypeID) l.push(p); } }
       const m:Record<string,{n:number;rate:number;nombre:string}>={};
-      for(const x of lista){ m[String(x.roomTypeID)]={ n:Number(x.roomsAvailable||0), rate:Number(x.roomRate||0), nombre:String(x.roomTypeName||"") }; }
+      for(const x of l) m[String(x.roomTypeID)]={ n:Number(x.roomsAvailable||0), rate:Number(x.roomRate||0), nombre:String(x.roomTypeName||"") };
       return m;
     }));
-    const disp = porNoche[0]||{};
-    const miDisp = disp[miTipo]||{n:0,rate:0,nombre:miTipoNombre};
 
-    // === 2) ¿EN SU CAMA? ===
     const inv = await inventario(key, pid);
-    const camasDelTipo = inv.filter((r:any)=>r.roomTypeID===miTipo);
-    const oc = await ocupacion(key, pid, masDias(salida,-30), hasta);
+    const oc  = await ocupacion(key, pid, masDias(salida,-30), hasta);
+    const libre=(id:string,n:string)=>!(oc.mapa[id]||{})[n];
+    const quien=(id:string,n:string)=>(oc.mapa[id]||{})[n]||null;
 
-    function libre(roomID:string, noche:string){ return !(oc.mapa[roomID]||{})[noche]; }
-    function quien(roomID:string, noche:string){ return (oc.mapa[roomID]||{})[noche]||null; }
+    /* Precio de un tipo para un tramo: la tarifa de CADA noche por las camas que
+       ocupa la reserva, y encima el 15%. */
+    function precioTramo(tipoID:string, k:number){
+      let sin=0, hay=true;
+      for(let i=0;i<=k;i++){ const v=(porNoche[i]||{})[tipoID]; if(!v||v.n<camasReserva){ hay=false; break; } sin+=v.rate*camasReserva; }
+      return hay ? { hay, sin:Math.round(sin), con:Math.round(sin*(1-SUPERPEPE)) } : { hay:false, sin:0, con:0 };
+    }
+    function camasLibres(tipoID:string, k:number, excluir:string[]){
+      const tramo=cand.slice(0,k+1);
+      return inv.filter((c:any)=> c.roomTypeID===tipoID && !excluir.includes(c.roomID) && tramo.every((n:string)=>libre(c.roomID,n)));
+    }
 
-    const noches:any[]=[];
+    /* La escalera, para cada número de noches. */
+    const escalera:any[]=[];
     for(let k=0;k<MAX_NOCHES;k++){
-      const noche = nochesCand[k];
-      const dn = porNoche[k]||{};
-      const mio = dn[miTipo]||{n:0,rate:0,nombre:miTipoNombre};
-      const hayTipo = mio.n>0;                        // el motor dice que esa noche queda algo de su tipo
-      const miCamaLibre = miCuarto ? libre(miCuarto, noche) : false;
-      const ocupa = miCuarto ? quien(miCuarto, noche) : null;
-      /* Que el que la ocupa LLEGUE ese día es lo que la hace movible: si ya viene
-         durmiendo ahí de antes, moverlo es sacarlo de su cama, no reubicar una
-         llegada. */
-      const esLlegada = !!(ocupa && ocupa.llega===noche);
-      const huecos = camasDelTipo.filter((c:any)=> c.roomID!==miCuarto && libre(c.roomID,noche));
-      const huecosMismoNivel = huecos.filter((c:any)=> c.nivel===nivelDe(camaDe(miCuartoNombre)));
-      /* Para reubicar al que llega hay que ofrecerle SU nivel, no el primero libre. */
-      const nivelDelQueLlega = ocupa ? miNivel : "";
-      const reubicables = huecos.filter((c:any)=> !nivelDelQueLlega || c.nivel===nivelDelQueLlega);
+      const tramo=cand.slice(0,k+1);
+      const alts:any[]=[];
 
-      let modo="", cama_destino=null, mover=null;
-      if(!hayTipo){ modo="sin_sitio"; }
-      else if(miCamaLibre){ modo="misma_cama"; cama_destino=miCuarto; }
-      else if(esLlegada && reubicables.length){ modo="misma_cama_moviendo"; cama_destino=miCuarto; mover={ a:reubicables[0].roomName, rid:ocupa?.rid||"" }; }
-      else if(huecosMismoNivel.length){ modo="otra_cama"; cama_destino=huecosMismoNivel[0].roomID; }
-      else if(huecos.length){ modo="otra_cama"; cama_destino=huecos[0].roomID; }
-      else { modo = oc.incompleto ? "quiza" : "sin_sitio"; }
+      const pMio=precioTramo(miTipo,k);
 
-      const tarifa = Number(mio.rate||0);
-      const precio = Math.round(tarifa*(1-SUPERPEPE));
-      noches.push({ noche, modo,
-        cama_destino, cama_destino_nombre: (camasDelTipo.find((c:any)=>c.roomID===cama_destino)||{}).roomName || "",
-        mueve_a_otro: mover, tarifa, precio, ahorro: Math.round(tarifa-precio),
-        libre_en_el_tipo: mio.n });
-    }
+      // 1) sus mismas camas, libres todo el tramo
+      const suyasLibres = misCuartos.length>0 && misCuartos.every((id:string)=>tramo.every((n:string)=>libre(id,n)));
+      if(pMio.hay && suyasLibres) alts.push({ tipo:"misma_cama", etiqueta:"Tu misma cama", detalle:miCuartoNombre,
+        room_type:miTipo, camas:misCuartos, camas_nombre:[miCuartoNombre], mueve_cosas:false, sin:pMio.sin, precio:pMio.con });
 
-    /* Se ofrecen noches seguidas: extender la 3 sin la 1 y la 2 no existe. */
-    const ofrecibles:any[]=[]; let acum=0;
-    for(const n of noches){ if(n.modo==="sin_sitio") break; acum+=n.precio; ofrecibles.push({ ...n, noches:ofrecibles.length+1, total:acum }); }
-
-    // === 3) Si le toca cambiarse de cama, el upgrade es una salida mejor que aguantarse ===
-    let upgrade:any=null;
-    const cambiaCama = ofrecibles.length && ofrecibles[0].modo!=="misma_cama" && ofrecibles[0].modo!=="misma_cama_moviendo";
-    if(ofrecibles.length){
-      let mejor:any=null;
-      for(const [tid,v] of Object.entries<any>(disp)){
-        if(tid===miTipo || !v.n) continue;
-        if(v.rate<=miDisp.rate) continue;                 // upgrade es subir, no bajar
-        if(!mejor || v.rate<mejor.rate) mejor={ tid, ...v };   // el más barato de los que suben
+      // 2) su cama, moviendo al que LLEGABA a ella (al que ya duerme ahí no se le toca)
+      if(pMio.hay && !suyasLibres && soloUno){
+        const id=misCuartos[0]||"";
+        const chocan = tramo.map((n:string)=>quien(id,n)).filter(Boolean);
+        const todosLlegan = chocan.length>0 && chocan.every((o:any)=>tramo.includes(o.llega));
+        const huecos = camasLibres(miTipo,k,misCuartos);
+        const suNivel = huecos.filter((c:any)=>c.nivel===miNivel);
+        if(todosLlegan && (suNivel.length||huecos.length)){
+          const destino=(suNivel[0]||huecos[0]);
+          alts.push({ tipo:"misma_cama_moviendo", etiqueta:"Tu misma cama", detalle:miCuartoNombre+" · lo cuadramos con recepción",
+            room_type:miTipo, camas:misCuartos, camas_nombre:[miCuartoNombre], mueve_cosas:false,
+            mover_a_otro:{ a:destino.roomName, rid:(chocan[0] as any).rid }, sin:pMio.sin, precio:pMio.con });
+        }
       }
-      if(mejor) upgrade={ tipo:mejor.tid, nombre:mejor.nombre, tarifa:mejor.rate,
-        precio:Math.round(mejor.rate*(1-SUPERPEPE)),
-        aviso:"Es otra habitación, así que tendríamos que cambiarte de cuarto." };
+
+      // 3) otra(s) cama(s) de su mismo dormitorio — mismo precio; primero su nivel
+      if(pMio.hay){
+        const huecos=camasLibres(miTipo,k,misCuartos);
+        const ordenados=[...huecos.filter((c:any)=>c.nivel===miNivel), ...huecos.filter((c:any)=>c.nivel!==miNivel)];
+        if(ordenados.length>=camasReserva){
+          const eleg=ordenados.slice(0,camasReserva);
+          const cambiaNivel = eleg.some((c:any)=>c.nivel!==miNivel);
+          alts.push({ tipo:"mismo_dorm", etiqueta:"Otra cama en tu mismo dormitorio",
+            detalle: eleg.map((c:any)=>c.roomName).join(", ") + (cambiaNivel?` · cama ${eleg[0].nivel}`:""),
+            room_type:miTipo, camas:eleg.map((c:any)=>c.roomID), camas_nombre:eleg.map((c:any)=>c.roomName),
+            mueve_cosas:true, sin:pMio.sin, precio:pMio.con });
+        }
+      }
+
+      // 4 y 5) otros tipos — otro dormitorio o una privada, ordenados por precio
+      const otros:any[]=[];
+      for(const tid of Object.keys(porNoche[0]||{})){
+        if(tid===miTipo) continue;
+        if(!puedeDormir(tid)) continue;          // el femenino no se le ofrece a quien no puede
+        const p=precioTramo(tid,k); if(!p.hay) continue;
+        const huecos=camasLibres(tid,k,[]);
+        const priv=(inv.find((c:any)=>c.roomTypeID===tid)||{}).isPrivate;
+        /* Para una privada basta el cuarto; para un dormitorio hacen falta tantas
+           camas como tiene la reserva, y juntas: el grupo no se parte. */
+        const necesita = priv ? 1 : camasReserva;
+        if(huecos.length<necesita) continue;
+        const eleg=huecos.slice(0,necesita);
+        otros.push({ tipo: priv?"privada":"otro_dorm",
+          etiqueta: priv?"Habitación privada":"Otro dormitorio",
+          detalle: ((porNoche[0]||{})[tid]||{}).nombre || tid,
+          room_type:tid, camas:eleg.map((c:any)=>c.roomID), camas_nombre:eleg.map((c:any)=>c.roomName),
+          mueve_cosas:true, sin:p.sin, precio:p.con });
+      }
+      otros.sort((a,b)=>a.precio-b.precio);
+      alts.push(...otros);
+
+      if(!alts.length) break;                 // sin sitio esa noche: no se ofrecen las siguientes
+      escalera.push({ noches:k+1, hasta:masDias(salida,k+1), alternativas:alts,
+        mejor:alts[0], desde:Math.min(...alts.map((a:any)=>a.precio)) });
     }
 
-    return J({ ...base,
-      cama_libre_en_el_tipo: miDisp.n, tarifa_noche: miDisp.rate, descuento:"15% SuperPepe",
-      datos_completos: !oc.incompleto,
-      camas_del_tipo: camasDelTipo.length,
-      opciones: ofrecibles, upgrade, cambia_cama: cambiaCama,
-      pax:{ adults, children },
-      mensaje: ofrecibles.length
-        ? (cambiaCama ? "Puedes quedarte, pero tendríamos que cambiarte de cama." : "Puedes quedarte en tu misma cama.")
-        : "Para esas noches ya no nos queda sitio en tu dormitorio." });
+    /* === PEDIRLA. La noche se aparta AHORA; el cobro lo cierra recepción. ===
+       Apartarla no es un capricho: entre que acepta y que baja a recepción, el motor
+       puede vender esa misma cama. Lo que espera es el dinero, no el cuarto. */
+    if(String(b.op||"")==="pedir"){
+      const nQ=Number(b.noches||0);
+      const fila=escalera.find((e:any)=>e.noches===nQ);
+      if(!fila) return J({ok:false,error:"esas noches ya no están libres", escalera},409);
+      const alt = fila.alternativas.find((a:any)=>a.tipo===String(b.alternativa||"")) || fila.mejor;
+      const nuevaSalida=masDias(salida,nQ);
+      const op_key=`${rid}:${nuevaSalida}`;
+
+      try{ const ya=await rest(`apepe_extension?op_key=eq.${encodeURIComponent(op_key)}&select=id,estado,monto&limit=1`);
+        if(Array.isArray(ya)&&ya[0]) return J({ok:true, ya:true, estado:ya[0].estado, monto:Number(ya[0].monto||0), nueva_salida:nuevaSalida, mensaje:"Esa extensión ya estaba pedida."}); }catch{}
+
+      const antes=Number(d.total||0);
+      /* Sólo checkoutDate: mandando `rooms` Cloudbeds rehace la asignación y le
+         quitaríamos la cama que justo venimos a conservarle. */
+      const mv=await cbForm(key,"putReservation",{ propertyID:String(pid), reservationID:rid, checkoutDate:nuevaSalida },"PUT");
+      if(!mv.ok){
+        try{ await rest(`apepe_extension`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({ op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ, monto:alt.precio, tarifa_sin_dto:alt.sin, cama_antes:miCuartoNombre, estado:"error", pedido_por:"huesped", detalle:{paso:"putReservation",resp:mv.j}, updated_at:new Date().toISOString() })}); }catch{}
+        return J({ok:false, error:"no pudimos apartar esa noche", detalle:mv.j},502);
+      }
+
+      /* Cloudbeds cobra la noche extra a la tarifa del día; nosotros prometimos esa
+         tarifa menos el 15%. Releemos el folio y cuadramos la diferencia, igual que
+         en el upgrade y en el winback: el folio tiene que decir lo que le dijimos. */
+      const nd=await cbGet(key,`getReservation?reservationID=${encodeURIComponent(rid)}&propertyID=${pid}`);
+      const cobroCB=Math.round((Number((nd?.data??nd)?.total||0)-antes)*100)/100;
+      const dif=Math.round((alt.precio-cobroCB)*100)/100;
+      let ajuste:any={aplicado:true, cobro_cb:cobroCB, pactado:alt.precio, dif:0};
+      if(Math.abs(dif)>=1){
+        const a=await cbForm(key,"postAdjustment",{ propertyID:String(pid), reservationID:rid, amount:String(dif), description:`Extensión ${nQ} noche(s) · SuperPepe −15%` });
+        ajuste={aplicado:a.ok, cobro_cb:cobroCB, pactado:alt.precio, dif, resp:a.ok?undefined:a.j};
+      }
+
+      /* Cambiarle la cama a ÉL no afecta a nadie: esas camas están libres. Mover a un
+         tercero sí, y eso lo decide una persona: se lo dejamos escrito a recepción. */
+      let asignada:any=null;
+      if(alt.tipo!=="misma_cama" && alt.tipo!=="misma_cama_moviendo" && alt.camas?.length){
+        const form:Record<string,string>={ propertyID:String(pid), reservationID:rid };
+        alt.camas.forEach((id:string,i:number)=>{ form[`rooms[${i}][roomID]`]=String(id); });
+        const as=await cbForm(key,"putReservation",form,"PUT");
+        asignada={ ok:as.ok, camas:alt.camas_nombre, resp:as.ok?undefined:as.j };
+      }
+
+      try{ await rest(`apepe_extension`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({
+        op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ,
+        monto:alt.precio, tarifa_sin_dto:alt.sin,
+        cama_antes:miCuartoNombre, cama_despues:(alt.camas_nombre||[]).join(", ")||miCuartoNombre,
+        cambio_de_cama: !!alt.mueve_cosas, movimos_a: alt.mover_a_otro||null,
+        estado:"por_cobrar", pedido_por:"huesped",
+        detalle:{ modo:alt.tipo, etiqueta:alt.etiqueta, ajuste, asignada, pax:paxTotal, camas:camasReserva },
+        updated_at:new Date().toISOString() })}); }catch{}
+
+      const doler = alt.mueve_cosas ? ` ${AVISO_MUDANZA}` : "";
+      return J({ ok:true, estado:"por_cobrar", nueva_salida:nuevaSalida, noches:nQ,
+        monto:alt.precio, ahorro:Math.round(alt.sin-alt.precio), donde:alt.etiqueta, detalle:alt.detalle,
+        mueve_cosas:!!alt.mueve_cosas, recepcion_mueve:alt.mover_a_otro||null,
+        mensaje:`¡Hecho! Te quedas ${nQ} noche${nQ>1?"s":""} más · ${alt.etiqueta}. Pasa a recepción a pagar los $${alt.precio}.${doler}` });
+    }
+
+    return J({ ...base, descuento:"15% SuperPepe", datos_completos:!oc.incompleto,
+      aviso_mudanza:AVISO_MUDANZA, escalera,
+      mensaje: escalera.length
+        ? (escalera[0].mejor.tipo==="misma_cama" ? "Puedes quedarte en tu misma cama." : "Puedes quedarte, pero habría que moverte.")
+        : "Para esas noches ya no nos queda sitio." });
   }catch(e){ console.error(e); return J({ok:false,error:String(e)},500); }
 });
