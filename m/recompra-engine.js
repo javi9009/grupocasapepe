@@ -112,14 +112,42 @@ function corridaCon(SALEN, QUEDAN, cfg){
   var filas=ANIOS.map(function(a){
     var flc=U[a]-DEUDA;
     var act=est.map(function(e,i){ return i; }).filter(function(i){ return est[i].saldo>1; });
-    var f={anio:a, flc:flc, n:act.length, bote:act.length?BOTE/act.length:0, pago:{}, tasa:{}, saldo:{}, div:{}};
+    /* UNA PERSONA ES UNA PERSONA. El bote se divide entre PERSONAS, no entre
+       posiciones ni entre vehículos. Guiot y Manzanilla están en El Pontigu y en
+       Struchture: son dos posiciones con dos capitales, pero una sola persona, así
+       que cobran UNA porción del bote, repartida entre sus dos saldos a prorrata
+       de lo que les falta. Si una de sus dos posiciones queda liquidada, la otra
+       se queda con la porción entera. */
+    var saldo0={}; act.forEach(function(i){ saldo0[i]=est[i].saldo; });
+    var grupos={}, orden=[];
+    act.forEach(function(i){ var nm=SALEN[i].n;
+      if(!grupos[nm]){ grupos[nm]=[]; orden.push(nm); } grupos[nm].push(i); });
+    var boteP=orden.length?BOTE/orden.length:0;
+    var f={anio:a, flc:flc, n:orden.length, pos:act.length, bote:boteP,
+           boteFila:{}, pago:{}, tasa:{}, saldo:{}, div:{}};
     var usado=0;
-    act.forEach(function(i){
-      var tasa=f.bote+est[i].pct;
-      var p=Math.min(Math.max(0,tasa*flc), est[i].saldo);
+    function aplica(i,p){
+      if(!(p>0)) p=0;
       est[i].saldo-=p; est[i].cobra+=p; usado+=p;
       if(est[i].saldo<1 && est[i].liq===null) est[i].liq=a;
-      f.pago[i]=p; f.tasa[i]=tasa; f.saldo[i]=est[i].saldo;
+      f.pago[i]=(f.pago[i]||0)+p; f.saldo[i]=est[i].saldo;
+    }
+    orden.forEach(function(nm){
+      var hs=grupos[nm], sum0=hs.reduce(function(t,j){ return t+saldo0[j]; },0), sobra=0;
+      hs.forEach(function(i){
+        var parte=hs.length>1 ? (sum0>0?saldo0[i]/sum0:1/hs.length) : 1;
+        var bi=boteP*parte;
+        f.boteFila[i]=bi; f.tasa[i]=bi+est[i].pct;
+        var quiere=Math.max(0, f.tasa[i]*flc);
+        var p=Math.min(quiere, est[i].saldo);
+        sobra+=quiere-p; aplica(i,p);
+      });
+      /* Lo que le sobra a una posición ya liquidada se va a la otra de la MISMA
+         persona antes de volver a la bolsa: su porción es suya entera. */
+      if(sobra>0.5) hs.forEach(function(i){
+        if(sobra<=0 || est[i].saldo<=1) return;
+        var p=Math.min(sobra, est[i].saldo); sobra-=p; aplica(i,p);
+      });
     });
     f.remod=(PNv/100)*flc;
     var noRef=0;
@@ -145,7 +173,9 @@ function socioFn(clave, vehiculo, cfg){
   var R=corridaCon(SALEN,QUEDAN,cfg), e=R.est[idx], filas=[];
   R.filas.forEach(function(f){
     if(f.pago[idx]==null) return;
-    filas.push({anio:f.anio, flc:f.flc, n:f.n, bote:f.bote, tasa:f.tasa[idx],
+    filas.push({anio:f.anio, flc:f.flc, n:f.n,
+                bote:(f.boteFila&&f.boteFila[idx]!=null)?f.boteFila[idx]:f.bote,
+                botePersona:f.bote, tasa:f.tasa[idx],
                 pago:f.pago[idx], saldo:f.saldo[idx]});
   });
   return {i:idx, socio:SALEN[idx], cobra:e.cobra, liq:e.liq, filas:filas};
@@ -161,7 +191,9 @@ function simularFn(h, cfg){
   var idx=S2.length-1, R=corridaCon(S2,Q2,cfg), e=R.est[idx], filas=[];
   R.filas.forEach(function(f){
     if(f.pago[idx]==null) return;
-    filas.push({anio:f.anio, flc:f.flc, n:f.n, bote:f.bote, tasa:f.tasa[idx],
+    filas.push({anio:f.anio, flc:f.flc, n:f.n,
+                bote:(f.boteFila&&f.boteFila[idx]!=null)?f.boteFila[idx]:f.bote,
+                botePersona:f.bote, tasa:f.tasa[idx],
                 pago:f.pago[idx], saldo:f.saldo[idx]});
   });
   return {i:idx, socio:nuevo, cobra:e.cobra, liq:e.liq, filas:filas, hipotetico:true, h:h};
@@ -278,6 +310,10 @@ function comparativaFn(h, cfg){
    pisar los globales de los módulos que cargan este archivo. */
 window.RECOMPRA={
   SALEN:SALEN, QUEDAN:QUEDAN, U:U, ANIOS:ANIOS, BASE:BASE, TOTDIL:TOTDIL,
+  /* Cuántas PERSONAS distintas salen: Guiot y Manzanilla están en los dos
+     vehículos, así que hay 22 posiciones pero 20 personas, y el bote se
+     divide entre personas. */
+  PERSONAS:(function(){ var v={},n=0; SALEN.forEach(function(s){ if(!v[s.n]){v[s.n]=1;n++;} }); return n; })(),
   VALFUT:VALFUT, DESC:DESC, SERIE_D:SERIE_D, SERIE_D_VIVA:SERIE_D_VIVA, VEST:VEST,
   PON_TODO:PON_TODO, STR_TODO:STR_TODO, ACC:ACC,
   money:money, mC:mC, pc:pc, corrida:corrida, REFTOT:348600, REFPPS:22.19343,
