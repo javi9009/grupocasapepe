@@ -208,18 +208,62 @@ h1{font-size:19px;margin:0;font-weight:700}
     });
   }
   function money2(n){ try{ return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0}); }catch(e){ return '$'+n; } }
+  /* El winback se quedaba a la mitad: el huésped aceptaba, alguien cancelaba en
+     Booking… y ahí moría. La función que crea la reserva directa existía, pero
+     nadie la llamaba: esta pestaña era de sólo mirar. Liz canceló la de Ramírez
+     Lizbeth el 28-sep y el sistema no creó nada, porque no había por dónde
+     decirle que ya estaba cancelada. Este es ese botón. Javi, 28-sep. */
   function pintarWinback(L){
     if(!WB.length){ L.innerHTML='<div class="empty">Nadie ha solicitado winback todavía.</div>'; return; }
-    var EST={preconfirmada:'Preconfirmada',pendiente:'Pendiente',cancelada_lista:'Lista',generada:'Generada ✓',activa:'Activa'};
-    L.innerHTML=WB.map(function(w){
+    var EST={preconfirmada:'Preconfirmada',pendiente:'Pendiente',cancelada_lista:'Lista',generada:'Generada ✓',activa:'Activa',error:'No se pudo'};
+    L.innerHTML=WB.map(function(w,i){
       var quien=w.por||(w.via==='huesped'?'Huésped':'—');
-      return '<div class="row" style="cursor:default">'+
+      var falta = w.estado!=='generada' && !w.new_reservation_id;
+      return '<div class="row" style="cursor:default;align-items:flex-start">'+
         '<span class="dot" style="background:#B0246A"></span>'+
         '<div class="grow"><div class="nm">'+esc(w.nombre||'Huésped')+' <span class="tag-wb">💌 winback</span></div>'+
           '<div class="meta">Pagaba '+money2(w.precio_ota)+' → directa <b>'+money2(w.precio_directo)+'</b> (−15%) · '+esc((w.property||'').toUpperCase())+'</div>'+
-          '<div class="meta">Solicitó: '+esc(quien)+' · '+fdt(w.fecha)+'</div></div>'+
-        '<span class="pill '+(w.estado==='generada'?'verde':'naranja')+'">'+esc(EST[w.estado]||w.estado)+'</span></div>';
+          '<div class="meta">Solicitó: '+esc(quien)+' · '+fdt(w.fecha)+'</div>'+
+          (w.new_reservation_id?'<div class="meta">Reserva directa <b>'+esc(w.new_reservation_id)+'</b></div>':'')+
+          (falta
+            ? '<div class="meta" style="margin-top:7px">Cuando la canceles en el canal, dale aquí y se crea la directa.</div>'+
+              '<button class="btn" data-wb="'+i+'" style="margin-top:6px">Ya la cancelé · crear la directa</button>'+
+              '<div class="meta" id="wbm'+i+'" style="margin-top:5px"></div>'
+            : '')+
+        '</div>'+
+        '<span class="pill '+(w.estado==='generada'?'verde':(w.estado==='error'?'gris':'naranja'))+'">'+esc(EST[w.estado]||w.estado)+'</span></div>';
     }).join('');
+    Array.prototype.forEach.call(L.querySelectorAll('[data-wb]'),function(b){
+      b.onclick=function(){ aplicaWinback(WB[+b.getAttribute('data-wb')], b); };
+    });
+  }
+
+  /* Crear la directa. Lo hace la función de recepción, que exige sesión con
+     permiso: nunca se dispara sola desde el teléfono del huésped. */
+  async function aplicaWinback(w, btn){
+    var msg=document.getElementById(btn.getAttribute('data-wb')?('wbm'+btn.getAttribute('data-wb')):'');
+    var tok=sessTok();
+    function di(t,mal){ if(msg){ msg.textContent=t; msg.style.color = mal?'var(--bad)':'var(--ok)'; } }
+    if(!tok){ di('Inicia sesión en el panel para poder crearla.',true); return; }
+    if(!confirm('¿Ya está cancelada en el canal?\n\nSe va a crear la reserva directa de '+
+        (w.nombre||'este huésped')+' a '+money2(w.precio_directo)+'. Si el canal sigue activo, '+
+        'acabarás con la misma noche vendida dos veces.')) return;
+    btn.disabled=true; var old=btn.textContent; btn.textContent='Creando…'; di('');
+    try{
+      var r=await fetch(SB+'/functions/v1/apepe-winback',{method:'POST',
+        headers:{apikey:KEY,Authorization:'Bearer '+tok,'Content-Type':'application/json'},
+        body:JSON.stringify({op:'aplicar',reservation_id:w.ota_reservation_id||w.reservation_id,prop:w.property})
+      }).then(function(x){return x.json();});
+      if(r&&r.ok&&(r.estado==='generada'||r.new_reservation_id)){
+        di('Creada: '+(r.new_reservation_id||'listo')+'. Recargando…');
+        setTimeout(cargar,900);
+      } else if(r&&r.estado==='cancelada_lista'){
+        di('Está en modo prueba: no se creó nada. Hay que encender apepe_winback_activo.',true);
+      } else {
+        di((r&&(r.mensaje||r.error))||'No se pudo crear. Revisa en Cloudbeds antes de reintentar.',true);
+      }
+    }catch(e){ di('Error de conexión: '+(e.message||e),true); }
+    btn.disabled=false; btn.textContent=old;
   }
   function pintarMov(L){
     if(!MOV.length){ L.innerHTML='<div class="empty">Sin no-shows de ayer ni cancelaciones recientes.</div>'; return; }
