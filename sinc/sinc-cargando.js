@@ -33,11 +33,11 @@ window.sincCargando = (function () {
       [ST+'maguey.webp','Institución, conocimiento u objeto: toda herramienta del tour entra por una de las tres puertas.','Teoría de la cultura · Gustavo Bueno']
     ],
     huesped: [
-      [ST+'hola-perrito.png','Hay viajeros de paz y viajeros de guerra. Esto está hecho para los primeros.','Hospitalidad Original'],
+      [ST+'hola-perrito.webp','Hay viajeros de paz y viajeros de guerra. Esto está hecho para los primeros.','Hospitalidad Original'],
       [ST+'maguey.webp','Lo llamaron el árbol de las maravillas: da techo, hilo, aguja, papel y de beber.','El agave']
     ],
     huesped_en: [
-      [ST+'hola-perrito.png','There are travellers of peace and travellers of war. This place was built for the first kind.','Original Hospitality'],
+      [ST+'hola-perrito.webp','There are travellers of peace and travellers of war. This place was built for the first kind.','Original Hospitality'],
       [ST+'maguey.webp','They called the agave the tree of wonders: a roof, thread, a needle, paper and something to drink.','The agave']
     ]
   };
