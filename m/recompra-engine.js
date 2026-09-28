@@ -39,7 +39,8 @@ var PON_TODO=7518290, STR_TODO=4195000;
 
 /* Quién sale. El capital es el EXHIBIDO por cada persona; las acciones solo
    determinan el % de dividendo mientras cobra. Guiot y Manzanilla están en los
-   dos vehículos: cuentan como dos socios y cobran dos porciones del bote. */
+   dos vehículos: son dos posiciones con dos capitales, pero UNA sola persona, y
+   cobran UNA sola porción del bote repartida entre sus dos saldos. */
 var SALEN=[
  {k:'Starseeker, S.L.U.', n:'Joaquín Canals', v:'Starseeker', cap:3384307, acc:8907,  tot:3384307},
  {k:'Aldo Gelover Escamilla', n:'Aldo Gelover Escamilla', v:'directo',    cap:5579666, acc:14416, tot:5579666},
