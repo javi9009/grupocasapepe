@@ -42,6 +42,25 @@ Deno.serve(async (req)=>{
   if(req.method==="OPTIONS") return new Response("ok",{headers:CORS});
   if(req.method!=="POST") return J({ ok:false, error:"POST only" },405);
   let body:any={}; try{ body=await req.json(); }catch{}
+
+  /* El huésped pide SU contrato: el que firmó al hacer el check-in. Solo eso.
+     Ni su identificación ni su firma suelta, que siguen siendo del equipo —de
+     eso iba la contención del 27-sep—. Lo que demuestra que es él es la liga de
+     su reserva, igual que en el check-in. */
+  if(String(body.accion||"")==="mio"){
+    const tk=String(body.token||"").trim();
+    if(!/^[0-9a-f-]{36}$/i.test(tk)) return J({ ok:false, error:"liga no válida" },400);
+    const t=await fetch(`${SB_URL}/rest/v1/apepe_reserva_token?select=reservation_id&token=eq.${tk}&limit=1`,{headers:H}).then(r=>r.json()).catch(()=>[]);
+    const rid=Array.isArray(t)&&t[0]?String(t[0].reservation_id||""):"";
+    if(!rid) return J({ ok:false, error:"liga no válida" },404);
+    const c=await fetch(`${SB_URL}/rest/v1/apepe_checkin?select=id,doc_datos,created_at&doc_datos->>reserva_id=eq.${encodeURIComponent(rid)}&order=created_at.desc&limit=1`,{headers:H}).then(r=>r.json()).catch(()=>[]);
+    const row=Array.isArray(c)&&c[0]?c[0]:null;
+    if(!row) return J({ ok:true, hay:false });
+    const p=(row.doc_datos&&row.doc_datos.paths)||{};
+    const url=p.contrato?await firmar(p.contrato, 600):null;
+    return J({ ok:true, hay:!!url, contrato_url:url, firmado_at:row.created_at });
+  }
+
   const id=String(body.checkin_id||""); if(!id) return J({ ok:false, error:"falta checkin_id" },400);
   const accion=String(body.accion||"ver");
   const row=await leer(id); if(!row) return J({ ok:false, error:"check-in no encontrado" },404);
