@@ -53,8 +53,26 @@ function diffDias(a:string,b:string){ try{ return Math.round((new Date(b+"T12:00
 function camaDe(rn:string){ const m=/\((\d+)\)/.exec(String(rn||"")); if(!m) return null; const n=Number(m[1]); return isFinite(n)?n:null; }
 function nivelDe(c:number|null){ if(c==null) return ""; return (c%2===0)?"baja":"alta"; }
 
-/* getRooms viene paginado y sin paginar miente: devuelve un solo tipo de cuarto. */
-async function inventario(key:string, pid:string){
+/* Caché. El inventario y la ocupación son IGUALES para todos los huéspedes y se
+   estaban releyendo enteros en cada visita: de ahí los 33 segundos. */
+async function cacheLee(clave:string, segundos:number){
+  try{
+    const r=await rest(`apepe_cache?clave=eq.${encodeURIComponent(clave)}&select=valor,updated_at&limit=1`);
+    if(!Array.isArray(r)||!r[0]) return null;
+    const edad=(Date.now()-new Date(r[0].updated_at).getTime())/1000;
+    return edad<=segundos ? r[0].valor : null;
+  }catch{ return null; }
+}
+async function cacheGuarda(clave:string, valor:unknown){
+  try{ await rest(`apepe_cache`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
+    body:JSON.stringify({clave, valor, updated_at:new Date().toISOString()})}); }catch{}
+}
+
+/* getRooms viene paginado y sin paginar miente: devuelve un solo tipo de cuarto.
+   Las camas de la casa cambian una vez al año, así que se guardan un día. */
+async function inventario(key:string, pid:string, prop:string, fresco:boolean){
+  const clave=`inventario:${prop}`;
+  if(!fresco){ const c=await cacheLee(clave, 86400); if(Array.isArray(c)) return c as any[]; }
   const out:any[]=[];
   for(let p=1;p<=8;p++){
     const j=await cbGet(key, `getRooms?propertyID=${pid}&pageSize=100&pageNumber=${p}`);
@@ -62,19 +80,28 @@ async function inventario(key:string, pid:string){
     if(Array.isArray(d)) for(const blk of d){ const rs=Array.isArray(blk?.rooms)?blk.rooms:(blk?.roomID?[blk]:[]); for(const r of rs){ out.push(r); n++; } }
     if(n<100) break;
   }
-  return out.map((r:any)=>({ roomID:String(r.roomID||""), roomName:String(r.roomName||""), roomTypeID:String(r.roomTypeID||""),
+  const lista=out.map((r:any)=>({ roomID:String(r.roomID||""), roomName:String(r.roomName||""), roomTypeID:String(r.roomTypeID||""),
                              isPrivate:!!r.isPrivate, cama:camaDe(r.roomName), nivel:nivelDe(camaDe(r.roomName)) }))
             .filter((r:any)=>r.roomID);
+  if(lista.length) await cacheGuarda(clave, lista);
+  return lista;
 }
 
-/* Quién duerme en qué cama y qué noches. detailedRoomRates trae las noches exactas. */
-async function ocupacion(key:string, pid:string, desde:string, hasta:string){
+/* Quién duerme en qué cama y qué noches. detailedRoomRates trae las noches exactas.
+   Las páginas van EN PARALELO: iban una detrás de otra y cada una tarda lo suyo,
+   así que tres páginas eran casi medio minuto de espera él solo. Se piden tres de
+   golpe y sólo se pide el segundo grupo si el primero vino lleno. */
+async function ocupacion(key:string, pid:string, prop:string, desde:string, hasta:string, fresco:boolean){
+  const clave=`ocupacion:${prop}:${desde}:${hasta}`;
+  if(!fresco){ const c=await cacheLee(clave, 240); if(c && (c as any).mapa) return c as any; }
+
   const mapa:Record<string,Record<string,any>>={}; let incompleto=false;
-  for(let p=1;p<=6;p++){
-    let j:any={};
-    try{ j=await cbGet(key, `getReservationsWithRateDetails?propertyID=${pid}&resultsFrom=${desde}&resultsTo=${hasta}&pageSize=100&pageNumber=${p}`); }
-    catch{ incompleto=true; break; }
-    const d=Array.isArray(j?.data)?j.data:[];
+  const pagina=async(p:number)=>{
+    try{ const j=await cbGet(key, `getReservationsWithRateDetails?propertyID=${pid}&resultsFrom=${desde}&resultsTo=${hasta}&pageSize=100&pageNumber=${p}`);
+      return Array.isArray(j?.data)?j.data:[]; }
+    catch{ incompleto=true; return []; }
+  };
+  const mete=(d:any[])=>{
     for(const r of d){
       if(/cancel|no_show|void/i.test(String(r.status||""))) continue;
       for(const rm of (Array.isArray(r.rooms)?r.rooms:[])){
@@ -85,9 +112,15 @@ async function ocupacion(key:string, pid:string, desde:string, hasta:string){
         }
       }
     }
-    if(d.length<100) break;
-  }
-  return { mapa, incompleto };
+  };
+  const g1=await Promise.all([pagina(1),pagina(2),pagina(3)]);
+  g1.forEach(mete);
+  if(g1[2].length===100){ const g2=await Promise.all([pagina(4),pagina(5),pagina(6)]); g2.forEach(mete);
+    if(g2[2].length===100) incompleto=true; }   // más de 600: no cabe, y hay que decirlo
+
+  const out={ mapa, incompleto };
+  if(!incompleto) await cacheGuarda(clave, out);
+  return out;
 }
 
 Deno.serve(async (req)=>{
@@ -158,17 +191,30 @@ Deno.serve(async (req)=>{
        noches, así que una noche llena tapaba las otras seis. */
     const hasta = masDias(salida, MAX_NOCHES);
     const cand:string[]=[]; for(let k=0;k<MAX_NOCHES;k++) cand.push(masDias(salida,k));
-    const porNoche = await Promise.all(cand.map(async (n)=>{
-      const av=await cbGet(key, `getAvailableRoomTypes?propertyID=${pid}&startDate=${n}&endDate=${masDias(n,1)}&rooms=1&adults=1`);
-      const ad=av?.data??av; let l:any[]=[];
-      if(Array.isArray(ad)){ for(const p of ad){ if(Array.isArray(p.propertyRooms)) l=l.concat(p.propertyRooms); else if(p.roomTypeID) l.push(p); } }
-      const m:Record<string,{n:number;rate:number;nombre:string}>={};
-      for(const x of l) m[String(x.roomTypeID)]={ n:Number(x.roomsAvailable||0), rate:Number(x.roomRate||0), nombre:String(x.roomTypeName||"") };
-      return m;
-    }));
 
-    const inv = await inventario(key, pid);
-    const oc  = await ocupacion(key, pid, masDias(salida,-30), hasta);
+    /* Mirar es una cosa y apartar es otra. Para mirar vale el caché —el huésped ve
+       sus opciones al instante—, pero al apartar se relee todo en vivo: entre que
+       abrió la pantalla y tocó el botón le pueden haber vendido la cama, y vender
+       dos veces la misma noche no se arregla con una disculpa. */
+    const fresco = String(b.op||"")==="pedir";
+
+    /* Los tres bloques a la vez. Iban en fila —disponibilidad, luego inventario,
+       luego ocupación— y se sumaban sus esperas: 33 segundos de pantalla en blanco
+       en la primera prueba de verdad. */
+    const [porNoche, inv, oc] = await Promise.all([
+      Promise.all(cand.map(async (n)=>{
+        const av=await cbGet(key, `getAvailableRoomTypes?propertyID=${pid}&startDate=${n}&endDate=${masDias(n,1)}&rooms=1&adults=1`);
+        const ad=av?.data??av; let l:any[]=[];
+        if(Array.isArray(ad)){ for(const p of ad){ if(Array.isArray(p.propertyRooms)) l=l.concat(p.propertyRooms); else if(p.roomTypeID) l.push(p); } }
+        const m:Record<string,{n:number;rate:number;nombre:string}>={};
+        for(const x of l) m[String(x.roomTypeID)]={ n:Number(x.roomsAvailable||0), rate:Number(x.roomRate||0), nombre:String(x.roomTypeName||"") };
+        return m;
+      })),
+      inventario(key, pid, prop, fresco),
+      /* Catorce días atrás alcanzan para pillar a quien lleva aquí una temporada sin
+         arrastrar tres meses de reservas que no tocan estas noches. */
+      ocupacion(key, pid, prop, masDias(salida,-14), hasta, fresco),
+    ]);
     const libre=(id:string,n:string)=>!(oc.mapa[id]||{})[n];
     const quien=(id:string,n:string)=>(oc.mapa[id]||{})[n]||null;
 
@@ -249,6 +295,11 @@ Deno.serve(async (req)=>{
       alts.push(...otros);
 
       if(!alts.length) break;                 // sin sitio esa noche: no se ofrecen las siguientes
+      /* Clave única por alternativa. Con sólo el tipo, los tres "otro dormitorio"
+         compartían identidad: en la pantalla se marcaban los tres a la vez y, peor,
+         al apartar el servidor cogía el primero que coincidiera — otro cuarto y otro
+         precio que los que el huésped había elegido. */
+      alts.forEach((a:any)=>{ a.clave = a.tipo + (a.room_type&&a.room_type!==miTipo ? (":"+a.room_type) : ""); });
       escalera.push({ noches:k+1, hasta:masDias(salida,k+1), alternativas:alts,
         mejor:alts[0], desde:Math.min(...alts.map((a:any)=>a.precio)) });
     }
@@ -260,7 +311,10 @@ Deno.serve(async (req)=>{
       const nQ=Number(b.noches||0);
       const fila=escalera.find((e:any)=>e.noches===nQ);
       if(!fila) return J({ok:false,error:"esas noches ya no están libres", escalera},409);
-      const alt = fila.alternativas.find((a:any)=>a.tipo===String(b.alternativa||"")) || fila.mejor;
+      const pedida=String(b.alternativa||"");
+      const alt = fila.alternativas.find((a:any)=>a.clave===pedida)
+               || fila.alternativas.find((a:any)=>a.tipo===pedida)   // compatibilidad
+               || fila.mejor;
       const nuevaSalida=masDias(salida,nQ);
       const op_key=`${rid}:${nuevaSalida}`;
 
