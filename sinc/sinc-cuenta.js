@@ -31,6 +31,33 @@ window.sincCuenta = (function () {
     return _sb;
   }
 
+  /* A dónde devuelve Google. Dos cosas importantes:
+     · si la pantalla dice a dónde iba (la de pago, por ejemplo), se vuelve ahí
+       directamente, y no a donde se pulsó el botón: si no, el huésped vuelve a
+       la ficha, vuelve a darle a Reservar, vuelve a Google… y no sale del bucle;
+     · se quitan los parámetros del viaje anterior, que si no se encadenan. */
+  function aDondeVuelve(destino) {
+    var u = new URL(destino || location.href, location.href);
+    ['code', 'error', 'error_description', 'state'].forEach(function (k) { u.searchParams.delete(k); });
+    return u.toString();
+  }
+  /* Cuando Google devuelve, la sesión viaja en la URL: hay que crear el cliente
+     para que la recoja. Antes esto solo pasaba si la pantalla llamaba a la
+     cuenta al cargar —la ficha del tour no lo hacía—, así que el pase se
+     quedaba sin canjear y parecía que no había entrado nunca. */
+  function recoge() {
+    try {
+      cli();
+      if (/[?&](code|error)=/.test(location.search)) {
+        setTimeout(function () {
+          var u = new URL(location.href);
+          ['code', 'error', 'error_description', 'state'].forEach(function (k) { u.searchParams.delete(k); });
+          history.replaceState({}, '', u.pathname + (u.search || '') + u.hash);
+        }, 1200);
+      }
+    } catch (_) {}
+  }
+
   function esc(s) {
     return (s == null ? '' : String(s)).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -183,7 +210,7 @@ window.sincCuenta = (function () {
           try {
             var r = await cli().auth.signInWithOAuth({
               provider: 'google',
-              options: { redirectTo: location.href },
+              options: { redirectTo: aDondeVuelve(opts.volverA) },
             });
             if (r.error) throw r.error;
           } catch (x) {
@@ -387,6 +414,10 @@ window.sincCuenta = (function () {
   return {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
-    miPerfil: miPerfil, comoHuesped: comoHuesped,
+    miPerfil: miPerfil, comoHuesped: comoHuesped, recoge: recoge,
   };
 })();
+
+/* En cuanto carga: si la sesión viene en la URL, se recoge aquí mismo. Ninguna
+   pantalla tiene que acordarse de hacerlo. */
+try { sincCuenta.recoge(); } catch (_) {}
