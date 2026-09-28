@@ -133,7 +133,17 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 const sb=createClient(SB_U,SB_K,{auth:{persistSession:true,autoRefreshToken:true}});
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let EMAIL='', PROMPT_EVT=null, ASM=null, NOTIFS=[], STAGE=0;
+let EMAIL='', PROMPT_EVT=null, ASM=null, NOTIFS=[], STAGE=0, MIS_CORREOS=[];
+// Un socio puede tener dos correos (Juanjo) o haber cambiado (Aldo, Dani, Cejudo):
+// lo que se le envió quedó guardado con el de entonces. gob_mis_correos() devuelve
+// todos los suyos para que sus pendientes aparezcan entre por donde entre.
+async function misCorreos(){
+ if(MIS_CORREOS.length) return MIS_CORREOS;
+ MIS_CORREOS=[EMAIL];
+ try{ const r=await sb.rpc('gob_mis_correos'); if(Array.isArray(r.data)&&r.data.length) MIS_CORREOS=r.data.map(x=>String(x).toLowerCase()); }catch(e){}
+ if(MIS_CORREOS.indexOf(EMAIL)<0) MIS_CORREOS.push(EMAIL);
+ return MIS_CORREOS;
+}
 
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();PROMPT_EVT=e;});
 
@@ -141,6 +151,7 @@ async function init(){
  const {data:{session}}=await sb.auth.getSession();
  EMAIL=(session&&session.user&&session.user.email||'').toLowerCase();
  $('#hola').textContent = EMAIL ? ('Bienvenido · '+EMAIL) : 'Inicia sesión para ver tu información.';
+ await misCorreos();
  await cargarAsamblea(); await cargarPendientes();
 }
 init();
@@ -150,7 +161,7 @@ async function cargarAsamblea(){
  try{
   // Sociedades del socio (por su ficha); si no hay, cae a HBR.
   let SOCS=['hbr'];
-  try{ const rs=await sb.from('socios').select('sociedades').eq('email',EMAIL).limit(1); const ss=(rs.data&&rs.data[0]&&rs.data[0].sociedades)||''; const arr=String(ss).split(',').map(x=>x.trim()).filter(Boolean); if(arr.length) SOCS=arr; }catch(e){}
+  try{ const rs=await sb.from('socios').select('sociedades').in('email',await misCorreos()).limit(1); const ss=(rs.data&&rs.data[0]&&rs.data[0].sociedades)||''; const arr=String(ss).split(',').map(x=>x.trim()).filter(Boolean); if(arr.length) SOCS=arr; }catch(e){}
   // Próxima asamblea activa de cualquiera de sus sociedades: la más reciente NO cancelada ya convocada.
   const {data}=await sb.from('gob_minutas').select('*').in('sociedad',SOCS).neq('estado','cancelada').order('updated_at',{ascending:false}).limit(30);
   const list=(data||[]).filter(m=>!(m.textos&&m.textos.historica));   // las históricas no son «la próxima»
@@ -209,7 +220,7 @@ async function renderAsistencia(){
  const abox=$('#asm-asist'); if(!abox) return;
  if(!EMAIL){ abox.innerHTML=''; return; }
  let a=null;
- try{ const r=await sb.from('gob_notificaciones').select('*').eq('socio_email',EMAIL).eq('tipo','asistencia').limit(1); a=(r.data&&r.data[0])||null; }catch(e){}
+ try{ const r=await sb.from('gob_notificaciones').select('*').in('socio_email',await misCorreos()).eq('tipo','asistencia').limit(1); a=(r.data&&r.data[0])||null; }catch(e){}
  abox.innerHTML=renderAsist(a);
 }
 window.renderAsistencia=renderAsistencia;
@@ -232,15 +243,16 @@ async function cargarPendientes(){
  const box=$('#pend-body'), abox=$('#asm-asist');
  if(!EMAIL){ box.textContent='Inicia sesión para ver tus pendientes.'; if(abox)abox.innerHTML=''; return; }
  let nn=[],pp=[];
- try{ const r=await sb.from('gob_notificaciones').select('*').eq('socio_email',EMAIL); nn=r.data||[]; }catch(e){}
- try{ const r=await sb.from('gob_poderes').select('*').eq('estado','en_firma'); pp=(r.data||[]).filter(p=>[p.apoderado_email,p.testigo1_email,p.testigo2_email].map(x=>(x||'').toLowerCase()).includes(EMAIL)); }catch(e){}
+ const MIOS=await misCorreos();
+ try{ const r=await sb.from('gob_notificaciones').select('*').in('socio_email',MIOS); nn=r.data||[]; }catch(e){}
+ try{ const r=await sb.from('gob_poderes').select('*').eq('estado','en_firma'); pp=(r.data||[]).filter(p=>[p.apoderado_email,p.testigo1_email,p.testigo2_email].map(x=>(x||'').toLowerCase()).some(x=>MIOS.indexOf(x)>=0)); }catch(e){}
  NOTIFS=nn;
  // Asistencia → se muestra en el bloque de la asamblea (arriba), no en pendientes
  const _li=document.getElementById('lnk-inv');
  if(_li&&ASM&&ASM.sociedad) _li.href='/m/socios-gobierno.html?soc='+encodeURIComponent(ASM.sociedad);
  const asist=nn.find(n=>n.tipo==='asistencia');
  if(abox) abox.innerHTML=renderAsist(asist);
- const deriv=pp.map(p=>({id:'poder:'+p.id,tipo:'poder_firmar',_p:p,estado:'pendiente',titulo:'Carta poder por firmar',detalle:'Fuiste designado '+((p.apoderado_email||'').toLowerCase()===EMAIL?'apoderado':'testigo')+' en la carta poder de '+(p.otorgante_nombre||'un socio')+'. Recibirás la solicitud de firma en tu correo.'}));
+ const deriv=pp.map(p=>({id:'poder:'+p.id,tipo:'poder_firmar',_p:p,estado:'pendiente',titulo:'Carta poder por firmar',detalle:'Fuiste designado '+(MIOS.indexOf((p.apoderado_email||'').toLowerCase())>=0?'apoderado':'testigo')+' en la carta poder de '+(p.otorgante_nombre||'un socio')+'. Recibirás la solicitud de firma en tu correo.'}));
  const items=nn.filter(n=>n.tipo!=='asistencia').filter(n=>{
    if(n.tipo==='firmar_doc') return STAGE>=2;        // oculto hasta la firma
    if(n.tipo==='descargar_titulo') return STAGE>=4;  // oculto hasta emitir títulos
