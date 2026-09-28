@@ -1076,6 +1076,14 @@ gmp-place-autocomplete,.gmpac{
     return [];
   }
   async function patch(t,id,b){return await req(t+'?id=eq.'+id,{method:'PATCH',body:JSON.stringify(b)});}
+  /* Una RPC devuelve o el resultado o el mensaje de la base, ya legible: los
+     avisos de «falta apartar la sala» vienen escritos desde allí. */
+  async function rpc(f,b){
+    var r=await req('rpc/'+f,{method:'POST',body:JSON.stringify(b||{})});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok) return {ok:false, error:(j&&(j.message||j.hint))||('Respondió '+r.status)};
+    return j&&typeof j==='object'?j:{ok:true,dato:j};
+  }
   async function post(t,b,rep){return await req(t,{method:'POST',headers:rep?{'Prefer':'return=representation'}:null,body:JSON.stringify(b)});}
   async function del(t,q){return await req(t+'?'+q,{method:'DELETE'});}
 
@@ -2319,11 +2327,34 @@ gmp-place-autocomplete,.gmpac{
       if(nuevo===antes)return;
       if(nuevo==='publicada'){
         var falta=[];
-        if(E.neto_adulto==null)falta.push('el precio');
+        if(E.neto_adulto==null && !esEvento())falta.push('el precio');
         if(!(E.horas||[]).length)falta.push('la hora');
         if(falta.length){
           toast('Para publicarla falta '+falta.join(' y ')+'.',true);
           this.value=antes; return;
+        }
+        /* El paso que falta en un evento no es un campo de la ficha: es la sala.
+           Publicarlo sin apartarla deja el escaparate vendiendo una noche que
+           el calendario del espacio no conoce, y esa noche puede acabar con dos
+           montajes encima. Aquí se aparta, que es un clic, en vez de mandar a
+           la persona a otra pantalla. Javi, 28-sep. */
+        if(esEvento() && !E.solicitud_id){
+          if(!E.espacio_id){
+            toast('Este evento todavía no dice en qué sala es.',true);
+            this.value=antes; return;
+          }
+          if(!confirm('Antes de publicarlo hay que apartar la sala esas fechas. ¿Lo hago ahora?')){
+            this.value=antes; return;
+          }
+          this.disabled=true;
+          var ap=await rpc('ev_apartar_sala',{p_experiencia:ID});
+          this.disabled=false;
+          if(!ap||!ap.ok){
+            toast((ap&&ap.error)||'No se pudo apartar la sala',true);
+            this.value=antes; return;
+          }
+          E.solicitud_id=ap.solicitud_id;
+          toast('Sala apartada · '+(ap.fechas||1)+' función(es)');
         }
       }
       this.disabled=true;

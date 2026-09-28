@@ -147,8 +147,13 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Pre
         <div id="fallback" class="oculto">
           <p class="dice" data-i18n>El cobro se abre en la pasarela segura de Stripe y vuelves aquí al terminar.</p>
         </div>
+        <div id="libre" class="oculto">
+          <p class="dice" data-i18n>No hay nada que pagar. Apartas tu lugar y te llega el boleto
+            con su QR al correo, igual que si lo hubieras comprado: es lo que te deja entrar, y es
+            como sabemos cuánta gente viene.</p>
+        </div>
         <button class="btn ancho" id="bPagar" style="margin-top:18px" data-i18n>Pagar</button>
-        <div class="pie">🔒 <span data-i18n>Transacción segura con</span> <b>Stripe</b></div>
+        <div class="pie" id="pieSeguro">🔒 <span data-i18n>Transacción segura con</span> <b>Stripe</b></div>
       </div>
     </div>
 
@@ -411,6 +416,22 @@ function pintaQuien(){
    todavía, se cobra como siempre —saltando a la pasarela— y nadie se queda
    sin poder comprar por una llave que falta. */
 async function montaTarjeta(){
+  /* Entrada libre: no hay tarjeta que pedir. El huésped ya entró con su cuenta
+     —que es lo que nos da su correo— y lo único que falta es apartarle el
+     lugar y mandarle el QR. Pedirle una tarjeta para cobrarle cero sería
+     absurdo, y además Stripe rechaza un importe de cero: el checkout de un
+     evento gratuito se moría justo aquí. Javi, 28-sep. */
+  if(total()<=0){
+    $('tarjeta').classList.add('oculto');
+    $('fallback').classList.add('oculto');
+    $('libre').classList.remove('oculto');
+    $('dicePago').textContent=T('Entrada libre');
+    var pie=$('pieSeguro'); if(pie)pie.textContent=T('Tu lugar queda apartado a tu nombre');
+    $('bPagar').textContent=T('Apartar mi lugar');
+    $('bPagar').onclick=function(){ paga('libre'); };
+    return;
+  }
+
   var ctx=null;
   try{ ctx=await sincCuenta.fn('sinc-pago',{accion:'contexto',op_experiencia_id:ID}); }catch(_){}
   PK=ctx&&ctx.pk; CUENTA=(ctx&&ctx.cuenta)||null;
@@ -453,7 +474,7 @@ async function paga(dentro){
   try{
     /* Con la tarjeta dentro, Stripe revisa lo tecleado ANTES de que exista la
        reserva: así una tarjeta mal escrita no deja una reserva colgando. */
-    if(dentro){
+    if(dentro===true){
       var v=await elements.submit();
       if(v.error)throw new Error(v.error.message);
     }
@@ -465,6 +486,12 @@ async function paga(dentro){
       p_notas:null, p_canal:'web', p_seguro:!!SEGURO,
       p_terminos:(TYC&&TYC.version)||1, p_codigo:CODIGO||null, p_propina:PROPINA||0
     },true);
+
+    if(dentro==='libre'){
+      await sincCuenta.fn('sinc-pago',{accion:'sin_cobro',reserva_id:res.id},true);
+      await muestraGracias(res.id);
+      return;
+    }
 
     if(!dentro){
       var r=await fetch(SB+'/functions/v1/sinc-stripe-checkout',{
@@ -503,18 +530,21 @@ async function muestraGracias(id){
   var r=null;
   for(var i=0;i<8;i++){
     try{ r=(await rpc('sinc_reserva_web',{p_reserva:id})||[])[0]||null; }catch(_){}
-    if(r&&r.pago_estado==='pagado')break;
+    /* 'sin_cobro' es una entrada libre ya confirmada: no hay webhook detrás al
+       que esperar, así que no se le hacen ocho vueltas de reloj a nada. */
+    if(r&&(r.pago_estado==='pagado'||r.pago_estado==='sin_cobro'))break;
     await new Promise(function(f){setTimeout(f,1500);});
   }
   CARGA.para();
   $('cargando').classList.add('oculto');
 
-  var pagada=r&&r.pago_estado==='pagado';
+  var libre=r&&r.pago_estado==='sin_cobro';
+  var pagada=r&&(r.pago_estado==='pagado'||libre);
   $('gracias').classList.remove('oculto');
   $('gracias').innerHTML=
     '<div class="dos" style="grid-template-columns:1fr"><div class="caja gracias">'+
       '<div class="tic">'+(pagada?'✓':'⏳')+'</div>'+
-      '<h2 style="font-size:22px">'+esc(T(pagada?'Listo':'Casi'))+'</h2>'+
+      '<h2 style="font-size:22px">'+esc(T(pagada?(libre?'Tu lugar está apartado':'Listo'):'Casi'))+'</h2>'+
       (r&&r.folio?'<div class="folio">'+esc(r.folio)+'</div>'+
         '<div class="mini">'+esc(T('Guarda este folio'))+'</div>':'')+
       '<p style="font-size:14.5px;line-height:1.6;color:var(--tinta-2);margin:18px 0 0">'+
