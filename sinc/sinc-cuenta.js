@@ -1,0 +1,307 @@
+/* La cuenta del huésped de Sincrético.
+ *
+ * Antes se compraba escribiendo un correo en un campo. El problema no era el
+ * formulario: era que el boleto viaja con un QR, y un correo mal tecleado deja
+ * a alguien en la puerta sin poder entrar. Así que antes de pagar hay que tener
+ * una cuenta y el correo confirmado. Dos caminos:
+ *
+ *   Google  — un botón. El correo viene confirmado de origen.
+ *   Correo  — seis cifras al buzón. Se teclean aquí y con eso se abre sesión.
+ *
+ * La sesión del huésped se guarda aparte de la del panel (storageKey propio):
+ * si alguien de casa compra un tour desde su navegador, no se queda sin su
+ * sesión de trabajo.
+ *
+ * Necesita supabase-js cargado antes. Lo demás —estilos incluidos— va aquí.
+ */
+window.sincCuenta = (function () {
+  'use strict';
+
+  var SB  = 'https://rehophywchakfapivsbh.supabase.co';
+  var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+
+  var _sb = null, YO = null;
+  function cli() {
+    if (!_sb) {
+      _sb = supabase.createClient(SB, KEY, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true,
+                storageKey: 'sinc-huesped-auth' },
+      });
+    }
+    return _sb;
+  }
+
+  function esc(s) {
+    return (s == null ? '' : String(s)).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  /* ---------- los estilos del pop-up, aquí mismo ---------- */
+  var puesto = false;
+  function estilos() {
+    if (puesto) return; puesto = true;
+    var s = document.createElement('style');
+    s.textContent =
+      '.cuCapa{position:fixed;inset:0;background:rgba(30,26,22,.5);z-index:120;' +
+        'display:flex;align-items:center;justify-content:center;padding:18px;' +
+        'backdrop-filter:blur(2px);overflow:auto}' +
+      '.cuHoja{background:#fff;border-radius:16px;max-width:430px;width:100%;' +
+        'padding:26px 24px 22px;box-shadow:0 30px 60px -30px rgba(30,26,22,.6);' +
+        'font-family:Inter,system-ui,sans-serif;color:#1E1A16}' +
+      '.cuHoja h2{font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;' +
+        'font-size:21px;margin:0 0 6px;letter-spacing:.01em}' +
+      '.cuHoja p{font-size:13.5px;line-height:1.55;color:#6E665C;margin:0 0 18px}' +
+      '.cuHoja label{display:block;font-family:Oswald,sans-serif;font-size:11px;' +
+        'letter-spacing:.1em;text-transform:uppercase;color:#6E665C;margin:0 0 5px}' +
+      '.cuHoja input{width:100%;padding:12px 13px;border:1px solid #E6DFD6;border-radius:10px;' +
+        'font:inherit;font-size:15px;background:#fff;margin-bottom:12px}' +
+      '.cuHoja input:focus{outline:2px solid #F2682A;outline-offset:-1px;border-color:#F2682A}' +
+      '.cuHoja input.cifras{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;' +
+        'font-size:27px;letter-spacing:.34em;text-align:center;padding:14px 10px}' +
+      '.cuBtn{width:100%;border:0;border-radius:10px;background:#F2682A;color:#fff;' +
+        'font-family:Oswald,sans-serif;font-weight:600;letter-spacing:.04em;' +
+        'text-transform:uppercase;font-size:14px;padding:13px 18px;cursor:pointer}' +
+      '.cuBtn:hover{background:#C9501A}' +
+      '.cuBtn:disabled{background:#E6DFD6;color:#A9A096;cursor:default}' +
+      '.cuBtn.plano{background:#fff;color:#1E1A16;border:1px solid #E6DFD6;margin-top:8px}' +
+      '.cuBtn.plano:hover{background:#F4EFE8}' +
+      '.cuBtn.google{background:#fff;color:#1E1A16;border:1px solid #E6DFD6;' +
+        'display:flex;align-items:center;justify-content:center;gap:10px;text-transform:none;' +
+        'font-family:Inter,sans-serif;font-weight:600;font-size:15px;letter-spacing:0}' +
+      '.cuBtn.google:hover{background:#F4EFE8}' +
+      '.cuO{display:flex;align-items:center;gap:12px;margin:16px 0;color:#A9A096;' +
+        'font-size:12px;text-transform:uppercase;letter-spacing:.1em;' +
+        'font-family:Oswald,sans-serif}' +
+      '.cuO:before,.cuO:after{content:"";flex:1;height:1px;background:#E6DFD6}' +
+      '.cuErr{display:none;background:#F6E1DD;color:#9E3B2E;border-radius:9px;' +
+        'padding:10px 13px;font-size:13px;line-height:1.5;margin:0 0 14px}' +
+      '.cuPie{font-size:11.5px;color:#A9A096;line-height:1.5;margin:14px 0 0;text-align:center}' +
+      '.cuLink{background:none;border:0;padding:0;color:#C9501A;font:inherit;' +
+        'font-size:13px;text-decoration:underline;cursor:pointer}';
+    document.head.appendChild(s);
+  }
+
+  var GOOGLE_SVG =
+    '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">' +
+    '<path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.1 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/>' +
+    '<path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-2.8-.4-4.1H24v7.8h12.6c-.3 2.1-1.6 5.2-4.7 7.3l7.6 5.9c4.5-4.2 6.6-10.3 6.6-16.9z"/>' +
+    '<path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C.9 16.3 0 20 0 24s.9 7.7 2.6 10.8l7.8-6.1z"/>' +
+    '<path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2 1.4-4.8 2.4-8.3 2.4-6.4 0-11.7-3.7-13.6-8.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
+
+  /* ---------- lo que sabemos de la sesión ---------- */
+  async function sesion() {
+    try { return (await cli().auth.getSession()).data.session || null; } catch (_) { return null; }
+  }
+  /* Las cabeceras para hablar con la base. Si hay sesión manda su token; si no,
+     la llave pública, que es lo que ve cualquiera que llega de la calle. */
+  async function hdr() {
+    var s = await sesion();
+    return {
+      'apikey': KEY,
+      'Authorization': 'Bearer ' + ((s && s.access_token) || KEY),
+      'Content-Type': 'application/json',
+    };
+  }
+
+  /* La ficha del cliente. La crea la base la primera vez que entra. */
+  async function fichaje(extra) {
+    var h = await hdr();
+    var r = await fetch(SB + '/rest/v1/rpc/sinc_soy_cliente', {
+      method: 'POST', headers: h, body: JSON.stringify(extra || {}),
+    });
+    var t = await r.text(), j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
+    if (!r.ok) throw new Error((j && (j.message || j.hint)) || 'No pudimos abrir tu ficha');
+    YO = j;
+    return j;
+  }
+
+  /* Si ya hay sesión de antes, se recupera sin molestar a nadie. */
+  async function yaEntrado() {
+    var s = await sesion();
+    if (!s) return null;
+    try { return await fichaje({}); } catch (_) { return null; }
+  }
+
+  async function salir() {
+    YO = null;
+    try { await cli().auth.signOut(); } catch (_) {}
+  }
+
+  async function fn(nombre, cuerpo, conSesion) {
+    var h = conSesion ? await hdr()
+                      : { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json' };
+    var r = await fetch(SB + '/functions/v1/' + nombre, {
+      method: 'POST', headers: h, body: JSON.stringify(cuerpo || {}),
+    });
+    var t = await r.text(), j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
+    if (!r.ok) throw new Error((j && j.error) || ('Respondió ' + r.status));
+    return j;
+  }
+
+  /* ---------- el pop-up ---------- */
+  /* Devuelve la ficha del cliente, o null si cierra sin entrar. */
+  function entra(opts) {
+    opts = opts || {};
+    estilos();
+    return new Promise(function (listo) {
+      var capa = document.createElement('div');
+      capa.className = 'cuCapa';
+      capa.innerHTML = '<div class="cuHoja" id="cuHoja"></div>';
+      document.body.appendChild(capa);
+      capa.onclick = function (e) { if (e.target === capa) { cierra(); listo(null); } };
+      function cierra() { if (capa.parentNode) document.body.removeChild(capa); }
+      function $(i) { return document.getElementById(i); }
+      function err(t) { var e = $('cuErr'); if (!e) return; e.textContent = t; e.style.display = t ? 'block' : 'none'; }
+
+      var correo = '';
+      paso1();
+
+      /* ---- quién eres ---- */
+      function paso1() {
+        $('cuHoja').innerHTML =
+          '<h2>' + esc(opts.titulo || 'Entra para reservar') + '</h2>' +
+          '<p>' + esc(opts.dice || 'Tu boleto lleva un QR y te llega por correo: por eso ' +
+            'necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.') + '</p>' +
+          '<div class="cuErr" id="cuErr"></div>' +
+          '<button class="cuBtn google" id="cuGoogle">' + GOOGLE_SVG + ' Continuar con Google</button>' +
+          '<div class="cuO">o con tu correo</div>' +
+          '<label for="cuMail">Tu correo</label>' +
+          '<input id="cuMail" type="email" inputmode="email" autocomplete="email" ' +
+            'placeholder="tu@correo.com" value="' + esc(correo) + '">' +
+          '<button class="cuBtn" id="cuManda">Mandarme un código</button>' +
+          '<button class="cuBtn plano" id="cuNo">Ahora no</button>' +
+          '<p class="cuPie">Con Google no hay que confirmar nada: tu correo ya viene verificado.</p>';
+
+        $('cuNo').onclick = function () { cierra(); listo(null); };
+        $('cuMail').focus();
+        $('cuMail').onkeydown = function (e) { if (e.key === 'Enter') $('cuManda').click(); };
+
+        $('cuGoogle').onclick = async function () {
+          err('');
+          this.disabled = true;
+          try {
+            var r = await cli().auth.signInWithOAuth({
+              provider: 'google',
+              options: { redirectTo: location.href },
+            });
+            if (r.error) throw r.error;
+          } catch (x) {
+            this.disabled = false;
+            err('Entrar con Google todavía no está encendido. Usa tu correo, que funciona igual.');
+            console.error('google', x);
+          }
+        };
+
+        $('cuManda').onclick = async function () {
+          err('');
+          var m = $('cuMail').value.trim();
+          if (m.indexOf('@') < 1 || m.indexOf('.') < 0) { err('Ese correo no se ve bien escrito.'); return; }
+          this.disabled = true; this.textContent = 'Mandando…';
+          try {
+            var j = await fn('sinc-identidad', { accion: 'enviar', email: m });
+            correo = m;
+            paso2(j && j.enviado_a);
+          } catch (x) {
+            this.disabled = false; this.textContent = 'Mandarme un código';
+            err(String(x.message || x));
+          }
+        };
+      }
+
+      /* ---- las seis cifras ---- */
+      function paso2(tapado) {
+        $('cuHoja').innerHTML =
+          '<h2>Mira tu correo</h2>' +
+          '<p>Mandamos seis cifras a <b>' + esc(tapado || correo) + '</b>. Vale diez minutos. ' +
+            'Si no lo ves, asómate a la carpeta de spam.</p>' +
+          '<div class="cuErr" id="cuErr"></div>' +
+          '<label for="cuCod">El código</label>' +
+          '<input id="cuCod" class="cifras" inputmode="numeric" autocomplete="one-time-code" ' +
+            'maxlength="6" placeholder="······">' +
+          '<button class="cuBtn" id="cuVer">Confirmar</button>' +
+          '<button class="cuBtn plano" id="cuOtro">Usar otro correo</button>' +
+          '<p class="cuPie"><button class="cuLink" id="cuRe">Mandármelo otra vez</button></p>';
+
+        var c = $('cuCod');
+        c.focus();
+        c.oninput = function () {
+          this.value = this.value.replace(/\D/g, '').slice(0, 6);
+          if (this.value.length === 6) $('cuVer').click();
+        };
+        c.onkeydown = function (e) { if (e.key === 'Enter') $('cuVer').click(); };
+        $('cuOtro').onclick = paso1;
+        $('cuRe').onclick = async function () {
+          err('');
+          this.textContent = 'Mandando…';
+          try { await fn('sinc-identidad', { accion: 'enviar', email: correo }); this.textContent = 'Va de nuevo ✓'; }
+          catch (x) { this.textContent = 'Mandármelo otra vez'; err(String(x.message || x)); }
+        };
+
+        $('cuVer').onclick = async function () {
+          err('');
+          var cod = c.value.replace(/\D/g, '');
+          if (cod.length !== 6) { err('El código son seis cifras.'); return; }
+          this.disabled = true; this.textContent = 'Comprobando…';
+          var b = this;
+          try {
+            var j = await fn('sinc-identidad', { accion: 'verificar', email: correo, codigo: cod });
+            /* El pase de entrada se cambia por una sesión de verdad. Supabase ha
+               llamado 'email' y 'magiclink' a lo mismo según la versión, así que
+               se prueban los dos antes de darlo por perdido. */
+            var s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'email' });
+            if (s.error) s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'magiclink' });
+            if (s.error) throw s.error;
+            var yo = await fichaje({});
+            if (!yo || !String(yo.nombre || '').trim()) { paso3(); return; }
+            cierra(); listo(yo);
+          } catch (x) {
+            b.disabled = false; b.textContent = 'Confirmar';
+            c.value = ''; c.focus();
+            err(String(x.message || x));
+          }
+        };
+      }
+
+      /* ---- cómo te llamas (solo la primera vez) ---- */
+      function paso3() {
+        $('cuHoja').innerHTML =
+          '<h2>¿A nombre de quién?</h2>' +
+          '<p>Es lo que verá quien te reciba el día del tour.</p>' +
+          '<div class="cuErr" id="cuErr"></div>' +
+          '<label for="cuNom">Nombre y apellido</label>' +
+          '<input id="cuNom" autocomplete="name" placeholder="Nombre y apellido">' +
+          '<label for="cuTel">WhatsApp <span style="text-transform:none;letter-spacing:0">(por si hay que avisarte algo)</span></label>' +
+          '<input id="cuTel" type="tel" autocomplete="tel" placeholder="+52 55 …">' +
+          '<button class="cuBtn" id="cuGuarda">Listo</button>';
+        $('cuNom').focus();
+        $('cuNom').onkeydown = function (e) { if (e.key === 'Enter') $('cuGuarda').click(); };
+        $('cuGuarda').onclick = async function () {
+          err('');
+          var n = $('cuNom').value.trim();
+          if (n.length < 2) { err('Dinos cómo te llamas.'); return; }
+          this.disabled = true; this.textContent = 'Un momento…';
+          try {
+            var yo = await fichaje({ p_nombre: n, p_telefono: $('cuTel').value.trim() || null });
+            cierra(); listo(yo);
+          } catch (x) {
+            this.disabled = false; this.textContent = 'Listo';
+            err(String(x.message || x));
+          }
+        };
+      }
+    });
+  }
+
+  /* Lo normal: si ya entró, sigue; si no, se le pide. Devuelve la ficha o null. */
+  async function exige(opts) {
+    var yo = await yaEntrado();
+    if (yo) return yo;
+    return await entra(opts);
+  }
+
+  return {
+    cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
+    yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
+  };
+})();

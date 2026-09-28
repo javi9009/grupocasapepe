@@ -439,6 +439,8 @@ footer b{color:var(--tinta);}
   <button id="mBtn">Reservar</button>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="sinc-cuenta.js"></script>
 <script>
 (function(){
 'use strict';
@@ -577,7 +579,6 @@ async function arranca(){
   pintaGuias();pintaRecorrido();pintaDonde();pintaImpacto();pintaLogras();pintaSaber();
   montaPanel();
   await cargaDisponibilidad();
-  vueltaDePago();
 }
 
 /* ---------- portada ---------- */
@@ -1184,13 +1185,13 @@ function montaPanel(){
       pintaTotal();
     };
   });
-  $('bReservar').onclick=abreCheckout;
+  $('bReservar').onclick=vaAPagar;
   $('mBtn').onclick=function(){
     if(!diaSel||!horaSel){
       document.querySelector('.panel').scrollIntoView({behavior:'smooth',block:'center'});
       return;
     }
-    abreCheckout();
+    vaAPagar();
   };
   pintaTotal();
 }
@@ -1211,273 +1212,26 @@ function pintaTotal(){
   var b=$('mBtn');b.textContent=listo?'Reservar':'Ver fechas';
 }
 
-/* ---------- checkout ---------- */
-/* ---------- checkout ---------- */
-/* Dos pasos: primero quién eres, y después un repaso donde se ve lo que hay
-   que recordar del día del tour, se ofrece la cobertura y se aceptan las
-   condiciones. El cobro va al final, con la tarjeta, y solo entonces. */
-var DATOS={nombre:'',mail:'',tel:'',idioma:'',pais:'',notas:'',seguro:false,acepta:false};
-
+/* ---------- a pagar ----------
+   La compra ya no se cierra aquí. En esta ficha se elige día, hora y cuántos
+   son, y hasta ahí llega: después hace falta cuenta —el boleto lleva un QR y
+   tiene que llegar a un buzón que de verdad sea suyo— y de ahí a la pantalla
+   de pago, que es la que cobra y la que confirma. */
+var DATOS={};
 function seguroMxn(){ return cfgn('sinc_seguro_mxn',0); }
-function totalConSeguro(){
-  return total() + (DATOS.seguro && seguroMxn()>0 ? seguroMxn()*1 : 0) + (PROPINA||0);
-}
-/* Las propinas que se ofrecen: redondeadas, nunca cifras rotas. */
-function opcionesPropina(){
-  var t=total(), l=[0];
-  [0.05,0.10,0.15].forEach(function(p){
-    var v=Math.round(t*p/10)*10;
-    if(v>0 && l.indexOf(v)<0)l.push(v);
-  });
-  return l;
-}
 
-/* Lo que de verdad conviene saber antes de pagar, sacado de la ficha. */
-function recordatorios(){
-  var l=[], dur=duracion();
-  l.push(['Cuándo', bonita(diaSel)+' a las '+hhmm(horaSel)+(dur?' · dura '+dur:'')]);
-  if(E.cer_inicio_lugar)
-    l.push(['Dónde', E.cer_inicio_lugar+(E.cer_inicio_barrio?' · '+E.cer_inicio_barrio:'')+
-            '. Llega unos minutos antes: el grupo sale a su hora.']);
-  if(E.edad_minima) l.push(['Edad', 'A partir de '+E.edad_minima+' años, sin excepciones.']);
-  if((E.que_llevar||[]).length) l.push(['Lleva contigo', E.que_llevar.join(' · ')]);
-  if((E.idiomas||[]).length>1) l.push(['Idioma', 'Se da en '+E.idiomas.join(' y ')+'.']);
-  if(E.requiere_minimo&&E.cupo_min)
-    l.push(['Grupo mínimo', 'Necesita '+E.cupo_min+' personas. Si no se juntan te avisamos y te devolvemos todo.']);
-  if(E.accesibilidad==='no') l.push(['Accesibilidad','No es accesible en silla de ruedas.']);
-  if(E.accesibilidad==='parcial') l.push(['Accesibilidad','Parcialmente accesible: escríbenos antes y lo vemos.']);
-  l.push(['Cancelación', CANCEL[E.cancelacion]||'Consúltalo antes de reservar.']);
-  return l;
-}
-
-function abreCheckout(){
-  var capa=document.createElement('div');capa.className='capa';
-  capa.innerHTML='<div class="hoja" id="ckHoja"></div>';
-  document.body.appendChild(capa);
-  capa.onclick=function(e){if(e.target===capa)cierra();};
-  function cierra(){ if(capa.parentNode)document.body.removeChild(capa); }
-
-  paso1();
-
-  /* ---- paso 1: quién eres ---- */
-  function paso1(){
-    $('ckHoja').innerHTML=
-      '<div class="pasos"><b>1. Tus datos</b><span>2. Repasa y paga</span></div>'+
-      '<h2>¿Quién viene?</h2>'+
-      '<div class="err" id="ckErr"></div>'+
-      '<div class="campo"><label for="ckNombre">Tu nombre</label>'+
-        '<input id="ckNombre" autocomplete="name" placeholder="Nombre y apellido" value="'+esc(DATOS.nombre)+'"></div>'+
-      '<div class="par">'+
-        '<div class="campo"><label for="ckMail">Correo</label>'+
-          '<input id="ckMail" type="email" autocomplete="email" placeholder="tu@correo.com" value="'+esc(DATOS.mail)+'"></div>'+
-        '<div class="campo"><label for="ckTel">WhatsApp</label>'+
-          '<input id="ckTel" type="tel" autocomplete="tel" placeholder="+52 55 …" value="'+esc(DATOS.tel)+'"></div>'+
-      '</div>'+
-      '<div class="par">'+
-        '<div class="campo"><label for="ckIdioma">Idioma</label><select id="ckIdioma">'+
-          (E.idiomas||['Español']).map(function(i){
-            return '<option'+(DATOS.idioma===i?' selected':'')+'>'+esc(i)+'</option>';}).join('')+
-          '</select></div>'+
-        '<div class="campo"><label for="ckPais">País</label>'+
-          '<input id="ckPais" autocomplete="country-name" placeholder="México" value="'+esc(DATOS.pais)+'"></div>'+
-      '</div>'+
-      '<div class="campo"><label for="ckNotas">Algo que debamos saber</label>'+
-        '<textarea id="ckNotas" placeholder="Alergias, movilidad, si vienen con niños…">'+esc(DATOS.notas)+'</textarea>'+
-        '<div class="ayuda">Se lo pasamos a quien te va a recibir, y para nada más.</div></div>'+
-      '<button class="btn ancho" id="ckSigue">Continuar</button>'+
-      '<button class="btn plano ancho" id="ckNo" style="margin-top:8px">Todavía no</button>';
-
-    $('ckNo').onclick=cierra;
-    $('ckNombre').focus();
-    $('ckSigue').onclick=function(){
-      DATOS.nombre=$('ckNombre').value.trim();
-      DATOS.mail=$('ckMail').value.trim();
-      DATOS.tel=$('ckTel').value.trim();
-      DATOS.idioma=$('ckIdioma').value;
-      DATOS.pais=$('ckPais').value.trim();
-      DATOS.notas=$('ckNotas').value.trim();
-      var e=$('ckErr');
-      if(!DATOS.nombre){e.textContent='Dinos cómo te llamas.';e.style.display='block';return;}
-      if(!DATOS.mail||DATOS.mail.indexOf('@')<1){
-        e.textContent='Necesitamos un correo para mandarte la confirmación.';e.style.display='block';return;}
-      paso2();
-    };
-  }
-
-  /* ---- paso 2: repasa y paga ---- */
-  function paso2(){
-    var seg=seguroMxn();
-    $('ckHoja').innerHTML=
-      '<div class="pasos"><span>1. Tus datos</span><b>2. Repasa y paga</b></div>'+
-      '<h2>Antes de pagar</h2>'+
-      '<div class="err" id="ckErr"></div>'+
-
-      '<div class="resumen">'+
-        '<div class="l"><b>'+esc(E.nombre)+'</b></div>'+
-        '<div class="l"><span>'+esc(bonita(diaSel))+'</span><b>'+hhmm(horaSel)+'</b></div>'+
-        '<div class="l"><span>'+adultos+' adulto'+(adultos===1?'':'s')+
-          (menores?' · '+menores+' menor'+(menores===1?'':'es'):'')+'</span>'+
-          '<b>'+money(total())+'</b></div>'+
-        '<div class="l"><span>A nombre de '+esc(DATOS.nombre)+'</span></div>'+
-      '</div>'+
-
-      '<h3 class="cktit">Lo que hay que recordar</h3>'+
-      '<ul class="recuerda">'+recordatorios().map(function(r){
-        return '<li><b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span></li>';}).join('')+'</ul>'+
-
-      (seg>0
-        ? '<label class="oferta"><input type="checkbox" id="ckSeguro"'+(DATOS.seguro?' checked':'')+'>'+
-          '<span class="txt"><b>'+esc(cfg('sinc_seguro_titulo','Cobertura de cancelación'))+
-          ' · +'+money(seg)+'</b>'+esc(cfg('sinc_seguro_texto',''))+'</span></label>'
-        : '')+
-
-      /* Quien te atendió en recepción. La propina es suya, íntegra: no le
-         quitamos nada y no espera al día del tour. */
-      (QUIEN&&QUIEN.nombre
-        ? '<div style="border:1px solid var(--linea);border-radius:14px;padding:14px 15px;margin:14px 0">'+
-            '<div style="font-size:14px;margin-bottom:4px">Te atendió <b>'+esc(QUIEN.nombre)+'</b>'+
-            (QUIEN.hotel?' · '+esc(QUIEN.hotel):'')+'</div>'+
-            '<div style="font-size:12.5px;color:var(--tenue);margin-bottom:10px">'+
-              '¿Quieres dejarle algo? Le llega completo.</div>'+
-            '<div style="display:flex;gap:8px;flex-wrap:wrap" id="ckProp">'+
-              opcionesPropina().map(function(v){
-                return '<button type="button" data-v="'+v+'" class="btn plano" '+
-                  'style="padding:8px 14px;font-size:14px'+
-                  (v===PROPINA?';outline:2px solid var(--naranja);outline-offset:-2px':'')+'">'+
-                  (v===0?'Ahora no':money(v))+'</button>';}).join('')+
-            '</div></div>'
-        : '')+
-
-      '<label class="acepto"><input type="checkbox" id="ckTyC"'+(DATOS.acepta?' checked':'')+'>'+
-        '<span>He leído y acepto las <a href="terminos.html" target="_blank" rel="noopener">'+
-        'condiciones de reserva</a>'+
-        (E.terminos_publicados?' y las condiciones propias de '+esc(E.operador||'la operadora'):'')+
-        '.</span></label>'+
-
-      '<div class="total"><span class="t">Total</span><span class="v" id="ckTotal">'+
-        money(totalConSeguro())+'</span></div>'+
-
-      '<button class="btn ancho" id="ckPagar">Pagar con tarjeta</button>'+
-      '<button class="btn plano ancho" id="ckAtras" style="margin-top:8px">Atrás</button>'+
-      '<div class="pie" id="ckPie">El cobro lo procesa Stripe. No guardamos tu tarjeta.</div>';
-
-    $('ckAtras').onclick=paso1;
-    if($('ckSeguro'))$('ckSeguro').onchange=function(){
-      DATOS.seguro=this.checked; $('ckTotal').textContent=money(totalConSeguro()); };
-    if($('ckProp'))$('ckProp').onclick=function(ev){
-      var b=ev.target.closest('button[data-v]'); if(!b)return;
-      PROPINA=Number(b.getAttribute('data-v'))||0;
-      Array.prototype.forEach.call(this.querySelectorAll('button[data-v]'),function(x){
-        x.style.outline=(Number(x.getAttribute('data-v'))===PROPINA&&PROPINA>0)
-          ?'2px solid var(--naranja)':'';
-        x.style.outlineOffset='-2px';
-      });
-      $('ckTotal').textContent=money(totalConSeguro());
-    };
-    $('ckTyC').onchange=function(){DATOS.acepta=this.checked;};
-    $('ckPagar').onclick=paga;
-  }
-
-  async function paga(){
-    var b=$('ckPagar'), e=$('ckErr');
-    e.style.display='none';
-    if(!$('ckTyC').checked){
-      e.textContent='Hay que aceptar las condiciones de reserva para continuar.';
-      e.style.display='block';return;
-    }
-    b.disabled=true;b.textContent='Un momento…';
-    var res;
-    try{
-      res=await rpc('sinc_reservar_web',{
-        p_op_exp:ID, p_fecha:diaSel, p_hora:horaSel, p_nombre:DATOS.nombre,
-        p_adultos:adultos, p_menores:menores, p_email:DATOS.mail,
-        p_telefono:DATOS.tel||null, p_idioma:DATOS.idioma||null,
-        p_pais:DATOS.pais||null, p_notas:DATOS.notas||null, p_canal:'web',
-        p_seguro:!!DATOS.seguro, p_terminos:(TYC&&TYC.version)||1,
-        p_codigo:CODIGO||null, p_propina:PROPINA||0
-      });
-    }catch(x){
-      e.textContent=String(x.message||x);e.style.display='block';
-      b.disabled=false;b.textContent='Pagar con tarjeta';
-      cargaDisponibilidad();
-      return;
-    }
-
-    /* La reserva ya existe y tiene el lugar bloqueado. Ahora, la pasarela. */
-    try{
-      var r=await fetch(SB+'/functions/v1/sinc-stripe-checkout',{
-        method:'POST',headers:hdr(),
-        body:JSON.stringify({reserva_id:res.id, origen:location.origin,
-                             ruta:location.pathname+location.search})});
-      var j=await r.json();
-      if(r.ok&&j.url){ location.href=j.url; return; }
-      if(r.status===503){ await sinCobro(res); return; }
-      throw new Error(j.error||'No pudimos abrir el pago');
-    }catch(x){
-      /* El cobro no salió, pero la reserva sí: no se pierde, se cierra a mano */
-      await sinCobro(res, String(x.message||x));
-    }
-  }
-
-  async function sinCobro(res, aviso){
-    try{ res=await rpc('sinc_reserva_sin_cobro',{p_reserva:res.id})||res; }catch(_){}
-    cierra();
-    confirmada(res, aviso);
-  }
-}
-
-/* ---------- confirmación ---------- */
-function confirmada(r, aviso){
-  var capa=document.createElement('div');capa.className='capa';
-  var pagada=r.pago_estado==='pagado';
-  capa.innerHTML=
-   '<div class="hoja"><div class="exito">'+
-     '<div class="tic">✓</div>'+
-     '<h2>Listo, '+esc(String(r.nombre||'').split(' ')[0])+'</h2>'+
-     '<div class="folio">'+esc(r.folio||'')+'</div>'+
-     '<div style="font-size:12px;color:var(--tenue)">Guarda este folio</div>'+
-     '<div class="resumen" style="text-align:left;margin-top:18px">'+
-       '<div class="l"><b>'+esc(E.nombre)+'</b></div>'+
-       (diaSel?'<div class="l"><span>'+esc(bonita(diaSel))+'</span><b>'+hhmm(horaSel)+'</b></div>':'')+
-       '<div class="l"><span>'+esc(E.cer_inicio_lugar||'')+'</span></div>'+
-       '<div class="l"><span>'+(r.pax||0)+' persona'+((r.pax||0)===1?'':'s')+'</span>'+
-         '<b>'+money(r.pago_total||r.total)+'</b></div>'+
-       (r.seguro?'<div class="l"><span>Con cobertura de cancelación</span></div>':'')+
-     '</div>'+
-     (aviso?'<div class="err" style="display:block;text-align:left">'+esc(aviso)+'</div>':'')+
-     '<p class="serif" style="text-align:left">'+
-       (pagada
-         ? 'Pago recibido. Te mandamos la confirmación a <b>'+esc(r.email||'')+'</b>.'
-         : 'Tu lugar está apartado. Te escribimos a <b>'+esc(r.email||'')+'</b> para cerrar el pago.')+
-       ' '+esc(CANCEL[E.cancelacion]||'')+'</p>'+
-     '<button class="btn plano ancho" id="okCerrar">Cerrar</button>'+
-   '</div></div>';
-  document.body.appendChild(capa);
-  capa.querySelector('#okCerrar').onclick=function(){
-    document.body.removeChild(capa);
-    diaSel=null;horaSel=null;adultos=1;menores=0;
-    DATOS.seguro=false;DATOS.acepta=false;
-    cargaDisponibilidad();pintaTotal();
-  };
-}
-
-/* Al volver de la pasarela. El pago lo confirma el webhook, no esta pantalla:
-   aquí solo se lee cómo quedó la reserva. */
-async function vueltaDePago(){
-  var m=location.search.match(/[?&]pago=(ok|no)/);
-  var id=(location.search.match(/[?&]res=([0-9a-f-]{36})/)||[])[1];
-  if(!m)return;
-  history.replaceState({},'',location.pathname+'?id='+ID);
-  if(!id){ return; }
-  var r=null;
-  for(var i=0;i<5&&!r;i++){
-    try{ r=(await rpc('sinc_reserva_web',{p_reserva:id})||[])[0]; }catch(_){}
-    if(r&&m[1]==='ok'&&r.pago_estado!=='pagado'){ r=null; await new Promise(function(f){setTimeout(f,1500);}); }
-  }
-  if(!r)return;
-  if(r.fecha){diaSel=String(r.fecha).slice(0,10);horaSel=r.hora;}
-  if(m[1]==='ok') confirmada(r);
-  else error('El pago no se completó. Tu lugar sigue apartado un rato: vuelve a intentarlo.');
+async function vaAPagar(){
+  if(!diaSel||!horaSel||esPreficha())return;
+  var b=$('bReservar'), t=b.textContent;
+  b.disabled=true; b.textContent='Un momento…';
+  var yo=null;
+  try{ yo=await sincCuenta.exige({titulo:'Entra para reservar'}); }
+  catch(x){ console.error('cuenta',x); }
+  b.disabled=false; b.textContent=t; pintaTotal();
+  if(!yo)return;
+  location.href='pago.html?id='+encodeURIComponent(ID)+
+    '&f='+encodeURIComponent(diaSel)+'&h='+encodeURIComponent(hhmm(horaSel))+
+    '&a='+adultos+'&m='+menores+QS+(CODIGO?'&c='+encodeURIComponent(CODIGO):'');
 }
 
 arranca();
