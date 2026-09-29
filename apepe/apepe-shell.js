@@ -49,11 +49,14 @@
     var css = ''
       + '.apsh-top{position:sticky;top:0;z-index:60;background:#1E1A16;color:#fff}'
       + '.apsh-in{max-width:720px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}'
-      + '.apsh-marca{height:34px;width:auto;flex:0 0 auto}'
+      + '.apsh-back{color:#fff;text-decoration:none;font-size:22px;line-height:1;opacity:.9;flex:0 0 auto}'
+      + '.apsh-marcafila{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px}'
+      + '.apsh-marca{height:34px;width:auto;display:block}'
       + '.apsh-txt{flex:1;min-width:0;line-height:1.15}'
-      + '.apsh-nom{font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.02em;font-size:16px}'
+      + '.apsh-nom{font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.02em;font-size:17px;'
+      +   'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
       + '.apsh-lema{font-family:"Lobster Two",cursive;color:#F8BBCB;font-size:14px}'
-      + '.apsh-sede{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.08em;color:#8DC8EA;text-transform:uppercase;flex:0 0 auto}'
+      + '.apsh-sede{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.08em;color:#8DC8EA;text-transform:uppercase}'
       + '.apsh-franja{height:8px;display:flex}.apsh-franja i{flex:1}'
       + '.apsh-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:60;background:#FBF7F2;'
       +   'border-top:1px solid #E6DFD6;display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));'
@@ -68,19 +71,48 @@
     document.head.appendChild(st);
 
     /* --- header de la APePe --- */
+    /* El nombre de la pantalla, no la marca otra vez: el logo ya dice de quién
+       es la casa. Se saca del <title> -"Tolantongo · Sincrético"- y si no hay,
+       se queda el lema. Igual que en Bienvenida, Vnums o La Cósmica: flecha
+       para volver, logo con la sede debajo, y el nombre al lado. */
+    function escapa(t){ return String(t==null?'':t).replace(/[&<>"]/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    /* Ojo: la ficha del tour pone su título DESPUÉS, cuando le llegan los datos.
+       Si se lee una sola vez sale «Sincrético», que es el título de fábrica. */
+    function delTitulo(){
+      var n = String(document.title || '').split(/[·|]/)[0].trim();
+      if (!n || /^(sincr[eé]tico|casa pepe)$/i.test(n)) return '';
+      return n;
+    }
+    var nombre = delTitulo() || 'Experiencia';
+
     var hdr = document.createElement('header');
     hdr.className = 'apsh-top';
     hdr.innerHTML =
       '<div class="apsh-in">'
-      +  '<img class="apsh-marca" src="/img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
-      +    'onerror="this.style.display=\'none\'">'
-      +  '<div class="apsh-txt"><div class="apsh-nom">Casa Pepe</div>'
+      +  '<a class="apsh-back" href="'+liga('/apepe/index.html')+'" aria-label="Volver">\u2190</a>'
+      +  '<div class="apsh-marcafila">'
+      +    '<img class="apsh-marca" src="/img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
+      +      'onerror="this.style.display=\'none\'">'
+      +    '<div class="apsh-sede">'+sede+'</div>'
+      +  '</div>'
+      +  '<div class="apsh-txt"><div class="apsh-nom">'+escapa(nombre)+'</div>'
       +    '<div class="apsh-lema">How to be a Mexican?</div></div>'
-      +  '<div class="apsh-sede">'+sede+'</div>'
       + '</div>'
       + '<div class="apsh-franja"><i style="background:#F2682A"></i><i style="background:#E2188E"></i>'
       +   '<i style="background:#F8BBCB"></i><i style="background:#8DC8EA"></i></div>';
     document.body.insertBefore(hdr, document.body.firstChild);
+
+    /* Y cuando el título cambie, el header se entera. */
+    try {
+      var caja = hdr.querySelector('.apsh-nom');
+      var t = document.querySelector('title');
+      if (caja && t && window.MutationObserver) {
+        new MutationObserver(function () {
+          var n = delTitulo(); if (n) caja.textContent = n;
+        }).observe(t, { childList: true, characterData: true, subtree: true });
+      }
+    } catch (_) {}
 
     /* --- barra de pestañas de la APePe --- */
     var IMG = '/img/apepe/stickers/';
