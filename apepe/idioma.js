@@ -133,7 +133,7 @@
     'Sin fotos': 'No photos',
     'Tu cuarto': 'Your room',
     'Ver menos': 'See less',
-    'Virreinal': 'Viceregal',
+    'Virreinal': 'Virreinal',
     'sin cargo': 'no charge',
     'sin fecha': 'no date',
     '{n} noche': '{n} night',
