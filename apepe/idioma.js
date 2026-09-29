@@ -284,6 +284,16 @@
     'Sobre esta carta': 'About this card',
     /* El motor de reservas del socio. */
     'Entras': 'Check in',
+    'Reservar': 'Book it',
+    'Reservando…': 'Booking…',
+    'Elige dónde quieres dormir': 'Pick where you want to sleep',
+    'Una habitación': 'One room',
+    '{n} habitaciones': '{n} rooms',
+    '{a} → {b}, {n} noches.': '{a} → {b}, {n} nights.',
+    '{a} → {b} · {c}': '{a} → {b} · {c}',
+    'Te acaba de llegar el correo con la confirmación.': 'The confirmation email has just landed in your inbox.',
+    'No te preocupes por el importe: como socio va a tu cuenta y no se cobra aquí ni en recepción.': 'Do not worry about the amount: as a partner it goes to your account and is not charged here or at the front desk.',
+
     'Sales': 'Check out',
     'Personas': 'Guests',
     'Ver qué hay libre': 'See what is free',
