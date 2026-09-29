@@ -160,17 +160,47 @@
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
-  /* Las zonas donde de verdad anda el huésped. El radio es a ojo de barrio:
-     lo que se camina sin pensarlo. */
-  var ZONAS=[
-    {n:'Centro',      lat:19.4338, lng:-99.1380},
-    {n:'Roma',        lat:19.4180, lng:-99.1620},
-    {n:'Condesa',     lat:19.4120, lng:-99.1720},
-    {n:'Juárez',      lat:19.4270, lng:-99.1610},
-    {n:'Coyoacán',    lat:19.3500, lng:-99.1620},
-    {n:'Polanco',     lat:19.4310, lng:-99.1930},
-    {n:'Chapultepec', lat:19.4220, lng:-99.1820}
-  ];
+  /* Sede del huésped. Por ahora llega por la liga (?ciudad= / ?sede=) y por
+     defecto CDMX: un huésped de CDMX sólo ve CDMX; uno de Puebla, sólo Puebla. */
+  function normSede(v){ v=String(v==null?'':v).trim().toLowerCase();
+    return /pue|chol|atlix|tlax/.test(v) ? 'puebla' : 'cdmx'; }
+  var _P0=new URLSearchParams(location.search);
+  var CIUDAD=normSede(_P0.get('ciudad')||_P0.get('sede')||'cdmx');
+
+  var SEDES={
+    cdmx:{ etiqueta:'CDMX', centro:[19.4326,-99.1450], zoom:13,
+      /* Pertenece a CDMX: la ciudad lo dice; y para los retos —que no traen
+         ciudad— cae al oeste del meridiano que deja Teotihuacán con nosotros
+         y Puebla/Cholula/Tlaxcala del otro lado. */
+      esDeAqui:function(p){
+        var c=String(p.ciudad||'').toLowerCase();
+        if(c) return c.indexOf('méxico')>=0||c.indexOf('mexico')>=0||c.indexOf('cdmx')>=0||c.indexOf('estado de')>=0;
+        return Number(p.lng) <= -98.6;
+      },
+      zonas:[
+        {n:'Centro',      lat:19.4338, lng:-99.1380},
+        {n:'Roma',        lat:19.4180, lng:-99.1620},
+        {n:'Condesa',     lat:19.4120, lng:-99.1720},
+        {n:'Juárez',      lat:19.4270, lng:-99.1610},
+        {n:'Coyoacán',    lat:19.3500, lng:-99.1620},
+        {n:'Polanco',     lat:19.4310, lng:-99.1930},
+        {n:'Chapultepec', lat:19.4220, lng:-99.1820}
+      ] },
+    puebla:{ etiqueta:'PUEBLA', centro:[19.0438,-98.1982], zoom:13,
+      esDeAqui:function(p){
+        var c=String(p.ciudad||'').toLowerCase();
+        if(c) return c.indexOf('puebla')>=0||c.indexOf('chol')>=0||c.indexOf('atlix')>=0||c.indexOf('tlax')>=0;
+        return Number(p.lng) > -98.6;
+      },
+      zonas:[
+        {n:'Centro',             lat:19.0438, lng:-98.1982},
+        {n:'Cholula',            lat:19.0630, lng:-98.3020},
+        {n:'Angelópolis',        lat:19.0300, lng:-98.2380},
+        {n:'Barrio del Artista', lat:19.0460, lng:-98.1930},
+        {n:'Atlixco',            lat:18.9086, lng:-98.4348}
+      ] }
+  };
+  var SED=SEDES[CIUDAD], ZONAS=SED.zonas;
 
   var TODOS=[], TIPOS=[], antojo='', ORIG=null, MAP=null, CAPA=null, YO=null;
 
@@ -192,6 +222,8 @@
         {headers:{apikey:KEY,Authorization:'Bearer '+KEY}});
       if(!r.ok) throw new Error(r.status);
       TODOS=await r.json();
+      /* Filtro por sede: el huésped sólo ve los lugares de su ciudad. */
+      TODOS=TODOS.filter(function(p){ return SED.esDeAqui(p); });
       /* Las descripciones de los lugares son contenido, no botones: viven en la
          tabla i18n y se pisan encima aquí. Si falta una, se ve el español. */
       try{ await sincI18n.aplica('mapa_puntos',TODOS); }catch(_){}
@@ -210,8 +242,9 @@
       var rc=await fetch(SB+'/rest/v1/rpc/pch_mapa_publico',{method:'POST',
         headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},body:'{}'});
       if(rc.ok){ (await rc.json()||[]).forEach(function(x){
-        TODOS.push({lat:x.lat,lng:x.lng,tipologia:'challenge',tipologia_nombre:'Challenges',
-          tipologia_orden:0,color:x.color||'#E2188E',nombre:'Reto Pepe Challenge',
+        if(!SED.esDeAqui({lng:x.lng})) return;   /* reto de otra ciudad: fuera */
+        TODOS.push({lat:x.lat,lng:x.lng,tipologia:'challenge',tipologia_nombre:'Pepe GO!',
+          tipologia_orden:0,color:x.color||'#E2188E',nombre:'Reto Pepe GO!',
           descripcion_breve:x.resena||'',maps_url:'/apepe/challenge',_challenge:true,_lugar_id:x.lugar_id}); }); }
     }catch(_){ }
     TIPOS=[];
@@ -226,6 +259,7 @@
     /* En el orden del mapa impreso: primero qué ver, luego comer y beber,
        y al final lo práctico. Los puntos vienen ordenados por su número. */
     TIPOS.sort(function(a,b){return a.orden-b.orden;});
+    var _badge=document.querySelector('.top .der b'); if(_badge) _badge.textContent=SED.etiqueta;
     pintaZonas(); pintaAntojo(); pintaLlevo(); arrancaMapa(); pinta();
   }
 
@@ -248,7 +282,7 @@
     /* Los retos no son una tipología: el Tenampa sigue siendo una cantina.
        Van como filtro aparte, al principio, porque es lo que engancha. */
     if(TODOS.some(function(p){return p.reto;}))
-      h+='<button class="chip emb" data-t="__reto" aria-pressed="false">★ Embajadores CDMX</button>';
+      h+='<button class="chip emb" data-t="__reto" aria-pressed="false">★ Embajadores '+esc(SED.etiqueta)+'</button>';
     TIPOS.forEach(function(t){
       h+='<button class="chip" data-t="'+esc(t.codigo)+'" aria-pressed="false">'+
          '<span class="pt" style="background:'+esc(t.color||'#999')+'"></span>'+esc(t.nombre)+'</button>';
@@ -265,7 +299,7 @@
   }
 
   function arrancaMapa(){
-    MAP=L.map('mapa',{scrollWheelZoom:false}).setView([19.4326,-99.1450],13);
+    MAP=L.map('mapa',{scrollWheelZoom:false}).setView(SED.centro, SED.zoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(MAP);
     CAPA=L.layerGroup().addTo(MAP);
@@ -340,9 +374,9 @@
       if(p._challenge){
         m=L.marker([p.lat,p.lng],{icon:L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,30],popupAnchor:[0,-28],
           html:'<div style="width:30px;height:30px;border-radius:8px 8px 8px 2px;transform:rotate(45deg);background:'+esc(p.color||'#E2188E')+';border:2px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center"><span style="transform:rotate(-45deg);font-size:15px">🎴</span></div>'})});
-        m.bindPopup('<b>🎴 '+esc(T('Reto Pepe Challenge'))+'</b>'+
+        m.bindPopup('<b>🎴 '+esc(T('Reto Pepe GO!'))+'</b>'+
           (p.descripcion_breve?'<br><i>'+esc(p.descripcion_breve)+'</i>':'')+
-          '<br><a href="/apepe/challenge" rel="noopener">'+esc(T('Ábrelo en el Pepe Challenge'))+' →</a>');
+          '<br><a href="/apepe/challenge" rel="noopener">'+esc(T('Ábrelo en Pepe GO!'))+' →</a>');
       } else {
         m=L.marker([p.lat,p.lng],{icon:L.icon({
           iconUrl:'img/mapa/'+p.tipologia+'.png',
