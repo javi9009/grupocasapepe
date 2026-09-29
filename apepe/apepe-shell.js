@@ -116,13 +116,23 @@
 
     /* --- barra de pestañas de la APePe --- */
     var IMG = '/img/apepe/stickers/';
-    var tabs = [
-      { t:'inicio', label:'Inicio',       href:liga('/apepe/index.html'),      img:IMG+'hola-perrito.webp',  match:['/apepe/index','/apepe/'] },
-      { t:'vnums',  label:'Vnums',        href:liga('/apepe/vnums.html'),       img:'/img/apepe/vnum-moneda-128.webp', match:['/apepe/vnums'] },
-      { t:'exp',    label:'Experiencias', href:ligaApp('/apepe/experiencias.html'), img:IMG+'blue-demon-a.webp', match:['/apepe/experiencias','/sinc/index','/sinc/exp'] },
-      { t:'mapa',   label:'Mapa',         href:ligaApp('/sinc/mapa.html'),      img:IMG+'diana-reforma.webp', match:['/sinc/mapa'] },
-      { t:'yo',     label:'Yo',           href:liga('/apepe/yo.html'),          img:IMG+'teotihuacan.webp',   match:['/apepe/yo'] }
-    ];
+    /* Modo de acceso recortado: 'publico' (usuario local Pepe GO) o 'colab'
+       (colaborador de SoyPepe). Llega por ?modo= y se recuerda. */
+    var MODO = (function(){ try{ var m=P.get('modo')||'';
+      if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
+      return localStorage.getItem('apepe_modo')||''; }catch(_){ return ''; } })();
+    var CAT = {
+      inicio: { t:'inicio', label:'Inicio', href:liga('/apepe/index.html'), img:IMG+'hola-perrito.webp', match:['/apepe/index','/apepe/'] },
+      pepego: { t:'pepego', label:'Pepe GO!', href:liga('/apepe/challenge.html'), img:IMG+'bellas-artes.webp', match:['/apepe/challenge'] },
+      vnums:  { t:'vnums', label:'Vnums', href:liga('/apepe/vnums.html'), img:'/img/apepe/vnum-moneda-128.webp', match:['/apepe/vnums'] },
+      exp:    { t:'exp', label:'Experiencias', href:ligaApp('/apepe/experiencias.html'), img:IMG+'blue-demon-a.webp', match:['/apepe/experiencias','/sinc/index','/sinc/exp'] },
+      mapa:   { t:'mapa', label:'Mapa', href:ligaApp('/sinc/mapa.html'), img:IMG+'diana-reforma.webp', match:['/sinc/mapa'] },
+      yo:     { t:'yo', label:'Yo', href:liga('/apepe/yo.html'), img:IMG+'teotihuacan.webp', match:['/apepe/yo'] }
+    };
+    var ORDEN = MODO==='publico' ? ['pepego','exp','vnums','mapa']
+              : MODO==='colab'  ? ['mapa','pepego','exp']
+              : ['inicio','vnums','exp','mapa','yo'];
+    var tabs = ORDEN.map(function(k){ return CAT[k]; });
     var ruta = location.pathname.replace(/\.html$/,'');
     var nav = document.createElement('nav');
     nav.className = 'apsh-tabbar';

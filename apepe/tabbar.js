@@ -22,20 +22,31 @@
   window.__apepeTabbar = true;
 
   var IMG = '/img/apepe/stickers/';
-  /* Inicio · Vnums · Experiencias · Mapa · Yo, en ese orden. El mapa es también
-     donde se filtra el Pepe GO!, por eso no tiene pestaña propia. */
-  var TABS = [
-    { id:'inicio', txt:'Inicio',       base:'/apepe/index.html',       img:IMG+'hola-perrito.webp',   caeEn:['/apepe','/apepe/index',
-        /* Las pantallas que cuelgan de Inicio: se llega a ellas desde ahí,
-           así que la pestaña encendida sigue siendo Inicio. */
-        '/apepe/welcome','/apepe/cosmica','/apepe/extender','/apepe/promos',
-        '/apepe/pepequiz','/apepe/tienda','/apepe/upgrade','/apepe/wifi',
-        '/apepe/hola-pepe'] },
-    { id:'vnums',  txt:'Vnums',        base:'/apepe/vnums.html',       img:'/img/apepe/vnum-moneda-128.webp', mon:true, caeEn:['/apepe/vnums'] },
-    { id:'exp',    txt:'Experiencias', base:'/apepe/experiencias.html',img:IMG+'blue-demon-a.webp',   app:true, caeEn:['/apepe/experiencias','/sinc/index','/sinc/exp','/sinc/todas'] },
-    { id:'mapa',   txt:'Mapa',         base:'/sinc/mapa.html',         img:IMG+'diana-reforma.webp',  app:true, caeEn:['/sinc/mapa','/apepe/challenge'] },
-    { id:'yo',     txt:'Yo',           base:'/apepe/yo.html',          img:IMG+'teotihuacan.webp',    caeEn:['/apepe/yo'] }
-  ];
+
+  /* Modo de acceso: '' = huésped (todo), 'publico' = usuario local de Pepe GO
+     (sólo Pepe GO · Experiencias · Vnums · Mapa), 'colab' = colaborador de
+     SoyPepe (sólo Mapa · Pepe GO · Experiencias). Llega por ?modo= y se recuerda. */
+  var MODO = (function(){ try{
+    var p=new URLSearchParams(location.search), m=p.get('modo')||'';
+    if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
+    return localStorage.getItem('apepe_modo')||'';
+  }catch(_){ return ''; } })();
+
+  var CAT = {
+    inicio: { id:'inicio', txt:'Inicio', base:'/apepe/index.html', img:IMG+'hola-perrito.webp',
+      caeEn:['/apepe','/apepe/index','/apepe/welcome','/apepe/cosmica','/apepe/extender','/apepe/promos',
+        '/apepe/pepequiz','/apepe/tienda','/apepe/upgrade','/apepe/wifi','/apepe/hola-pepe'] },
+    pepego: { id:'pepego', txt:'Pepe GO!', base:'/apepe/challenge.html', img:IMG+'bellas-artes.webp', caeEn:['/apepe/challenge'] },
+    vnums:  { id:'vnums', txt:'Vnums', base:'/apepe/vnums.html', img:'/img/apepe/vnum-moneda-128.webp', mon:true, caeEn:['/apepe/vnums'] },
+    exp:    { id:'exp', txt:'Experiencias', base:'/apepe/experiencias.html', img:IMG+'blue-demon-a.webp', app:true, caeEn:['/apepe/experiencias','/sinc/index','/sinc/exp','/sinc/todas'] },
+    mapa:   { id:'mapa', txt:'Mapa', base:'/sinc/mapa.html', img:IMG+'diana-reforma.webp', app:true, caeEn:['/sinc/mapa'] },
+    yo:     { id:'yo', txt:'Yo', base:'/apepe/yo.html', img:IMG+'teotihuacan.webp', caeEn:['/apepe/yo'] }
+  };
+  var ORDEN;
+  if (MODO==='publico')    ORDEN=['pepego','exp','vnums','mapa'];
+  else if (MODO==='colab') ORDEN=['mapa','pepego','exp'];
+  else { ORDEN=['inicio','vnums','exp','mapa','yo']; CAT.mapa.caeEn=['/sinc/mapa','/apepe/challenge']; }
+  var TABS = ORDEN.map(function(k){ return CAT[k]; });
 
   function qs() {
     try { if (window.apepeResv) return window.apepeResv.qs(); } catch (_) {}
