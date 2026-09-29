@@ -48,9 +48,23 @@
     } catch (_) {}
   }
 
+  /* La ciudad del huésped (CDMX / Puebla). Llega una vez por la liga
+     (?ciudad= / ?sede=) y se recuerda en el aparato, para que la app entera
+     —mapa, PepeGO, Experiencias— la respete sin arrastrarla en cada enlace.
+     Es el primer paso de "la ciudad sale de la reserva". */
+  var sede = '';
+  try {
+    var _s = (p && (p.get('ciudad') || p.get('sede'))) || '';
+    _s = String(_s).trim().toLowerCase();
+    if (_s) { sede = /pue|chol|atlix|tlax/.test(_s) ? 'puebla' : 'cdmx';
+              localStorage.setItem('apepe_sede', sede); }
+    else { sede = localStorage.getItem('apepe_sede') || ''; }
+  } catch (_) {}
+
   window.apepeResv = {
     token: function () { return vals.resv || ''; },
     sol: function () { return vals.sol || ''; },
+    sede: function () { return sede || ''; },
     /* Lo que hay que pegarle a una liga interna para no perder la identidad. */
     qs: function () {
       if (vals.resv) return '?resv=' + encodeURIComponent(vals.resv);

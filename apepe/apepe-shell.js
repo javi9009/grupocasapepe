@@ -33,7 +33,9 @@
     }
     function liga(base){ return base + QS; }
 
-    var sede = (function(){ var v=String(P.get('ciudad')||P.get('sede')||'').toLowerCase();
+    var sede = (function(){
+      var g=''; try{ g=localStorage.getItem('apepe_sede')||''; }catch(_){}
+      var v=String(P.get('ciudad')||P.get('sede')||g||'').toLowerCase();
       return /pue|chol|atlix|tlax/.test(v) ? 'PUEBLA' : 'CDMX'; })();
 
     /* --- fuera el chrome de Sincrético --- */
