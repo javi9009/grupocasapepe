@@ -428,9 +428,19 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
 <div class="pop" id="popCam"><div class="inner" style="text-align:center;max-width:480px">
   <h3 data-i18n="camTit">Toma la foto de tu documento</h3>
   <p class="mini" data-i18n="camHint" style="margin:0 0 10px">Acerca la zona de datos (los renglones). Buena luz y sin reflejos.</p>
-  <video id="camVideo" playsinline autoplay muted style="width:100%;max-height:52vh;border-radius:14px;background:#000;object-fit:cover"></video>
+  <div id="camCaja" style="position:relative;line-height:0">
+    <video id="camVideo" playsinline autoplay muted style="width:100%;max-height:52vh;border-radius:14px;background:#000;object-fit:cover"></video>
+    <!-- El marco: mientras el documento no lo llene, la franja de datos sale
+         demasiado chica para leerse. Es más útil que cualquier instrucción. -->
+    <div id="camMarco" style="position:absolute;inset:8% 6%;border:2px dashed rgba(255,255,255,.85);
+         border-radius:10px;pointer-events:none;box-shadow:0 0 0 9999px rgba(0,0,0,.18)"></div>
+    <div id="camFoco" style="position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;border:2px solid #F2682A;
+         border-radius:50%;opacity:0;transition:opacity .35s;pointer-events:none"></div>
+  </div>
+  <p class="mini" id="camEstado" style="margin:8px 0 0;min-height:16px"></p>
   <div class="rowbtn" style="margin-top:12px">
     <button class="btn sec" type="button" id="camCancel" data-i18n="camX">Cancelar</button>
+    <button class="btn sec" type="button" id="camLuz" style="display:none">🔦 Luz</button>
     <button class="btn mag" type="button" id="camShot" data-i18n="camCap">📸 Capturar</button>
   </div>
 </div></div>
@@ -848,24 +858,109 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   $('fileDoc').onchange=function(e){ procesarDoc(e.target.files&&e.target.files[0]); };
   // Cámara en vivo: funciona en Chrome (escritorio y móvil), Safari y la tablet de recepción.
   // El botón de archivo (btnDoc) sigue igual para galería o navegadores sin cámara.
-  var _camStream=null;
+  /* LA CÁMARA DEL DOCUMENTO.
+     No leía los pasaportes, y no era el lector: era la foto. Se pedía la cámara
+     sin decir nada más, así que el navegador daba la vista previa que le venía
+     bien -640x480 en muchos teléfonos-, y en 640 de ancho la franja de datos de
+     un pasaporte no tiene píxeles que leer por mucho que se amplíe. Encima se
+     capturaba dibujando ESE video en un canvas, así que la foto salía con la
+     resolución de la vista previa, no la de la cámara.
+     Ahora: se pide resolución de verdad y enfoque continuo; se dispara con
+     ImageCapture.takePhoto() cuando el teléfono lo trae, que es la foto entera
+     del sensor y no el fotograma de la previa; se puede tocar la pantalla para
+     enfocar donde está el documento; hay linterna si la cámara la tiene; y si
+     aun así la foto sale chica, se dice y se ofrece la cámara del teléfono, que
+     enfoca mejor que nadie. Javi, 29-sep. */
+  var _camStream=null, _camTrack=null, _camCap=null;
+  function camEstado(t){ var e=$('camEstado'); if(e) e.textContent=t||''; }
   function camCerrar(){ try{ if(_camStream){ _camStream.getTracks().forEach(function(t){ t.stop(); }); _camStream=null; } }catch(_){}
-    try{ $('camVideo').srcObject=null; }catch(_){} $('popCam').classList.remove('on'); }
+    _camTrack=null; _camCap=null;
+    try{ $('camVideo').srcObject=null; }catch(_){} $('popCam').classList.remove('on'); camEstado(''); }
   if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){ $('btnCam').style.display=''; }
+
+  function camAjusta(){
+    if(!_camTrack||!_camTrack.getCapabilities) return;
+    var cap={}; try{ cap=_camTrack.getCapabilities()||{}; }catch(_){}
+    /* Enfoque continuo: sin esto muchas cámaras se quedan fijas al infinito y
+       un documento a 20 cm sale siempre borroso. */
+    var av=[];
+    if(cap.focusMode && cap.focusMode.indexOf('continuous')>=0) av.push({focusMode:'continuous'});
+    if(cap.exposureMode && cap.exposureMode.indexOf('continuous')>=0) av.push({exposureMode:'continuous'});
+    if(av.length){ try{ _camTrack.applyConstraints({advanced:av}); }catch(_){} }
+    var luz=$('camLuz');
+    if(luz) luz.style.display = (cap.torch ? '' : 'none');
+    var st={}; try{ st=_camTrack.getSettings()||{}; }catch(_){}
+    if(st.width) camEstado((st.width>=1600?'':'⚠ ')+'Cámara a '+st.width+'×'+st.height+
+      (st.width>=1600?' · toca la pantalla para enfocar':' · si no lee, usa «Subir o tomar foto»'));
+  }
   $('btnCam').onclick=async function(){
     try{
-      _camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+      /* Lo más grande que nos dé; si la cámara no llega, el navegador baja solo. */
+      _camStream=await navigator.mediaDevices.getUserMedia({audio:false, video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:2560}, height:{ideal:1440},
+        advanced:[{focusMode:'continuous'}]
+      }});
       $('camVideo').srcObject=_camStream; $('popCam').classList.add('on');
+      _camTrack=_camStream.getVideoTracks()[0]||null;
+      try{ if(window.ImageCapture && _camTrack) _camCap=new ImageCapture(_camTrack); }catch(_){ _camCap=null; }
+      setTimeout(camAjusta,300);
     }catch(err){ /* sin permiso o sin cámara: cae al selector de archivo */ $('fileDoc').click(); }
   };
+  /* Tocar donde está el documento: en las cámaras que lo soportan enfoca ahí, y
+     en las que no, al menos vuelve a pedir un enfoque. */
+  $('camCaja').addEventListener('click', function(ev){
+    var v=$('camVideo'), f=$('camFoco'); if(!v||!_camTrack) return;
+    var r=v.getBoundingClientRect();
+    var x=(ev.clientX-r.left)/r.width, y=(ev.clientY-r.top)/r.height;
+    if(f){ f.style.left=(ev.clientX-r.left)+'px'; f.style.top=(ev.clientY-r.top)+'px';
+           f.style.opacity='1'; setTimeout(function(){ f.style.opacity='0'; },700); }
+    var cap={}; try{ cap=_camTrack.getCapabilities()||{}; }catch(_){}
+    var av=[];
+    if(cap.pointsOfInterest) av.push({pointsOfInterest:[{x:x,y:y}]});
+    if(cap.focusMode && cap.focusMode.indexOf('single-shot')>=0) av.push({focusMode:'single-shot'});
+    else if(cap.focusMode && cap.focusMode.indexOf('continuous')>=0) av.push({focusMode:'continuous'});
+    if(av.length){ try{ _camTrack.applyConstraints({advanced:av}); }catch(_){} }
+  });
+  $('camLuz').onclick=function(){
+    if(!_camTrack) return;
+    var st={}; try{ st=_camTrack.getSettings()||{}; }catch(_){}
+    try{ _camTrack.applyConstraints({advanced:[{torch:!st.torch}]}); }catch(_){}
+  };
   $('camCancel').onclick=camCerrar;
-  $('camShot').onclick=function(){
-    var v=$('camVideo'); if(!v||!v.videoWidth){ camCerrar(); return; }
+  $('camShot').onclick=async function(){
+    var v=$('camVideo');
+    camEstado('Tomando…');
+    /* La foto del sensor, no el fotograma de la vista previa: es la diferencia
+       entre 0.3 y 8 megapíxeles, y entre que se lea el documento o no. */
+    if(_camCap && _camCap.takePhoto){
+      try{
+        var blob=await _camCap.takePhoto();
+        if(blob && blob.size>20000){ camCerrar(); revisaFoto(blob); return; }
+      }catch(_){}
+    }
+    if(!v||!v.videoWidth){ camCerrar(); return; }
     var cv=document.createElement('canvas'); cv.width=v.videoWidth; cv.height=v.videoHeight;
     try{ cv.getContext('2d').drawImage(v,0,0,cv.width,cv.height); }catch(_){ camCerrar(); return; }
     camCerrar();
-    cv.toBlob(function(b){ if(b) procesarDoc(b); },'image/jpeg',0.92);
+    cv.toBlob(function(b){ if(b) revisaFoto(b); },'image/jpeg',0.95);
   };
+  /* Si la foto salió chica no la mandamos a ciegas: el lector va a fallar y el
+     huésped se va a quedar mirando un error que no es suyo. */
+  function revisaFoto(blob){
+    try{
+      var im=new Image();
+      im.onload=function(){
+        if(im.width<1200){
+          avisoDoc('warn','La foto salió chica ('+im.width+' px de ancho) y puede que no se lea. '+
+            'Si falla, toca <b>Subir o tomar foto</b> y usa la cámara del teléfono.');
+        }
+        procesarDoc(blob);
+      };
+      im.onerror=function(){ procesarDoc(blob); };
+      im.src=URL.createObjectURL(blob);
+    }catch(_){ procesarDoc(blob); }
+  }
   function avisoDoc(cls,txt){ var a=$('docAviso'); a.className='aviso '+cls; a.innerHTML=txt; }
   window._docOK=false;
   function ocr(f){ return Tesseract.recognize(f,'eng',{}).then(function(r){ return (r&&r.data&&r.data.text)||''; }); }

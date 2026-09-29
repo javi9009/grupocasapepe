@@ -56,18 +56,87 @@
     } catch (_) {}
   }
 
-  /* La ciudad del huésped (CDMX / Puebla). Llega una vez por la liga
-     (?ciudad= / ?sede=) y se recuerda en el aparato, para que la app entera
-     —mapa, PepeGO, Experiencias— la respete sin arrastrarla en cada enlace.
-     Es el primer paso de "la ciudad sale de la reserva". */
+  /* LA CIUDAD DE LA APP.
+     No es un ajuste del aparato: la dice LA RESERVA. Si la reserva es de Puebla,
+     APePe es de Puebla -mapa, Pepe GO!, experiencias, promos-, y si es de CDMX,
+     de CDMX. Javi, 29-sep: "el que te marca la ubicación de la app es la
+     reserva".
+     El orden, de más fuerte a más débil:
+       1. la reserva abierta (token -> apepe_sede_token)
+       2. lo que diga la liga (?ciudad= / ?sede=), que es un acto de quien entra
+          -el QR del Pepe GO! de cada casa lo trae-
+       3. lo último que se supo en este aparato
+       4. dónde está el teléfono, si ya nos dio el permiso; y si no, CDMX
+     Sin reserva se cae al no-lugar: la app sigue entera para jugar, reservar
+     tours y juntar Vnums, pero no es la casa de nadie. */
+  var SB_URL = 'https://rehophywchakfapivsbh.supabase.co';
+  var SB_FN = SB_URL + '/functions/v1/apepe-reserva';
+  var KEY   = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+
+  function normSede(v){ return /pue|chol|atlix|tlax/.test(String(v||'').toLowerCase()) ? 'puebla' : 'cdmx'; }
   var sede = '';
   try {
     var _s = (p && (p.get('ciudad') || p.get('sede'))) || '';
     _s = String(_s).trim().toLowerCase();
-    if (_s) { sede = /pue|chol|atlix|tlax/.test(_s) ? 'puebla' : 'cdmx';
-              localStorage.setItem('apepe_sede', sede); }
+    if (_s) { sede = normSede(_s); localStorage.setItem('apepe_sede', sede); }
     else { sede = localStorage.getItem('apepe_sede') || ''; }
   } catch (_) {}
+
+  /* 1) La reserva manda. Se guarda por token para que el siguiente arranque lo
+     sepa sin preguntar; la primera vez llega tarde, y si resulta que la ciudad
+     era otra se recarga una sola vez -mejor un parpadeo que media app en la
+     ciudad equivocada-. */
+  function sedeDeLaReserva(){
+    if (!vals.resv) return;
+    var mapa = {};
+    try { mapa = JSON.parse(localStorage.getItem('apepe_sede_de')||'{}') || {}; } catch(_){}
+    var ya = mapa[vals.resv];
+    if (ya) { aplicaSede(ya, false); return; }
+    fetch(SB_URL + '/rest/v1/rpc/apepe_sede_token', { method:'POST',
+      headers:{ apikey:KEY, Authorization:'Bearer '+KEY, 'Content-Type':'application/json' },
+      body: JSON.stringify({ p_token: vals.resv }) })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(v){
+        if (!v) return;
+        var s = normSede(v);
+        mapa[vals.resv] = s;
+        try { localStorage.setItem('apepe_sede_de', JSON.stringify(mapa)); } catch(_){}
+        aplicaSede(s, true);
+      }).catch(function(){});
+  }
+  function aplicaSede(s, puedeRecargar){
+    if (!s || s === sede) return;
+    sede = s;
+    try { localStorage.setItem('apepe_sede', s); } catch(_){}
+    if (!puedeRecargar) return;
+    var marca = 'apepe_sede_recarga';
+    try { if (sessionStorage.getItem(marca) === s) return; sessionStorage.setItem(marca, s); } catch(_){}
+    try { location.reload(); } catch(_){}
+  }
+
+  /* 4) Sin reserva y sin nada sabido: dónde está el teléfono. No se le pide el
+     permiso aquí -aparecer pidiendo la ubicación nada más abrir es de mal
+     vecino-; sólo se usa si ya lo tiene dado. Puebla si anda por allá, y CDMX
+     en cualquier otro caso. */
+  function sedeDelTelefono(){
+    if (sede || vals.resv || !navigator.geolocation) return;
+    function mira(){
+      navigator.geolocation.getCurrentPosition(function(pos){
+        var la = pos.coords.latitude, ln = pos.coords.longitude;
+        var cerca = (la > 18.6 && la < 19.4 && ln > -98.6 && ln < -97.7);
+        aplicaSede(cerca ? 'puebla' : 'cdmx', false);
+      }, function(){}, { timeout: 6000, maximumAge: 600000 });
+    }
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({ name:'geolocation' }).then(function(x){
+          if (x && x.state === 'granted') mira();
+        }).catch(function(){});
+      }
+    } catch (_) {}
+  }
+
+  try { sedeDeLaReserva(); sedeDelTelefono(); } catch (_) {}
 
   /* CUÁNDO SE OLVIDA.
      Guardar el token para siempre tiene su precio: en un aparato compartido -el
@@ -79,8 +148,6 @@
      La fecha de salida se pregunta una vez al día y se apunta, para que los
      demás arranques lo resuelvan sin red. */
   var GRACIA_DIAS = 2;
-  var SB_FN = 'https://rehophywchakfapivsbh.supabase.co/functions/v1/apepe-reserva';
-  var KEY   = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   function hoyISO(){ try{ return new Date().toISOString().slice(0,10); }catch(_){ return ''; } }
   function pasado(hasta){
     try{
