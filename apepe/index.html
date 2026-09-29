@@ -113,6 +113,18 @@ a{color:inherit}
 .ficha .de{color:var(--gris);font-size:11.5px;line-height:1.3}
 .ficha .pr{margin-top:auto;font-family:'Oswald',sans-serif;font-size:13.5px;color:var(--naranja-oscuro);padding-top:5px}
 .ficha:active{transform:scale(.99)}
+/* Los datos de la ficha: cuánto dura, en qué idioma, cuántos caben. Van en una
+   línea chica, que no compitan con el nombre. */
+.ficha .datos{display:flex;flex-wrap:wrap;gap:3px 8px;color:var(--gris);font-size:11px;line-height:1.3;margin-top:1px}
+/* EL GRUPO. Una bandera por persona apuntada. Mientras falten más de 4 horas es
+   una previsión, no una lista: por eso lo dice en cursiva. */
+.ficha .grupo{display:flex;align-items:center;gap:2px;margin-top:4px;flex-wrap:wrap;min-height:16px}
+.ficha .grupo .bn{font-size:14px;line-height:1}
+.ficha .grupo .mas{font-family:'Oswald',sans-serif;font-size:10.5px;color:var(--gris);
+  background:var(--hueso);border-radius:999px;padding:1px 6px;margin-left:2px}
+.ficha .grupo .nota{width:100%;font-size:10px;color:var(--tenue);font-style:italic;margin-top:1px}
+.ficha .grupo .nota.firme{font-style:normal;color:var(--ok)}
+
 /* La promo y el impacto, en la propia ficha. Son las dos razones por las que
    alguien elige un tour y no otro, así que no pueden estar sólo dentro. */
 .ficha .promo{position:absolute;left:7px;top:7px;background:var(--magenta);color:#fff;
@@ -601,7 +613,8 @@ a{color:inherit}
         var esHoy = i < (s0||[]).filter(function(x){ return String(x.hora||'').slice(0,5)>=ahora; }).length;
         var k=f.experiencia_id+'|'+(esHoy?'0':'1');
         if(vistas[k]) return; vistas[k]=1;   // una ficha por experiencia y día
-        fichas.push({e:e, hora:String(f.hora||'').slice(0,5), hoy:esHoy});
+        fichas.push({e:e, hora:String(f.hora||'').slice(0,5), hoy:esHoy,
+                     fecha: esHoy?ymd(hoy):ymd(man)});
       });
 
     if(!fichas.length){
@@ -612,21 +625,83 @@ a{color:inherit}
     caja.innerHTML=fichas.slice(0,10).map(function(x){
       var e=x.e;
       var img = tapa(e.nombre, e.portada);
+      /* Cuánto dura, en qué idioma y cuántos caben. El cupo sólo si es chico:
+         Javi -"no pongas grupo máximo si supera las 10 personas"-, porque un
+         tope de 20 no promete un grupo pequeño, es ruido. */
+      var datos=[];
+      if(e.duracion_min){ var hh=Math.floor(e.duracion_min/60), mm=e.duracion_min%60;
+        datos.push('\u23F1 '+(hh?hh+' h':'')+(mm?(hh?' ':'')+mm+' min':'')); }
+      if(Array.isArray(e.idiomas)&&e.idiomas.length)
+        datos.push('\uD83D\uDCAC '+e.idiomas.map(function(x){return String(x).slice(0,3);}).join('/'));
+      if(e.cupo_max && e.cupo_max<=10) datos.push('\uD83D\uDC65 m\u00e1x '+e.cupo_max);
       /* Precio: si hay promo, manda la promo y se tacha el de lista. */
       var lista = e.pvp_adulto, promo = e.pvp_promo;
       var precio = promo || lista;
       var tachado = (promo && lista && Number(lista)>Number(promo))
         ? ' <s style="color:var(--tenue);font-size:11.5px">$'+Number(lista).toLocaleString('es-MX',{maximumFractionDigits:0})+'</s>' : '';
-      return '<a class="ficha" href="/apepe/experiencias.html'+(q||'')+'">'+
+      /* AL TOUR, no a la lista. Tocar la tarjeta y acabar en la home era el
+         camino más largo posible para comprar. Javi, 29-sep. */
+      return '<a class="ficha" href="'+ligaTour(e.id,q)+'">'+
         '<span class="im">'+img+
           (e.promo_etiqueta?'<span class="promo">'+esc(e.promo_etiqueta)+'</span>':'')+
           '<span class="hora">'+(x.hoy?'Hoy':'Mañana')+' '+esc(x.hora)+'</span></span>'+
         '<span class="cu"><span class="nm">'+esc(e.nombre||'Experiencia')+'</span>'+
-        (e.barrio?'<span class="de">'+esc(e.barrio)+'</span>':'')+
+        (datos.length?'<span class="datos">'+datos.map(function(d){return '<span>'+d+'</span>';}).join('')+'</span>':'')+
         odsChips(e)+
+        '<span class="grupo" data-g="'+esc(e.id)+'|'+esc(x.fecha)+'|'+esc(x.hora)+'"></span>'+
         (precio?'<span class="pr">$'+Number(precio).toLocaleString('es-MX',{maximumFractionDigits:0})+tachado+'</span>':'')+
         '</span></a>';
     }).join('');
+    pintaGrupos();
+  }
+
+  /* LA LIGA AL TOUR. La ficha de Sincrético es exp.html?id=<uuid>; se le pasa
+     app=1 y el token de la reserva para que sepa volver a APePe. */
+  function ligaTour(id, q){
+    var qq='?id='+encodeURIComponent(id)+'&app=1';
+    if(RESV) qq+='&resv='+encodeURIComponent(RESV);
+    else if(SOL) qq+='&sol='+encodeURIComponent(SOL);
+    return '/sinc/exp.html'+qq;
+  }
+
+  /* QUIÉN VA EN ESA SALIDA.
+     Una bandera por persona apuntada. Mientras falten más de 4 horas no hay
+     lista cerrada, así que lo que se enseña es una PREVISIÓN -sacada de la
+     probabilidad real de cada país en los 46.000 contactos que el CRM trae de
+     Cloudbeds- y se dice que lo es. A cuatro horas o menos manda lo que hay
+     reservado de verdad. La decisión y la semilla viven en la base
+     (sinc_grupo_previsto): aquí sólo se pinta. */
+  var CABEN_BANDERAS=6;
+  function bandera(iso){
+    iso=String(iso||'').toUpperCase();
+    if(!/^[A-Z]{2}$/.test(iso)) return '\uD83C\uDFF3';
+    return String.fromCodePoint(0x1F1E6 + iso.charCodeAt(0) - 65,
+                                0x1F1E6 + iso.charCodeAt(1) - 65);
+  }
+  function pintaGrupos(){
+    Array.prototype.forEach.call(document.querySelectorAll('.grupo[data-g]'), function(caja){
+      if(caja.dataset.listo) return; caja.dataset.listo='1';
+      var p=(caja.getAttribute('data-g')||'').split('|');
+      if(p.length<3) return;
+      fetch(SB+'/rest/v1/rpc/sinc_grupo_previsto',{method:'POST',
+        headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({p_experiencia:p[0], p_fecha:p[1], p_hora:p[2]})})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(g){
+        if(!g||!g.ok) return;
+        var l=g.paises||[], n=Number(g.personas||0);
+        if(!n){ caja.innerHTML='<span class="nota firme">Sin nadie apuntado todav\u00eda \u00b7 s\u00e9 el primero</span>'; return; }
+        var ver=l.slice(0,CABEN_BANDERAS);
+        caja.innerHTML =
+          ver.map(function(i){ return '<span class="bn" title="'+esc(i)+'">'+bandera(i)+'</span>'; }).join('') +
+          (l.length>CABEN_BANDERAS ? '<span class="mas">+'+n+'</span>' : '') +
+          '<span class="nota'+(g.cerrado?' firme':'')+'">'+
+            (g.cerrado
+              ? n+(n===1?' persona apuntada':' personas apuntadas')
+              : 'Previsi\u00f3n: '+n+(n===1?' viajero':' viajeros')+'. La lista no se cierra hasta 4 h antes.')+
+          '</span>';
+      }).catch(function(){});
+    });
   }
 
   /* Qué sticker le toca a un tour sin foto. Se mira por lo que dice su nombre,
