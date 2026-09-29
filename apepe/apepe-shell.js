@@ -47,7 +47,7 @@
 
     /* --- estilos del marco (prefijo apsh-, para no chocar con sinc.css) --- */
     var css = ''
-      + '.apsh-top{position:sticky;top:0;z-index:60;background:#1E1A16;color:#fff}'
+      + '.apsh-top{position:sticky;top:0;z-index:1200;background:#1E1A16;color:#fff}'
       + '.apsh-in{max-width:720px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}'
       + '.apsh-back{color:#fff;text-decoration:none;font-size:22px;line-height:1;opacity:.9;flex:0 0 auto}'
       + '.apsh-marcafila{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px}'
@@ -58,7 +58,7 @@
       + '.apsh-lema{font-family:"Lobster Two",cursive;color:#F8BBCB;font-size:14px}'
       + '.apsh-sede{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.08em;color:#8DC8EA;text-transform:uppercase}'
       + '.apsh-franja{height:8px;display:flex}.apsh-franja i{flex:1}'
-      + '.apsh-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:60;background:#FBF7F2;'
+      + '.apsh-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:1200;background:#FBF7F2;'
       +   'border-top:1px solid #E6DFD6;display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));'
       +   'box-shadow:0 -8px 24px -20px rgba(30,26,22,.5)}'
       + '.apsh-tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;'
@@ -133,5 +133,8 @@
         + 'onerror="this.replaceWith(document.createTextNode(\'•\'))"></span>' + x.label + '</a>';
     }).join('');
     document.body.appendChild(nav);
+    /* El marco cambió la altura útil: que cualquier mapa (Leaflet) recalcule su tamaño. */
+    setTimeout(function(){ try{ window.dispatchEvent(new Event('resize')); }catch(_){ } }, 90);
+    setTimeout(function(){ try{ window.dispatchEvent(new Event('resize')); }catch(_){ } }, 400);
   } catch (e) { /* el marco nunca debe tumbar la pantalla */ }
 })();
