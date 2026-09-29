@@ -660,15 +660,35 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
     $('rFecha').textContent=RES.fecha_reserva?fdate(String(RES.fecha_reserva).slice(0,10)):'—';
     if(nom) $('cNombre').value=nom;
     if(RES.nacionalidad && PAISES.indexOf(RES.nacionalidad)>=0) $('cNac').value=RES.nacionalidad;
-    if(RES.email) $('r4Email').value=RES.email;
+    if(RES.email && !esCorreoDeOTA(RES.email)) $('r4Email').value=RES.email;
     if(RES.telefono) $('r4Tel').value=RES.telefono;
     if(RES.nacimiento){ var nb=String(RES.nacimiento).slice(0,10); if(/^\d{4}-\d{2}-\d{2}$/.test(nb)) $('cNacim').value=nb; }
     contrato();
     var q=RESV?('?resv='+encodeURIComponent(RESV)):(SOL?('?sol='+encodeURIComponent(SOL)):'');
     $('btnApepe').href='/apepe/'+q;
     montaFront(q);
-    if(RESV){ var bu=$('btnUpg'); if(bu){ bu.href='/apepe/upgrade.html?resv='+encodeURIComponent(RESV); bu.style.display='block'; } }
+    if(RESV){ var bu=$('btnUpg'); if(bu){ bu.href='/apepe/upgrade.html?resv='+encodeURIComponent(RESV); bu.style.display='block'; miUpgrade(); } }
   }
+  /* Si ya hizo el upgrade, el botón no puede seguir ofreciéndole otro: sólo se
+     mejora la habitación una vez por reserva. Se pregunta a la base (una fila),
+     no a apepe-upgrade, que para contestar tiene que ir tres veces a Cloudbeds. */
+  var MI_UPGRADE=null;
+  function miUpgrade(){
+    if(!RESV) return Promise.resolve(null);
+    return fetch(SB+'/rest/v1/rpc/apepe_upgrade_estado',{method:'POST',
+      headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({p_resv:RESV})})
+      .then(function(r){ return r.json(); })
+      .then(function(u){
+        MI_UPGRADE = (u && u.hay) ? u : null;
+        if(!MI_UPGRADE) return null;
+        var bu=$('btnUpg');
+        if(bu){ bu.removeAttribute('data-i18n');
+          bu.textContent = (LANG==='en' ? '\u2728 See my upgrade \u2192' : '\u2728 Ver mi upgrade \u2192'); }
+        return MI_UPGRADE;
+      }).catch(function(){ return null; });
+  }
+
   /* ¿Esto corre en la tablet de recepción o en el teléfono del huésped?
      En recepción la pantalla vive dentro de un recuadro; y si algún día se abre
      suelta, `?front=1` lo dice igual. */
@@ -967,6 +987,16 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
     if(tipo.indexOf('éd')>=0||tipo.indexOf('ced')>=0) return /^[0-9]{6,9}$/.test(num);
     if(tipo.indexOf('oficial')>=0||tipo.indexOf('identif')>=0) return /^[A-Z0-9]{5,18}$/.test(num);
     return /^[A-Z0-9]{5,9}$/.test(num); }
+  /* Correos que no son del huesped, sino de la OTA. Booking reparte un alias
+     'rlizbe.441965@guest.booking.com' que reenvia al panel de Booking y muere con
+     la reserva: si lo dejamos pasar, el comprobante, la liga de APePe y cualquier
+     aviso posterior se pierden. Expedia y Airbnb hacen lo mismo. */
+  function esCorreoDeOTA(m){
+    return /@(guest\.)?booking\.com$/i.test(String(m||'').trim()) ||
+           /@(guest\.)?expedia\.com$/i.test(String(m||'').trim()) ||
+           /@.*airbnb\.com$/i.test(String(m||'').trim());
+  }
+
   // pasa lo capturado a la pantalla 4 (editable) y arma reserva + acompañantes
   function pintarResumen(){
     $('r4Nombre').value=($('cNombre').value||'').trim();
@@ -974,7 +1004,10 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
     $('r4Tipo').value=$('cTipo').value||'Pasaporte';
     $('r4Num').value=($('cNum').value||'').trim();
     $('r4Nacim').value=$('cNacim').value||'';
-    if(!$('r4Email').value && RES.email) $('r4Email').value=RES.email;
+    /* El correo que manda Booking es un alias suyo (algo@guest.booking.com): no
+       llega nada de verdad al huesped y ademas caduca cuando pasa la estancia.
+       Asi que ni se precarga ni se acepta: lo tiene que escribir el. Javi, 29-sep. */
+    if(!$('r4Email').value && RES.email && !esCorreoDeOTA(RES.email)) $('r4Email').value=RES.email;
     $('r4Desde').textContent=fdate(RES.desde); $('r4Hasta').textContent=fdate(RES.hasta);
     $('r4Noches').textContent=noches();
     $('r4Pax').textContent=RES.pax||'—'; $('r4Hb').textContent=RES.habitacion||'—';
@@ -1057,15 +1090,26 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   function traspasoUpgrade(){
     ocultarCarga();
     $('popCarga').classList.remove('on');
-    if(RESV){
+    if(!RESV){ go(5); return; }
+    miUpgrade().then(function(u){
       $('upgVer').href='/apepe/upgrade.html?resv='+encodeURIComponent(RESV);
-      $('upgTit').textContent=(LANG==='en'?'You have an approved upgrade price. Want to see it?':'Tienes un precio de preupgrade aprobado, ¿quieres conocerlo?');
-      $('upgTxt').textContent=(LANG==='en'?'Before you arrive you can move up to a better room for very little. Take a look — no strings.':'Antes de llegar puedes mejorar tu habitación por muy poco. Míralo — sin compromiso.');
-      $('upgVer').textContent=(LANG==='en'?'See my upgrade →':'Ver mi upgrade →');
       $('upgNo').textContent=(LANG==='en'?'Not now, thanks':'Ahora no, gracias');
       $('upgNo').onclick=function(){ $('popUpgrade').classList.remove('on'); go(5); };
+      if(u){
+        /* Ya lo hizo. No se le vuelve a ofrecer: se le enseña. */
+        $('upgTit').textContent=(LANG==='en'?'Your upgrade is done':'Tu upgrade ya está hecho');
+        $('upgTxt').textContent=(LANG==='en'
+          ? 'You moved up to '+(u.cuarto||'a better room')+'. Here are the details.'
+          : 'Subiste a '+(u.cuarto||'una habitación mejor')+'. Aquí tienes el detalle.');
+        $('upgVer').textContent=(LANG==='en'?'See my upgrade →':'Ver mi upgrade →');
+        $('upgNo').textContent=(LANG==='en'?'Continue':'Continuar');
+      } else {
+        $('upgTit').textContent=(LANG==='en'?'You have an approved upgrade price. Want to see it?':'Tienes un precio de preupgrade aprobado, ¿quieres conocerlo?');
+        $('upgTxt').textContent=(LANG==='en'?'Before you arrive you can move up to a better room for very little. Take a look — no strings.':'Antes de llegar puedes mejorar tu habitación por muy poco. Míralo — sin compromiso.');
+        $('upgVer').textContent=(LANG==='en'?'See my upgrade →':'Ver mi upgrade →');
+      }
       $('popUpgrade').classList.add('on');
-    } else { go(5); }
+    });
   }
 
   function yaHecho(){
@@ -1094,9 +1138,22 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
        detrás y el huésped firmaba, tocaba "Aceptar y firmo" y se quedaba mirando el
        contrato quieto con un botón apagado. Subir la firma y la foto del documento
        tarda lo suyo, y en ese rato parecía que se había colgado. Javi, 29-sep. */
+    /* Antes de subir nada: un correo de la OTA no vale. Se avisa y se devuelve al
+       campo, no se guarda a medias. */
+    var _mail=($('r4Email').value||'').trim();
+    if(esCorreoDeOTA(_mail)){
+      b.disabled=false; b.textContent=t('ctEnviar');
+      a.className='aviso err';
+      a.textContent = (LANG==='en')
+        ? 'That address belongs to the booking channel, not to you — it stops working after your stay. Please use your own email.'
+        : 'Ese correo es del canal de reservas, no tuyo: deja de funcionar al terminar tu estancia. Pon el tuyo, por favor.';
+      verContrato(false);
+      var _in=$('r4Email'); if(_in){ _in.value=''; try{ _in.scrollIntoView({behavior:'smooth',block:'center'}); _in.focus(); }catch(_){} }
+      return;
+    }
     verContrato(false);
     mostrarCarga();
-    var contacto={ email:($('r4Email').value||'').trim(), tel:($('r4Tel').value||'').trim(), nacimiento:($('r4Nacim').value||''), reserva_id:RES.reserva||'', reserva_token:RESV||'' };
+    var contacto={ email:_mail, tel:($('r4Tel').value||'').trim(), nacimiento:($('r4Nacim').value||''), reserva_id:RES.reserva||'', reserva_token:RESV||'' };
     var payload={ solicitud_id:SOL||RESV||null, nombre:nombre, nacionalidad:$('r4Nac').value||'',
       doc_tipo:$('r4Tipo').value, doc_numero:($('r4Num').value||'').trim(),
       doc_datos:Object.assign({},window._docData||{},contacto,{id_foto:window._docFoto||''}),
