@@ -1,6 +1,6 @@
 # Los cuatro niveles como materiales sobre el collage de la carta.
 # El oro es el que a Javi le gusta: va empujado a metal de verdad.
-from PIL import Image, ImageFilter, ImageDraw, ImageOps
+from PIL import Image, ImageFilter, ImageDraw, ImageEnhance
 import numpy as np
 
 
@@ -49,28 +49,61 @@ def oro(im):
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
-def madera(im):
-    """Talla policromada: relieve marcado, veta encima, color apagado del original."""
+def _tabla(H, W, semilla=4):
+    """Una tabla de madera: veta larga, anillos y un par de nudos."""
+    r = np.random.default_rng(semilla)
+    # ruido estirado en vertical -> la veta corre a lo largo
+    n = r.normal(0, 1, (H//3 + 1, W//40 + 1))
+    n = np.asarray(Image.fromarray(((n-n.min())/np.ptp(n)*255).astype(np.uint8))
+                   .resize((W, H), Image.BICUBIC), np.float32)/255.0
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    # anillos de crecimiento: líneas que ondulan siguiendo el ruido
+    anillos = 0.5 + 0.5*np.sin(xx*0.16 + n*22.0 + yy*0.004)
+    anillos = anillos**2.2                       # vetas finas y marcadas
+    # un nudo, chico y pegado al canto, que es donde salen
+    cx, cy, rr = W*0.90, H*0.26, W*0.055
+    d = np.sqrt(((xx-cx)/rr)**2 + ((yy-cy)/(rr*1.6))**2)
+    nudo = 0.5 + 0.5*np.sin(d*7.0 + n*2.0)
+    peso = np.clip(1.0 - d/2.6, 0, 1)**1.5
+    anillos = anillos*(1-peso) + nudo*peso
+    fibra = r.normal(0, 0.035, (H, W))
+    t = np.clip(0.30 + 0.62*anillos + 0.18*n + fibra, 0, 1)
+    return t
+
+def madera(im, fuerza=0.80):
     a = np.asarray(im.convert('RGB'), np.float32)
-    L = np.asarray(im.convert('L'))
-    n = _relieve(L, 3.4, 1.4)
-    n = np.clip((n - 0.5)*1.3 + 0.5, 0, 1)
-    r = np.random.default_rng(5)
-    v = r.normal(0, 1, (L.shape[0], L.shape[1]//6 + 1))
-    v = np.asarray(Image.fromarray(((v - v.min())/np.ptp(v)*255).astype(np.uint8))
-                   .resize((L.shape[1], L.shape[0]), Image.BICUBIC), np.float32)/255.0
-    yy = np.linspace(0, 1, L.shape[0])[:, None]
-    veta = 0.78 + 0.22*(0.5 + 0.5*np.sin(v*9.0 + yy*2.4))
-    base = _rampa(n*veta, [(0.00, (36, 20, 9)), (0.35, (104, 60, 26)),
-                           (0.70, (176, 118, 62)), (1.00, (232, 190, 132))])
-    # el color del collage se queda, pero mate y comido por la madera
-    col = np.clip((a - 128)*0.55 + 128, 0, 255)
-    out = base*0.70 + col*0.30
+    H, W, _ = a.shape
+    t = _tabla(H, W)
+    # la tabla, en color
+    tab = np.stack([np.interp(t, [0, .35, .7, 1], [58, 122, 178, 221]),
+                    np.interp(t, [0, .35, .7, 1], [32,  76, 124, 174]),
+                    np.interp(t, [0, .35, .7, 1], [14,  38,  70, 116])], -1)
+    # la tinta: el arte, apagado y un poco más oscuro, como serigrafía
+    tinta = np.asarray(ImageEnhance.Color(im.convert('RGB')).enhance(0.62), np.float32)
+    tinta = np.clip((tinta - 128)*0.92 + 118, 0, 255)
+    # overlay de la tabla sobre la tinta: la veta atraviesa la imagen
+    b = tab/255.0; s = tinta/255.0
+    ov = np.where(s < 0.5, 2*s*b, 1 - 2*(1-s)*(1-b))
+    out = (s*(1-fuerza) + ov*fuerza)*255.0
+    # la madera manda en las zonas claras: ahí casi no hay tinta
+    luz = np.clip((tinta.mean(-1, keepdims=True) - 150)/105.0, 0, 1)
+    out = out*(1-luz*0.55) + tab*(luz*0.55)
+    # bisel: el canto de la tabla
+    m = max(3, W//110)
+    borde = np.ones((H, W, 1), np.float32)
+    borde[:m, :] *= 1.22; borde[:, :m] *= 1.18
+    borde[-m:, :] *= 0.74; borde[:, -m:] *= 0.80
+    out = out*borde
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
 def chaquira(im, paso=9):
-    """Cada celda es una cuenta con su punto de luz, en hileras encajadas."""
+    """Tabla huichola: la carta entera cuenta a cuenta, sobre fondo de cera.
+    El margen de papel desaparece: una tabla no tiene margen blanco."""
+    x0, y0, x1, y1 = _marco(im)
+    fondo = Image.new('RGB', im.size, (18, 24, 86))     # azul de tabla huichola
+    fondo.paste(im.crop((x0, y0, x1, y1)), (x0, y0))
+    im = fondo
     W, H = im.size
     peq = im.convert('RGB').resize((max(1, W//paso), max(1, H//paso)), Image.BOX)
     col = np.asarray(peq, np.float32)
