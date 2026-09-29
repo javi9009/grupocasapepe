@@ -145,11 +145,35 @@ Deno.serve(async (req)=>{
       let marcas:any[]=[];
       try{ marcas=await rest(`apepe_salida_tarde?fecha=eq.${fecha}&property=eq.${prop}&select=*&order=marcada_at.desc`)||[]; }catch{}
       const porRid:Record<string,any>={}; for(const m of marcas) porRid[String(m.reservation_id)]=m;
+
+      /* Las extensiones que el huésped ya cerró en la app y están esperando el cobro.
+         Van aquí porque si no, no las ve NADIE: la app le dice "pasa a recepción a
+         pagar" y recepción no tenía dónde enterarse. Es el mismo agujero que tenía el
+         upgrade — el trato cerrado con el huésped y muerto en una tabla. Javi, 29-sep. */
+      const hace7=mxHoy(-7);
+      let extensiones:any[]=[];
+      try{ extensiones=await rest(
+        `apepe_extension?property=eq.${prop}&estado=in.(por_cobrar,error,cobrado)` +
+        `&updated_at=gte.${hace7}T00:00:00Z&select=*&order=updated_at.desc&limit=40`)||[]; }catch{}
+
+      /* Quién es cada quien: la extensión sólo guarda el id de la reserva. */
+      const faltan=extensiones.filter((e:any)=>!porRid[String(e.reservation_id)]).slice(0,15);
+      const nombres:Record<string,string>={};
+      await Promise.all(faltan.map(async (e:any)=>{
+        const d=await cbGet(key, `getReservation?reservationID=${encodeURIComponent(String(e.reservation_id))}&propertyID=${pid}`);
+        const r=d?.data??d;
+        const gl=r?.guestList&&typeof r.guestList==="object"?Object.values(r.guestList) as any[]:[];
+        const main=gl.find((g:any)=>g.isMainGuest)||gl[0]||{};
+        nombres[String(e.reservation_id)]=[main.guestFirstName,main.guestLastName].filter(Boolean).join(" ")||String(r?.guestName||"");
+      }));
+
       return J({ ok:true, fecha, hora:mxHora(),
         salidas: salidas.map((x:any)=>({ reservation_id:String(x.reservationID), nombre:x.guestName||"",
           desde:x.startDate||"", hasta:x.endDate||"", estado_cb:String(x.status||""),
           marca: porRid[String(x.reservationID)]||null })),
-        marcas });
+        marcas,
+        extensiones: extensiones.map((e:any)=>({ ...e,
+          huesped: nombres[String(e.reservation_id)] || (porRid[String(e.reservation_id)]||{}).huesped || "" })) });
     }
 
     /* Recepción: elige qué se le ofrece y con eso se le avisa al huésped. Aquí es
@@ -178,6 +202,15 @@ Deno.serve(async (req)=>{
           updated_at:new Date().toISOString() })});
       return J({ ok:true, estado:"ofrecida", base_noche:base, precios, ofrece,
         mensaje:`Listo. ${nombre||"El huésped"} ve sus opciones en la app.` });
+    }
+
+    /* Cobrar la extensión. La noche ya está apartada en Cloudbeds y el folio ya
+       cuadrado; lo único que faltaba era que alguien dijera que el dinero entró. */
+    if(op==="cobrar_extension"){
+      const id=Number(b.id||0); if(!id) return J({ok:false,error:"falta el id"},400);
+      await rest(`apepe_extension?id=eq.${id}`,{method:"PATCH",headers:{Prefer:"return=minimal"},
+        body:JSON.stringify({ estado:"cobrado", cobrado_por:em, cobrado_at:new Date().toISOString(), updated_at:new Date().toISOString() })});
+      return J({ ok:true, estado:"cobrado" });
     }
 
     if(op==="cobrar"){
