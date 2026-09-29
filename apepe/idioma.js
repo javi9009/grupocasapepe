@@ -281,6 +281,7 @@
     'Ver fechas y precios': 'See dates and prices',
     'No. Era «{r}».': 'Nope. It was “{r}”.',
     'No era ésa.': 'That was not it.',
+    'Sobre esta carta': 'About this card',
     'Con tu 15% ya aplicado': 'With your 15% already applied',
     'Tu 15% de siempre, ya aplicado en la liga. No tienes que escribirlo.': 'Your usual 15%, already built into the link. You do not have to type it in.',
     'Reservas Casa Pepe': 'Casa Pepe bookings',
