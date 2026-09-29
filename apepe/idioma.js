@@ -261,6 +261,7 @@
     'Regalo del viernes': 'Friday gift',
     'Transporte público': 'Public transport',
     'Ver mi resultado ▸': 'See my score ▸',
+    'Ver mi carta ▸': 'See my card ▸',
     'consulta la semana': 'check the week',
     '¡Subiste de carta!': 'You levelled up your card!',
     'Cargando la tienda…': 'Opening the shop…',
