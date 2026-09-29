@@ -103,6 +103,82 @@ def madera(im):
 
 # paleta corta y brillante, como la cera de una tabla huichola
 PAL = np.array([
+    (252, 252, 250), (198, 200, 210), (120, 124, 140), (24, 22, 30),
+    (214, 26, 38),   (242, 96, 24),   (250, 194, 30),  (252, 236, 130),
+    (146, 204, 40),  (24, 148, 74),   (24, 186, 182),  (60, 136, 224),
+    (26, 46, 156),   (126, 50, 168),  (230, 34, 142),  (248, 150, 180),
+    (128, 78, 44),
+], np.float32)
+
+CENEFA = [(24, 22, 30), (230, 34, 142), (250, 194, 30), (24, 186, 182)]
+
+
+def _marco(im):
+    """El rectángulo negro impreso de la carta, sin el margen de papel."""
+    a = np.asarray(im.convert('RGB')); H, W, _ = a.shape
+    osc = (a.max(axis=2) < 90)
+    ys = np.where(osc.sum(axis=1) > W*0.5)[0]
+    xs = np.where(osc.sum(axis=0) > H*0.5)[0]
+    if len(ys) < 2 or len(xs) < 2:
+        return (0, 0, W, H)
+    return (int(xs[0]), int(ys[0]), int(xs[-1])+1, int(ys[-1])+1)
+
+
+# Madera tipo ficha de tarot: tabla de abedul clara con el dibujo quemado
+# a láser. Líneas cafés finas, sin color, esquinas redondeadas y canto tostado.
+
+
+def _tabla(H, W, semilla=9):
+    r = np.random.default_rng(semilla)
+    n = r.normal(0, 1, (max(2, H//4), max(2, W//60)))
+    n = np.asarray(Image.fromarray(((n-n.min())/np.ptp(n)*255).astype(np.uint8))
+                   .resize((W, H), Image.BICUBIC), np.float32)/255.0
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    veta = 0.5 + 0.5*np.sin(xx*0.05 + n*9.0 + yy*0.002)
+    t = np.clip(0.80 + 0.14*veta + 0.06*n + r.normal(0, 0.012, (H, W)), 0, 1)
+    # abedul: crema cálido, muy claro
+    return np.stack([t*236, t*214*1.02, t*176], -1).clip(0, 255)
+
+
+def madera(im):
+    W, H = im.size
+    a = np.array(im.convert('RGB'))[:, :, ::-1]
+    g = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
+    suave = cv2.bilateralFilter(g, 9, 70, 70)
+
+    # el trazo: contornos, como el paso del láser
+    e1 = cv2.Canny(suave, 40, 110)
+    e2 = cv2.Canny(cv2.GaussianBlur(suave, (0, 0), 2.2), 25, 70)
+    trazo = np.maximum(e1, e2).astype(np.float32)/255.0
+    k = max(1, int(min(W, H)*0.0022))
+    trazo = cv2.dilate(trazo, np.ones((k*2+1, k*2+1), np.uint8))
+    trazo = cv2.GaussianBlur(trazo, (0, 0), 0.7)
+
+    # un tono suave para que las manchas grandes se lean, sin llenar de negro
+    tono = np.clip((160 - suave.astype(np.float32))/160.0, 0, 1)**1.7 * 0.30
+
+    quema = np.clip(trazo*0.92 + tono, 0, 1)
+
+    tabla = _tabla(H, W)
+    # el quemado no es negro plano: es café que varía con la profundidad
+    cafe = np.stack([np.full((H, W), 92.0), np.full((H, W), 56.0), np.full((H, W), 26.0)], -1)
+    out = tabla*(1-quema[..., None]) + cafe*quema[..., None]
+
+    # canto tostado y esquinas redondeadas
+    rad = int(min(W, H)*0.055)
+    msk = _redondo(W, H, rad)
+    canto = np.asarray(Image.fromarray((msk*255).astype(np.uint8))
+                       .filter(ImageFilter.GaussianBlur(min(W, H)*0.010)), np.float32)/255.0
+    out = out*(0.72 + 0.28*canto)[..., None]
+    out = out*msk[..., None] + (30, 24, 18)*(1-msk)[..., None]
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+# Chaquira huichola: la carta entera sembrada de cuentas, cada una con su
+# agujero, en paleta cerrada y saturada, con cenefa de bandas alrededor.
+
+# paleta corta y brillante, como la cera de una tabla huichola
+PAL = np.array([
     (250, 250, 248), (24, 22, 28), (206, 26, 34), (238, 108, 22),
     (248, 196, 30), (146, 196, 44), (30, 146, 72), (28, 178, 176),
     (58, 130, 216), (26, 44, 150), (118, 52, 158), (224, 34, 140),
@@ -117,48 +193,30 @@ def _snap(c):
     return PAL[d.argmin(-1)]
 
 
-def chaquira(im, paso=11):
+def chaquira(im, ancho_px=60):
     W, H = im.size
     x0, y0, x1, y1 = _marco(im)
+    base = Image.new('RGB', (W, H), CENEFA[0])
+    base.paste(im.crop((x0, y0, x1, y1)).filter(ImageFilter.SMOOTH_MORE), (x0, y0))
 
-    # el margen de papel se cambia por la cenefa de bandas
-    base = Image.new('RGB', (W, H), CENEFA[-1])
-    d0 = ImageDraw.Draw(base)
-    ancho = max(paso, int(min(x0, y0)/max(1, len(CENEFA)))) or paso
-    for k, col in enumerate(CENEFA):
-        d0.rectangle([k*ancho, k*ancho, W-1-k*ancho, H-1-k*ancho], fill=col)
-    base.paste(im.crop((x0, y0, x1, y1)).filter(ImageFilter.SMOOTH), (x0, y0))
-
-    # se muestrea una cuenta por celda y se cierra a la paleta
-    nx, ny = max(1, W//paso), max(1, H//paso)
+    # la rejilla: pocos píxeles, bien grandes
+    nx = ancho_px
+    ny = max(1, round(nx*H/W))
     peq = np.asarray(base.resize((nx, ny), Image.BOX), np.float32)
-    peq = np.clip((peq - 128)*1.45 + 122, 0, 255)
+    peq = np.clip((peq - 128)*1.55 + 120, 0, 255)     # contraste de consola
     col = _snap(peq).astype(np.uint8)
 
-    out = Image.new('RGB', (W, H), (16, 14, 20))
-    d = ImageDraw.Draw(out)
-    r = paso*0.50
-    for j in range(ny):
-        cy = j*paso + paso/2
-        off = (paso/2) if (j % 2) else 0
-        for i in range(nx):
-            cx = i*paso + paso/2 + off
-            c = tuple(int(v) for v in col[j, i])
-            aro = tuple(int(v*0.58) for v in c)
-            d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=c, outline=aro,
-                      width=max(1, int(paso*0.09)))
-            # el agujero de la cuenta
-            hr = r*0.26
-            d.ellipse([cx-hr, cy-hr, cx+hr, cy+hr], fill=tuple(int(v*0.42) for v in c))
-            # brillo de la cera
-            br = r*0.22; bx, by = cx - r*0.34, cy - r*0.34
-            d.ellipse([bx-br, by-br, bx+br, by+br],
-                      fill=tuple(min(255, int(v*0.40 + 155)) for v in c))
-    return out
+    # cenefa de píxeles alrededor, como marco de videojuego
+    for k, c in enumerate(CENEFA):
+        col[k, k:nx-k] = c; col[ny-1-k, k:nx-k] = c
+        col[k:ny-k, k] = c; col[k:ny-k, nx-1-k] = c
 
-
-# Oro tipo placa de metal: la carta entera es una lámina, con canto biselado,
-# esquinas redondeadas y todo el dibujo repujado sobre la misma superficie.
+    out = Image.fromarray(col).resize((W, H), Image.NEAREST)
+    o = np.asarray(out, np.float32)
+    rad = int(min(W, H)*0.055)
+    msk = _redondo(W, H, rad)
+    o = o*msk[..., None] + (16, 14, 22)*(1-msk)[..., None]
+    return Image.fromarray(np.clip(o, 0, 255).astype(np.uint8))
 
 
 def oro(im):
