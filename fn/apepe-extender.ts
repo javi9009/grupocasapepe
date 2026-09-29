@@ -33,7 +33,11 @@ const cors = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers"
 const J = (o: unknown, s=200) => new Response(JSON.stringify(o), { status:s, headers:{ ...cors, "Content-Type":"application/json" } });
 const SUPERPEPE = 0.15;
 const MAX_NOCHES = 7;
-const ABRE_DIAS_ANTES = 2;
+/* Ya no hay puerta de entrada. Estaba abierto sólo los dos últimos días y Javi
+   tiene razón: hay quien lo pide con dos días de antelación, y quien el segundo día
+   de una estancia de diez ya sabe que se queda más. Cerrarlo antes de tiempo sólo
+   conseguía que preguntaran en recepción lo que la app podía contestarles sola.
+   La única puerta que queda es la de salida. Javi, 29-sep. */
 const CIERRA_HORA = 12;
 const AVISO_MUDANZA = "Deja tus cosas juntas y listas: te las mueve Housekeeping.";
 
@@ -169,19 +173,23 @@ Deno.serve(async (req)=>{
 
     const hoy=ahoraMX();
     const faltan=diffDias(hoy.fecha, salida);
-    const abierto = faltan<=ABRE_DIAS_ANTES && (faltan>0 || (faltan===0 && hoy.hora<CIERRA_HORA));
+    /* Abierto toda su estancia. Se cierra sólo cuando ya deja de ser una extensión:
+       pasadas las 12:00 de su día de salida —ahí ya es late checkout y lo decide
+       recepción— o cuando la estancia terminó. */
+    const seFue = /checked_out/i.test(status);
+    const abierto = !seFue && (faltan>0 || (faltan===0 && hoy.hora<CIERRA_HORA));
     const base = { ok:true, reserva:{ id:rid, property:prop, llegada, salida, estado:status,
         pax:paxTotal, camas:camasReserva, solo_uno:soloUno,
         cuarto:{ tipo:miTipo, tipo_nombre:miTipoNombre, unidad:misCuartos[0]||"", unidad_nombre:miCuartoNombre, nivel:miNivel } },
-      ventana:{ abierta:abierto, faltan_dias:faltan, abre_el:masDias(salida,-ABRE_DIAS_ANTES), cierra:`${CIERRA_HORA}:00 del ${salida}`, ahora:`${hoy.fecha} ${String(hoy.hora).padStart(2,"0")}:${String(hoy.min).padStart(2,"0")}` } };
+      ventana:{ abierta:abierto, faltan_dias:faltan, cierra:`${CIERRA_HORA}:00 del ${salida}`, ahora:`${hoy.fecha} ${String(hoy.hora).padStart(2,"0")}:${String(hoy.min).padStart(2,"0")}` } };
 
-    if(/cancel|no_show/i.test(status)) return J({ ...base, alternativas:[], motivo:"reserva_no_activa", mensaje:"Esta reserva ya no está activa." });
+    if(/cancel|no_show/i.test(status)) return J({ ...base, escalera:[], motivo:"reserva_no_activa", mensaje:"Esta reserva ya no está activa." });
     if(!abierto){
-      const tarde = faltan===0 && hoy.hora>=CIERRA_HORA;
-      return J({ ...base, alternativas:[], motivo: tarde?"tarde":"pronto",
+      const tarde = !seFue && faltan<=0;
+      return J({ ...base, escalera:[], motivo: tarde?"tarde":"fuera",
         mensaje: tarde
           ? "Ya pasaron las 12:00 de tu día de salida, así que esto ya no es una extensión. Pregúntanos en recepción por un late checkout."
-          : `Podrás pedir tu extensión desde el ${masDias(salida,-ABRE_DIAS_ANTES)}.` });
+          : "Tu estancia ya terminó. ¡Vuelve pronto!" });
     }
 
     /* UNA CONSULTA POR NOCHE. getAvailableRoomTypes devuelve el roomRate del RANGO
