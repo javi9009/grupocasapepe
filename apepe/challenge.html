@@ -91,6 +91,13 @@ a{color:inherit;text-decoration:none}
 .prog2{display:flex;gap:5px;justify-content:center;margin:2px 0 12px}
 .prog2 i{width:22px;height:5px;border-radius:3px;background:var(--linea)}
 .prog2 i.on{background:var(--naranja)}
+/* El reloj de la pregunta: una barra que se vacía. La animación la lleva el
+   navegador, así que no depende de que el JS vaya corriendo cada cuadro. */
+.reloj{height:6px;border-radius:4px;background:var(--linea);overflow:hidden;margin:0 0 12px}
+.reloj i{display:block;height:100%;width:100%;background:var(--magenta);border-radius:4px;
+  transform-origin:left center;animation:vaciar linear forwards}
+@keyframes vaciar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media(prefers-reduced-motion:reduce){.reloj i{animation:none;opacity:.5}}
 .tier-scale{display:flex;justify-content:space-between;gap:6px;margin:14px 0 2px;font-size:11px;color:var(--tenue);text-align:center}
 .tier-scale div{flex:1}
 .tier-scale b{display:block;font-size:15px}
@@ -313,8 +320,11 @@ function startGeo(){
   {enableHighAccuracy:true,maximumAge:10000,timeout:15000});
 }
 
-/* ---------- Reto ---------- */
-var RETO=null; // {lugar_id, personaje_id, preguntas, i, sel:[], correctas}
+/* ---------- Reto ----------
+   Diez preguntas contra reloj. El reloj de cada pregunta viene de la base
+   (5 a 9 segundos según lo larga que sea). Lo que sobra del reloj es la
+   eficiencia, y de ahí sale el nivel de la carta. Sin tope de intentos. */
+var RETO=null, RELOJ=null;
 function empezarReto(lugarId){
   cerrar('ovFicha');
   var pin=pines.filter(function(p){return p.r.lugar_id===lugarId;})[0];
@@ -324,61 +334,71 @@ function empezarReto(lugarId){
   api('pch_reto_iniciar',{p_token:TOKEN,p_lugar_id:lugarId,p_lat:pos.lat,p_lng:pos.lng}).then(function(j){
     if(!j||!j.ok){
       var m = j&&j.error==='lejos'? 'Todavía estás lejos ('+j.dist+' m). Acércate al lugar.'
-            : j&&j.error==='sin_intentos'? 'Ya usaste tus 3 intentos con este personaje.'
+            : j&&j.error==='sin_preguntas'? 'Este personaje todavía no tiene su reto listo. Vuelve pronto.'
             : 'No se pudo iniciar el reto.';
       $('retoBody').innerHTML='<p class="center">'+m+'</p><button class="btn ghost" onclick="cerrarReto()">Cerrar</button>'; return;
     }
-    RETO={lugar_id:lugarId,personaje_id:j.personaje_id,preguntas:j.preguntas,i:0,sel:[],pos:pos,intentos_previos:j.intentos_previos};
+    RETO={lugar_id:lugarId,personaje_id:j.personaje_id,intento_id:j.intento_id,
+          preguntas:j.preguntas||[],i:0,sel:[],pos:pos};
     introReto();
   }).catch(function(){ $('retoBody').innerHTML='<p class="center">Falló la conexión. Intenta de nuevo.</p><button class="btn ghost" onclick="cerrarReto()">Cerrar</button>'; });
 }
 function introReto(){
   $('retoBody').innerHTML='<div class="center">'+
     '<div class="kop">Un personaje te reta</div>'+
-    '<p class="qn">«Contéstame 5 preguntas sobre mi vida. Si me ganas, me quedo en tu pasaporte.»</p>'+
-    '<p class="mini">Entre más le atines, mejor será la carta que te lleves. Tienes 3 intentos en total. '+(RETO.intentos_previos>0?('Ya llevas '+RETO.intentos_previos+'.'):'')+'</p>'+
+    '<p class="qn">«Contéstame diez preguntas sobre mi vida. Si me ganas, me quedo en tu pasaporte.»</p>'+
+    '<p class="mini">Cada pregunta tiene su reloj. Entre más rápido y mejor le atines, mejor la carta: madera, chaquira, oro o catrín. Puedes volver a intentarlo las veces que quieras, y las preguntas cambian.</p>'+
     '<button class="btn dark" style="margin-top:12px" onclick="preguntaReto()">Empezar</button></div>';
 }
+function paraReloj(){ if(RELOJ){ clearTimeout(RELOJ); RELOJ=null; } }
 function preguntaReto(){
+  paraReloj();
   var q=RETO.preguntas[RETO.i];
+  if(!q){ resolverReto(); return; }
   var prog=''; for(var n=0;n<RETO.preguntas.length;n++){ prog+='<i class="'+(n<=RETO.i?'on':'')+'"></i>'; }
   var ops=(q.op||[]).map(function(o,ix){ return '<button class="op" data-ix="'+ix+'" onclick="responde('+ix+')">'+esc(o)+'</button>'; }).join('');
+  var seg=Math.max(3,+q.seg||7);
   $('retoBody').innerHTML='<div class="prog2">'+prog+'</div>'+
+    '<div class="reloj"><i id="relojBarra" style="animation-duration:'+seg+'s"></i></div>'+
     '<div class="kop">Pregunta '+(RETO.i+1)+' de '+RETO.preguntas.length+'</div>'+
     '<p class="qn">'+esc(q.q)+'</p>'+ops;
+  RETO.t0=Date.now();
+  /* Si se acaba el reloj, la pregunta se va sin respuesta y cuenta como fallada. */
+  RELOJ=setTimeout(function(){ responde(null); }, seg*1000);
 }
 function responde(ix){
+  paraReloj();
   var q=RETO.preguntas[RETO.i];
-  RETO.sel.push({id:q.id,sel:ix});
+  RETO.sel.push({id:q.id, sel:(ix===null?null:ix), ms:Date.now()-(RETO.t0||Date.now())});
   RETO.i++;
-  if(RETO.i<RETO.preguntas.length){ preguntaReto(); }
-  else { resolverReto(); }
+  if(RETO.i<RETO.preguntas.length){ preguntaReto(); } else { resolverReto(); }
 }
 function resolverReto(){
+  paraReloj();
   $('retoBody').innerHTML='<div class="spin"></div><p class="center mini">Calificando…</p>';
-  api('pch_reto_resolver',{p_token:TOKEN,p_lugar_id:RETO.lugar_id,p_lat:RETO.pos.lat,p_lng:RETO.pos.lng,p_respuestas:RETO.sel}).then(function(j){
+  api('pch_reto_resolver',{p_token:TOKEN,p_intento_id:RETO.intento_id,p_respuestas:RETO.sel}).then(function(j){
     if(!j||!j.ok){ $('retoBody').innerHTML='<p class="center">No se pudo calificar. '+((j&&j.error)||'')+'</p><button class="btn ghost" onclick="cerrarReto()">Cerrar</button>'; return; }
-    var gano=j.tier_gano, t=TIER[gano];
-    var head;
+    var gano=j.tier_gano, t=TIER[gano]||{}, head;
+    var tiempo=Math.round((j.eficiencia||0)*100);
     if(gano){
       head='<div class="center"><img class="ficha-img" src="'+esc(j.personaje.img)+'">'+
-        '<div class="kop">'+(j.subio?'¡Desbloqueaste!':'Ya lo tenías')+'</div>'+
+        '<div class="kop">'+(j.subio?'¡Subiste de carta!':'Ya la tenías igual o mejor')+'</div>'+
         '<h3 style="font-family:Oswald;text-transform:uppercase;margin:4px 0">'+esc(j.personaje.nombre)+'</h3>'+
         '<p class="tt" style="font-family:\'Lobster Two\';color:var(--magenta);margin:0 0 8px">'+esc(j.personaje.titulo||'')+'</p>'+
-        '<span class="badge" style="background:'+(t.c)+'">'+t.e+' '+t.n+'</span>'+
+        '<span class="badge" style="background:'+(t.c||'#333')+'">'+(t.e||'')+' '+(t.n||'')+'</span>'+
         '<p style="text-align:left;margin-top:12px">'+esc(j.personaje.semblanza||'')+'</p>';
     }else{
-      head='<div class="center"><div class="kop">Casi…</div>'+
-        '<p class="qn">Acertaste '+j.aciertos+' de '+j.total+'. Necesitas al menos 3 para quedártelo.</p>';
+      head='<div class="center"><div class="kop">Ni una…</div>'+
+        '<p class="qn">No acertaste ninguna. Vuelve a intentarlo: las preguntas cambian.</p>';
     }
-    var extra = j.intentos_restantes>0
-      ? '<p class="mini">Te quedan '+j.intentos_restantes+' intento(s)'+(gano&&gano!=='catrin'?' para subir de tier':'')+'.</p>'
-      : '<p class="mini">Se acabaron tus intentos con este personaje.</p>';
-    $('retoBody').innerHTML=head+extra+
+    $('retoBody').innerHTML=head+
+      '<p class="mini">'+j.aciertos+' de '+j.total+' correctas · '+tiempo+'% de reloj aprovechado'+
+      (j.sin_responder? ' · '+j.sin_responder+' se te fueron de tiempo':'')+'</p>'+
+      '<p class="mini">Puedes repetirlo cuando quieras'+(gano&&gano!=='catrin'?' para subir de carta':'')+'.</p>'+
       '<button class="btn pri" style="margin-top:10px" onclick="cerrarReto(true)">'+(gano?'Ver mi pasaporte':'Cerrar')+'</button></div>';
   }).catch(function(){ $('retoBody').innerHTML='<p class="center">Falló la conexión al calificar.</p><button class="btn ghost" onclick="cerrarReto()">Cerrar</button>'; });
 }
-function cerrarReto(recargar){ cerrar('ovReto'); RETO=null; if(recargar){ cargaPasaporte(); if(map) cargaMapa(); $('tabP').click(); } }
+function cerrarReto(recargar){ paraReloj(); cerrar('ovReto'); RETO=null; if(recargar){ cargaPasaporte(); if(map) cargaMapa(); $('tabP').click(); } }
 
 /* ---------- Ranking ---------- */
 function verRank(){
