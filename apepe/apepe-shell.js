@@ -117,10 +117,16 @@
     /* --- barra de pestañas de la APePe --- */
     var IMG = '/img/apepe/stickers/';
     /* Modo de acceso recortado: 'publico' (usuario local Pepe GO) o 'colab'
-       (colaborador de SoyPepe). Llega por ?modo= y se recuerda. */
-    var MODO = (function(){ try{ var m=P.get('modo')||'';
+       (colaborador de SoyPepe); vacío = huésped, que lo ve todo.
+       Manda la identidad, no el recuerdo: con token de reserva es huésped aunque
+       el teléfono guardara otro modo de una visita anterior -a Javi le había
+       dejado la app sin Vnums ni Yo-. Un ?modo= en la liga sí manda. */
+    var MODO = (function(){ try{
+      var m=P.get('modo')||'';
       if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
-      return localStorage.getItem('apepe_modo')||''; }catch(_){ return ''; } })();
+      if(RESV || SOL){ try{ localStorage.removeItem('apepe_modo'); }catch(_){ } return ''; }
+      return localStorage.getItem('apepe_modo')||'';
+    }catch(_){ return ''; } })();
     var CAT = {
       inicio: { t:'inicio', label:'Inicio', href:liga('/apepe/index.html'), img:IMG+'hola-perrito.webp', match:['/apepe/index','/apepe/'] },
       pepego: { t:'pepego', label:'Pepe GO!', href:liga('/apepe/challenge.html'), img:IMG+'bellas-artes.webp', match:['/apepe/challenge'] },

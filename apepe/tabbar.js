@@ -23,14 +23,34 @@
 
   var IMG = '/img/apepe/stickers/';
 
-  /* Modo de acceso: '' = huésped (todo), 'publico' = usuario local de Pepe GO
-     (sólo Pepe GO · Experiencias · Vnums · Mapa), 'colab' = colaborador de
-     SoyPepe (sólo Mapa · Pepe GO · Experiencias). Llega por ?modo= y se recuerda. */
-  var MODO = (function(){ try{
-    var p=new URLSearchParams(location.search), m=p.get('modo')||'';
+  /* EL MODO DE ACCESO. Dos APePe distintas viven en las mismas pantallas:
+       · huésped  -> la completa (Inicio, Vnums, Experiencias, Mapa, Yo). Se llega
+                     por el check-in, y ahí caben también los voluntarios.
+       · publico  -> el que entra por el Pepe GO! de Sincrético sin hospedarse:
+                     juega, reserva tours y junta Vnums (Pepe GO, Experiencias,
+                     Vnums, Mapa).
+       · colab    -> el colaborador que llega desde SoyPepe (Mapa, Pepe GO,
+                     Experiencias).
+
+     MANDA LA IDENTIDAD, NO EL RECUERDO. El modo se guardaba en el teléfono, y a
+     un huésped que alguna vez abrió el Pepe GO! público o SoyPepe le desaparecían
+     los Vnums y el Yo de su propia app. Así que: si hay token de reserva, es
+     huésped y punto, y de paso se borra el modo guardado. Un ?modo= en la liga sí
+     manda -es un acto de esta navegación-; lo guardado, sólo cuando no hay token. */
+  var MODO = (function(){
+    function bueno(v){ v=String(v==null?'':v).trim();
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)?v:''; }
+    function ls(k){ try{ return bueno(localStorage.getItem(k)); }catch(_){ return ''; } }
+    var p; try{ p=new URLSearchParams(location.search); }catch(_){ p=null; }
+    var m = p ? (p.get('modo')||'') : '';
     if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
-    return localStorage.getItem('apepe_modo')||'';
-  }catch(_){ return ''; } })();
+    var hayReserva = false;
+    try{ hayReserva = !!(window.apepeResv && (window.apepeResv.token()||window.apepeResv.sol())); }catch(_){ }
+    if(!hayReserva && p) hayReserva = !!(bueno(p.get('resv'))||bueno(p.get('sol')));
+    if(!hayReserva) hayReserva = !!(ls('apepe_resv')||ls('apepe_sol'));
+    if(hayReserva){ try{ localStorage.removeItem('apepe_modo'); }catch(_){ } return ''; }
+    try{ return localStorage.getItem('apepe_modo')||''; }catch(_){ return ''; }
+  })();
 
   var CAT = {
     inicio: { id:'inicio', txt:'Inicio', base:'/apepe/index.html', img:IMG+'hola-perrito.webp',
