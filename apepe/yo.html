@@ -26,6 +26,22 @@
   --sombra:0 1px 1px rgba(30,26,22,.05),0 12px 30px -22px rgba(30,26,22,.4);
   --radio:14px;
 }
+/* Interruptores de avisos. El de push no es un gusto: es un permiso del navegador,
+   así que puede quedarse apagado aunque el huésped lo encienda. Por eso su texto
+   de abajo cuenta qué pasó. */
+.sw{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--linea)}
+.sw:last-child{border-bottom:0}
+.sw .tx{flex:1}
+.sw .tx b{display:block;font-size:14.5px}
+.sw .tx span{display:block;color:var(--gris);font-size:12.5px;margin-top:2px;line-height:1.45}
+.sw input{appearance:none;-webkit-appearance:none;width:46px;height:27px;border-radius:999px;
+  background:var(--linea);position:relative;cursor:pointer;flex:none;margin-top:3px;transition:background .18s}
+.sw input:checked{background:var(--naranja)}
+.sw input::after{content:'';position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:999px;
+  background:#fff;transition:left .18s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.sw input:checked::after{left:22px}
+.sw input:disabled{opacity:.5;cursor:not-allowed}
+.swNota{color:var(--tenue);font-size:12px;margin-top:10px;line-height:1.45}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--papel);color:var(--tinta);font-family:'Inter',system-ui,sans-serif;
@@ -147,6 +163,11 @@ a{color:inherit}
   <div class="card wb" id="cWb" style="display:none">
     <h2>Tarifa directa</h2>
     <div id="wb"></div>
+  </div>
+
+  <div class="card" id="cAvisos">
+    <h2 id="avisos">Avisos</h2>
+    <div id="avs"><div class="vacio">Mirando…</div></div>
   </div>
 </div>
 
@@ -311,11 +332,85 @@ async function pintaWinback(){
   };
 }
 
+/* ---------- avisos: qué quiere recibir ---------- */
+function rpc(fn,b){ return fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',
+  headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+  body:JSON.stringify(b||{})}).then(function(r){return r.json();}); }
+
+async function pintaAvisos(){
+  var caja=$('avs');
+  if(!RESV){ caja.innerHTML='<div class="vacio">Abre esta pantalla desde la liga de tu reserva para configurar tus avisos.</div>'; return; }
+  var pref={};
+  try{ pref=await rpc('apepe_notif_prefs',{p_resv:RESV})||{}; }catch(e){}
+  if(pref.ok===false){ caja.innerHTML='<div class="vacio">No reconocemos tu reserva.</div>'; return; }
+
+  /* El push necesita tres cosas que pueden faltar: service worker, API de
+     notificaciones y que el huésped diga que sí. Si falta alguna, el interruptor
+     se queda apagado y se explica por qué, en vez de mentir. */
+  var puedePush = ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window);
+  var bloqueado = puedePush && Notification.permission === 'denied';
+
+  caja.innerHTML =
+    '<div class="sw"><div class="tx"><b>Ofertas y descuentos</b>'+
+      '<span>Tarifas directas, upgrades y lo que se nos ocurra regalarte.</span></div>'+
+      '<input type="checkbox" id="avOf"'+(pref.ofertas===false?'':' checked')+'></div>'+
+    '<div class="sw"><div class="tx"><b>Tu estancia</b>'+
+      '<span>Check-in, tu cuarto, tus experiencias y tus boletos.</span></div>'+
+      '<input type="checkbox" id="avEs"'+(pref.estancia===false?'':' checked')+'></div>'+
+    '<div class="sw"><div class="tx"><b>Avisarme al teléfono</b>'+
+      '<span id="avPuSub">'+(
+        !puedePush ? 'Tu navegador no puede mandarte avisos. Los verás igual en la campanita de arriba.'
+        : bloqueado ? 'Los bloqueaste en este navegador. Actívalos desde los ajustes del sitio y vuelve aquí.'
+        : 'Aunque no tengas APePe abierta. Te pedirá permiso una vez.')+'</span></div>'+
+      '<input type="checkbox" id="avPu"'+(pref.push?' checked':'')+(puedePush&&!bloqueado?'':' disabled')+'></div>'+
+    '<div class="swNota">Los avisos son de esta reserva. Al terminar tu estancia dejamos de mandarte nada.</div>';
+
+  function guarda(campo,valor){
+    var b={p_resv:RESV}; b[campo]=valor;
+    return rpc('apepe_notif_prefs_guardar',b).catch(function(){});
+  }
+  $('avOf').onchange=function(){ guarda('p_ofertas',this.checked); };
+  $('avEs').onchange=function(){ guarda('p_estancia',this.checked); };
+  $('avPu').onchange=async function(){
+    var sw=this;
+    if(!sw.checked){ await rpc('apepe_push_baja',{p_resv:RESV}).catch(function(){}); await guarda('p_push',false); return; }
+    sw.disabled=true;
+    try{
+      var per=await Notification.requestPermission();
+      if(per!=='granted'){
+        sw.checked=false;
+        $('avPuSub').textContent='No diste permiso. Los verás igual en la campanita de arriba.';
+        return;
+      }
+      var reg=await navigator.serviceWorker.ready;
+      var sub=await reg.pushManager.getSubscription();
+      if(!sub){
+        var vap=await fetch(SB+'/functions/v1/apepe-push?clave=1',{headers:{apikey:KEY}}).then(function(r){return r.json();}).catch(function(){return null;});
+        if(!vap||!vap.clave){
+          sw.checked=false;
+          $('avPuSub').textContent='Todavía no tenemos listo el aviso al teléfono. Mientras, la campanita de arriba no falla.';
+          return;
+        }
+        sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:vap.clave});
+      }
+      var j=sub.toJSON();
+      await rpc('apepe_push_alta',{p_resv:RESV, p_endpoint:j.endpoint,
+        p_p256dh:(j.keys||{}).p256dh, p_auth:(j.keys||{}).auth, p_ua:navigator.userAgent.slice(0,180)});
+      $('avPuSub').textContent='Listo. Te avisamos aunque tengas APePe cerrada.';
+    }catch(e){
+      sw.checked=false;
+      $('avPuSub').textContent='No se pudo activar en este teléfono. Los verás en la campanita de arriba.';
+    }finally{ sw.disabled=false; }
+  };
+}
+
 pintaReserva();
 pintaDocs();
 pintaBoletos();
 pintaWinback();
+pintaAvisos();
 })();
 </script>
+<script src="/apepe/notis.js"></script>
 </body>
 </html>
