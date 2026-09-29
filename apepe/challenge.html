@@ -116,6 +116,8 @@ a{color:inherit;text-decoration:none}
 /* El pin late cuando ya estás dentro del radio */
 @keyframes latir{0%,100%{transform:scale(1)}50%{transform:scale(1.22)}}
 .pin .b.cerca{animation:latir .9s ease-in-out infinite}
+.pin .c{width:30px;height:44px;border-radius:5px;overflow:hidden;border:2.5px solid;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+.pin .c img{width:100%;height:100%;object-fit:cover;display:block}
 @media(prefers-reduced-motion:reduce){.pin .b.cerca{animation:none;outline:3px solid #fff}}
 .gpschip{border:0;font-family:inherit;cursor:pointer}
 .gpschip:disabled{opacity:.85;cursor:default}
@@ -323,18 +325,24 @@ function initMap(){
 /* Color del pin: la etapa mientras está bloqueada, el nivel que ganaste en cuanto
    la tienes. Así el mapa se va llenando de oro y de día de muertos. */
 var TIERCOL={madera:'#8A5A2B',chaquira:'#1A2C9C',oro:'#C99A1E',catrin:'#E2188E'};
-function pinIcon(color,txt,cerca){
+/* El pin de un lugar ya ganado es la carta misma, en el material que sacaste
+   ahí. Los otros lugares de esa carta siguen esperando. */
+function pinIcon(r,cerca){
+  if(r.aqui && r.thumb){
+    return L.divIcon({className:'pin',
+      html:'<div class="c" style="border-color:'+(TIERCOL[r.tier_aqui]||'#8A5A2B')+'">'+
+           '<img src="'+esc(r.thumb)+'" alt=""></div>',
+      iconSize:[30,44],iconAnchor:[15,44],popupAnchor:[0,-42]});
+  }
   return L.divIcon({className:'pin',
-    html:'<div class="b'+(cerca?' cerca':'')+'" style="background:'+color+'"><span>'+txt+'</span></div>',
+    html:'<div class="b'+(cerca?' cerca':'')+'" style="background:'+(r.color||'#F2682A')+'"><span>🎴</span></div>',
     iconSize:[34,34],iconAnchor:[17,34],popupAnchor:[0,-32]});
 }
-function colorPin(r){ return r.abierta ? (TIERCOL[r.tier]||'#8A5A2B') : (r.color||'#F2682A'); }
-function textoPin(r){ return r.abierta ? ((TIER[r.tier]||{}).e||'★') : '🎴'; }
 function cargaMapa(){
   api('pch_mapa',{p_token:TOKEN}).then(function(rows){
     pines.forEach(function(p){ if(map.hasLayer(p.mk)) map.removeLayer(p.mk); }); pines=[];
     (rows||[]).forEach(function(r){
-      var mk=L.marker([r.lat,r.lng],{icon:pinIcon(colorPin(r),textoPin(r),false)}).addTo(map);
+      var mk=L.marker([r.lat,r.lng],{icon:pinIcon(r,false)}).addTo(map);
       mk.on('click',function(){ abrePin(r); });
       pines.push({r:r,mk:mk,cerca:false});
     });
@@ -349,25 +357,25 @@ function marcaCercanos(){
     var cerca = DEMO ? false : (dist(myPos.lat,myPos.lng,p.r.lat,p.r.lng) <= p.r.radio);
     if(cerca !== p.cerca){
       p.cerca=cerca;
-      p.mk.setIcon(pinIcon(colorPin(p.r),textoPin(p.r),cerca && !p.r.abierta));
+      p.mk.setIcon(pinIcon(p.r, cerca && !p.r.aqui));
     }
   });
 }
 function abrePin(r){
   var d = myPos? dist(myPos.lat,myPos.lng,r.lat,r.lng) : null;
   var cerca = DEMO || (d!=null && d<=r.radio);
-  var titulo = r.abierta? esc(r.personaje) : 'Un personaje te espera aquí';
-  var sub = r.abierta? ('<div class="mini" style="text-align:left">'+esc(r.lugar||'')+'</div>') :
-            ('<div class="pista" style="text-align:left">'+esc(r.resena||'')+'</div>');
+  var titulo = r.aqui? esc(r.personaje) : 'Un personaje te espera aquí';
+  var sub = '<div class="mini" style="text-align:left">'+esc(r.lugar||'')+'</div>'+
+            (r.aqui? '' : '<div class="pista" style="text-align:left">'+esc(r.resena||'')+'</div>');
   var llegar = r.como_llegar? '<p class="mini" style="text-align:left">📍 '+esc(r.como_llegar)+'</p>':'';
   var estado = DEMO? '<p class="mini">Vista previa: puedes retar sin estar en el lugar.</p>'
     : (d==null? '<p class="mini">Activa tu ubicación para saber si ya estás cerca.</p>'
         : (cerca? '<p class="mini" style="color:#2E7D5B;font-weight:700">✓ Estás a '+Math.round(d)+' m — ¡puedes retarlo!</p>'
                 : '<p class="mini">Estás a '+(d>1200?(Math.round(d/100)/10+' km'):(Math.round(d)+' m'))+'. Acércate a menos de '+r.radio+' m.</p>'));
-  var t = r.abierta? (TIER[r.tier]||{}) : null;
+  var t = r.aqui? (TIER[r.tier_aqui]||{}) : null;
   /* Ganada no es final: se puede repetir para subir de carta. */
-  var btn = r.abierta
-    ? '<p class="mini">La tienes en <b>'+(t.n||'')+'</b> '+(t.e||'')+'. Puedes repetirlo para subirla.</p>'+
+  var btn = r.aqui
+    ? '<p class="mini">Aquí la sacaste en <b>'+(t.n||'')+'</b> '+(t.e||'')+'. Puedes repetirlo para subirla.</p>'+
       '<button class="btn pri" '+(cerca?'':'disabled')+' onclick="empezarReto('+r.lugar_id+')">Intentarlo otra vez</button>'
     : '<button class="btn pri" '+(cerca?'':'disabled')+' onclick="empezarReto('+r.lugar_id+')">Aceptar el reto</button>';
   $('fichaBody').innerHTML='<div class="ficha center"><h3>'+titulo+'</h3>'+sub+llegar+estado+'<div style="margin-top:12px">'+btn+'</div></div>';
@@ -388,7 +396,7 @@ function startGeo(){
     var best=null;
     pines.forEach(function(x){
       if(FILTRO!=='todas' && x.r.col!==FILTRO) return;
-      if(x.r.abierta) return;
+      if(x.r.aqui) return;
       var dd=dist(myPos.lat,myPos.lng,x.r.lat,x.r.lng);
       if(!best||dd<best.d) best={d:dd,r:x.r};
     });
