@@ -33,7 +33,15 @@
   Object.keys(CLAVES).forEach(function (nom) {
     var k = CLAVES[nom];
     var deLaUrl = p ? bueno(p.get(nom)) : '';
-    if (deLaUrl) { guarda(k, deLaUrl); vals[nom] = deLaUrl; return; }
+    if (deLaUrl) {
+      /* Liga nueva en el aparato: lo que supiéramos de la anterior -su fecha de
+         salida- no vale para ésta. */
+      if (deLaUrl !== lee(k)) {
+        ['apepe_resv_hasta','apepe_resv_visto'].forEach(function(x){
+          try { localStorage.removeItem(x); } catch (_) {} });
+      }
+      guarda(k, deLaUrl); vals[nom] = deLaUrl; return;
+    }
     var guardado = lee(k);
     if (guardado && p) { p.set(nom, guardado); cambio = true; }
     vals[nom] = guardado;
@@ -61,6 +69,61 @@
     else { sede = localStorage.getItem('apepe_sede') || ''; }
   } catch (_) {}
 
+  /* CUÁNDO SE OLVIDA.
+     Guardar el token para siempre tiene su precio: en un aparato compartido -el
+     de recepción, el de la sala- el siguiente que entra sin su propia liga
+     hereda la reserva del anterior, con sus fechas y sus papeles. Así que la
+     liga guardada se olvida sola dos días después del checkout.
+     La que viene escrita en la URL no se toca nunca: si alguien la abre, la
+     abre a propósito.
+     La fecha de salida se pregunta una vez al día y se apunta, para que los
+     demás arranques lo resuelvan sin red. */
+  var GRACIA_DIAS = 2;
+  var SB_FN = 'https://rehophywchakfapivsbh.supabase.co/functions/v1/apepe-reserva';
+  var KEY   = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  function hoyISO(){ try{ return new Date().toISOString().slice(0,10); }catch(_){ return ''; } }
+  function pasado(hasta){
+    try{
+      var f = Date.parse(String(hasta)+'T23:59:59Z');
+      return !!f && (Date.now() - f) > GRACIA_DIAS*86400000;
+    }catch(_){ return false; }
+  }
+  function olvidaTodo(){
+    Object.keys(CLAVES).forEach(function(n){ try{ localStorage.removeItem(CLAVES[n]); }catch(_){} });
+    ['apepe_resv_hasta','apepe_resv_visto','apepe_modo','sinc_resv_sesion']
+      .forEach(function(k){ try{ localStorage.removeItem(k); }catch(_){} });
+    vals = {};
+  }
+  function revisaCaducidad(){
+    if (!vals.resv) return;
+    /* Olvidar sólo se olvida la liga HEREDADA del aparato (cambio === la
+       repusimos nosotros). La que el huésped trae escrita en la URL se respeta
+       siempre; de ella sólo apuntamos la fecha, para los arranques de después. */
+    var hasta=''; try{ hasta = localStorage.getItem('apepe_resv_hasta')||''; }catch(_){}
+    if (cambio && hasta && pasado(hasta)) {
+      olvidaTodo();
+      try{ var u=new URL(location.href); u.searchParams.delete('resv');
+           history.replaceState(null,'',u.pathname+(u.search||'')+u.hash); }catch(_){}
+      return;
+    }
+    var visto=''; try{ visto = localStorage.getItem('apepe_resv_visto')||''; }catch(_){}
+    if (hasta && visto === hoyISO()) return;   /* ya se preguntó hoy */
+    try{ localStorage.setItem('apepe_resv_visto', hoyISO()); }catch(_){}
+    var tok = vals.resv;
+    fetch(SB_FN, { method:'POST',
+      headers:{ apikey:KEY, Authorization:'Bearer '+KEY, 'Content-Type':'application/json' },
+      body: JSON.stringify({ resv: tok }) })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        var h = j && j.ok && j.reserva ? j.reserva.hasta : '';
+        if (!h) return;
+        try{ localStorage.setItem('apepe_resv_hasta', h); }catch(_){}
+        if (cambio && pasado(h)) { olvidaTodo(); }
+      })
+      .catch(function(){});
+  }
+  try{ revisaCaducidad(); }catch(_){}
+
   window.apepeResv = {
     token: function () { return vals.resv || ''; },
     sol: function () { return vals.sol || ''; },
@@ -73,11 +136,6 @@
     },
     /* Para cuando el huésped se va: el siguiente que agarre el teléfono no
        hereda su reserva. */
-    olvida: function () {
-      Object.keys(CLAVES).forEach(function (n) {
-        try { localStorage.removeItem(CLAVES[n]); } catch (_) {}
-      });
-      vals = {};
-    }
+    olvida: olvidaTodo
   };
 })();

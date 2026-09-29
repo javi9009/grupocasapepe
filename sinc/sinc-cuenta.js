@@ -156,6 +156,7 @@ window.sincCuenta = (function () {
 
   async function salir() {
     YO = null;
+    try { localStorage.removeItem('sinc_resv_sesion'); } catch (_) {}
     try { await cli().auth.signOut(); } catch (_) {}
   }
 
@@ -397,8 +398,12 @@ window.sincCuenta = (function () {
       var s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'email' });
       if (s.error) s = await cli().auth.verifyOtp({ token_hash: j.token_hash, type: 'magiclink' });
       if (s.error) throw s.error;
-      return await fichaje({ p_nombre: j.nombre || null, p_telefono: j.telefono || null,
-                             p_hotel: j.hotel_id || null, p_origen: 'hotel' });
+      var ficha = await fichaje({ p_nombre: j.nombre || null, p_telefono: j.telefono || null,
+                                  p_hotel: j.hotel_id || null, p_origen: 'hotel' });
+      /* De qué liga salió esta sesión. Es lo que luego permite saber si la que
+         hay abierta es la del huésped que trae la liga o la de otro. */
+      try { localStorage.setItem('sinc_resv_sesion', t); } catch (_) {}
+      return ficha;
     } catch (x) {
       /* Que no lo vuelva a intentar en cada pantalla de la sesión. */
       try { sessionStorage.setItem('sinc_resv_no', t); } catch (_) {}
@@ -406,10 +411,29 @@ window.sincCuenta = (function () {
     }
   }
 
-  async function exige(opts) {
+  /* QUIÉN ES EL DE ESTA PANTALLA.
+     Había dos identidades sueltas a la vez: la reserva, que viene en la liga, y
+     la cuenta de Sincrético, que vive en el navegador. Como se miraba primero la
+     cuenta, en un teléfono donde alguien dejó la suya abierta -el de recepción,
+     el de una compañera- a cada huésped le salían los boletos de esa persona
+     debajo de su propia reserva. Y peor: habría reservado un tour a nombre de
+     ella.
+     Con liga delante manda la liga: si la sesión abierta no nació de esta misma
+     liga, se cierra y se entra como el huésped que la trae. Sin liga (el público
+     del Pepe GO!) todo sigue igual que siempre. */
+  async function yoDeEstaLiga() {
+    var t = '';
+    try { t = (new URLSearchParams(location.search).get('resv') || '').trim(); } catch (_) {}
+    if (!/^[0-9a-f-]{36}$/i.test(t)) return await yaEntrado();
+    var deQuien = ''; try { deQuien = localStorage.getItem('sinc_resv_sesion') || ''; } catch (_) {}
     var yo = await yaEntrado();
-    if (yo) return yo;
-    yo = await comoHuesped();
+    if (yo && deQuien === t) return yo;
+    if (yo) await salir();
+    return await comoHuesped();
+  }
+
+  async function exige(opts) {
+    var yo = await yoDeEstaLiga();
     if (yo) return yo;
     return await entra(opts);
   }
@@ -417,7 +441,7 @@ window.sincCuenta = (function () {
   return {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
-    miPerfil: miPerfil, comoHuesped: comoHuesped, recoge: recoge,
+    miPerfil: miPerfil, comoHuesped: comoHuesped, yoDeEstaLiga: yoDeEstaLiga, recoge: recoge,
   };
 })();
 
