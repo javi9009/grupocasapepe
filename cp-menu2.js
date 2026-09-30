@@ -45,7 +45,13 @@
   function tono(c){ return COLORES[c] || COLORES.operacion; }
 
   var CSS = [
-    '.m2{display:flex;height:100%;min-height:0;background:var(--bg2,#f7f6f1)}',
+    /* La barra lateral sigue siendo la barra lateral: arriba el logo y el
+       selector de propiedad -que antes se borraban al montar el menu nuevo, y
+       Javi se quedaba sin poder cambiar de hotel-, y debajo el menu. */
+    '.m2wrap{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg2,#f7f6f1)}',
+    '.m2head{flex:0 0 auto;padding:1rem .75rem 0}',
+    '.m2head .projsel{margin:.55rem 0 .7rem}',
+    '.m2{display:flex;flex:1 1 auto;min-height:0;background:var(--bg2,#f7f6f1)}',
     '.m2 *{box-sizing:border-box}',
     /* --- el riel de categorías --- */
     '.m2-cat{flex:0 0 auto;width:210px;border-right:1px solid var(--bd,rgba(0,0,0,.1));',
@@ -58,6 +64,8 @@
     '.m2.catmin .m2-cat .it .tx{display:none}',
     '.m2-cat .it:hover{background:var(--bg3,#f1efe8)}',
     '.m2-cat .it.on{background:var(--m2suave);color:var(--m2fuerte);font-weight:600}',
+    '.m2-cat .it.salir{margin-top:14px;border-top:1px solid var(--bd,rgba(0,0,0,.1));',
+    '  border-radius:0;padding-top:12px;color:var(--txt3,#888780);font-size:12.5px}',
     /* --- la columna de subcategorías --- */
     '.m2-sub{flex:0 0 auto;width:212px;border-right:1px solid var(--bd,rgba(0,0,0,.1));',
     '  overflow-y:auto;padding:10px 8px;background:#fff;transition:width .16s ease}',
@@ -80,13 +88,25 @@
     '.m2-tira button{border:1px solid var(--bd,rgba(0,0,0,.12));background:#fff;color:var(--txt2,#5f5e5a);',
     '  width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:13px;line-height:1}',
     '.m2-tira button:hover{background:var(--bg3,#f1efe8)}',
-    '.m2{position:relative}'
+    '.m2{position:relative}',
+    /* --- en el telefono la barra mide 248 px: las dos columnas juntas (422)
+       no caben y la segunda se quedaba fuera de la pantalla, que es por lo que
+       "no funcionaba". Aqui se ve una columna a la vez, como en Supabase. --- */
+    '@media(max-width:760px){',
+    '  .m2.movil .m2-cat,.m2.movil .m2-sub{width:100%;border-right:0;padding:10px 8px}',
+    '  .m2.movil .m2-cat .it .tx{display:inline}',
+    '  .m2.movil .m2-tira{display:none}',
+    '  .m2.movil .m2-sub .atras{background:var(--bg3,#f1efe8);font-weight:600}',
+    '}'
   ].join('');
 
   var D = null;          // datos y ganchos
   var hijos = {};        // codigo -> [nodos]
   var porCod = {};
-  var estado = { cat:null, rama:null, activa:null, catmin:false, submin:false };
+  var estado = { cat:null, rama:null, activa:null, catmin:false, submin:false, vista:'cat' };
+  var cabecera = null;   // logo + selector de propiedad, prestados del <aside>
+  var MQ = (window.matchMedia ? window.matchMedia('(max-width:760px)') : null);
+  function esMovil(){ return !!(MQ && MQ.matches); }
 
   function esVisible(n){
     if (n.tipo === 'contenedor') return (hijos[n.codigo]||[]).some(esVisible);
@@ -113,63 +133,92 @@
 
   function pinta(){
     var caja = D.caja;
+    var movil = esMovil();
     caja.innerHTML = '';
-    var raiz = el('div','m2'+(estado.catmin?' catmin':'')+(estado.submin?' submin':''));
+    var wrap = el('div','m2wrap');
+    if (cabecera) wrap.appendChild(cabecera);
+    var raiz = el('div','m2'+(movil?' movil':'')
+                        +(!movil&&estado.catmin?' catmin':'')
+                        +(!movil&&estado.submin?' submin':''));
     var t = color(porCod[estado.cat] || {});
     raiz.style.setProperty('--m2fuerte', t.fuerte);
     raiz.style.setProperty('--m2suave', t.suave);
 
-    /* 1 · las categorías */
-    var cat = el('nav','m2-cat');
-    hijosVisibles(null).forEach(function(n){
-      var p = parte(n);
-      var it = el('div','it'+(n.codigo===estado.cat?' on':''),
-        '<span class="ic">'+esc(p.ic)+'</span><span class="tx">'+esc(p.tx)+'</span>');
-      it.title = p.tx;
-      it.onclick = function(){
-        estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
-        estado.catmin = false; pinta();
-      };
-      cat.appendChild(it);
-    });
-    raiz.appendChild(cat);
+    /* 1 · las categorías. En el teléfono sólo cuando toca verlas. */
+    if (!movil || estado.vista === 'cat') {
+      var cat = el('nav','m2-cat');
+      hijosVisibles(null).forEach(function(n){
+        var p = parte(n);
+        var it = el('div','it'+(n.codigo===estado.cat?' on':''),
+          '<span class="ic">'+esc(p.ic)+'</span><span class="tx">'+esc(p.tx)+'</span>'
+          +(movil?'<span style="margin-left:auto;opacity:.5">›</span>':''));
+        it.title = p.tx;
+        it.onclick = function(){
+          estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
+          estado.catmin = false; estado.vista = 'sub'; pinta();
+        };
+        cat.appendChild(it);
+      });
+      /* La puerta de salida, dentro del propio menú: el botón de la barra de
+         arriba se pierde en el teléfono y quien probaba el menú nuevo se
+         quedaba sin manera evidente de volver. */
+      if (D.volverViejo) {
+        var sal = el('div','it salir','<span class="ic">↩︎</span><span class="tx">Menú de siempre</span>');
+        sal.title = 'Volver al menú de siempre';
+        sal.onclick = function(){ D.volverViejo(); };
+        cat.appendChild(sal);
+      }
+      raiz.appendChild(cat);
+    }
 
     /* 2 · la columna de la rama abierta */
-    var sub = el('nav','m2-sub');
-    var nodoRama = porCod[estado.rama];
-    if (nodoRama) {
-      var padre = porCod[nodoRama.parent_codigo];
-      if (padre) {
-        var atras = el('div','atras','← '+esc(parte(padre).tx));
-        atras.onclick = function(){ estado.rama = padre.codigo; pinta(); };
-        sub.appendChild(atras);
+    if (!movil || estado.vista === 'sub') {
+      var sub = el('nav','m2-sub');
+      var nodoRama = porCod[estado.rama];
+      if (nodoRama) {
+        var padre = porCod[nodoRama.parent_codigo];
+        if (padre) {
+          var atras = el('div','atras','← '+esc(parte(padre).tx));
+          atras.onclick = function(){ estado.rama = padre.codigo; pinta(); };
+          sub.appendChild(atras);
+        } else if (movil) {
+          /* En el teléfono la raíz también necesita puerta de salida: si no,
+             se entra a una categoría y ya no se puede volver a la lista. */
+          var vuelve = el('div','atras','← '+esc(T_CATS));
+          vuelve.onclick = function(){ estado.vista = 'cat'; pinta(); };
+          sub.appendChild(vuelve);
+        }
+        sub.appendChild(el('div','tit', esc(parte(nodoRama).tx)));
+        hijosVisibles(nodoRama.codigo).forEach(function(n){
+          var p = parte(n);
+          var tieneHijos = hijosVisibles(n.codigo).length > 0;
+          var pend = (n.tipo === 'pendiente') || (!n.ruta && !tieneHijos);
+          var it = el('div','it'+(n.codigo===estado.activa?' on':'')+(pend?' pend':''),
+            '<span class="ic">'+esc(p.ic)+'</span><span>'+esc(p.tx)+(tieneHijos?' ›':'')+'</span>');
+          if (!pend) it.onclick = function(){ elige(n); };
+          sub.appendChild(it);
+        });
       }
-      sub.appendChild(el('div','tit', esc(parte(nodoRama).tx)));
-      hijosVisibles(nodoRama.codigo).forEach(function(n){
-        var p = parte(n);
-        var tieneHijos = hijosVisibles(n.codigo).length > 0;
-        var pend = (n.tipo === 'pendiente') || (!n.ruta && !tieneHijos);
-        var it = el('div','it'+(n.codigo===estado.activa?' on':'')+(pend?' pend':''),
-          '<span class="ic">'+esc(p.ic)+'</span><span>'+esc(p.tx)+(tieneHijos?' ›':'')+'</span>');
-        if (!pend) it.onclick = function(){ elige(n); };
-        sub.appendChild(it);
-      });
+      raiz.appendChild(sub);
     }
-    raiz.appendChild(sub);
 
-    /* 3 · los tiradores: mismo sitio, siempre */
-    var tira = el('div','m2-tira');
-    var b1 = el('button', null, estado.catmin ? '»' : '«');
-    b1.title = estado.catmin ? 'Mostrar categorías' : 'Encoger categorías';
-    b1.onclick = function(){ estado.catmin = !estado.catmin; pinta(); };
-    var b2 = el('button', null, estado.submin ? '▸' : '◂');
-    b2.title = estado.submin ? 'Mostrar el submenú' : 'Ocultar el submenú';
-    b2.onclick = function(){ estado.submin = !estado.submin; pinta(); };
-    tira.appendChild(b1); tira.appendChild(b2);
-    raiz.appendChild(tira);
+    /* 3 · los tiradores: mismo sitio, siempre (en el teléfono estorban) */
+    if (!movil) {
+      var tira = el('div','m2-tira');
+      var b1 = el('button', null, estado.catmin ? '»' : '«');
+      b1.title = estado.catmin ? 'Mostrar categorías' : 'Encoger categorías';
+      b1.onclick = function(){ estado.catmin = !estado.catmin; pinta(); };
+      var b2 = el('button', null, estado.submin ? '▸' : '◂');
+      b2.title = estado.submin ? 'Mostrar el submenú' : 'Ocultar el submenú';
+      b2.onclick = function(){ estado.submin = !estado.submin; pinta(); };
+      tira.appendChild(b1); tira.appendChild(b2);
+      raiz.appendChild(tira);
+    }
 
-    caja.appendChild(raiz);
+    wrap.appendChild(raiz);
+    caja.appendChild(wrap);
   }
+  var T_CATS = 'Todas las áreas';
 
   /* Qué pasa al elegir algo de la columna. */
   function elige(n){
@@ -177,14 +226,14 @@
     if (conHijos.length) {
       /* A) grupo: tablero de cuadritos, y la columna baja un escalón */
       estado.rama = n.codigo; estado.activa = null;
-      estado.catmin = true;
+      estado.catmin = !esMovil();
       D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n));
       pinta();
       return;
     }
     /* B) pantalla: se abre, y las dos columnas se encogen */
     if (!n.ruta) return;
-    estado.activa = n.codigo; estado.catmin = true;
+    estado.activa = n.codigo; estado.catmin = !esMovil();
     D.abrir(n.ruta, parte(n).tx, migaja(n));
     pinta();
   }
@@ -199,7 +248,7 @@
   function abreCodigo(cod){
     var n = porCod[cod]; if (!n) return false;
     estado.cat = raizDe(n); estado.rama = n.parent_codigo || estado.cat;
-    elige(n); return true;
+    estado.vista = 'sub'; elige(n); return true;
   }
   function raizDe(n){ var c=n,v=0; while(c && c.parent_codigo && v++<6) c=porCod[c.parent_codigo]; return c?c.codigo:null; }
 
@@ -215,10 +264,31 @@
       var st = document.createElement('style'); st.id='cpMenu2css'; st.textContent = CSS;
       document.head.appendChild(st);
     }
+    /* El <aside> trae el logo y el selector de propiedad recien pintados por
+       index.html. Se toman prestados (no se clonan: asi conservan sus manejadores)
+       para que sigan arriba del menu nuevo. */
+    cabecera = null;
+    var trozos = [];
+    ['.brand','.projsel'].forEach(function(q){
+      var e = op.caja.querySelector(q); if (e) trozos.push(e);
+    });
+    if (trozos.length) {
+      /* Un <div> de verdad, no un fragmento: el fragmento se vacia al insertarlo
+         y en el siguiente repintado la cabecera desaparecia. */
+      cabecera = el('div','m2head');
+      trozos.forEach(function(e){ cabecera.appendChild(e); });
+    }
+
     var prim = hijosVisibles(null)[0];
     estado.cat = estado.rama = prim ? prim.codigo : null;
     estado.activa = null; estado.catmin = false; estado.submin = false;
+    estado.vista = 'cat';
     pinta();
+    if (MQ && !MQ._cpm2) { MQ._cpm2 = true;
+      var alGirar = function(){ if (D) pinta(); };
+      if (MQ.addEventListener) MQ.addEventListener('change', alGirar);
+      else if (MQ.addListener) MQ.addListener(alGirar);
+    }
     window.addEventListener('message', function(ev){
       if (ev && ev.data && ev.data.tipo === 'cp-menu2-abre' && ev.data.codigo) abreCodigo(ev.data.codigo);
     });
