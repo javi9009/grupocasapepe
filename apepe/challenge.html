@@ -371,7 +371,22 @@ function fichaBloqueada(k){
 }
 
 /* ---------- Mapa ---------- */
-var map=null, pines=[], userMk=null, myPos=null, watchId=null, FILTRO='todas', CERCA=null;
+var map=null, pines=[], userMk=null, myPos=null, myAcc=0, watchId=null, FILTRO='todas', CERCA=null;
+var GEOERR=null, _geoTry=0, _pinAbierto=null;
+/* Dentro de un edificio el telefono no da un punto: da un circulo. En el patio
+   de Casa Pepe un iPhone reporta facil 100-150 m de margen, y con el radio
+   pelado (70 m en la Terraza) el huesped que YA esta ahi nunca puede retar.
+   Se le suma el margen que el propio telefono declara, con tope para que nadie
+   rete el Zocalo desde Toluca. */
+var TOLMAX=200;
+function margen(){ return Math.min(Math.max(myAcc||0,0), TOLMAX); }
+function alcance(r){ return (Number(r&&r.radio)||70) + margen(); }
+function textoGeoErr(){
+  if(GEOERR===1) return T('Tu teléfono no nos dejó ver la ubicación. Permítela para este sitio y toca aquí.');
+  if(GEOERR===2) return T('Tu teléfono no encuentra señal de ubicación. Sal un momento al patio o a la calle y toca aquí.');
+  if(GEOERR===3) return T('Tardó demasiado en encontrarte. Toca aquí para volver a intentarlo.');
+  return T('Buscando tu ubicación… en un momento sabrás si ya estás cerca.');
+}
 function irMapa(){ $('tabM').click(); }
 
 /* Las tres etapas, con el color que trae cada colección de la base. */
@@ -385,7 +400,7 @@ function pintaFiltros(){
       (e.id==='todas'?'':'<i style="background:'+e.c+'"></i>')+e.n+'</button>';
   }).join('');
   Array.prototype.forEach.call($('filtros').querySelectorAll('[data-f]'),function(b){
-    b.onclick=function(){ FILTRO=b.getAttribute('data-f'); pintaFiltros(); aplicaFiltro(); };
+    b.onclick=function(){ FILTRO=b.getAttribute('data-f'); pintaFiltros(); aplicaFiltro(); revisaCercania(); };
   });
 }
 function aplicaFiltro(){
@@ -465,7 +480,7 @@ function cargaMapa(){
       mk.on('click',function(){ abrePin(r); });
       pines.push({r:r,mk:mk,cerca:false});
     });
-    aplicaFiltro(); marcaCercanos();
+    aplicaFiltro(); revisaCercania();
   }).catch(function(){});
 }
 /* Repinta sólo los que cambiaron de estado: redibujar 223 pines en cada
@@ -473,7 +488,7 @@ function cargaMapa(){
 function marcaCercanos(){
   if(!myPos && !DEMO) return;
   pines.forEach(function(p){
-    var cerca = DEMO ? false : (dist(myPos.lat,myPos.lng,p.r.lat,p.r.lng) <= p.r.radio);
+    var cerca = DEMO ? false : (dist(myPos.lat,myPos.lng,p.r.lat,p.r.lng) <= alcance(p.r));
     if(cerca !== p.cerca){
       p.cerca=cerca;
       p.mk.setIcon(pinIcon(p.r, cerca && !p.r.aqui));
@@ -481,16 +496,19 @@ function marcaCercanos(){
   });
 }
 function abrePin(r){
+  _pinAbierto=r;
   var d = myPos? dist(myPos.lat,myPos.lng,r.lat,r.lng) : null;
-  var cerca = DEMO || (d!=null && d<=r.radio);
+  var cerca = DEMO || (d!=null && d<=alcance(r));
   var titulo = r.aqui? esc(r.personaje) : T('Un personaje te espera aquí');
   var sub = '<div class="mini" style="text-align:left">'+esc(r.lugar||'')+'</div>'+
             (r.aqui? '' : '<div class="pista" style="text-align:left">'+esc(r.resena||'')+'</div>');
   var llegar = r.como_llegar? '<p class="mini" style="text-align:left">📍 '+esc(r.como_llegar)+'</p>':'';
   var estado = DEMO? '<p class="mini">'+T('Vista previa: puedes retar sin estar en el lugar.')+'</p>'
-    : (d==null? '<p class="mini">'+T('Activa tu ubicación para saber si ya estás cerca.')+'</p>'
+    : (d==null? '<p class="mini">'+textoGeoErr()+'</p>'+
+                '<button class="btn ghost" style="margin-top:8px" onclick="reintentaGeo()">'+T('Reintentar ubicación')+'</button>'
         : (cerca? '<p class="mini" style="color:#2E7D5B;font-weight:700">'+T('✓ Estás a {n} m — ¡puedes retarlo!').replace('{n}',Math.round(d))+'</p>'
-                : '<p class="mini">'+T('Estás a {d}. Acércate a menos de {r} m.').replace('{d}',(d>1200?(Math.round(d/100)/10+' km'):(Math.round(d)+' m'))).replace('{r}',r.radio)+'</p>'));
+                : '<p class="mini">'+T('Estás a {d}. Acércate a menos de {r} m.').replace('{d}',(d>1200?(Math.round(d/100)/10+' km'):(Math.round(d)+' m'))).replace('{r}',Math.round(alcance(r)))+'</p>'+
+                  '<button class="btn ghost" style="margin-top:8px" onclick="reintentaGeo()">'+T('Reintentar ubicación')+'</button>'));
   var t = r.aqui? (TIER[r.tier_aqui]||{}) : null;
   /* Ganada no es final: se puede repetir para subir de carta. */
   var btn = r.aqui
@@ -504,32 +522,86 @@ function startGeo(){
   var g=$('gps'); g.style.display='block';
   if(!navigator.geolocation){ g.textContent=T('Tu teléfono no comparte ubicación.'); g.disabled=true; return; }
   g.textContent=T('Buscando tu ubicación…'); g.disabled=true;
-  /* El chip es un botón: si ya estás dentro de un lugar, abre ese reto.
-     Antes sólo decía «toca el pin» y no se podía tocar. */
-  g.onclick=function(){ if(CERCA) abrePin(CERCA); };
-  watchId=navigator.geolocation.watchPosition(function(p){
-    myPos={lat:p.coords.latitude,lng:p.coords.longitude};
+  /* El chip es un boton con dos oficios: si ya estas dentro de un lugar abre ese
+     reto; si el telefono no nos dio ubicacion, vuelve a pedirla. Antes solo
+     decia el error y se quedaba muerto para siempre. */
+  g.onclick=function(){ if(CERCA){ abrePin(CERCA); return; } reintentaGeo(); };
+  pideGeo();
+}
+function reintentaGeo(){
+  var g=$('gps'); if(g){ g.disabled=true; g.textContent=T('Buscando tu ubicación…'); }
+  _geoTry=0; pideGeo();
+}
+function pideGeo(){
+  if(!navigator.geolocation) return;
+  GEOERR=null;
+  if(watchId!=null){ try{ navigator.geolocation.clearWatch(watchId); }catch(e){} watchId=null; }
+  /* Dos tiempos. Primero un punto rapido, aunque sea de antena o de wifi y
+     aunque venga guardado: en interiores el fino tarda o no llega, y mientras
+     tanto la pantalla se queda diciendo "activa tu ubicacion" con la ubicacion
+     puesta. Encima, el fino va afinando el margen. */
+  try{
+    navigator.geolocation.getCurrentPosition(fijaPos, function(){},
+      {enableHighAccuracy:false, maximumAge:180000, timeout:20000});
+  }catch(e){}
+  watchId=navigator.geolocation.watchPosition(fijaPos, falloGeo,
+    {enableHighAccuracy:true, maximumAge:15000, timeout:30000});
+}
+function fijaPos(p){
+  var sinFix = !myPos;
+  GEOERR=null; _geoTry=0;
+  myPos={lat:p.coords.latitude,lng:p.coords.longitude};
+  myAcc=p.coords.accuracy||0;
+  if(map){
     if(!userMk){ userMk=L.circleMarker([myPos.lat,myPos.lng],{radius:8,color:'#1E7BE0',fillColor:'#4B9BF5',fillOpacity:.9,weight:2}).addTo(map); }
     else userMk.setLatLng([myPos.lat,myPos.lng]);
-    marcaCercanos();
-    var best=null;
-    pines.forEach(function(x){
-      if(FILTRO!=='todas' && x.r.col!==FILTRO) return;
-      if(x.r.aqui) return;
-      var dd=dist(myPos.lat,myPos.lng,x.r.lat,x.r.lng);
-      if(!best||dd<best.d) best={d:dd,r:x.r};
-    });
-    if(!best){ CERCA=null; g.textContent=T('Ya tienes todo por aquí ✨'); g.disabled=true; return; }
-    if(best.d<=best.r.radio){
-      CERCA=best.r; g.disabled=false;
-      g.innerHTML=T('🎯 <b>¡Estás en un lugar!</b> Tócame para retar.');
-    } else {
-      CERCA=null; g.disabled=true;
-      g.innerHTML=T('El personaje más cercano está a <b>{d}</b>').replace('{d}',
-        (best.d>1200?(Math.round(best.d/100)/10+' km'):(Math.round(best.d)+' m')));
-    }
-  },function(){ $('gps').textContent=T('No pudimos leer tu ubicación. Actívala para jugar.'); },
-  {enableHighAccuracy:true,maximumAge:10000,timeout:15000});
+  }
+  revisaCercania();
+  /* Si la ficha estaba abierta diciendo "no sabemos donde estas", se repinta
+     sola en cuanto llega el punto. */
+  if(sinFix && _pinAbierto && $('ovFicha') && $('ovFicha').classList.contains('show')) abrePin(_pinAbierto);
+}
+function falloGeo(e){
+  GEOERR=(e&&e.code)||0;
+  /* Un timeout del modo fino no es un no: es un "aqui dentro no llega el GPS".
+     Se reintenta en modo grueso, que si funciona con wifi y antenas. */
+  if(GEOERR===3 && _geoTry<2 && !myPos){
+    _geoTry++;
+    if(watchId!=null){ try{ navigator.geolocation.clearWatch(watchId); }catch(_){} }
+    watchId=navigator.geolocation.watchPosition(fijaPos, falloGeo,
+      {enableHighAccuracy:false, maximumAge:120000, timeout:45000});
+    return;
+  }
+  if(myPos) return;          // ya teniamos un punto: no lo tiramos por un fallo
+  var g=$('gps'); if(!g) return;
+  g.disabled=false;          // tocable para reintentar
+  g.textContent=textoGeoErr();
+  if(_pinAbierto && $('ovFicha') && $('ovFicha').classList.contains('show')) abrePin(_pinAbierto);
+}
+/* El unico lugar donde se decide quien esta cerca. Lo llaman el GPS, la carga
+   del mapa y el cambio de filtro, porque cualquiera de los tres puede llegar
+   primero. */
+function revisaCercania(){
+  var g=$('gps'); if(!g) return;
+  marcaCercanos();
+  if(!myPos) return;
+  if(!pines.length){ CERCA=null; g.disabled=true; g.textContent=T('Cargando los lugares del mapa…'); return; }
+  var best=null;
+  pines.forEach(function(x){
+    if(FILTRO!=='todas' && x.r.col!==FILTRO) return;
+    if(x.r.aqui) return;
+    var dd=dist(myPos.lat,myPos.lng,x.r.lat,x.r.lng);
+    if(!best||dd<best.d) best={d:dd,r:x.r};
+  });
+  if(!best){ CERCA=null; g.disabled=true; g.textContent=T('Ya tienes todo por aquí ✨'); return; }
+  if(best.d<=alcance(best.r)){
+    CERCA=best.r; g.disabled=false;
+    g.innerHTML=T('🎯 <b>¡Estás en un lugar!</b> Tócame para retar.');
+  } else {
+    CERCA=null; g.disabled=false;   // tocable: repite la busqueda del punto
+    g.innerHTML=T('El personaje más cercano está a <b>{d}</b>').replace('{d}',
+      (best.d>1200?(Math.round(best.d/100)/10+' km'):(Math.round(best.d)+' m')));
+  }
 }
 /* ---------- Reto ----------
    Diez preguntas contra reloj. El reloj de cada pregunta viene de la base
@@ -540,9 +612,10 @@ function empezarReto(lugarId){
   cerrar('ovFicha');
   var pin=pines.filter(function(p){return p.r.lugar_id===lugarId;})[0];
   var pos = DEMO && pin ? {lat:pin.r.lat,lng:pin.r.lng} : myPos;
-  if(!pos){ alert(T('Activa tu ubicación para aceptar el reto.')); return; }
+  if(!pos){ reintentaGeo(); alert(textoGeoErr()); return; }
   $('retoBody').innerHTML='<div class="spin"></div>'; abrir('ovReto');
-  api('pch_reto_iniciar',{p_token:TOKEN,p_lugar_id:lugarId,p_lat:pos.lat,p_lng:pos.lng,p_idioma:LANG()}).then(function(j){
+  api('pch_reto_iniciar',{p_token:TOKEN,p_lugar_id:lugarId,p_lat:pos.lat,p_lng:pos.lng,
+                          p_precision:(DEMO?0:Math.round(myAcc||0)),p_idioma:LANG()}).then(function(j){
     if(!j||!j.ok){
       var m = j&&j.error==='lejos'? T('Todavía estás lejos ({n} m). Acércate al lugar.').replace('{n}',j.dist)
             : j&&j.error==='sin_preguntas'? T('Este personaje todavía no tiene su reto listo. Vuelve pronto.')
@@ -661,7 +734,8 @@ document.querySelectorAll('.tab').forEach(function(t){
     var m=t.getAttribute('data-t')==='map';
     $('vMap').style.display=m?'block':'none'; $('vPas').style.display=m?'none':'block';
     $('gps').style.display=m?'block':'none';
-    if(m){ initMap(); setTimeout(function(){ if(map) map.invalidateSize(); },80); }
+    if(m){ initMap(); setTimeout(function(){ if(map) map.invalidateSize(); },80);
+           if(map && !myPos && GEOERR!==1) reintentaGeo(); }
   };
 });
 
