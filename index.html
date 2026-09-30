@@ -16,6 +16,8 @@ html,body{margin:0;height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:#fff}
 .layout{display:grid;grid-template-columns:248px 1fr;height:100vh}
 aside{background:var(--bg2);border-right:1px solid var(--bd);overflow-y:auto;padding:1rem .75rem}
+aside.m2host{padding:0;overflow:hidden}
+.layout:has(aside.m2host){grid-template-columns:auto 1fr}
 aside .brand{font-weight:600;font-size:14px;margin:.25rem .4rem .5rem;color:var(--txt)}
 aside .brand b{color:var(--gold)}
 .projsel{margin:0 .4rem .9rem}
@@ -257,6 +259,9 @@ aside .brand .bl{width:26px;height:26px;object-fit:contain;flex:none}
 <span class="right">
 <span class="who" id="who"></span>
 <button class="gear-btn" id="dirBell" title="Buzón de Dirección" aria-label="Buzón de Dirección" style="position:relative;display:none">🔔<span id="dirBellBadge" style="display:none;position:absolute;top:-4px;right:-4px;background:#b03434;color:#fff;font-size:10px;font-weight:700;border-radius:10px;padding:0 5px;min-width:16px;height:16px;line-height:16px;text-align:center">0</span></button>
+<!-- El menú nuevo, mientras se prueba. Sólo lo ven los que están apuntados en
+     apepe_config.menu2_probadores; para el resto ni existe. Javi, 30-sep. -->
+<button class="gear-btn" id="menu2Btn" title="Probar el menú nuevo" style="display:none">🧭 Nuevo menú</button>
 <button class="gear-btn" id="cfgGear" title="Configuración" aria-label="Configuración">⚙️</button>
 <button class="out" id="logout">Salir</button>
 </span>
@@ -268,6 +273,7 @@ aside .brand .bl{width:26px;height:26px;object-fit:contain;flex:none}
      dentro. Sin ella, «Cobrar Vnums» y «Verificar boleto» enseñaban el
      botón de encender la cámara y no pasaba nada. Javi, 28-sep. -->
 <iframe id="frame" title="Contenido" allow="camera; geolocation; clipboard-write"></iframe>
+<script src="/cp-menu2.js"></script>
 </main>
 </div>
 
@@ -871,9 +877,71 @@ function sinNadaQueVer(){
   try{ $('crumb').innerHTML='<b>Sin accesos asignados</b>'; }catch(e){}
 }
 
+/* ---------- EL MENÚ NUEVO (en pruebas) ----------
+   Tres niveles de verdad: categoría que sólo despliega, subcategoría que abre
+   -un tablero de cuadritos si tiene cosas dentro, o la pantalla si no- y la
+   pantalla. El árbol vive en `paginas` (parent_codigo); el dibujo, en
+   /cp-menu2.js. Convive con el de siempre: se enciende con el botón de arriba
+   o con ?menu=nuevo, y se apaga igual. Javi, 30-sep. */
+var MENU2_OK=false, MENU2_ON=false, MENU2_NODOS=null;
+function menu2Quiere(){
+  try{
+    var q=new URLSearchParams(location.search).get('menu');
+    if(q==='nuevo'){ localStorage.setItem('cpp_menu2','1'); return true; }
+    if(q==='viejo'){ localStorage.removeItem('cpp_menu2'); return false; }
+    return localStorage.getItem('cpp_menu2')==='1';
+  }catch(_){ return false; }
+}
+async function menu2Permitido(){
+  if(isJaviSelf) return true;
+  try{
+    var r=await sb.from('apepe_config').select('valor').eq('clave','menu2_probadores').limit(1);
+    var l=((r.data&&r.data[0]&&r.data[0].valor)||'').toLowerCase().split(',').map(function(x){return x.trim();});
+    return l.indexOf((USEREMAIL||'').toLowerCase())>=0;
+  }catch(_){ return false; }
+}
+async function menu2Arbol(){
+  if(MENU2_NODOS) return MENU2_NODOS;
+  var r=await sb.from('paginas')
+    .select('codigo,nombre,ruta,icono,color,parent_codigo,orden,tipo')
+    .eq('app','dashboard').eq('activo',true).order('orden');
+  MENU2_NODOS = r.data||[];
+  return MENU2_NODOS;
+}
+async function menu2Montar(){
+  var nodos=await menu2Arbol();
+  document.getElementById('aside').classList.add('m2host');
+  cpMenu2.montar({
+    nodos: nodos,
+    /* Gerencia y quien no tenga permisos declarados lo ve todo, igual que en el
+       menú de siempre; el portero de verdad está en cada pantalla. */
+    puedeVer: function(cod){ return isGerencia || !DPERMS || hasPerm(cod); },
+    verPendientes: isJaviSelf,
+    caja: document.getElementById('aside'),
+    abrir: function(ruta,titulo,migaja){ select(ruta,titulo,migaja||'Panel'); }
+  });
+}
+function menu2Boton(){
+  var b=document.getElementById('menu2Btn'); if(!b||!MENU2_OK) return;
+  b.style.display='';
+  b.textContent = MENU2_ON ? '↩︎ Menú de siempre' : '🧭 Nuevo menú';
+  b.title = MENU2_ON ? 'Volver al menú de siempre' : 'Probar el menú nuevo';
+  b.onclick=function(){
+    try{ if(MENU2_ON) localStorage.removeItem('cpp_menu2'); else localStorage.setItem('cpp_menu2','1'); }catch(_){}
+    var u=new URL(location.href); u.searchParams.delete('menu'); location.replace(u.toString());
+  };
+}
+
 function rebuildMenu(){
 const M=filterByProj(applyPerms(applyCats(buildMenu())));
 render(M);
+/* El menú nuevo se pinta encima cuando toca. El viejo se calcula igual: así el
+   deep-link, el aterrizaje y la migaja siguen funcionando como siempre. */
+menu2Permitido().then(function(ok){
+  MENU2_OK=ok; MENU2_ON = ok && menu2Quiere();
+  menu2Boton();
+  if(MENU2_ON) menu2Montar();
+});
 // Enlace profundo desde el correo de convocatoria: ?ir=<ítem del menú>[&sub=<ancla>]
 // Abre el módulo DENTRO del panel, con su barra lateral, para que el socio
 // pueda seguir navegando en vez de caer en la página suelta.
