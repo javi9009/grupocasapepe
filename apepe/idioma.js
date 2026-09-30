@@ -285,6 +285,9 @@
     /* El motor de reservas del socio. */
     'Entras': 'Check in',
     'Reservar': 'Book it',
+    '¿Lo reservo?': 'Shall I book it?',
+    'Ahora no': 'Not now',
+    'Sí, resérvalo': 'Yes, book it',
     'En total, contándote': 'In total, counting you',
     'Elige entrada y salida': 'Pick check-in and check-out',
     'Toca el día que entras': 'Tap the day you arrive',
