@@ -108,7 +108,18 @@
   var MQ = (window.matchMedia ? window.matchMedia('(max-width:760px)') : null);
   function esMovil(){ return !!(MQ && MQ.matches); }
 
+  /* El archivo, sin la pestaña: '/m/pedidos.html?tab=aprobar' -> '/m/pedidos.html' */
+  function archivo(r){ return String(r||'').split('#')[0].split('?')[0]; }
+  /* 'Aprobar pedidos' es la pestaña de dentro de Pedidos, no una pantalla
+     aparte: si apunta al mismo archivo que su padre, vive en Accesos (para dar
+     el permiso) pero no ocupa un renglón del menú. Lo mismo con las pestañas de
+     Desayunos y con los Horarios de voluntarios dentro de Horarios. */
+  function esPestana(n){
+    var p = porCod[n.parent_codigo];
+    return !!(p && p.ruta && n.ruta && archivo(p.ruta) === archivo(n.ruta));
+  }
   function esVisible(n){
+    if (esPestana(n)) return false;
     if (n.tipo === 'contenedor') return (hijos[n.codigo]||[]).some(esVisible);
     if (n.tipo === 'pendiente') return D.puedeVer(n.codigo) || D.verPendientes;
     return D.puedeVer(n.codigo);
@@ -223,19 +234,25 @@
   /* Qué pasa al elegir algo de la columna. */
   function elige(n){
     var conHijos = hijosVisibles(n.codigo);
+    /* Si la cosa tiene pantalla propia, manda la pantalla: un grupo que además
+       es una página (Pedidos, Briefing, Desayunos) no debe abrir un tablero de
+       cuadritos en vez de abrirse. Si encima tiene hijos, la columna baja a
+       ellos para poder seguir hacia dentro. */
+    if (n.ruta) {
+      estado.activa = n.codigo;
+      if (conHijos.length) estado.rama = n.codigo;
+      estado.catmin = !esMovil();
+      D.abrir(n.ruta, parte(n).tx, migaja(n));
+      pinta();
+      return;
+    }
     if (conHijos.length) {
-      /* A) grupo: tablero de cuadritos, y la columna baja un escalón */
+      /* grupo sin pantalla: tablero de cuadritos, y la columna baja un escalón */
       estado.rama = n.codigo; estado.activa = null;
       estado.catmin = !esMovil();
       D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n));
       pinta();
-      return;
     }
-    /* B) pantalla: se abre, y las dos columnas se encogen */
-    if (!n.ruta) return;
-    estado.activa = n.codigo; estado.catmin = !esMovil();
-    D.abrir(n.ruta, parte(n).tx, migaja(n));
-    pinta();
   }
   function migaja(n){
     var p=[], c=porCod[n.parent_codigo], v=0;
