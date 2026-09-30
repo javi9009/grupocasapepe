@@ -285,6 +285,9 @@
     /* El motor de reservas del socio. */
     'Entras': 'Check in',
     'Reservar': 'Book it',
+    'con desayuno': 'breakfast included',
+    'Tus noches van como uso casa de socio, con desayuno incluido. Dinos las fechas y te la dejamos hecha.': 'Your nights go as partner house use, breakfast included. Tell us the dates and we will set it up.',
+    'Queda como uso casa de socio, con desayuno incluido.': 'It goes down as partner house use, breakfast included.',
     '¿Lo reservo?': 'Shall I book it?',
     'Ahora no': 'Not now',
     'Sí, resérvalo': 'Yes, book it',
