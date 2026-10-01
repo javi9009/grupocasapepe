@@ -344,11 +344,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     {k:'gente',  t:'Tu gente'},
     {k:'exp',    t:'Tus experiencias'},
     {k:'impacto',t:'Tu impacto',      pronto:1},
-    {k:'modulos',t:'Tus módulos',     pronto:1},
-    {k:'acuerdo',t:'El acuerdo',      pronto:1}
+    {k:'modulos',t:'Tus módulos'},
+    {k:'acuerdo',t:'El acuerdo'}
   ];
 
-  var ses=null, H=null, M=null, GENTE=[], CAT=[], step=0;
+  var ses=null, H=null, M=null, GENTE=[], CAT=[], MODS=[], MIOS=[], PUNTO=500, step=0;
 
   function $(id){return document.getElementById(id);}
   function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -459,7 +459,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     M=m&&m[0]||null;
     try{ GENTE=await api('hotel_usuarios?select=*&hotel_id=eq.'+H.id+'&order=rol,nombre') || []; }catch(_){ GENTE=[]; }
     try{ CAT=await rpc('hotel_experiencias_opciones') || []; }catch(_){ CAT=[]; }
+    try{ MODS=await api('hotel_modulos?select=*&activo=is.true&order=orden') || []; }catch(_){ MODS=[]; }
+    try{ MIOS=await api('hotel_modulos_activos?select=*&hotel_id=eq.'+H.id) || []; }catch(_){ MIOS=[]; }
+    try{ var cfg=await api('sinc_config?select=valor&clave=eq.hotel_punto_mxn'); if(cfg&&cfg[0]) PUNTO=Number(cfg[0].valor)||500; }catch(_){}
   }
+  function mio(cod){ return MIOS.filter(function(x){return x.modulo===cod && x.activo;})[0]||null; }
+  function puntosUsados(){ return MIOS.filter(function(x){return x.activo&&x.cobro==='puntos';})
+      .reduce(function(a,x){ var m=MODS.filter(function(y){return y.codigo===x.modulo;})[0]; return a+Number(x.puntos!=null?x.puntos:(m?m.puntos:0)); },0); }
+  function rentaMes(){ return MIOS.filter(function(x){return x.activo&&x.cobro==='renta';})
+      .reduce(function(a,x){ var m=MODS.filter(function(y){return y.codigo===x.modulo;})[0]; return a+Number(x.renta_mxn!=null?x.renta_mxn:((m?m.puntos:0)*PUNTO)); },0); }
 
   async function guardaHotel(campos){
     await api('hoteles?id=eq.'+H.id,{method:'PATCH',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),body:JSON.stringify(campos)});
@@ -482,7 +490,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       lleno(H.llegada_texto) && !!(M&&M.paleta_elegida),
       GENTE.filter(function(u){return u.activo;}).length>0,
       CAT.filter(function(x){return x.escogida;}).length>0,
-      false,false,false
+      false,
+      MIOS.filter(function(x){return x.activo;}).length>0 || MODS.length===0,
+      !!H.contrato_firmado_at
     ];
   }
 
@@ -522,7 +532,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         +'<div class="bloq">Este paso todavía no está listo. Lo estamos construyendo.</div></div>';
       return;
     }
-    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa,gente:pGente,exp:pExp})[p.k](c);
+    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa,gente:pGente,exp:pExp,modulos:pModulos,acuerdo:pAcuerdo})[p.k](c);
   }
 
   function pieGuardar(fn2){
@@ -782,6 +792,101 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       try{ await api('hotel_catalogo?hotel_id=eq.'+H.id,{method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
            await carga(); pinta(); toast('Quitadas'); }
       catch(e){ toast(String(e.message||e),true); b.disabled=false; }
+    };
+  }
+
+  /* ---------- paso 9: tus módulos ---------- */
+  function pModulos(c){
+    var tope=Number(H.com_hotel_pct||0), usados=puntosUsados(), renta=rentaMes();
+    var sinPms=!H.pms;
+    function tarjeta(m){
+      var a=mio(m.codigo), on=!!a;
+      var cuesta=Number(m.puntos||0);
+      var bloq=m.necesita_pms&&sinPms;
+      return '<div class="card" style="margin-bottom:9px;'+(bloq?'opacity:.55':'')+'">'
+        +'<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'
+        +'<div style="flex:1;min-width:190px">'
+        +'<b style="font-family:Oswald;font-size:13.5px;text-transform:uppercase;letter-spacing:.03em">'+esc(m.nombre)+'</b>'
+        +(m.incluido?' <span class="etq ok">Incluido</span>':' <span class="etq">'+cuesta+'% · $'+(cuesta*PUNTO).toLocaleString('es-MX')+'/mes</span>')
+        +'<div class="mini" style="margin-top:3px">'+esc(m.descripcion||'')+'</div>'
+        +(bloq?'<div class="mini" style="color:var(--alerta);margin-top:4px">Necesita tu PMS conectado.</div>':'')
+        +'</div>'
+        +(m.incluido? '<span class="etq ok">Va contigo</span>'
+          : '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+            +'<button class="interruptor '+(on&&a.cobro==='puntos'?'act':'ina')+'" data-m="'+esc(m.codigo)+'" data-c="puntos"'+(bloq?' disabled':'')+'>'+cuesta+' puntos</button>'
+            +'<button class="interruptor '+(on&&a.cobro==='renta'?'act':'ina')+'" data-m="'+esc(m.codigo)+'" data-c="renta"'+(bloq?' disabled':'')+'>$'+(cuesta*PUNTO).toLocaleString('es-MX')+'/mes</button>'
+            +(on?'<button class="interruptor ina" data-m="'+esc(m.codigo)+'" data-c="no">Quitar</button>':'')
+            +'</div>')
+        +'</div></div>';
+    }
+    c.innerHTML='<div class="card"><h3>Tus módulos</h3>'
+      +'<div class="hint">Cada módulo cuesta puntos de <b>tu</b> 5% de comisión, o renta mensual si prefieres no ceder comisión. '
+      +'Nuestro 10% y el 10% de quien vende no se tocan, y el precio al huésped no se mueve.</div>'
+      +'<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">'
+      +'<div><div class="mini">Puntos usados</div><b style="font-family:Oswald;font-size:21px">'+usados+' de '+tope+'</b></div>'
+      +'<div><div class="mini">Renta al mes</div><b style="font-family:Oswald;font-size:21px">$'+renta.toLocaleString('es-MX')+'</b></div>'
+      +'</div>'
+      +'<div class="prog" style="margin-top:10px"><i style="width:'+Math.min(100,tope?Math.round(100*usados/tope):0)+'%"></i></div>'
+      +(usados>=tope?'<div class="mini">Ya no te quedan puntos. Lo que añadas va en renta.</div>':'')
+      +'</div>'
+      +MODS.map(tarjeta).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('.interruptor[data-m]'),function(b){
+      if(b.disabled) return;
+      b.onclick=async function(){
+        var cod=b.getAttribute('data-m'), cobro=b.getAttribute('data-c');
+        var m=MODS.filter(function(x){return x.codigo===cod;})[0]||{};
+        b.disabled=true;
+        try{
+          if(cobro==='no'){
+            await api('hotel_modulos_activos?hotel_id=eq.'+H.id+'&modulo=eq.'+cod,{method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
+          } else {
+            await api('hotel_modulos_activos',{method:'POST',headers:Object.assign({},hdr(),{'Prefer':'resolution=merge-duplicates,return=minimal'}),
+              body:JSON.stringify({hotel_id:H.id,modulo:cod,cobro:cobro,activo:true,
+                puntos:cobro==='puntos'?m.puntos:null, renta_mxn:cobro==='renta'?Number(m.puntos||0)*PUNTO:null})});
+          }
+          await carga(); pinta();
+        }catch(e){ toast(String(e.message||e).replace(/^.*?message":"/,'').replace(/".*$/,''),true); b.disabled=false; }
+      };
+    });
+  }
+
+  /* ---------- paso 10: el acuerdo ---------- */
+  function pAcuerdo(c){
+    var firmado=!!H.contrato_firmado_at;
+    var usados=puntosUsados(), renta=rentaMes();
+    var mesaRe=[['Nosotros · la plataforma',H.com_plataforma_pct+'%'],
+                ['Tu casa',H.com_hotel_pct+'%'+(usados?' (cedes '+usados+' en módulos)':'')],
+                ['Quien atiende',H.com_colaborador_pct+'%']];
+    var elegidos=MIOS.filter(function(x){return x.activo;}).map(function(x){
+      var m=MODS.filter(function(y){return y.codigo===x.modulo;})[0]||{};
+      return '<li>'+esc(m.nombre||x.modulo)+' — '+(x.cobro==='puntos'?(x.puntos||m.puntos)+' puntos':'$'+Number(x.renta_mxn||0).toLocaleString('es-MX')+' al mes')+'</li>';
+    }).join('');
+    c.innerHTML='<div class="card"><h3>El acuerdo</h3>'
+      +'<div class="hint">Lo que firmas. El huésped paga <b>'+(Number(H.com_plataforma_pct)+Number(H.com_hotel_pct)+Number(H.com_colaborador_pct))
+      +'%</b> sobre el neto del touroperador, y se reparte así:</div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:14px">'
+      +mesaRe.map(function(r){return '<tr><td style="padding:7px 0;border-bottom:1px solid var(--linea)">'+esc(r[0])+'</td>'
+        +'<td style="padding:7px 0;border-bottom:1px solid var(--linea);text-align:right;font-family:Oswald;font-size:16px">'+esc(r[1])+'</td></tr>';}).join('')
+      +'</table>'
+      +(elegidos?'<div class="mini" style="margin-bottom:5px">Tus módulos</div><ul style="margin:0 0 12px;padding-left:18px;font-size:13.5px">'+elegidos+'</ul>':'')
+      +(renta?'<div class="mini" style="margin-bottom:12px">Renta mensual: <b>$'+renta.toLocaleString('es-MX')+'</b></div>':'')
+      +'<div class="mini" style="line-height:1.55;margin-bottom:14px">'
+      +'Tu dinero llega por Stripe, directo, sin pasar por nosotros. Puedes cambiar tus módulos cuando quieras. '
+      +'Firmar <b>no</b> te pone a vender: revisamos tu alta y la activamos.</div>'
+      +(firmado
+        ? '<div class="bloq" style="text-align:left"><b>Firmado el '+new Date(H.contrato_firmado_at).toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+'</b>'
+          +' por '+esc(H.contrato_firmante||'')+'.<br>'
+          +(H.estado==='activo'?'Tu hotel ya está activo y vendiendo.':'Estamos revisando tu alta. Te avisamos en cuanto quede activa.')+'</div>'
+        : '<div class="fgrid">'+campo('aFirma','Quién firma','', 'text','Nombre de quien tiene facultades para obligar al hotel.',1)+'</div>'
+          +'<div class="ft"><button class="btn" id="bFirmar">Firmar</button></div>')
+      +'</div>';
+    if(!firmado) $('bFirmar').onclick=async function(){
+      var b=this; b.disabled=true; b.textContent='Firmando…';
+      try{
+        if(!v('aFirma')) throw new Error('Pon quién firma.');
+        await rpc('hotel_firmar_contrato',{p_firmante:v('aFirma')});
+        await carga(); pinta(); toast('Firmado. Revisamos tu alta y te avisamos.');
+      }catch(x){ toast(String(x.message||x),true); b.disabled=false; b.textContent='Firmar'; }
     };
   }
 
