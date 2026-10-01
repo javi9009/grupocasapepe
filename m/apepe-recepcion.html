@@ -135,7 +135,7 @@ h1{font-size:19px;margin:0;font-weight:700}
     <button class="dc dc-lc" data-f="tarde"><div class="dl">🧹 Salida tarde</div><div class="dn" id="dLc">—</div><div class="ds" id="sLc">por resolver</div></button>
     <button class="dc dc-up" data-f="upgrades" aria-selected="false"><div class="dl">⬆️ Upgrades</div><div class="dn" id="dUp">—</div><div class="ds" id="sUp">por cobrar</div></button>
     <button class="dc dc-wb" data-f="winback" aria-selected="false"><div class="dl">💌 Winback</div><div class="dn" id="dWb">—</div><div class="ds" id="sWb">solicitudes</div></button>
-    <button class="dc dc-ns" data-f="nsnr" aria-selected="false"><div class="dl">🚫 No-show / NR</div><div class="dn" id="dNs">—</div><div class="ds" id="sNs">ayer + cancel.</div></button>
+    <button class="dc dc-ns" data-f="nsnr" aria-selected="false"><div class="dl">🚫 No-show / NR</div><div class="dn" id="dNs">—</div><div class="ds" id="sNs">sin llegar + cancel.</div></button>
   </div>
 
   <div class="list" id="list"></div>
@@ -154,10 +154,18 @@ h1{font-size:19px;margin:0;font-weight:700}
   var DATA=[], FILTRO='hoy', WB=[], MOV=[], WBSET={}, UP=[], UPSET={}, LC=[], SAL=[], EXT=[];
   function ymd(off){ var d=new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()+off);
     return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+  /* HOY es hoy, con un día de gracia para el que llegó de madrugada o entró
+     tarde. Antes era `s <= hoy`, o sea «hoy y todos los rezagados», y eso
+     arrastraba para siempre a quien nunca hizo check-in: las residencias de
+     Virreyes, que se quedan un mes, llenaban la pantalla con llegadas del 21 y
+     del 26 de septiembre. Eso no es el trabajo de hoy, son no-shows, y para
+     eso está su pestaña. Javi, 1-oct. */
+  var GRACIA_DIAS = 1;
   function esDia(r,key){ var s=String(r.desde||'').slice(0,10);
-    if(key==='hoy') return s<=ymd(0);          // hoy + rezagados que aún no llegan
+    if(key==='hoy') return s<=ymd(0) && s>=ymd(-GRACIA_DIAS);
     if(key==='manana') return s===ymd(1);
     if(key==='pasado') return s===ymd(2);
+    if(key==='rezagados') return !!s && s<ymd(-GRACIA_DIAS);
     return s>ymd(2); }                          // próximamente (siguientes días)
   function cuenta(key){ var t=0,h=0,sin=0; DATA.forEach(function(r){ if(!esDia(r,key)) return; t++;
     if(r.semaforo==='gris') sin++; else h++; }); return {t:t,h:h,sin:sin}; }
@@ -252,7 +260,9 @@ h1{font-size:19px;margin:0;font-weight:700}
       $('dUp').textContent=pc;
       if($('sUp')) $('sUp').innerHTML=pc?('<b>'+pc+'</b> por revisar'):'todo al día'; }
     if($('dNs')){ var ns=MOV.filter(function(m){return m.tipo==='noshow';}).length, nc=MOV.filter(function(m){return m.tipo==='cancelado';}).length;
-      $('dNs').textContent=MOV.length; if($('sNs')) $('sNs').innerHTML=ns+' NS · '+nc+' cancel.'; }
+      var rz=DATA.filter(function(r){ return esDia(r,'rezagados') && r.semaforo==='gris'; }).length;
+      $('dNs').textContent=MOV.length+rz;
+      if($('sNs')) $('sNs').innerHTML=(rz?('<b>'+rz+'</b> sin llegar · '):'')+ns+' NS · '+nc+' cancel.'; }
     // 3) lista según el filtro
     var L=$('list');
     if(FILTRO==='salidas'){ pintarSalidas(L); return; }
@@ -564,8 +574,28 @@ h1{font-size:19px;margin:0;font-weight:700}
     btn.disabled=false; btn.textContent=old;
   }
   function pintarMov(L){
-    if(!MOV.length){ L.innerHTML='<div class="empty">Sin no-shows de ayer ni cancelaciones recientes.</div>'; return; }
-    L.innerHTML=MOV.map(function(m){
+    /* Los rezagados: llegadas de hace más de un día que siguen sin check-in.
+       Antes se quedaban en HOY para siempre -y las residencias de Virreyes, que
+       se quedan un mes, llenaban la pantalla-. Aquí sí tienen sentido: alguien
+       tiene que decidir si entró sin registrarse o no llegó. */
+    var rez=DATA.filter(function(r){ return esDia(r,'rezagados') && r.semaforo==='gris'; })
+                .sort(function(a,b){ return String(a.desde).localeCompare(String(b.desde)); });
+    var hRez = rez.length
+      ? '<div class="empty" style="text-align:left;padding:10px 12px 4px;font-weight:700;color:var(--ink,#1F1B16)">'
+        + rez.length + ' sin check-in desde antes de ayer</div>'
+        + rez.map(function(r){
+            var idx=DATA.indexOf(r);
+            return '<div class="row" data-i="'+idx+'">'
+              +'<span class="dot" style="background:var(--warn,#8C6212)"></span>'
+              +'<div class="grow"><div class="nm">'+esc(r.nombre||'—')
+                +' <span class="tag-ns">sin llegar</span></div>'
+                +'<div class="meta">Llegó el '+fdate(r.desde)+' · '+esc((r.sede||'').toUpperCase())
+                +(r.reservation_id?(' · '+esc(r.reservation_id)):'')+'</div></div></div>';
+          }).join('')
+      : '';
+    if(!MOV.length && !rez.length){ L.innerHTML='<div class="empty">Sin no-shows ni cancelaciones recientes.</div>'; return; }
+    if(!MOV.length){ L.innerHTML=hRez; enganchaFilas(L); return; }
+    L.innerHTML=hRez+MOV.map(function(m){
       var esNS=m.tipo==='noshow';
       var tag=esNS?'<span class="tag-ns">NS · no llegó ayer</span>':(m.nr?('<span class="tag-nr">NR · con penalización'+(m.penalidad?(' '+money2(m.penalidad)):'')+'</span>'):'<span class="src" style="background:var(--none-bg);color:var(--none)">Cancelada</span>');
       return '<div class="row" style="cursor:default">'+
@@ -573,6 +603,14 @@ h1{font-size:19px;margin:0;font-weight:700}
         '<div class="grow"><div class="nm">'+esc(m.nombre||'—')+' '+tag+'</div>'+
           '<div class="meta">Llegada '+fdate(m.desde)+' · '+esc((m.property||'').toUpperCase())+' · '+esc(m.reservation_id)+'</div></div></div>';
     }).join('');
+    enganchaFilas(L);
+  }
+  /* Las filas de rezagado sí abren la ficha: hay que poder entrar a resolverlas. */
+  function enganchaFilas(L){
+    Array.prototype.forEach.call(L.querySelectorAll('.row[data-i]'), function(el){
+      el.style.cursor='pointer';
+      el.onclick=function(){ try{ abrir(DATA[+el.getAttribute("data-i")]); }catch(_){} };
+    });
   }
 
   var SVG_GLOBO='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"/></svg>';
