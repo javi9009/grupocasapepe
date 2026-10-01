@@ -36,12 +36,44 @@
   try { M = JSON.parse(sessionStorage.getItem(CLAVE_M) || 'null'); } catch (_) {}
 
   /* ---------- de qué hotel es esta app ---------- */
+  /* VOLVER A CASA.
+     El hotel se guarda en el aparato, igual que la reserva, para que el huésped
+     pueda navegar sin arrastrar el parámetro. El precio es el mismo que apunta
+     resv.js: en un teléfono que entró una vez por el QR de un hotel, la app se
+     queda de ese hotel para siempre. Hacía falta la puerta de salida.
+       ?h=no  ?h=0  ?h=casapepe  ?h=   →  se olvida y vuelve a ser Casa Pepe.
+     Y hay que recargar: la sustitución es destructiva — las cadenas originales
+     ya no están en el DOM, no se pueden deshacer sin volver a pintar. */
+  var VUELVE = { 'no': 1, '0': 1, 'casapepe': 1, 'casa-pepe': 1, 'ninguno': 1 };
+  function olvidaHotel() {
+    M = null;
+    try { sessionStorage.removeItem(CLAVE_M); } catch (_) {}
+    try { localStorage.removeItem(CLAVE_H); } catch (_) {}
+  }
+
   var slug = '', resv = '';
   try {
     var p = new URLSearchParams(location.search);
-    slug = String(p.get('h') || '').trim().toLowerCase();
-    if (slug) { try { localStorage.setItem(CLAVE_H, slug); } catch (_) {} }
-    else { try { slug = localStorage.getItem(CLAVE_H) || ''; } catch (_) {} }
+    var cru = p.get('h');
+    if (cru !== null) {
+      slug = String(cru).trim().toLowerCase();
+      if (!slug || VUELVE[slug]) {
+        var habia = !!(M && M.hotel_id);
+        olvidaHotel(); slug = '';
+        /* Se quita el parámetro antes de recargar, o la recarga volvería a
+           entrar aquí y no acabaría nunca. */
+        try {
+          p.delete('h');
+          var q = p.toString();
+          history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash);
+        } catch (_) {}
+        if (habia) { try { location.reload(); } catch (_) {} }
+      } else {
+        try { localStorage.setItem(CLAVE_H, slug); } catch (_) {}
+      }
+    } else {
+      try { slug = localStorage.getItem(CLAVE_H) || ''; } catch (_) {}
+    }
   } catch (_) {}
   try { resv = (window.apepeResv && window.apepeResv.token()) || ''; } catch (_) {}
 
@@ -211,6 +243,9 @@
     texto: texto,
     /* Lo que hay que pegarle a una liga para no perder el hotel. */
     qs: function () { return (M && M.slug) ? 'h=' + encodeURIComponent(M.slug) : ''; },
-    aplica: aplica
+    aplica: aplica,
+    /* Para el teléfono compartido —recepción, la sala— y para salir de un
+       hotel sin pelearse con el localStorage a mano. */
+    vuelveACasa: function () { olvidaHotel(); try { location.reload(); } catch (_) {} }
   };
 })();
