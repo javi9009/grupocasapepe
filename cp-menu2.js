@@ -188,9 +188,12 @@
           /* Y se abre lo que esa categoría es: su propia pantalla si la tiene,
              y si no el tablero de su grupo. Antes sólo desplegaba, y había que
              dar un segundo clic para que pasara algo. */
-          var h = hijosVisibles(n.codigo);
-          if (n.ruta) { estado.activa = n.codigo; D.abrir(n.ruta, parte(n).tx, migaja(n)); }
-          else if (h.length) { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n)); }
+          var d = atajo(n), h = hijosVisibles(d.codigo);
+          /* Si el atajo bajo a otra cosa, la columna se planta ahi: enseñar la
+             del padre con un solo renglon no ayuda a nadie. */
+          if (d.codigo !== n.codigo) estado.rama = d.codigo;
+          if (d.ruta) { estado.activa = d.codigo; D.abrir(d.ruta, parte(d).tx, migaja(d)); }
+          else if (h.length) { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(d.codigo), parte(d).tx, migaja(d)); }
           pinta();
         };
         cat.appendChild(it);
@@ -257,7 +260,22 @@
   var T_CATS = 'Todas las áreas';
 
   /* Qué pasa al elegir algo de la columna. */
+  /* Un grupo con UNA sola cosa dentro no es un grupo: es esa cosa con un paso
+     de mas. Se baja hasta encontrar algo que de verdad se abra —una pantalla,
+     o un grupo con varias—, y se abre eso. Javi, 1-oct: "si la categoría sólo
+     tiene una subcategoría no la muestres, abre directamente la página". */
+  function atajo(n){
+    var v = 0;
+    while (n && !n.ruta && v++ < 6) {
+      var h = hijosVisibles(n.codigo);
+      if (h.length !== 1) break;
+      n = h[0];
+    }
+    return n;
+  }
+
   function elige(n){
+    n = atajo(n);
     var conHijos = hijosVisibles(n.codigo);
     /* Si la cosa tiene pantalla propia, manda la pantalla: un grupo que además
        es una página (Pedidos, Briefing, Desayunos) no debe abrir un tablero de
