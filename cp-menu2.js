@@ -139,6 +139,12 @@
     if (esPestana(n)) return false;
     if (n.tipo === 'contenedor') return (hijos[n.codigo]||[]).some(esVisible);
     if (n.tipo === 'pendiente') return D.puedeVer(n.codigo) || D.verPendientes;
+    /* Un renglón sin ruta y sin nada dentro no abre nada: al tocarlo no pasa
+       absolutamente nada, que es peor que no estar en el menú. Le pasaba a
+       «Residencias», que se quedó cuando sus pantallas se apagaron. Mientras
+       el menú era de seis probadores daba igual; ahora lo ve toda la casa.
+       Javi, 1-oct. */
+    if (!n.ruta && !(hijos[n.codigo]||[]).some(esVisible)) return false;
     return D.puedeVer(n.codigo);
   }
   function hijosVisibles(cod){
