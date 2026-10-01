@@ -361,21 +361,47 @@ async function fichas(){
   }catch(e){ return {}; }
 }
 
+// Sede: SoyPepe pasa ?prop (UUID). sinc_catalogo trae ciudad en texto.
+function ciudadDeProp(){ return PROP==='febfbef6-7fd1-4b45-84d9-13533e8dcb72'?'Puebla':(PROP==='45e69775-d877-4507-a9e1-a45bd3400dc5'?'CDMX':null); }
+
+/* Catálogo VIVO de Sincrético: sinc_catalogo trae todas las experiencias (propias y de
+   touroperadores), con foto (portada), precio y filtro por ciudad. El BONO del vendedor y
+   la ficha rica (storytelling, incluye) se cruzan por NOMBRE con v_concierge_tours, porque
+   los ids de las dos fuentes no casan. Antes esto leía la tabla `tours` (lista vieja, sin
+   touroperadores) — Javi pidió apuntarlo al catálogo vivo (1-oct). */
 async function load(){
-  let extra={};
+  const ciudad=ciudadDeProp();
+  let cat=[], vct={};
   try{
-    const [r,f]=await Promise.all([
-      // La casa manda: SoyPepe pasa ?prop y aquí sólo salen los tours de esa sede.
-      fetch(SB_URL+'/rest/v1/tours?select=*&estatus=eq.activo'+(PROP?('&property_id=eq.'+encodeURIComponent(PROP)):'')+'&order=nombre.asc',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}),
-      fichas()
-    ]);
-    DATA = r.ok ? (await r.json()) : [];
-    extra=f;
-  }catch(e){ DATA=[]; }
-  DATA.forEach(t=>{ const x=extra[t.id]; if(x){ t.foto_url=x.foto_url; t.bono_mxn=x.bono_colaborador_mxn; t.dto_mxn=x.dto_huesped_mxn; } });
+    const r=await fetch(SB_URL+'/rest/v1/rpc/sinc_catalogo',{method:'POST',headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY,'Content-Type':'application/json'},body:JSON.stringify({p_dias:30})});
+    cat = r.ok ? (await r.json()) : [];
+  }catch(e){ cat=[]; }
+  try{
+    const rb=await fetch(SB_URL+'/rest/v1/v_concierge_tours?select=nombre,slug,bono_colaborador_mxn,storytelling,incluye,no_incluye,info_importante,lugar_inicio,fechas_salida,touroperador,idiomas,duracion_min',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
+    if(rb.ok){ (await rb.json()).forEach(x=>{ if(x.nombre) vct[x.nombre.trim().toLowerCase()]=x; }); }
+  }catch(e){}
+  if(ciudad) cat=cat.filter(c=> !c.ciudad || c.ciudad===ciudad);
+  DATA = cat.map(c=>{
+    const v=vct[(c.nombre||'').trim().toLowerCase()]||{};
+    const pvp=(c.pvp_promo!=null?c.pvp_promo:c.pvp_adulto);
+    const diash=(Array.isArray(c.dias)?c.dias.join(', '):'')+(Array.isArray(c.horas)&&c.horas.length?(' '+c.horas.join(', ')):'');
+    const fecha=c.proxima_fecha?('Próxima salida: '+c.proxima_fecha+(c.proxima_hora?(' '+String(c.proxima_hora).slice(0,5)):'')):'';
+    return {
+      id:c.id, nombre:c.nombre, slug:(v.slug||''),
+      pvp:pvp, foto_url:(c.portada||null),
+      duracion_min:(c.duracion_min||v.duracion_min||null),
+      idiomas:(Array.isArray(c.idiomas)?c.idiomas.join(', '):(c.idiomas||v.idiomas||'')),
+      lugar_inicio:(v.lugar_inicio||c.salida_desde||''),
+      dias_horario:diash, fechas_salida:fecha,
+      storytelling:(v.storytelling||c.resumen||''),
+      incluye:(v.incluye||''), info_importante:(v.info_importante||''),
+      bono_mxn:(v.bono_colaborador_mxn!=null?Math.round(Number(v.bono_colaborador_mxn)):null),
+      operador:(c.operador||v.touroperador||null)
+    };
+  });
   DATA=DATA.concat(ARTESANIAS).concat(SERVICIOS);
   renderCats(); render();
-  document.getElementById('sub').textContent = (REF_NICE && REF_NICE!=='PEPE') ? ('Hola '+REF_NICE+' — tu link y QR de venta van en cada experiencia.') : 'Catálogo de Casa Pepe · tu link y QR de venta por experiencia.';
+  document.getElementById('sub').textContent = (REF_NICE && REF_NICE!=='PEPE') ? ('Hola '+REF_NICE+' — tu link y QR de venta van en cada experiencia.') : 'Catálogo de Casa Pepe · Sincrético · tu link y QR de venta por experiencia.';
 }
 function renderCats(){
   const c=document.getElementById('cats');
