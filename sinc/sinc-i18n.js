@@ -332,6 +332,7 @@
          mañana aparece una tipología nueva, sale en español hasta que alguien
          la añada: nunca un hueco. */
       'Caminatas':'City walks',
+      'Tour a pie':'Walking tour',
       'Talleres y clases':'Workshops and classes',
       'Comer y beber':'Eating and drinking',
       'Arte e historia':'Art and history',
