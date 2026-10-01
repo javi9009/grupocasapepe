@@ -341,14 +341,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     {k:'formal', t:'Lo formal'},
     {k:'pago',   t:'Cómo te pagamos'},
     {k:'casa',   t:'Tu casa'},
-    {k:'gente',  t:'Tu gente',        pronto:1},
-    {k:'exp',    t:'Tus experiencias',pronto:1},
+    {k:'gente',  t:'Tu gente'},
+    {k:'exp',    t:'Tus experiencias'},
     {k:'impacto',t:'Tu impacto',      pronto:1},
     {k:'modulos',t:'Tus módulos',     pronto:1},
     {k:'acuerdo',t:'El acuerdo',      pronto:1}
   ];
 
-  var ses=null, H=null, M=null, step=0;
+  var ses=null, H=null, M=null, GENTE=[], CAT=[], step=0;
 
   function $(id){return document.getElementById(id);}
   function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -457,6 +457,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!H) return;
     var m=await api('hotel_marca?select=*&hotel_id=eq.'+H.id);
     M=m&&m[0]||null;
+    try{ GENTE=await api('hotel_usuarios?select=*&hotel_id=eq.'+H.id+'&order=rol,nombre') || []; }catch(_){ GENTE=[]; }
+    try{ CAT=await rpc('hotel_experiencias_opciones') || []; }catch(_){ CAT=[]; }
   }
 
   async function guardaHotel(campos){
@@ -478,7 +480,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       lleno(H.razon_social)&&lleno(H.rfc)&&lleno(H.tipo_persona),
       !!H.stripe_payouts_enabled && H.colaborador_pago_definido===true,
       lleno(H.llegada_texto) && !!(M&&M.paleta_elegida),
-      false,false,false,false,false
+      GENTE.filter(function(u){return u.activo;}).length>0,
+      CAT.filter(function(x){return x.escogida;}).length>0,
+      false,false,false
     ];
   }
 
@@ -518,7 +522,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         +'<div class="bloq">Este paso todavía no está listo. Lo estamos construyendo.</div></div>';
       return;
     }
-    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa})[p.k](c);
+    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa,gente:pGente,exp:pExp})[p.k](c);
   }
 
   function pieGuardar(fn2){
@@ -676,6 +680,109 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       return guardaHotel({llegada_texto:nulo(v('kLlegada')),storage_texto:nulo(v('kStor')),
         rest_nombre:nulo(v('kRestNom')),rest_abre:nulo(v('kRestAbre')),rest_cierra:nulo(v('kRestCierra'))});
     });
+  }
+
+  /* ---------- paso 6: tu gente ---------- */
+  function pGente(c){
+    var filas=GENTE.map(function(u){
+      return '<tr><td><b>'+esc(u.nombre||'')+'</b>'+(u.alias&&u.alias!==u.nombre?'<div class="mini">le dicen '+esc(u.alias)+'</div>':'')+'</td>'
+        +'<td class="mini">'+esc(u.email||'')+'</td>'
+        +'<td><span class="etq">'+esc(u.rol==='dueno'?'Dueño':(u.rol==='gerente'?'Gerente':'Concierge'))+'</span></td>'
+        +'<td class="mini"><code>'+esc(u.codigo_venta||'')+'</code></td>'
+        +'<td class="mini">'+(u.com_pct==null?'—':u.com_pct+'%')+'</td>'
+        +'<td>'+(u.activo?'<span class="etq ok">Activa</span>':'<span class="etq">Baja</span>')+'</td></tr>';
+    }).join('');
+    c.innerHTML='<div class="card"><h3>Tu gente</h3>'
+      +'<div class="hint">Quien atiende en tu recepción puede vender. Cada quien lleva su propio código, '
+      +'que va dentro de su QR: cuando un huésped lo escanea y compra, esa venta es suya.</div>'
+      +(GENTE.length
+        ? '<table style="width:100%;border-collapse:collapse;font-size:13.5px"><thead><tr>'
+          +['Quién','Correo','Rol','Su código','Comisión',''].map(function(t){return '<th style="text-align:left;font-family:Oswald;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gris);padding:6px 8px 8px;border-bottom:1px solid var(--linea)">'+t+'</th>';}).join('')
+          +'</tr></thead><tbody>'+filas+'</tbody></table>'
+        : '<div class="bloq">Todavía no has dado de alta a nadie.</div>')
+      +'</div>'
+      +'<div class="card"><h3>Dar de alta a alguien</h3>'
+      +'<div class="hint">Le llega un correo con su liga: se pone contraseña y entra a vender. El código se arma solo.</div>'
+      +'<div class="fgrid">'
+      +campo('gNom','Nombre completo','', 'text','',1)
+      +campo('gAlias','Alias','', 'text','Cómo le dicen. Es lo que ve el huésped en el QR.')
+      +campo('gMail','Correo','', 'email')
+      +'<div class="fld"><label for="gRol">Rol</label><select id="gRol">'
+      +'<option value="concierge">Concierge</option><option value="gerente">Gerente</option></select></div>'
+      +campo('gPct','Su comisión (%)', H.com_colaborador_pct, 'number','De tu 10%. Puedes dejarle 0, 5 o 10.')
+      +campo('gDesc','Descuento máximo (%)','','number','Cuánto puede regalar para cerrar una venta.')
+      +campo('gWa','WhatsApp','', 'tel')
+      +'</div>'
+      +'<div class="ft"><button class="btn" id="bAlta">Dar de alta e invitar</button></div></div>';
+    $('bAlta').onclick=async function(){
+      var b=this; b.disabled=true; b.textContent='Dando de alta…';
+      try{
+        if(!v('gNom')||!v('gMail')) throw new Error('Hace falta el nombre y el correo.');
+        var u=await rpc('hotel_colaborador_alta',{p_hotel:H.id,p_nombre:v('gNom'),p_email:v('gMail'),
+             p_rol:v('gRol')||'concierge',p_com_pct:v('gPct')?Number(v('gPct')):null,p_whatsapp:nulo(v('gWa'))});
+        var extra={};
+        if(v('gAlias')) extra.alias=v('gAlias');
+        if(v('gDesc')) extra.descuento_max_pct=Number(v('gDesc'));
+        if(u&&u.id&&Object.keys(extra).length)
+          await api('hotel_usuarios?id=eq.'+u.id,{method:'PATCH',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),body:JSON.stringify(extra)});
+        try{ await fn('hotel-colaborador',{accion:'invitar',usuario_id:u&&u.id}); }catch(_){ }
+        await carga(); pinta(); toast('Dado de alta. Le mandamos su liga.');
+      }catch(x){ toast(String(x.message||x),true); }
+      b.disabled=false; b.textContent='Dar de alta e invitar';
+    };
+  }
+
+  /* ---------- paso 7: tus experiencias ---------- */
+  function pExp(c){
+    var n=CAT.filter(function(x){return x.escogida;}).length;
+    c.innerHTML='<div class="card"><h3>Tus experiencias</h3>'
+      +'<div class="hint">Escoge qué se vende en tu casa. Lo que no marques, tu gente no lo puede vender — '
+      +'ni aunque esté en el catálogo de Sincrético. El precio ya trae tu comisión.</div>'
+      +'<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px">'
+      +'<span class="etq'+(n?' ok':'')+'">'+n+' de '+CAT.length+' escogidas</span>'
+      +'<button class="btn fantasma sm" id="bTodas">Escoger todas</button>'
+      +'<button class="btn fantasma sm" id="bNada">Quitar todas</button></div>'
+      +(CAT.length? '<div class="galeria" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr))">'
+        +CAT.map(function(x){
+          return '<button class="pal'+(x.escogida?' on':'')+'" data-e="'+esc(x.op_experiencia_id)+'" style="padding:12px 13px">'
+            +'<b style="font-family:Oswald;font-size:13px;text-transform:uppercase;letter-spacing:.03em;display:block">'+esc(x.nombre)+'</b>'
+            +'<div class="mini" style="margin:3px 0 7px">'+esc(x.categoria||x.tipo||'')
+            +(x.duracion_min?' · '+Math.round(x.duracion_min/60*10)/10+' h':'')
+            +(x.salidas?' · '+x.salidas+' salidas':' · sin salidas')+'</div>'
+            +'<div style="font-family:Oswald;font-size:15px">$'+Number(x.pvp_adulto||0).toLocaleString('es-MX')+'</div>'
+            +'<div class="mini">te deja $'+Number(x.me_deja||0).toLocaleString('es-MX')+' por persona</div>'
+            +'</button>';
+        }).join('')+'</div>'
+        : '<div class="bloq">Todavía no hay experiencias publicadas que puedas escoger.</div>')
+      +'</div>';
+    async function marca(id,on){
+      if(on) await api('hotel_catalogo',{method:'POST',headers:Object.assign({},hdr(),{'Prefer':'resolution=merge-duplicates,return=minimal'}),
+            body:JSON.stringify({hotel_id:H.id,op_experiencia_id:id,activo:true})});
+      else await api('hotel_catalogo?hotel_id=eq.'+H.id+'&op_experiencia_id=eq.'+id,{method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
+    }
+    Array.prototype.forEach.call(c.querySelectorAll('.pal'),function(b){
+      b.onclick=async function(){
+        var id=b.getAttribute('data-e'), x=CAT.filter(function(y){return y.op_experiencia_id===id;})[0];
+        b.disabled=true;
+        try{ await marca(id,!x.escogida); await carga(); pinta(); }
+        catch(e){ toast(String(e.message||e),true); b.disabled=false; }
+      };
+    });
+    $('bTodas').onclick=async function(){
+      var b=this; b.disabled=true; b.textContent='Escogiendo…';
+      try{
+        var faltan=CAT.filter(function(x){return !x.escogida;});
+        if(faltan.length) await api('hotel_catalogo',{method:'POST',headers:Object.assign({},hdr(),{'Prefer':'resolution=merge-duplicates,return=minimal'}),
+          body:JSON.stringify(faltan.map(function(x){return {hotel_id:H.id,op_experiencia_id:x.op_experiencia_id,activo:true};}))});
+        await carga(); pinta(); toast('Escogidas todas');
+      }catch(e){ toast(String(e.message||e),true); b.disabled=false; b.textContent='Escoger todas'; }
+    };
+    $('bNada').onclick=async function(){
+      var b=this; b.disabled=true;
+      try{ await api('hotel_catalogo?hotel_id=eq.'+H.id,{method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
+           await carga(); pinta(); toast('Quitadas'); }
+      catch(e){ toast(String(e.message||e),true); b.disabled=false; }
+    };
   }
 
   /* ---------- arranque ---------- */
