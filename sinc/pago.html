@@ -58,6 +58,14 @@
 .li span{color:var(--tinta-2)}
 .li b{white-space:nowrap;font-weight:600}
 .li.gris span,.li.gris b{color:var(--gris);font-weight:400}
+/* Cobro dividido: lo que se lleva la tarjeta ahora y lo que se paga al llegar.
+   Va pegado al total, que es donde mira el huésped antes de teclear. */
+.dividido{margin-top:10px;border:1px dashed #F8D3C0;background:#FFF4EE;border-radius:10px;
+  padding:10px 12px;font-size:13px;line-height:1.5}
+.dividido .r{display:flex;justify-content:space-between;gap:10px}
+.dividido .r b{font-family:Oswald,sans-serif;font-weight:700;font-size:16px;white-space:nowrap}
+.dividido .r+.r{margin-top:4px}
+.dividido .q{margin-top:6px;font-size:11.5px;color:#6B625C}
 .tot{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
   padding-top:14px;margin-top:4px;border-top:1px solid var(--linea)}
 .tot .t{font-family:Oswald,sans-serif;font-weight:700;font-size:16px;text-transform:uppercase}
@@ -164,6 +172,7 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Pre
         <div class="bloque"><h3 data-i18n>Entradas y complementos</h3><div id="entradas"></div></div>
         <div class="bloque"><h3 data-i18n>Detalle del precio</h3><div id="precio"></div>
           <div class="tot"><span class="t" data-i18n>Total</span><span class="v" id="vTotal">—</span></div>
+          <div class="dividido oculto" id="vDiv"></div>
         </div>
       </div>
 
@@ -254,6 +263,19 @@ var CANCEL={'24h':'Cancelas gratis hasta 24 horas antes.',
 function subtotal(){ return ADU*Number(E.pvp_adulto||0)+MEN*Number(E.pvp_menor||E.pvp_adulto||0); }
 function seguroMxn(){ return SEGURO?cfgn('sinc_seguro_mxn',0):0; }
 function total(){ return subtotal()+seguroMxn()+(PROPINA||0); }
+/* Cobro dividido: con la tarjeta entra sólo nuestra comisión —más la cobertura
+   y la propina, que no son del operador— y el resto se le paga a él al llegar.
+   Quien manda es sinc_cobro_plan, en la base: esto dice lo mismo antes de que
+   exista la reserva, para que nadie se entere del reparto en el cargo. */
+function dividido(){
+  return !!E.cobro_dividido && Number(E.anticipo_adulto||0)>0;
+}
+function ahora(){
+  if(!dividido())return total();
+  var a=ADU*Number(E.anticipo_adulto||0)+MEN*Number(E.anticipo_menor||E.anticipo_adulto||0);
+  return a+seguroMxn()+(PROPINA||0);
+}
+function resto(){ return Math.max(total()-ahora(),0); }
 function opcionesPropina(){
   var t=subtotal(), l=[0];
   [0.05,0.10,0.15].forEach(function(p){
@@ -301,6 +323,12 @@ async function arranca(){
       if(pr&&pr.pvp_adulto){
         E.pvp_adulto=Number(pr.pvp_adulto);
         E.pvp_menor=pr.pvp_menor!=null?Number(pr.pvp_menor):Number(pr.pvp_adulto);
+        /* Si cambia el precio, cambia con él el anticipo del cobro dividido:
+           es nuestra comisión sobre ESTE precio, no sobre el de la ficha. */
+        if(E.cobro_dividido&&pr.comision_pct!=null){
+          E.anticipo_adulto=Math.round(E.pvp_adulto*Number(pr.comision_pct)/100);
+          E.anticipo_menor =Math.round(Number(E.pvp_menor||E.pvp_adulto)*Number(pr.comision_pct)/100);
+        }
       }
       QUIEN=(await rpc('sinc_quien_te_atiende',{p_codigo:CODIGO})||[])[0]||null;
     }catch(_){}
@@ -350,7 +378,24 @@ function pintaPrecio(){
     (PROPINA>0?'<div class="li"><span>'+esc(T('Propina'))+'</span><b>'+money(PROPINA)+'</b></div>':'')+
     '<div class="li"><span>'+esc(T('Gastos de gestión'))+'</span><span class="sinc">'+esc(T('Sin gastos'))+'</span></div>';
   $('vTotal').textContent=money(total());
-  if(elements){ try{ elements.update({amount:Math.round(total()*100)}); }catch(_){} }
+  pintaDividido();
+  /* Stripe cobra lo de ahora, no el total: en cobro dividido son cosas
+     distintas y el formulario tiene que enseñar la cifra que se va a cargar. */
+  if(elements){ try{ elements.update({amount:Math.round(ahora()*100)}); }catch(_){} }
+  if($('bPagar')&&!pagando&&!$('bPagar').disabled&&MODO_BOTON)
+    $('bPagar').textContent=MODO_BOTON();
+}
+
+function pintaDividido(){
+  var c=$('vDiv'); if(!c)return;
+  if(!dividido()||!(resto()>0)){ c.classList.add('oculto'); return; }
+  c.classList.remove('oculto');
+  c.innerHTML=
+    '<div class="r"><span>'+esc(T('Pagas ahora con tarjeta'))+'</span><b>'+money(ahora())+'</b></div>'+
+    '<div class="r"><span>'+esc(T('Al llegar, al operador'))+'</span><b>'+money(resto())+'</b></div>'+
+    '<div class="q">'+esc(T('Hoy sólo se te cobra esa parte. Los '))+money(resto())+
+    esc(T(' restantes los pagas el día del tour, directo con '))+
+    esc(E.operador||T('la operadora'))+'.</div>';
 }
 
 function pintaRecuerda(){
@@ -411,6 +456,14 @@ function pintaQuien(){
   };
 }
 
+/* Qué dice el botón. Se guarda como función porque el importe cambia al tocar
+   la propina o la cobertura, y en cobro dividido el botón tiene que decir lo
+   que se va a cobrar AHORA, no el total. */
+var MODO_BOTON=null;
+function etiquetaPago(base){
+  return function(){ return dividido()? T('Pagar ahora ')+money(ahora()) : base; };
+}
+
 /* ---------- la tarjeta ---------- */
 /* Si hay llave publicable, el formulario vive aquí dentro. Si no la hay
    todavía, se cobra como siempre —saltando a la pasarela— y nadie se queda
@@ -427,7 +480,8 @@ async function montaTarjeta(){
     $('libre').classList.remove('oculto');
     $('dicePago').textContent=T('Entrada libre');
     var pie=$('pieSeguro'); if(pie)pie.textContent=T('Tu lugar queda apartado a tu nombre');
-    $('bPagar').textContent=T('Apartar mi lugar');
+    MODO_BOTON=function(){ return T('Apartar mi lugar'); };
+    $('bPagar').textContent=MODO_BOTON();
     $('bPagar').onclick=function(){ paga('libre'); };
     return;
   }
@@ -440,7 +494,8 @@ async function montaTarjeta(){
     $('tarjeta').classList.add('oculto');
     $('fallback').classList.remove('oculto');
     $('dicePago').textContent=T('El cobro se hace en la pasarela segura de Stripe.');
-    $('bPagar').textContent='Pagar con tarjeta';
+    MODO_BOTON=etiquetaPago('Pagar con tarjeta');
+    $('bPagar').textContent=MODO_BOTON();
     $('bPagar').onclick=function(){ paga(false); };
     return;
   }
@@ -454,7 +509,8 @@ async function montaTarjeta(){
       colorBackground:'#FFFFFF', spacingUnit:'4px' } },
   });
   elements.create('payment',{layout:'tabs'}).mount('#tarjeta');
-  $('bPagar').textContent='Pagar';
+  MODO_BOTON=etiquetaPago(T('Pagar'));
+  $('bPagar').textContent=MODO_BOTON();
   $('bPagar').onclick=function(){ paga(true); };
 }
 
