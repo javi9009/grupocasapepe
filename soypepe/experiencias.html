@@ -99,6 +99,14 @@
   .gbtn:disabled{opacity:.6}
   /* ---- Tarjeta de evento (fila de Virreyes) ---- */
   .hcard .ph.evt{background:linear-gradient(135deg,#5B57A6,#403c7a)}
+  /* ---- Sub-navegación del Concierge (Experiencias · Boletos · Restaurantes) ---- */
+  .cnav{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px;margin:0 0 14px}
+  .cnav button{flex:1;appearance:none;border:0;background:none;color:var(--muted);font:inherit;font-size:13.5px;font-weight:800;padding:10px 6px;border-radius:9px;cursor:pointer}
+  .cnav button.on{background:var(--gold);color:#fff}
+  .exp .ph.bol{background:linear-gradient(135deg,#B5483B,#8a3328)}
+  .exp .ph.rst{background:linear-gradient(135deg,#1D6B4A,#15503a)}
+  .exp .tipo{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+  .exp .imp{font-size:11px;color:#8C6212;font-weight:800}
   .sheet .hero.foto::before{content:"";position:absolute;inset:0;
     background:linear-gradient(180deg,rgba(0,0,0,.15) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.72) 100%)}
   .sheet .hero>*{position:relative;z-index:1}
@@ -275,10 +283,20 @@
   <h1>Vende <span class="it">Experiencias</span> y comparte tu ciudad</h1>
   <div class="sub" id="sub">Gana una propina extra por tu sentido de hospitalidad.</div>
 
-  <div id="rows"></div>
-  <p class="grh" id="todoh" style="display:none">Todo el catálogo</p>
-  <div class="fbar" id="fbar"></div>
-  <div class="grid" id="grid"><div class="empty">Cargando experiencias…</div></div>
+  <div class="cnav" id="cnav">
+    <button data-sec="exp" class="on">Experiencias</button>
+    <button data-sec="bol">Boletos</button>
+    <button data-sec="rest">Restaurantes</button>
+  </div>
+
+  <div id="secExp">
+    <div id="rows"></div>
+    <p class="grh" id="todoh" style="display:none">Todo el catálogo</p>
+    <div class="fbar" id="fbar"></div>
+    <div class="grid" id="grid"><div class="empty">Cargando experiencias…</div></div>
+  </div>
+  <div id="secBol" style="display:none"><div class="empty">Cargando boletos…</div></div>
+  <div id="secRest" style="display:none"><div class="empty">Cargando restaurantes…</div></div>
 
   <div class="foot">Casa Pepe · Experiencias — los precios y comisiones pueden cambiar.</div>
 </div>
@@ -327,6 +345,7 @@ const PROP=(params.get('prop')||'').trim();
 
 const ICON={'Tours':'🗺️','Meet at Casa':'🏠','Tiendita':'🧺','Lavandería':'🫧'};
 let DATA=[], VENTAS={}, VENTAS_TOT=0, EVENTOS=[];
+let BOLETOS=[], BOL_LOADED=false, REST=[], REST_LOADED=false, RESTF='';
 
 /* Favoritos del que vende: se marcan con la estrella y viven en este teléfono,
    por código de vendedor (no hay aún tabla de favoritos del colaborador). Es la
@@ -801,6 +820,106 @@ function openFicha(t){
 }
 function closeFicha(){ document.getElementById('sheet').classList.remove('show'); }
 
+/* ================= Sub-apartados del Concierge ================= */
+function setSec(sec){
+  document.querySelectorAll('#cnav button').forEach(b=>b.classList.toggle('on', b.getAttribute('data-sec')===sec));
+  const S={exp:'secExp',bol:'secBol',rest:'secRest'};
+  Object.keys(S).forEach(k=>{ const el=document.getElementById(S[k]); if(el) el.style.display = (k===sec)?'':'none'; });
+  if(sec==='bol' && !BOL_LOADED){ BOL_LOADED=true; loadBoletos(); }
+  if(sec==='rest' && !REST_LOADED){ REST_LOADED=true; loadRest(); }
+}
+function wireCnav(){ document.querySelectorAll('#cnav button').forEach(b=>b.onclick=()=>setSec(b.getAttribute('data-sec'))); }
+
+/* ---- Boletos (cine/eventos del Ateneo) ---- */
+function bolProx(b){ const fs=(b.funciones||[]).filter(f=>f.fecha>=hoyISO()).sort((a,b)=>((a.fecha+(a.hora||'')).localeCompare(b.fecha+(b.hora||'')))); return fs[0]||null; }
+function fmtFuncion(f){ try{ const d=new Date(f.fecha+'T'+(f.hora||'00:00')); return d.toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'})+(f.hora?(' · '+String(f.hora).slice(0,5)):''); }catch(_){ return f.fecha; } }
+function bolLink(b){ return (b.permite_online && b.pago_link) ? b.pago_link : ('https://casapepe.mx/x/boleto-'+b.id+'?ref='+encodeURIComponent(REF)); }
+function bolCard(b){
+  const prox=bolProx(b); const precio=(b.precio&&Number(b.precio)>0)?('$'+Number(b.precio).toLocaleString('es-MX')):'Gratis';
+  return '<div class="exp" data-bol="'+esc(b.id)+'">'
+    +'<span class="ph bol">'+(b.foto_url?('<img src="'+esc(b.foto_url)+'" alt="" loading="lazy" onerror="this.remove()">'):'<span class="ic">🎟️</span>')+'</span>'
+    +'<span class="cuerpo"><h3>'+esc(b.titulo)+'</h3>'
+      +'<span class="l">'+(prox?esc(fmtFuncion(prox)):'Próximamente')+(b.zona?(' · '+esc(b.zona)):'')+'</span>'
+      +'<span class="pre"><span class="pvp">'+precio+'</span><span class="tag">'+(b.permite_online?'en línea':'taquilla')+'</span></span>'
+    +'</span></div>';
+}
+async function loadBoletos(){
+  let evs=[], fun={};
+  try{ const r=await fetch(SB_URL+'/rest/v1/ateneo_cine_eventos?select=id,titulo,subtitulo,descripcion,foto_url,precio,pago_link,permite_online,permite_taquilla,zona,orden&activo=eq.true&order=orden',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}); evs=r.ok?await r.json():[]; }catch(e){}
+  try{ const rf=await fetch(SB_URL+'/rest/v1/ateneo_cine_funciones?select=evento_id,fecha,hora,activo&activo=eq.true&fecha=gte.'+hoyISO()+'&order=fecha,hora',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}); if(rf.ok)(await rf.json()).forEach(f=>{(fun[f.evento_id]=fun[f.evento_id]||[]).push(f);}); }catch(e){}
+  BOLETOS = evs.map(e=>Object.assign({},e,{funciones:(fun[e.id]||[])})).filter(e=> e.funciones.length>0 || (e.permite_online && e.pago_link));
+  renderBoletos();
+}
+function renderBoletos(){
+  const el=document.getElementById('secBol'); if(!el) return;
+  if(!BOLETOS.length){ el.innerHTML='<div class="empty">🎟️ <b>Sin funciones próximas</b><br><br>Cuando haya boletos a la venta aparecen aquí.</div>'; return; }
+  el.innerHTML='<p class="grh">Boletos · Café Cumbre y Teatro</p>'+BOLETOS.map(bolCard).join('');
+  el.querySelectorAll('.exp[data-bol]').forEach(e=>e.onclick=()=>openBoleto(BOLETOS.find(x=>String(x.id)===e.getAttribute('data-bol'))));
+}
+function openBoleto(b){
+  if(!b) return; const card=document.getElementById('sheetCard');
+  const prox=bolProx(b); const precio=(b.precio&&Number(b.precio)>0)?('$'+Number(b.precio).toLocaleString('es-MX')):'Gratis'; const link=bolLink(b);
+  const foto=b.foto_url?(' foto" style="background-image:url(\''+esc(b.foto_url)+'\')'):'';
+  card.innerHTML='<div class="hero'+foto+'"><span class="ic">🎟️</span><button class="x" id="fx">×</button><h2>'+esc(b.titulo)+'</h2></div>'
+    +'<div class="body">'
+    +'<div class="row2">'+[prox?('<span class="pill">🗓 '+esc(fmtFuncion(prox))+'</span>'):'', '<span class="pill">💵 <b>'+precio+'</b></span>', '<span class="pill">'+(b.permite_online?'En línea':'Taquilla')+'</span>'].filter(Boolean).join('')+'</div>'
+    +(b.descripcion?('<p class="story">'+esc(b.descripcion)+'</p>'):'')
+    +'<div class="sell" style="text-align:center"><div class="lbl">Comparte para que reserve</div>'
+      +'<div class="who">'+((b.permite_online&&b.pago_link)?'Paga su boleto en línea con este link.':'El huésped llega con tu recomendación; se paga en taquilla.')+'</div>'
+      +'<div class="qr" id="qbb"></div><div class="link">'+esc(link)+'</div>'
+      +'<button class="copy" id="cpb">📋 Copiar mi link</button></div>'
+    +'<button class="bsec" id="cerrarB">Cerrar</button>'
+    +'</div>';
+  document.getElementById('sheet').classList.add('show');
+  document.getElementById('fx').onclick=closeFicha;
+  document.getElementById('cerrarB').onclick=closeFicha;
+  const qb=document.getElementById('qbb'); try{ new QRCode(qb,{text:link,width:170,height:170,colorDark:'#1F1B16',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }catch(_){ }
+  const cpb=document.getElementById('cpb'); if(cpb) cpb.onclick=async()=>{ try{ await navigator.clipboard.writeText(link); cpb.textContent='✓ Copiado'; setTimeout(()=>{cpb.textContent='📋 Copiar mi link';},1600);}catch(_){ } };
+}
+
+/* ---- Restaurantes (capa "Comer y beber" de v_mapa_publico) con filtro por tipo ---- */
+function restCard(r){
+  return '<div class="exp" data-rst="'+esc(r.id)+'">'
+    +'<span class="ph rst"><span class="ic">🍽️</span></span>'
+    +'<span class="cuerpo"><h3>'+esc(r.nombre)+(r.imperdible?' <span class="imp">★</span>':'')+'</h3>'
+      +'<span class="l">'+esc(r.descripcion_breve||r.direccion||'')+'</span>'
+      +'<span class="pre"><span class="tipo">'+esc(r.tipologia_nombre||'')+'</span>'+(r.barrio?('<span class="l">'+esc(r.barrio)+'</span>'):'')+'</span>'
+    +'</span></div>';
+}
+async function loadRest(){
+  const ciudad=ciudadDeProp(); let rows=[];
+  try{ const r=await fetch(SB_URL+'/rest/v1/v_mapa_publico?capa=eq.'+encodeURIComponent('Comer y beber')+'&select=id,nombre,descripcion,descripcion_breve,direccion,barrio,ciudad,maps_url,tipologia_nombre,tipologia_orden,orden,imperdible&order=tipologia_orden,orden',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}); rows=r.ok?await r.json():[]; }catch(e){}
+  if(ciudad) rows=rows.filter(x=>!x.ciudad||x.ciudad===ciudad);
+  REST=rows; renderRest();
+}
+function renderRest(){
+  const el=document.getElementById('secRest'); if(!el) return;
+  if(!REST.length){ el.innerHTML='<div class="empty">🍽️ <b>Sin lugares todavía</b></div>'; return; }
+  const tipos=[...new Set(REST.map(r=>r.tipologia_nombre).filter(Boolean))];
+  const chips='<div class="cats">'+[''].concat(tipos).map(t=>'<div class="chip'+(RESTF===t?' on':'')+'" data-t="'+esc(t)+'">'+(t?esc(t):'Todos')+'</div>').join('')+'</div>';
+  const items=REST.filter(r=>!RESTF || r.tipologia_nombre===RESTF);
+  el.innerHTML='<p class="grh">Comer y beber · recomienda y comparte tu ciudad</p>'+chips+items.map(restCard).join('');
+  el.querySelectorAll('.cats .chip[data-t]').forEach(b=>b.onclick=()=>{ RESTF=b.getAttribute('data-t'); renderRest(); });
+  el.querySelectorAll('.exp[data-rst]').forEach(e=>e.onclick=()=>openRest(REST.find(x=>String(x.id)===e.getAttribute('data-rst'))));
+}
+function openRest(r){
+  if(!r) return; const card=document.getElementById('sheetCard');
+  const dir=[r.direccion,r.barrio].filter(Boolean).join(' · ');
+  card.innerHTML='<div class="hero"><span class="ic">🍽️</span><button class="x" id="fx">×</button><h2>'+esc(r.nombre)+'</h2></div>'
+    +'<div class="body">'
+    +'<div class="row2">'+[r.tipologia_nombre?('<span class="pill">'+esc(r.tipologia_nombre)+'</span>'):'', r.barrio?('<span class="pill">📍 '+esc(r.barrio)+'</span>'):'', r.imperdible?'<span class="pill">★ Imperdible</span>':''].filter(Boolean).join('')+'</div>'
+    +((r.descripcion||r.descripcion_breve)?('<p class="story">'+esc(r.descripcion||r.descripcion_breve)+'</p>'):'')
+    +(dir?('<div class="blk"><div class="t">Dónde</div><div class="c">'+esc(dir)+'</div></div>'):'')
+    +(r.maps_url?('<a class="bpri" style="display:block;text-align:center;text-decoration:none" target="_blank" rel="noopener" href="'+esc(r.maps_url)+'">🗺️ Cómo llegar</a>'):'')
+    +(r.maps_url?('<button class="bsec" id="rshare">💬 Recomendárselo al huésped</button>'):'')
+    +'<button class="bsec" id="cerrarR">Cerrar</button>'
+    +'</div>';
+  document.getElementById('sheet').classList.add('show');
+  document.getElementById('fx').onclick=closeFicha;
+  document.getElementById('cerrarR').onclick=closeFicha;
+  const sh=document.getElementById('rshare'); if(sh) sh.onclick=async()=>{ const txt=r.nombre+(r.maps_url?(' — '+r.maps_url):''); try{ await navigator.clipboard.writeText(txt); sh.textContent='✓ Copiado para compartir'; setTimeout(()=>{sh.textContent='💬 Recomendárselo al huésped';},1600);}catch(_){ } };
+}
+
 /* ================= Flujo de venta (beta) =================
    Tres pasos: cuánto y cuándo → confirmar → cómo se paga. Todavía no escribe
    reserva en la base: genera el QR y el link con el código de quien vende, que
@@ -891,6 +1010,7 @@ document.getElementById('buySheet').addEventListener('click',e=>{ if(e.target.id
 if(['gasto','caja'].includes(new URLSearchParams(location.search).get('abrir')||'')){
   document.body.classList.add('solo-caja');
 } else {
+  wireCnav();
   load();
 }
 </script>
