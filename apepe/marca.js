@@ -109,7 +109,7 @@
     return r || 'Restaurante';
   }
   function piezas(m) {
-    if (!m || !m.hotel_id) return [];
+    if (!m || !m.hotel_id || m.grupo) return [];
     var l = [], c = corto(m);
     if (m.go)    l.push([/Pepe\s?GO!?/g,  m.go]);
     if (m.quiz)  l.push([/PepeQuiz/g,     m.quiz]);
@@ -158,13 +158,29 @@
     if (/pepe|c[óo]smica/i.test(s)) return true;
     return !!(M && M.conserje && /don\s?jos[eé]/i.test(s));
   }
+  /* LO QUE PONE UNA REGLA NO LO VUELVE A LEER LA SIGUIENTE.
+     Las reglas se aplican en fila sobre el mismo texto, así que lo que escribe
+     una queda a tiro de las de después. Con «Pepe huésped» → «Casa Pepe CDMX
+     huésped», la regla de «Casa Pepe» entraba encima y salía «Casa Pepe CDMX
+     CDMX huésped» — que es justo lo que vio Javi en su app el 1-oct.
+     La solución es la misma de «Grupo Casa Pepe», generalizada: cada
+     sustitución se guarda aparte y deja un hueco numerado; al final se
+     devuelven todas de golpe. Así el orden de las reglas deja de importar y
+     ninguna puede morder el resultado de otra. */
   function texto(s) {
     if (!M || s == null) return s;
     s = String(s);
     if (!tiene(s)) return s;                  /* lo normal: salir en seguida */
-    s = s.replace(/Grupo\s?Casa\s?Pepe/g, GRUPO);
-    piezas(M).forEach(function (par) { s = s.replace(par[0], par[1]); });
-    return s.split(GRUPO).join('Grupo Casa Pepe');
+    var caja = [];
+    function guarda(v) { caja.push(String(v)); return '\u0000' + (caja.length - 1) + '\u0000'; }
+    s = s.replace(/Grupo\s?Casa\s?Pepe/g, function () { return guarda('Grupo Casa Pepe'); });
+    piezas(M).forEach(function (par) {
+      var r = par[1];
+      s = s.replace(par[0], typeof r === 'function'
+        ? function () { return guarda(r.apply(null, arguments)); }
+        : function () { return guarda(r); });
+    });
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return caja[Number(i)]; });
   }
 
   /* ---------- sustituir en lo ya pintado ---------- */

@@ -26,7 +26,7 @@ const SB  = 'https://rehophywchakfapivsbh.supabase.co';
 const KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 
 type Marca = {
-  hotel_id?: string; slug?: string; hotel?: string; ciudad?: string;
+  hotel_id?: string; slug?: string; hotel?: string; ciudad?: string; grupo?: boolean;
   app?: string; soy?: string; go?: string; quiz?: string; corto?: string;
   conserje?: string; rest?: string; logo?: string; logo_blanco?: string;
 };
@@ -48,7 +48,9 @@ async function marca(slug: string): Promise<Marca | null> {
       body: JSON.stringify({ p_slug: slug, p_resv: null }),
     });
     const j = r.ok ? await r.json() : null;
-    const m = (j && j.hotel_id) ? j as Marca : null;
+    // Un hotel del grupo no es una marca blanca: su app no se traduce a sí
+    // misma. La RPC ya lo corta devolviendo hotel_id nulo; esto es el cinturón.
+    const m = (j && j.hotel_id && !j.grupo) ? j as Marca : null;
     CACHE.set(slug, { t: Date.now(), m });
     return m;
   } catch (_) {
@@ -60,29 +62,34 @@ async function marca(slug: string): Promise<Marca | null> {
    cabecera. «Grupo Casa Pepe» se aparta y se devuelve: un hotel ajeno no es
    una empresa del Grupo. Y «Cósmica» pide C mayúscula para no tocar «La raza
    cósmica», que es el libro de Vasconcelos. */
-const GRUPO = '\u0000G\u0000';
+// Cada sustitucion deja un hueco numerado y se devuelve al final: asi ninguna
+// regla relee lo que puso otra. Sin esto, "Pepe huesped" -> "<hotel> huesped"
+// y la regla de "Casa Pepe" entraba encima del resultado. Mismo arreglo que en
+// apepe/marca.js, y por la misma razon.
 function traduce(s: string, m: Marca): string {
   if (!s) return s;
   if (!/pepe|c[óo]smica/i.test(s)) return s;
   const c = (m.corto || (m.go ? m.go.replace(/\s*GO!?\s*$/, '') : '') || m.hotel || '').trim();
-  let t = s.replace(/Grupo\s?Casa\s?Pepe/g, GRUPO);
-  if (m.go)   t = t.replace(/Pepe\s?GO!?/g, m.go);
-  if (m.quiz) t = t.replace(/PepeQuiz/g, m.quiz);
-  if (m.soy)  t = t.replace(/Soy\s?Pepe\b/g, m.soy);
+  const caja: string[] = [];
+  const g = (v: string) => { caja.push(v); return '\u0000' + (caja.length - 1) + '\u0000'; };
+  let t = s.replace(/Grupo\s?Casa\s?Pepe/g, () => g('Grupo Casa Pepe'));
+  if (m.go)   t = t.replace(/Pepe\s?GO!?/g, () => g(m.go!));
+  if (m.quiz) t = t.replace(/PepeQuiz/g, () => g(m.quiz!));
+  if (m.soy)  t = t.replace(/Soy\s?Pepe\b/g, () => g(m.soy!));
   if (c) {
-    t = t.replace(/Pepe(\s+)(hu[eé]sped|Hu[eé]sped|guest|Guest)/g, (_x, e, h) => c + e + h);
-    t = t.replace(/\b(Hola|Hi|Hello)(,?\s+)Pepe\b/g, (_x, h, e) => h + e + c);
-    t = t.replace(/\bapp de los Pepes\b/g, 'app de ' + c);
-    t = t.replace(/\bthe Pepes app\b/g, 'the ' + c + ' app');
+    t = t.replace(/Pepe(\s+)(hu[eé]sped|Hu[eé]sped|guest|Guest)/g, (_x, e, h) => g(c + e + h));
+    t = t.replace(/\b(Hola|Hi|Hello)(,?\s+)Pepe\b/g, (_x, h, e) => g(h + e + c));
+    t = t.replace(/\bapp de los Pepes\b/g, () => g('app de ' + c));
+    t = t.replace(/\bthe Pepes app\b/g, () => g('the ' + c + ' app'));
   }
-  t = t.replace(/\b([Ll])os\s+Pepes\b/g, (_x, i) => i + 'os anfitriones');
-  t = t.replace(/\bthe\s+Pepes\b/g, 'the hosts');
-  t = t.replace(/SuperPepe/g, 'tu descuento');
-  if (m.app)   t = t.replace(/APePe/g, m.app);
-  if (m.hotel) t = t.replace(/Casa\s?Pepe/g, m.hotel);
-  t = t.replace(/La\s?C[óo]smica/g, (m.rest || 'Restaurante'));
-  if (m.conserje) t = t.replace(/Don\s?Jos[eé]/g, m.conserje);
-  return t.split(GRUPO).join('Grupo Casa Pepe');
+  t = t.replace(/\b([Ll])os\s+Pepes\b/g, (_x, i) => g(i + 'os anfitriones'));
+  t = t.replace(/\bthe\s+Pepes\b/g, () => g('the hosts'));
+  t = t.replace(/SuperPepe/g, () => g('tu descuento'));
+  if (m.app)   t = t.replace(/APePe/g, () => g(m.app!));
+  if (m.hotel) t = t.replace(/Casa\s?Pepe/g, () => g(m.hotel!));
+  t = t.replace(/La\s?C[óo]smica/g, () => g(m.rest || 'Restaurante'));
+  if (m.conserje) t = t.replace(/Don\s?Jos[eé]/g, () => g(m.conserje!));
+  return t.replace(/\u0000(\d+)\u0000/g, (_x, i) => caja[Number(i)]);
 }
 
 function atrib(s: string): string {
