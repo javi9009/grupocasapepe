@@ -142,7 +142,8 @@
     return D.puedeVer(n.codigo);
   }
   function hijosVisibles(cod){
-    return (hijos[cod]||[]).filter(esVisible).sort(function(a,b){ return (a.orden||99)-(b.orden||99); });
+    var ord = function(x){ return (x==null || x==='') ? 99 : Number(x); };
+    return (hijos[cod]||[]).filter(esVisible).sort(function(a,b){ return ord(a.orden)-ord(b.orden); });
   }
   function color(n){
     var c=n; var v=0;
@@ -183,7 +184,14 @@
         it.title = p.tx;
         it.onclick = function(){
           estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
-          estado.catmin = false; estado.vista = 'sub'; pinta();
+          estado.catmin = false; estado.vista = 'sub';
+          /* Y se abre lo que esa categoría es: su propia pantalla si la tiene,
+             y si no el tablero de su grupo. Antes sólo desplegaba, y había que
+             dar un segundo clic para que pasara algo. */
+          var h = hijosVisibles(n.codigo);
+          if (n.ruta) { estado.activa = n.codigo; D.abrir(n.ruta, parte(n).tx, migaja(n)); }
+          else if (h.length) { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n)); }
+          pinta();
         };
         cat.appendChild(it);
       });
