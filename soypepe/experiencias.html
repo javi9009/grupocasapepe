@@ -396,7 +396,7 @@ const PROP=(params.get('prop')||'').trim();
 
 const ICON={'Tours':'🗺️','Meet at Casa':'🏠','Tiendita':'🧺','Lavandería':'🫧'};
 let DATA=[], VENTAS={}, VENTAS_TOT=0, EVENTOS=[];
-let BOLETOS=[], BOL_LOADED=false, REST=[], REST_LOADED=false, RESTF='';
+let BOLETOS=[], BOL_LOADED=false, REST=[], REST_LOADED=false, RESTF='', RESTSUB='';
 
 /* Favoritos del que vende: se marcan con la estrella y viven en este teléfono,
    por código de vendedor (no hay aún tabla de favoritos del colaborador). Es la
@@ -415,15 +415,32 @@ let FAVR=loadFavr();
 function saveFavr(){ try{ localStorage.setItem(FAVR_KEY, JSON.stringify([...FAVR])); }catch(e){} }
 function toggleFavR(id){ if(!id) return; if(FAVR.has(id)) FAVR.delete(id); else FAVR.add(id); saveFavr(); renderRest(); }
 function favBtnR(r){ const on=FAVR.has(r.id); return '<button class="fav'+(on?' on':'')+'" data-favr="'+esc(r.id)+'" title="'+(on?'Quitar':'Guardar')+'">'+(on?'★':'☆')+'</button>'; }
-// Grupos del apartado Restaurantes (mismos que el mapa) + Michelin. Multi-categoría.
+// Dos niveles igual que el mapa de huéspedes (Javi, 1-oct): Comida es la sombrilla
+// de comer, con Cocina Global, Cafés y Desayunos y Michelin como subfiltros. Multi-cat.
 var RGRUPOS=[
-  {key:'comida', n:'Comida', tipos:['tacos','fancy','veggie']},
-  {key:'global', n:'Cocina Global', tipos:[]},
-  {key:'cafe', n:'Cafés y Desayunos', tipos:['cafe']},
-  {key:'bebida', n:'Bebida', tipos:['fun']},
-  {key:'michelin', n:'Michelin', michelin:true}
+  {key:'comida', n:'Comida', tipos:['tacos','fancy','veggie','cafe'], cats:['global'], mich:true,
+    subs:[ {t:'tacos'}, {t:'fancy'}, {t:'veggie'}, {t:'cafe'},
+           {cat:'global', lab:'Cocina Global'},
+           {mich:'dos'}, {mich:'una'}, {mich:'verde'}, {mich:'bib'}, {mich:'lista'} ]},
+  {key:'bebida', n:'Bebida', tipos:['fun']}
 ];
-function rEnGrupo(r,G){ if(G.michelin) return !!(r.michelin&&r.michelin.length); return (G.tipos&&G.tipos.indexOf(r.tipologia)>=0) || ((r.categorias||[]).indexOf(G.key)>=0); }
+var MICHR={dos:'★★', una:'★', verde:'🌿', bib:'Bib', lista:'◆'};
+function rTieneCat(r,k){ return (r.categorias||[]).indexOf(k)>=0; }
+function rEnGrupo(r,G){
+  if(!G) return true;
+  if(G.tipos&&G.tipos.indexOf(r.tipologia)>=0) return true;
+  if(rTieneCat(r,G.key)) return true;
+  if(G.cats&&G.cats.some(function(c){return rTieneCat(r,c);})) return true;
+  if(G.mich&&r.michelin&&r.michelin.length) return true;
+  return false;
+}
+function rEnSub(r,code){
+  if(!code) return true;
+  if(code.slice(0,2)==='m:') return !!(r.michelin&&r.michelin.indexOf(code.slice(2))>=0);
+  if(code.slice(0,2)==='c:') return rTieneCat(r,code.slice(2));
+  return r.tipologia===code;
+}
+function rNombreTipo(code){ var f=REST.filter(function(r){return r.tipologia===code;})[0]; return f?f.tipologia_nombre:code; }
 function micoR(src,alt){ return '<img class="micon" src="/img/michelin/'+src+'" alt="'+(alt||'')+'" loading="lazy">'; }
 function restMich(r){
   if(!r.michelin||!r.michelin.length) return '';
@@ -1057,16 +1074,33 @@ function renderRest(){
     +'<div class="chip'+(RESTF==='fav'?' on':'')+'" data-g="fav">★ Favoritos</div>'
     +'<div class="chip'+(RESTF===''?' on':'')+'" data-g="">Todos</div>';
   RGRUPOS.forEach(function(G){ if(!REST.some(function(r){return rEnGrupo(r,G);})) return;
-    chips+='<div class="chip'+(RESTF===G.key?' on':'')+(G.michelin?' mich':'')+'" data-g="'+G.key+'">'+(G.michelin?'MICHELIN':esc(G.n))+'</div>'; });
+    chips+='<div class="chip'+(RESTF===G.key?' on':'')+'" data-g="'+esc(G.key)+'">'+esc(G.n)+'</div>'; });
   chips+='</div>';
+  // Subfiltros del grupo elegido (solo si el grupo los trae, p.ej. Comida).
+  var G=RGRUPOS.filter(function(x){return x.key===RESTF;})[0];
+  var subhtml='';
+  if(G&&G.subs){
+    subhtml='<div class="cats sub">'
+      +'<div class="chip'+(RESTSUB===''?' on':'')+'" data-s="">Todo</div>';
+    G.subs.forEach(function(s){
+      if(s.t){ if(!REST.some(function(r){return r.tipologia===s.t;})) return;
+        subhtml+='<div class="chip'+(RESTSUB===s.t?' on':'')+'" data-s="'+esc(s.t)+'">'+esc(rNombreTipo(s.t))+'</div>'; }
+      else if(s.cat){ if(!REST.some(function(r){return rTieneCat(r,s.cat);})) return;
+        subhtml+='<div class="chip'+(RESTSUB==='c:'+s.cat?' on':'')+'" data-s="c:'+esc(s.cat)+'">'+esc(s.lab||s.cat)+'</div>'; }
+      else if(s.mich){ if(!REST.some(function(r){return r.michelin&&r.michelin.indexOf(s.mich)>=0;})) return;
+        subhtml+='<div class="chip'+(RESTSUB==='m:'+s.mich?' on mich':' mich')+'" data-s="m:'+esc(s.mich)+'">MICHELIN '+esc(MICHR[s.mich]||'')+'</div>'; }
+    });
+    subhtml+='</div>';
+  }
   var items;
   if(RESTF==='fav') items=REST.filter(function(r){return FAVR.has(r.id);});
   else if(!RESTF) items=REST;
-  else { var G=RGRUPOS.filter(function(x){return x.key===RESTF;})[0]; items=G?REST.filter(function(r){return rEnGrupo(r,G);}):REST; }
+  else { items=G?REST.filter(function(r){return rEnGrupo(r,G)&&rEnSub(r,RESTSUB);}):REST; }
   var cuerpo = items.length ? items.map(restCard).join('')
     : '<div class="empty">'+(RESTF==='fav'?'Toca la ★ en un restaurante para tenerlo aquí.':'Sin lugares en esta categoría.')+'</div>';
-  el.innerHTML='<p class="grh">Comer y beber · recomienda y comparte tu ciudad</p>'+chips+cuerpo;
-  el.querySelectorAll('.cats .chip[data-g]').forEach(b=>b.onclick=()=>{ RESTF=b.getAttribute('data-g'); renderRest(); });
+  el.innerHTML='<p class="grh">Comer y beber · recomienda y comparte tu ciudad</p>'+chips+subhtml+cuerpo;
+  el.querySelectorAll('.cats:not(.sub) .chip[data-g]').forEach(b=>b.onclick=()=>{ RESTF=b.getAttribute('data-g'); RESTSUB=''; renderRest(); });
+  el.querySelectorAll('.cats.sub .chip[data-s]').forEach(b=>b.onclick=()=>{ RESTSUB=b.getAttribute('data-s'); renderRest(); });
   el.querySelectorAll('.fav[data-favr]').forEach(b=>b.onclick=(ev)=>{ ev.stopPropagation(); toggleFavR(b.getAttribute('data-favr')); });
   el.querySelectorAll('.exp[data-rst]').forEach(e=>e.onclick=(ev)=>{ if(ev.target.closest('.fav')) return; openRest(REST.find(x=>String(x.id)===e.getAttribute('data-rst'))); });
 }
