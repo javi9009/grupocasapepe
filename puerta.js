@@ -22,7 +22,7 @@
 
   var TEMAS={
     casapepe  :{color:'#137A56', alta:'Date de alta aquí'},
-    sincretico:{color:'#C9501A', alta:'Date de alta como touroperadora'},
+    sincretico:{color:'#C9501A', alta:'Date de alta'},
     ateneo    :{color:'#557B28', alta:'Date de alta en el Ateneo'},
     socios    :{color:'#906A6F', alta:'Pide tu acceso'}
   };
