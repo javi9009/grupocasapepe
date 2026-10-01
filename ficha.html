@@ -2841,9 +2841,28 @@ gmp-place-autocomplete,.gmpac{
       b.onclick=function(){reacomoda(b.getAttribute('data-crop'));};});
     Array.prototype.forEach.call($('galeria').querySelectorAll('[data-etq]'),function(s){
       s.onchange=async function(){
-        var r=await patch('sinc_media',s.getAttribute('data-etq'),{etiqueta:s.value});
-        if(!r.ok){error('Ya hay otra marcada así. Solo puede haber una principal y un header.');await recargaMedia();return;}
-        toast('Etiqueta guardada');};});
+        var id=s.getAttribute('data-etq'), nueva=s.value;
+        /* «Principal» y «Header» son plazas de una sola: la base lo impone con un
+           índice único. Antes, si la plaza estaba ocupada, el cambio rebotaba y
+           sólo se veía «ya hay otra marcada así» — sin decir cuál ni cómo salir,
+           y había que acordarse de degradar la otra a mano. Ahora se libera la
+           plaza y se asigna de corrido, que es lo que uno quiere al elegirla.
+           Javi, 1-oct. */
+        var ocupa=null;
+        if(nueva==='principal'||nueva==='header'){
+          ocupa=MED.filter(function(m){return m.etiqueta===nueva && m.id!==id;})[0]||null;
+          if(ocupa){
+            var r0=await patch('sinc_media',ocupa.id,{etiqueta:'general'});
+            if(!r0.ok){error('No pude liberar la plaza de «'+nueva+'». No cambié nada.');
+              await recargaMedia();return;}
+          }
+        }
+        var r=await patch('sinc_media',id,{etiqueta:nueva});
+        if(!r.ok){error('No se pudo guardar la etiqueta.');await recargaMedia();return;}
+        /* Se recarga siempre: sin esto MED se quedaba con la etiqueta vieja y el
+           siguiente cambio decidía sobre datos caducados. */
+        await recargaMedia();
+        toast(ocupa?('Hecho. La que estaba ahí pasó a General.'):'Etiqueta guardada');};});
     // reencuadre arrastrando
     Array.prototype.forEach.call($('galeria').querySelectorAll('[data-foco]'),function(v){
       var id=v.getAttribute('data-foco'),m=MED.filter(function(x){return x.id===id;})[0];
@@ -4407,9 +4426,26 @@ gmp-place-autocomplete,.gmpac{
   }
   function vpAzul(c){ return esPreficha() && !VALIDADOS[c] && vpVal(c)!=null; }
   function vpBloque(c,html){ return '<div class="'+(vpAzul(c)?'azul':'')+'">'+html+'</div>'; }
+  /* La vista previa leía `E.fotos`, una columna vieja que hoy no escribe nadie,
+     mientras que las fotos que sube el operador viven en `sinc_media` (MED). Por
+     eso el anuncio salía siempre con «Aquí va la foto de portada» aunque la
+     galería de arriba estuviera llena. Ahora mira donde de verdad están.
+     Javi, 1-oct.
+     Orden del anuncio: primero la principal, luego el header, luego el resto.
+     Para la portada se usa la versión horizontal (url_h) si existe, que es la que
+     se guarda justo para eso; el vídeo no entra, porque el hero es una imagen. */
+  var PESO_ETIQ={principal:0, header:1};
   function vpFotos(){
-    var out=[];
-    (E&&E.fotos||[]).forEach(function(f){ var u=typeof f==='string'?f:(f&&f.url); if(u)out.push({url:u,alt:(f&&f.alt)||''}); });
+    var out=MED.filter(function(m){ return m.tipo!=='video' && m.url; })
+      .slice()
+      .sort(function(a,b){
+        var pa=PESO_ETIQ[a.etiqueta], pb=PESO_ETIQ[b.etiqueta];
+        if(pa===undefined)pa=2; if(pb===undefined)pb=2;
+        return (pa-pb) || ((a.orden||0)-(b.orden||0));
+      })
+      .map(function(m){ return {url:(m.url_h||m.url), alt:m.alt||''}; });
+    if(!out.length)(E&&E.fotos||[]).forEach(function(f){
+      var u=typeof f==='string'?f:(f&&f.url); if(u)out.push({url:u,alt:(f&&f.alt)||''}); });
     if(!out.length)out=refFotos();
     return out;
   }
