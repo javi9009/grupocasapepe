@@ -167,23 +167,64 @@ var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 function $(id){return document.getElementById(id);}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function sesion(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
-  if(k&&/sb-.*-auth-token/.test(k)){var v=JSON.parse(localStorage.getItem(k)||'null');
-  var s=v&&(v.currentSession||v); if(s&&s.access_token)return s;}}}catch(_){}return null;}
+function clave(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
+  if(k&&/sb-.*-auth-token/.test(k))return k;}}catch(_){}return null;}
+function sesion(){try{var k=clave(); if(!k)return null;
+  var v=JSON.parse(localStorage.getItem(k)||'null');
+  var s=v&&(v.currentSession||v); return (s&&s.access_token)?s:null;}catch(_){}return null;}
 var SES=sesion();
+/* EL TOKEN CADUCA A LA HORA.
+   Esta pantalla lo leía UNA vez al cargar y no lo renovaba nunca. Pasada la
+   hora, cada escritura se iba con un token muerto y la base contestaba 401.
+   Como los interruptores de «Favorita» y «La conocemos» no atrapaban el error
+   (ver más abajo), la casilla se quedaba palomeada en la pantalla y en la base
+   no se guardaba nada: por eso Javi marcó favoritos y no se movió ni uno.
+   Ahora la sesión se relee en cada llamada —otra pestaña puede haberla
+   renovado— y, si aun así contesta 401, se renueva con el refresh_token y se
+   reintenta una vez. Javi, 1-oct. */
 function hdr(extra){
+  SES=sesion();
   var h={'apikey':KEY,'Authorization':'Bearer '+((SES&&SES.access_token)||KEY),
          'Content-Type':'application/json'};
   if(extra)for(var k in extra)h[k]=extra[k];
   return h;
 }
+var renovando=null;
+async function renueva(){
+  if(renovando) return renovando;
+  renovando=(async function(){
+    try{
+      var s=sesion(); if(!s||!s.refresh_token) return null;
+      var r=await fetch(SB+'/auth/v1/token?grant_type=refresh_token',{method:'POST',
+        headers:{apikey:KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({refresh_token:s.refresh_token})});
+      if(!r.ok) return null;
+      var j=await r.json();
+      if(!j||!j.access_token) return null;
+      var k=clave();
+      if(k){ try{
+        var v=JSON.parse(localStorage.getItem(k)||'null')||{};
+        if(v.currentSession) v.currentSession=Object.assign({},v.currentSession,j);
+        else v=Object.assign({},v,j);
+        localStorage.setItem(k,JSON.stringify(v));
+      }catch(_){} }
+      SES=sesion();
+      return j.access_token;
+    }catch(_){ return null; }
+    finally{ setTimeout(function(){ renovando=null; },0); }
+  })();
+  return renovando;
+}
 async function get(p){
   var r=await fetch(SB+'/rest/v1/'+p,{headers:hdr()});
+  if(r.status===401){ if(await renueva()) r=await fetch(SB+'/rest/v1/'+p,{headers:hdr()}); }
   if(!r.ok)throw new Error('La base respondió '+r.status);
   return await r.json();
 }
 async function rpc(f,b){
-  var r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',headers:hdr(),body:JSON.stringify(b||{})});
+  var cuerpo=JSON.stringify(b||{});
+  var r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',headers:hdr(),body:cuerpo});
+  if(r.status===401){ if(await renueva()) r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',headers:hdr(),body:cuerpo}); }
   var t=await r.text(), j=null; try{j=t?JSON.parse(t):null;}catch(_){}
   if(!r.ok)throw new Error((j&&(j.message||j.hint))||('La base respondió '+r.status));
   return j;
@@ -326,6 +367,14 @@ function abre(id){
         '</span></div>'+
       '<div class="dato"><span class="k">No puede bajar de</span>'+
         '<span class="v">'+esc(eAuto.nombre||'—')+'</span></div>'+
+      /* Se adelantó: cargó fichas sin tener contrato. No avanza de etapa —el
+         contrato va antes— pero el trabajo está hecho y hay que verlo, porque
+         es justo la palanca para pedirle la firma. Javi, 1-oct. */
+      (o.sin_contrato_con_fichas
+        ? '<div class="dato"><span class="k">Se adelantó</span><span class="v">'+
+          (o.n_suyas===1?'1 experiencia abierta':o.n_suyas+' experiencias abiertas')+
+          ' sin contrato firmado</span></div>'
+        : '')+
     '</div>'+
 
     '<div class="bloque">'+
@@ -372,15 +421,24 @@ function abre(id){
     '<div class="bloque"><h3>Lo que ya se hizo</h3><div id="pHist">Cargando…</div></div>';
 
   $('pEtapa').onchange=function(){mueve(id,$('pEtapa').value);};
-  $('pFav').onchange=async function(){
-    await rpc('crm_funnel_marca',{p_operador:id,p_marca:'favorita',p_valor:$('pFav').checked});
-    $('pMarcaOk').textContent='Guardado.'; await carga();
-  };
-  $('pCon').onchange=async function(){
-    await rpc('crm_funnel_marca',{p_operador:id,p_marca:'conocida',
-      p_valor:$('pCon').checked,p_quien:$('pQuien').value||null});
-    $('pMarcaOk').textContent='Guardado.'; await carga();
-  };
+  /* Si la base dice que no, la casilla vuelve a su sitio y se dice por qué.
+     Antes la promesa reventaba en silencio: la palomita se quedaba puesta y
+     no se había guardado nada. */
+  async function marca(cual, casilla, extra){
+    var caja=$('pMarcaOk'); caja.textContent='Guardando…'; caja.style.color='';
+    try{
+      await rpc('crm_funnel_marca', Object.assign({p_operador:id, p_marca:cual,
+        p_valor:casilla.checked}, extra||{}));
+      caja.textContent='Guardado.';
+      await carga();
+    }catch(x){
+      casilla.checked=!casilla.checked;         /* como estaba, que es la verdad */
+      caja.style.color='var(--error,#9E3B2E)';
+      caja.textContent='No se guardó: '+(x.message||x);
+    }
+  }
+  $('pFav').onchange=function(){ marca('favorita', $('pFav')); };
+  $('pCon').onchange=function(){ marca('conocida', $('pCon'), {p_quien:$('pQuien').value||null}); };
   $('pQuien').onchange=$('pCon').onchange;
   Array.prototype.forEach.call($('pCuerpo').querySelectorAll('[data-canal]'),function(b){
     b.onclick=async function(){
