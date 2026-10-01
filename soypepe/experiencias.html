@@ -465,12 +465,13 @@ async function load(){
     const rb=await fetch(SB_URL+'/rest/v1/v_concierge_tours?select=nombre,slug,bono_colaborador_mxn,storytelling,incluye,no_incluye,info_importante,lugar_inicio,fechas_salida,touroperador,idiomas,duracion_min,protagonista,guia_id,guia_nombre,guia_foto,guia_bio,guia_idiomas,guia_anios,guia_frase,guia_airbnb',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
     if(rb.ok){ (await rb.json()).forEach(x=>{ if(x.nombre) vct[x.nombre.trim().toLowerCase()]=x; }); }
   }catch(e){}
-  // Instagram del guía (handle público) — v_exp_guias_publica es anon-readable. El teléfono/
-  // WhatsApp NO se expone aquí: vive en `guias` (solo authenticated) y se pide por clic.
-  let gIG={};
+  // Guías por experiencia — v_exp_guias_publica es anon-readable y casa por experiencia_id (= id
+  // del catálogo). Trae nombre, foto, Instagram y descripción pública. El teléfono/WhatsApp NO
+  // viaja aquí: vive en `guias` (solo authenticated) y se pide por clic (window.cpGuiaWa).
+  let GEXP={};
   try{
-    const rg=await fetch(SB_URL+'/rest/v1/v_exp_guias_publica?select=guia_id,instagram',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
-    if(rg.ok){ (await rg.json()).forEach(x=>{ if(x.guia_id && x.instagram) gIG[x.guia_id]=x.instagram; }); }
+    const rg=await fetch(SB_URL+'/rest/v1/v_exp_guias_publica?select=experiencia_id,orden,guia_id,nombre,foto_url,instagram,descripcion_publica,vinculo&order=experiencia_id,orden',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
+    if(rg.ok){ (await rg.json()).forEach(x=>{ if(!x.experiencia_id) return; (GEXP[x.experiencia_id]=GEXP[x.experiencia_id]||[]).push(x); }); }
   }catch(e){}
   if(ciudad) cat=cat.filter(c=> !c.ciudad || c.ciudad===ciudad);
   DATA = cat.map(c=>{
@@ -491,10 +492,7 @@ async function load(){
       bono_mxn:(v.bono_colaborador_mxn!=null?Math.round(Number(v.bono_colaborador_mxn)):null),
       operador:(c.operador||v.touroperador||null),
       protagonista:(v.protagonista||''),
-      guia_id:(v.guia_id||null), guia_nombre:(v.guia_nombre||''), guia_foto:(v.guia_foto||''),
-      guia_bio:(v.guia_bio||''), guia_idiomas:(v.guia_idiomas||''), guia_anios:(v.guia_anios||null),
-      guia_frase:(v.guia_frase||''), guia_airbnb:(v.guia_airbnb||''),
-      guia_ig:(v.guia_id&&gIG[v.guia_id])||''
+      guias:(GEXP[c.id]||[])
     };
   });
   DATA=DATA.concat(SERVICIOS);
@@ -704,21 +702,26 @@ function render(){
 }
 function waDigits(s){ return String(s||'').replace(/[^0-9]/g,''); }
 // Bloque del guía/protagonista: para que el concierge lo conozca y le avise del grupo.
+// Guías reales de v_exp_guias_publica (por experiencia); si no hay, cae al protagonista del tour.
 function guiaBlock(t){
-  if(!t.guia_nombre && !t.protagonista) return '';
-  const meta=[t.guia_anios?('+'+t.guia_anios+' años guiando'):'', t.guia_idiomas?esc(t.guia_idiomas):''].filter(Boolean).join(' · ');
-  const foto=t.guia_foto?('<img src="'+esc(t.guia_foto)+'" alt="" onerror="this.remove()">'):'<span class="gi">🎤</span>';
-  const texto=t.guia_frase||t.guia_bio||'';
-  const prot=(t.protagonista && t.protagonista!==t.guia_nombre)?('<div class="gp">Protagonista del tour: <b>'+esc(t.protagonista)+'</b></div>'):'';
+  const gs=(t.guias||[]);
+  const g=gs[0];
+  if(!g && !t.protagonista) return '';
+  const nombre=g?g.nombre:t.protagonista;
+  const foto=(g&&g.foto_url)?('<img src="'+esc(g.foto_url)+'" alt="" onerror="this.remove()">'):'<span class="gi">🎤</span>';
+  const texto=(g&&g.descripcion_publica)||'';
+  const vinc=(g&&g.vinculo)?('<div class="gm">'+esc(g.vinculo)+'</div>'):'';
+  const mas=(gs.length>1)?('<div class="gp">y '+(gs.length-1)+' más en esta experiencia</div>'):'';
+  const prot=(t.protagonista && (!g || t.protagonista!==nombre))?('<div class="gp">Protagonista del tour: <b>'+esc(t.protagonista)+'</b></div>'):'';
   let acc='';
-  if(t.guia_ig){ const ig=String(t.guia_ig).replace(/^@/,''); acc+='<a class="gbtn" target="_blank" rel="noopener" href="https://instagram.com/'+encodeURIComponent(ig)+'">📷 Instagram</a>'; }
-  if(t.guia_id){ acc+='<button class="gbtn wa" data-gid="'+esc(t.guia_id)+'" data-gn="'+esc(t.guia_nombre||'')+'">💬 Avísale por WhatsApp</button>'; }
+  if(g&&g.instagram){ const ig=String(g.instagram).replace(/^@/,''); acc+='<a class="gbtn" target="_blank" rel="noopener" href="https://instagram.com/'+encodeURIComponent(ig)+'">📷 Instagram</a>'; }
+  if(g&&g.guia_id){ acc+='<button class="gbtn wa" data-gid="'+esc(g.guia_id)+'" data-gn="'+esc(nombre||'')+'">💬 Avísale por WhatsApp</button>'; }
   return '<div class="blk"><div class="t">Tu guía</div>'
     +'<div class="guia"><div class="gf">'+foto+'</div>'
-      +'<div class="gc"><div class="gn">'+esc(t.guia_nombre||t.protagonista)+'</div>'
-      +(meta?('<div class="gm">'+meta+'</div>'):'')
+      +'<div class="gc"><div class="gn">'+esc(nombre)+'</div>'
+      +vinc
       +(texto?('<div class="gq">“'+esc(texto)+'”</div>'):'')
-      +prot+'</div></div>'
+      +mas+prot+'</div></div>'
     +(acc?('<div class="gacc">'+acc+'</div>'):'')
     +'</div>';
 }
