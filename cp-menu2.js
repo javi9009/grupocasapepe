@@ -122,10 +122,18 @@
   /* 'Aprobar pedidos' es la pestaña de dentro de Pedidos, no una pantalla
      aparte: si apunta al mismo archivo que su padre, vive en Accesos (para dar
      el permiso) pero no ocupa un renglón del menú. Lo mismo con las pestañas de
-     Desayunos y con los Horarios de voluntarios dentro de Horarios. */
+     Desayunos y con los Horarios de voluntarios dentro de Horarios.
+     PERO un hijo que añade un #ancla o una ?pestaña NO es un duplicado: es un
+     sitio concreto dentro de una pantalla larga, y es justo para lo que sirve
+     el menú. Esta regla se estaba comiendo Resultados, Ventas y Deuda dentro
+     de Reporte de Resultados, y Socios se quedaba sin nada que enseñar.
+     Javi, 1-oct: "en socios falta Resultados". */
   function esPestana(n){
     var p = porCod[n.parent_codigo];
-    return !!(p && p.ruta && n.ruta && archivo(p.ruta) === archivo(n.ruta));
+    if (!(p && p.ruta && n.ruta)) return false;
+    if (archivo(p.ruta) !== archivo(n.ruta)) return false;
+    var dentro = function(r){ var i=String(r||'').search(/[#?]/); return i<0 ? '' : String(r).slice(i); };
+    return dentro(p.ruta) === dentro(n.ruta);
   }
   function esVisible(n){
     if (esPestana(n)) return false;
