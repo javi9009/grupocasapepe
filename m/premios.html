@@ -72,3 +72,216 @@ input:focus,select:focus{outline:0;border-color:var(--nar);box-shadow:0 0 0 3px 
     <div class="card" id="cSemana"></div>
   </div>
 </div>
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+const sb=createClient('https://rehophywchakfapivsbh.supabase.co','eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlaG9waHl3Y2hha2ZhcGl2c2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTU3MDgsImV4cCI6MjA5Njk3MTcwOH0.kntapjLdn0jUr62pre6uqFaf2RPfun6-DujIkshVd8Y');
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let CAT=[], RETOS=[], ASIG=[], SEM=null, RETO='quiz_huesped_dia', ME='';
+
+/* Los tipos que dictó Javi. El subtipo sólo existe donde él lo puso: una
+   cortesía es de algo, una promoción es de alguna forma, y los pepepesos no
+   son "de" nada. */
+const TIPOS={
+  pepepesos:{t:'Pepepesos',   emoji:'🪙', subs:null, cant:'Cuántos pepepesos'},
+  vnums:    {t:'Vnums',       emoji:'🎟️', subs:null, cant:'Cuántos Vnums'},
+  cortesia: {t:'Cortesía',    emoji:'🥂', subs:[['bebida','Bebida'],['estancia','Estancia'],['tour','Tour'],['otro','Otro']]},
+  dia_libre:{t:'Día libre',   emoji:'🌴', subs:null},
+  promocion:{t:'Promoción',   emoji:'🏷️', subs:[['2x1','2x1'],['descuento_pct','% de descuento'],['descuento_tour_comision','% en tour sobre nuestra comisión']], cant:'Qué porcentaje'}
+};
+const DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+
+/* La semana se nombra por su lunes: comparar semanas por el lunes evita toda
+   la miseria de los números ISO a fin de año. */
+function lunes(d){ const x=new Date(d); const n=(x.getDay()+6)%7; x.setDate(x.getDate()-n); return x.toISOString().slice(0,10); }
+function hoyMX(){ return new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'}); }
+function corto(f){ const d=new Date(f+'T12:00:00'); return d.getDate()+'/'+(d.getMonth()+1); }
+
+async function carga(){
+  const [c,r,a]=await Promise.all([
+    sb.from('premio_catalogo').select('*').eq('activo',true).order('para').order('orden'),
+    sb.from('premio_reto').select('*').eq('activo',true).order('orden'),
+    sb.from('premio_asignacion').select('*, premio:premio_id(*)').eq('semana',SEM)
+  ]);
+  CAT=c.data||[]; RETOS=r.data||[]; ASIG=a.data||[];
+}
+
+function tagDe(p){
+  const cls={vnums:'v',cortesia:'c',promocion:'p'}[p.tipo]||'';
+  const sub=p.subtipo?(' · '+(((TIPOS[p.tipo]||{}).subs||[]).filter(x=>x[0]===p.subtipo).map(x=>x[1])[0]||p.subtipo)):'';
+  return '<span class="tag '+cls+'">'+esc((TIPOS[p.tipo]||{t:p.tipo}).t+sub)+'</span>';
+}
+
+function pintaCat(){
+  const mios=CAT.filter(p=>p.para===(RETOS.find(r=>r.clave===RETO)||{}).para);
+  $('cCat').innerHTML='<h2>Los premios que hay</h2>'
+    +'<div class="sub">'+CAT.length+' en total · '+mios.length+' sirven para este reto</div>'
+    +'<div style="margin-top:10px">'+(CAT.length?CAT.map(p=>
+      '<div class="pr"><span class="em">'+esc(p.emoji||(TIPOS[p.tipo]||{}).emoji||'🎁')+'</span>'
+      +'<span class="n"><b>'+esc(p.nombre)+'</b><span>'+esc(p.detalle||'')+'</span></span>'
+      +tagDe(p)+(p.para==='equipo'?'<span class="tag eq">equipo</span>':'')+'</div>').join('')
+      :'<div class="vacio">Todavía no hay ninguno.</div>')+'</div>';
+}
+
+function pintaNuevo(){
+  $('cNuevo').innerHTML='<h2>Crear un premio</h2>'
+    +'<div class="sub">Lo que se da. Luego se cuelga de un reto, abajo.</div>'
+    +'<label for="nTipo">Qué es</label>'
+    +'<select id="nTipo">'+Object.keys(TIPOS).map(k=>'<option value="'+k+'">'+TIPOS[k].emoji+' '+TIPOS[k].t+'</option>').join('')+'</select>'
+    +'<div id="nSubBox" class="sx"><label for="nSub">De qué</label><select id="nSub"></select></div>'
+    +'<div id="nCantBox" class="sx"><label for="nCant" id="nCantL">Cuánto</label><input id="nCant" type="number" min="0" step="1"></div>'
+    +'<div id="nVnumBox" class="sx"><label for="nVnum">Qué carta de la billetera</label><select id="nVnum"></select>'
+      +'<div class="sub" style="margin-top:4px">Se entrega con una carta que ya existe; no se duplica.</div></div>'
+    +'<div class="fila"><div><label for="nNombre">Cómo se llama</label><input id="nNombre" placeholder="Margarita en La Cósmica"></div>'
+    +'<div><label for="nPara">Para quién</label><select id="nPara"><option value="huesped">Huésped</option><option value="equipo">Equipo</option></select></div></div>'
+    +'<label for="nDet">Una línea más (opcional)</label><input id="nDet" placeholder="La que te ganas con el quiz del martes">'
+    +'<div style="margin-top:14px"><button class="btn" id="nOk">Crear premio</button></div>'
+    +'<div class="msg" id="nMsg"></div>';
+
+  const tipo=$('nTipo');
+  function refresca(){
+    const k=tipo.value, T=TIPOS[k];
+    $('nSubBox').className = T.subs?'':'sx';
+    if(T.subs) $('nSub').innerHTML=T.subs.map(x=>'<option value="'+x[0]+'">'+x[1]+'</option>').join('');
+    $('nCantBox').className = T.cant?'':'sx';
+    if(T.cant) $('nCantL').textContent=T.cant;
+    /* La carta de billetera sólo se pregunta cuando el premio ES una carta. */
+    $('nVnumBox').className = (k==='vnums')?'':'sx';
+  }
+  tipo.onchange=refresca; refresca();
+
+  sb.from('vnum_premios').select('slug,nombre').eq('activo',true).order('orden').then(({data})=>{
+    $('nVnum').innerHTML='<option value="">— ninguna —</option>'
+      +(data||[]).map(v=>'<option value="'+esc(v.slug)+'">'+esc(v.nombre)+'</option>').join('');
+  });
+
+  $('nOk').onclick=async function(){
+    const m=$('nMsg'); m.className='msg';
+    const nombre=$('nNombre').value.trim();
+    if(!nombre){ m.className='msg err'; m.textContent='Falta cómo se llama.'; return; }
+    const k=$('nTipo').value, T=TIPOS[k];
+    const base=nombre.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+    const fila={
+      slug: base+'-'+Date.now().toString(36).slice(-4),
+      nombre, detalle:$('nDet').value.trim()||null, tipo:k,
+      subtipo: T.subs ? $('nSub').value : null,
+      cantidad: T.cant ? (Number($('nCant').value)||null) : null,
+      vnum_slug: (k==='vnums' && $('nVnum').value) ? $('nVnum').value : null,
+      para: $('nPara').value, emoji: T.emoji, creado_por: ME
+    };
+    this.disabled=true;
+    const {error}=await sb.from('premio_catalogo').insert(fila);
+    this.disabled=false;
+    if(error){ m.className='msg err'; m.textContent=error.message; return; }
+    m.className='msg ok'; m.textContent='Creado.';
+    $('nNombre').value=''; $('nDet').value='';
+    await carga(); pintaCat(); pintaSemana();
+  };
+}
+
+/* El calendario de la semana. Para un reto diario son siete renglones, uno por
+   día; para uno semanal, un solo renglón. */
+function pintaSemana(){
+  const R=RETOS.find(r=>r.clave===RETO)||{};
+  const diario=R.cadencia==='diario';
+  const hoy=new Date(hoyMX()+'T12:00:00').getDay();
+  const porHueco={}; ASIG.filter(a=>a.reto===RETO).forEach(a=>{ porHueco[diario?a.dow:'u']=a; });
+  const mios=CAT.filter(p=>p.para===(R.para||'huesped'));
+  const opts=p=>'<option value="">— sin premio —</option>'
+    +mios.map(x=>'<option value="'+x.id+'"'+(p&&p.premio_id===x.id?' selected':'')+'>'
+      +esc((x.emoji||'')+' '+x.nombre)+'</option>').join('');
+
+  let filas;
+  if(diario){
+    filas=[0,1,2,3,4,5,6].map(d=>{
+      const a=porHueco[d];
+      return '<div class="dia'+(d===hoy?' hoy':'')+'"><span class="d">'+DIAS[d].slice(0,3)+'</span>'
+        +'<select data-dow="'+d+'">'+opts(a)+'</select>'
+        +'<span class="tag">'+(a&&a.heredado_de?('de la del '+corto(a.heredado_de)):(a?'puesto':'—'))+'</span></div>';
+    }).join('');
+  }else{
+    const a=porHueco['u'];
+    filas='<div class="dia"><span class="d">Semana</span><select data-dow="">'+opts(a)+'</select>'
+      +'<span class="tag">'+(a&&a.heredado_de?('de la del '+corto(a.heredado_de)):(a?'puesto':'—'))+'</span></div>';
+  }
+
+  $('cSemana').innerHTML='<h2>Qué se gana</h2>'
+    +'<div class="sub">Elige el reto y la semana. Se guarda solo al cambiar.</div>'
+    +'<div class="sem" style="margin-top:12px">'
+      +'<select id="sReto" style="width:auto;min-width:230px">'
+        +RETOS.map(r=>'<option value="'+r.clave+'"'+(r.clave===RETO?' selected':'')+'>'+esc(r.nombre)+'</option>').join('')
+      +'</select>'
+      +'<button class="btn g sm" id="sAnt">‹ semana</button>'
+      +'<b style="font-family:\'IBM Plex Mono\',monospace">'+corto(SEM)+'</b>'
+      +'<button class="btn g sm" id="sSig">semana ›</button>'
+      +'<span style="flex:1"></span>'
+      +'<button class="btn g sm" id="sCopia">Copiar la semana anterior</button>'
+    +'</div>'
+    +filas
+    +'<div class="nota"><b>Si no tocas nada, se repite la semana anterior.</b> '
+    +'Al abrir una semana en blanco se copia sola la de antes, y cada renglón dice de dónde salió. '
+    +'Así nunca hay un reto sin premio por olvido.</div>'
+    +'<div class="msg" id="sMsg"></div>';
+
+  $('sReto').onchange=async e=>{ RETO=e.target.value; await carga(); await replica(); pintaCat(); pintaSemana(); };
+  $('sAnt').onclick=async ()=>{ const d=new Date(SEM+'T12:00:00'); d.setDate(d.getDate()-7); SEM=lunes(d); await carga(); await replica(); pintaSemana(); };
+  $('sSig').onclick=async ()=>{ const d=new Date(SEM+'T12:00:00'); d.setDate(d.getDate()+7); SEM=lunes(d); await carga(); await replica(); pintaSemana(); };
+  $('sCopia').onclick=async ()=>{ await replica(true); await carga(); pintaSemana(); };
+  $('cSemana').querySelectorAll('select[data-dow]').forEach(s=>{ s.onchange=()=>guarda(s); });
+}
+
+async function guarda(sel){
+  const m=$('sMsg'); m.className='msg';
+  const R=RETOS.find(r=>r.clave===RETO)||{};
+  const dow = sel.dataset.dow===''? null : Number(sel.dataset.dow);
+  const id = sel.value||null;
+  /* Quitar el premio es dejarlo en "sin premio": se borra la fila, no se
+     guarda un hueco con un premio nulo que luego nadie sabe leer. */
+  const base={reto:RETO, semana:SEM, posicion:1};
+  let q = sb.from('premio_asignacion').delete().eq('reto',RETO).eq('semana',SEM).eq('posicion',1);
+  q = (dow===null) ? q.is('dow',null) : q.eq('dow',dow);
+  const {error:e1}=await q;
+  if(e1){ m.className='msg err'; m.textContent=e1.message; return; }
+  if(id){
+    const {error:e2}=await sb.from('premio_asignacion')
+      .insert(Object.assign({},base,{dow, premio_id:id, creado_por:ME}));
+    if(e2){ m.className='msg err'; m.textContent=e2.message; return; }
+  }
+  m.className='msg ok'; m.textContent='Guardado.';
+  await carga(); pintaSemana();
+}
+
+/* La regla de Javi: si no se actualiza, se replica la semana anterior. Se hace
+   al abrir una semana que está en blanco, y queda anotado de dónde vino —si no,
+   dentro de un mes nadie sabe si ese premio se decidió o se heredó. */
+async function replica(forzar){
+  const R=RETOS.find(r=>r.clave===RETO)||{};
+  const hay=ASIG.filter(a=>a.reto===RETO).length;
+  if(hay && !forzar) return;
+  const d=new Date(SEM+'T12:00:00'); d.setDate(d.getDate()-7); const ant=lunes(d);
+  const {data}=await sb.from('premio_asignacion').select('*').eq('reto',RETO).eq('semana',ant);
+  if(!data||!data.length) return;
+  const filas=data.map(a=>({reto:RETO, premio_id:a.premio_id, semana:SEM, dow:a.dow,
+                            posicion:a.posicion, heredado_de:ant, creado_por:'replicado'}));
+  if(forzar){
+    let q=sb.from('premio_asignacion').delete().eq('reto',RETO).eq('semana',SEM);
+    await q;
+  }
+  await sb.from('premio_asignacion').insert(filas);
+  await carga();
+}
+
+async function arranque(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){ $('gate').innerHTML='<div class="card"><b>Entra con tu cuenta de Casa Pepe</b><div class="sub">Este generador es del equipo.</div></div>'; return; }
+  ME=(session.user&&session.user.email||'').toLowerCase();
+  SEM=lunes(new Date(hoyMX()+'T12:00:00'));
+  await carga();
+  await replica();
+  $('gate').hidden=true; $('app').hidden=false;
+  pintaNuevo(); pintaCat(); pintaSemana();
+}
+arranque();
+</script>
+</body>
+</html>
