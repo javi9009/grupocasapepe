@@ -68,7 +68,7 @@ function traduce(s: string, m: Marca): string {
   let t = s.replace(/Grupo\s?Casa\s?Pepe/g, GRUPO);
   if (m.go)   t = t.replace(/Pepe\s?GO!?/g, m.go);
   if (m.quiz) t = t.replace(/PepeQuiz/g, m.quiz);
-  if (m.soy)  t = t.replace(/SoyPepe/g, m.soy);
+  if (m.soy)  t = t.replace(/Soy\s?Pepe\b/g, m.soy);
   if (c) {
     t = t.replace(/Pepe(\s+)(hu[eé]sped|Hu[eé]sped|guest|Guest)/g, (_x, e, h) => c + e + h);
     t = t.replace(/\b(Hola|Hi|Hello)(,?\s+)Pepe\b/g, (_x, h, e) => h + e + c);

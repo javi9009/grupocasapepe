@@ -113,7 +113,9 @@
     var l = [], c = corto(m);
     if (m.go)    l.push([/Pepe\s?GO!?/g,  m.go]);
     if (m.quiz)  l.push([/PepeQuiz/g,     m.quiz]);
-    if (m.soy)   l.push([/SoyPepe/g,      m.soy]);
+    /* «SoyPepe» y «Soy Pepe» son la misma app escrita de dos maneras; el
+       título de su pantalla usa la segunda. */
+    if (m.soy)   l.push([/Soy\s?Pepe\b/g, m.soy]);
     /* Antes que APePe y que Casa Pepe porque ninguna de las dos contiene
        estas cadenas; el orden solo importa entre reglas que se solapan. La
        palabra que sigue conserva su mayúscula: «Pepe Huésped» → «Barrio
