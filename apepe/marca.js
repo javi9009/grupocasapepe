@@ -5,19 +5,34 @@
    buscar y reemplazar con el riesgo de romper copy en cada pantalla.
 
    Así que no se cambian: se traducen al vuelo. Esto resuelve de qué hotel es la
-   app, se trae su marca y sustituye las cinco piezas en el texto ya pintado.
-   Una pantalla nueva no tiene que saber que esto existe.
+   app, se trae su marca y sustituye las piezas en el texto ya pintado. Una
+   pantalla nueva no tiene que saber que esto existe.
 
-   Las cinco piezas, y sólo esas cinco:
-     Casa Pepe → el nombre del hotel      APePe    → App Barrio
-     SoyPepe   → Soy Barrio               PepeQuiz → Quiz Barrio
-     Pepe GO!  → Barrio GO!
+   Las piezas:
+     Casa Pepe    → el nombre del hotel     APePe    → App Barrio
+     SoyPepe      → Soy Barrio              PepeQuiz → Quiz Barrio
+     Pepe GO!     → Barrio GO!
+     Hola Pepe    → Hola Barrio            Pepe huésped → Barrio huésped
+     La Cósmica   → su restaurante         Don José → su conserje
+     Los Pepes    → los anfitriones        SuperPepe → tu descuento
+
+   «Hola Pepe» y «Pepe huésped» entraron el 1-oct: ahí Pepe no es nadie — es la
+   marca puesta donde va el chat y donde va el nombre del huésped — y en una
+   marca blanca no puede quedarse. Sale del campo `nombre_corto`: «Barrio», no
+   «App Barrio».
+
+   La Cósmica es el rooftop de Casa Pepe, no un módulo genérico. En otra casa se
+   llama como se llame su restaurante (`hoteles.rest_nombre`, el que pusieron en
+   su ficha de alta) y, si no lo dijeron, «Restaurante» a secas. Si su ficha dice
+   que tienen restaurante, sus horas salen de la misma ficha. Y lo que es de Casa
+   Pepe y de nadie más —su azotea, su power hour, su dirección— se marca con
+   `data-marca-casapepe` y se va del DOM: eso no se traduce, se quita.
 
    Lo que NO se toca, a propósito (ver el doc 72): «El Pepe» es José
-   Vasconcelos — el saco de galaxias es La raza cósmica — y «Don José» es quien
-   atiende en el chat. Son personas, no palabras: no se renombran con una
-   expresión regular. Y las rutas en minúsculas (/apepe/yo.html) tampoco, que
-   son archivos y no marca.
+   Vasconcelos y el saco de galaxias es La raza cósmica. Ojo con esa: la regla
+   del restaurante pide «Cósmica» con C mayúscula justo para no tocarla. Las
+   rutas en minúsculas (/apepe/yo.html) tampoco se traducen, que son archivos y
+   no marca.
 
    Sin hotel que resolver no sustituye nada y la app se queda como está. Ésa es
    la garantía de que esto no puede romper la app de Casa Pepe.
@@ -80,14 +95,52 @@
   /* ---------- las piezas ---------- */
   /* De la más larga a la más corta: «Pepe GO!» antes que nada que contenga
      «Pepe», o se quedaría a medias. */
+  /* El nombre de la marca a secas. Si nadie lo cargó se deduce del GO! —
+     «Barrio GO!» → «Barrio» — y en último caso se usa el nombre del hotel. */
+  function corto(m) {
+    if (!m) return '';
+    if (m.corto) return String(m.corto).trim();
+    if (m.go)    return String(m.go).replace(/\s*GO!?\s*$/, '').trim();
+    return String(m.hotel || '').trim();
+  }
+  /* Cómo se llama su restaurante. Sin nombre cargado, «Restaurante». */
+  function rest(m) {
+    var r = m && m.rest ? String(m.rest).trim() : '';
+    return r || 'Restaurante';
+  }
   function piezas(m) {
     if (!m || !m.hotel_id) return [];
-    var l = [];
+    var l = [], c = corto(m);
     if (m.go)    l.push([/Pepe\s?GO!?/g,  m.go]);
     if (m.quiz)  l.push([/PepeQuiz/g,     m.quiz]);
     if (m.soy)   l.push([/SoyPepe/g,      m.soy]);
+    /* Antes que APePe y que Casa Pepe porque ninguna de las dos contiene
+       estas cadenas; el orden solo importa entre reglas que se solapan. La
+       palabra que sigue conserva su mayúscula: «Pepe Huésped» → «Barrio
+       Huésped», «Pepe huésped» → «Barrio huésped». */
+    if (c) {
+      l.push([/Pepe(\s+)(hu[eé]sped|Hu[eé]sped|guest|Guest)/g,
+              function (_, e, h) { return c + e + h; }]);
+      l.push([/\b(Hola|Hi|Hello)(,?\s+)Pepe\b/g,
+              function (_, h, e) { return h + e + c; }]);
+    }
+    /* «Los Pepes» somos nosotros: el equipo y la gente de la casa. En otra casa
+       son sus anfitriones, no unos Pepes. Y cuando la frase dice «la app de los
+       Pepes», lo que nombra es la marca, no a la gente. */
+    if (c) {
+      l.push([/\bapp de los Pepes\b/g,  'app de ' + c]);
+      l.push([/\bthe Pepes app\b/g,     'the ' + c + ' app']);
+    }
+    l.push([/\b([Ll])os\s+Pepes\b/g, function (_, i) { return i + 'os anfitriones'; }]);
+    l.push([/\bthe\s+Pepes\b/g, 'the hosts']);
+    /* SuperPepe es el nombre interno del descuento por alargar la estancia.
+       Fuera de Casa Pepe no quiere decir nada: se llama por lo que es. */
+    l.push([/SuperPepe/g, 'tu descuento']);
     if (m.app)   l.push([/APePe/g,        m.app]);
     if (m.hotel) l.push([/Casa\s?Pepe/g,  m.hotel]);
+    /* «La Cósmica», con C mayúscula siempre: «La raza cósmica» no se toca. */
+    l.push([/La\s?C[óo]smica/g, rest(m)]);
+    if (m.conserje) l.push([/Don\s?Jos[eé]/g, m.conserje]);
     return l;
   }
   /* «Grupo Casa Pepe» es la sociedad, no la marca de la app: un hotel ajeno
@@ -98,7 +151,11 @@
   /* Ojo con el atajo: «APePe» se escribe A-P-e-P-e y NO contiene la cadena
      «Pepe». Buscarla con mayúscula dejaba fuera las 47 apariciones de APePe.
      Por eso la criba va sin distinguir mayúsculas. */
-  function tiene(s) { return s != null && /pepe/i.test(s); }
+  function tiene(s) {
+    if (s == null) return false;
+    if (/pepe|c[óo]smica/i.test(s)) return true;
+    return !!(M && M.conserje && /don\s?jos[eé]/i.test(s));
+  }
   function texto(s) {
     if (!M || s == null) return s;
     s = String(s);
@@ -139,6 +196,7 @@
     if (raiz.nodeType === 1 || raiz === document) {
       var base = raiz.nodeType === 1 ? raiz : document.body;
       if (!base) return;
+      limpia(base);
       ATRIBS.forEach(function (a) {
         var sel = '[' + a + ']', l = [];
         try { l = Array.prototype.slice.call(base.querySelectorAll(sel)); } catch (_) {}
@@ -151,10 +209,29 @@
     }
   }
 
+  /* LO QUE SOBRA EN OTRA CASA.
+     Traducir un nombre no basta: hay trozos de la app que son de Casa Pepe y de
+     nadie más — su azotea, su power hour, su dirección, la historia de la casa.
+     Eso no se traduce: se quita. Se marca en el HTML con data-marca-casapepe y
+     desaparece en cuanto la app es de otro hotel.
+     Se quita del DOM, no se esconde con CSS: así no lo lee un lector de
+     pantalla ni lo encuentra un buscador dentro de la app. */
+  var SOLO_CP = '[data-marca-casapepe]';
+  function limpia(base) {
+    if (!M || !M.hotel_id || !base) return;
+    try {
+      if (base.nodeType === 1 && base.matches && base.matches(SOLO_CP)) { base.remove(); return; }
+      Array.prototype.forEach.call(base.querySelectorAll(SOLO_CP), function (e) {
+        try { e.remove(); } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
   /* El logo y los colores: cualquier <img data-marca-logo> se cambia por el del
      hotel, en negro o en blanco según lo que pida su paleta. */
   function pinta() {
     if (!M || !M.hotel_id) return;
+    try { limpia(document.body); } catch (_) {}
     try { document.title = texto(document.title); } catch (_) {}
     var pal = M.paleta || null;
     if (pal) {
@@ -239,6 +316,17 @@
     soy:   function () { return (M && M.soy)   || 'SoyPepe'; },
     go:    function () { return (M && M.go)    || 'Pepe GO!'; },
     quiz:  function () { return (M && M.quiz)  || 'PepeQuiz'; },
+    /* El nombre de la marca a secas: «Barrio», no «App Barrio». */
+    corto: function () { return M && M.hotel_id ? corto(M) : 'Pepe'; },
+    /* Cómo se llama su restaurante, y si tienen uno. */
+    rest:  function () { return M && M.hotel_id ? rest(M) : 'La Cósmica'; },
+    hayRest: function () { return M && M.hotel_id ? !!M.rest_activo : true; },
+    /* Las horas de su restaurante, si las cargaron en la ficha. */
+    restHoras: function () {
+      if (!M || !M.hotel_id) return null;
+      return (M.rest_abre || M.rest_cierra) ? { abre: M.rest_abre, cierra: M.rest_cierra } : null;
+    },
+    conserje: function () { return (M && M.conserje) || 'Don José'; },
     /* Para traducir una cadena a mano antes de meterla en el DOM. */
     texto: texto,
     /* Lo que hay que pegarle a una liga para no perder el hotel. */
