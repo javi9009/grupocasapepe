@@ -51,7 +51,7 @@
     '.m2wrap{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg2,#f7f6f1)}',
     '.m2head{flex:0 0 auto;padding:1rem .75rem 0}',
     '.m2head .projsel{margin:.55rem 0 .7rem}',
-    '.m2{display:flex;flex:1 1 auto;min-height:0;background:var(--bg2,#f7f6f1)}',
+    '.m2{display:flex;flex:1 1 auto;min-height:0;background:var(--bg2,#f7f6f1);position:relative}',
     '.m2 *{box-sizing:border-box}',
     /* --- el riel de categorías --- */
     '.m2-cat{flex:0 0 auto;width:210px;border-right:1px solid var(--bd,rgba(0,0,0,.1));',
@@ -66,6 +66,15 @@
     '.m2-cat .it.on{background:var(--m2suave);color:var(--m2fuerte);font-weight:600}',
     '.m2-cat .it.salir{margin-top:14px;border-top:1px solid var(--bd,rgba(0,0,0,.1));',
     '  border-radius:0;padding-top:12px;color:var(--txt3,#888780);font-size:12.5px}',
+    /* Encogido a iconos, nadie se acuerda de qué es cada uno. Al pasar el
+       ratón el riel se abre entero, y lo hace FLOTANDO encima: si empujara la
+       pantalla, el contenido bailaría cada vez que pasas por encima sin
+       querer. Javi, 1-oct. */
+    '.m2.catmin .m2-cat:hover{position:absolute;left:0;top:0;bottom:0;width:210px;padding:10px 8px;',
+    '  z-index:40;box-shadow:6px 0 24px -10px rgba(30,26,22,.45)}',
+    '.m2.catmin .m2-cat:hover .it .tx{display:inline}',
+    '@media (hover:none){ .m2.catmin .m2-cat:hover{position:static;width:56px;padding:10px 4px;box-shadow:none}',
+    '  .m2.catmin .m2-cat:hover .it .tx{display:none} }',
     /* --- la columna de subcategorías --- */
     '.m2-sub{flex:0 0 auto;width:212px;border-right:1px solid var(--bd,rgba(0,0,0,.1));',
     '  overflow-y:auto;padding:10px 8px;background:#fff;transition:width .16s ease}',
