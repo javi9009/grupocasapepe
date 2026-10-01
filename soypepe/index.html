@@ -3855,6 +3855,25 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   var DIAS_C=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 
+  // Horas previstas (horarios: hora_inicio→hora_fin) vs trabajadas (asistencias: check_in→check_out) de un empId en un rango de días (keys YYYY-MM-DD). Sin tabla nueva — se derivan de lo que ya hay.
+  async function horasRango(empId, keys){
+    if(!empId||!keys||!keys.length) return null; var plan=0, trab=0, got=false;
+    try{ var r=await sb.from('horarios').select('hora_inicio,hora_fin').eq('employee_id',empId).in('fecha',keys).not('hora_inicio','is',null).not('hora_fin','is',null);
+      (r.data||[]).forEach(function(x){ var a=String(x.hora_inicio).split(':'), b=String(x.hora_fin).split(':'); var im=(+a[0])*60+(+a[1]), fm=(+b[0])*60+(+b[1]); if(fm<=im) fm+=1440; plan+=(fm-im)/60; got=true; }); }catch(e){}
+    try{ var r2=await sb.from('asistencias').select('check_in,check_out').eq('employee_id',empId).in('fecha',keys).not('check_in','is',null).not('check_out','is',null);
+      (r2.data||[]).forEach(function(x){ var d=(new Date(x.check_out)-new Date(x.check_in))/36e5; if(d>0&&d<24){ trab+=d; got=true; } }); }catch(e){}
+    return got?{plan:plan,trab:trab}:null;
+  }
+  function h1(x){ return (Math.round(x*10)/10); }
+  // Línea de evolución de horas: previstas si aún no trabaja, o "lleva Xh de Yh" con flecha arriba/abajo vs previsión.
+  function evHoras(h, periodo){
+    if(!h || (!h.plan && !h.trab)) return '';
+    if(h.trab<=0 && h.plan>0) return '<span class="ev">'+h1(h.plan)+'h previstas '+periodo+'</span>';
+    var cls = (h.plan>0 && h.trab>=h.plan*0.9) ? 'up' : (h.plan>0 ? 'down' : '');
+    var txt = h.plan>0 ? ('lleva '+h1(h.trab)+'h de '+h1(h.plan)+'h '+periodo) : (h1(h.trab)+'h '+periodo);
+    return '<span class="ev '+cls+'">'+txt+'</span>';
+  }
+
   // Comidas de la semana: dibuja cada día con menú y su botón de apuntarse (comidas_menu + comida_inscripciones)
   async function fComida(){
     var wrap=$('ccWeek'); if(!wrap) return;
@@ -3883,7 +3902,8 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
     try{ var r=await sb.from('mtto_tickets').select('id',{count:'exact',head:true}).eq('property_id',prop).not('estado','in','("resuelto","cerrado","cancelado")'); pend=r.count; }catch(e){}
     try{ var mon=hzFmt(hzMonday(mxToday())); var r2=await sb.from('mtto_tickets').select('id',{count:'exact',head:true}).eq('property_id',prop).in('estado',['resuelto','cerrado']).gte('updated_at',mon); sem=r2.count; }catch(e){}
     if(pend==null) return;
-    el.innerHTML='<b>'+pend+' por resolver</b>'+(sem!=null?('<span class="ev up">'+sem+' hechos esta semana</span>'):'');
+    var hev=''; try{ var empId=await ident(); if(empId){ var keys=hzWeekDates(hzMonday(mxToday())).map(hzFmt); var h=await horasRango(empId,keys); hev=evHoras(h,'esta semana'); } }catch(e){}
+    el.innerHTML='<b>'+pend+' por resolver</b>'+(sem!=null?('<span class="ev up">'+sem+' hechos esta semana</span>'):'')+hev;
   }
   // Vacaciones: días + semanas para expirar (<10 naranja, <5 rojo, * si pasó el año) + ritmo (tomadas/corresponden)
   async function fVac(){
@@ -3965,7 +3985,7 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
     var limpias=hk.filter(function(f){return f.color==='limpia';}).length;
     var porRevisar=hk.filter(function(f){return f.llegada && !f.aud;}).length;
     var llegados=hk.filter(function(f){return f.llegada;}).length;
-    var l=$('opLim'); if(l) l.innerHTML='<b>'+porLimpiar+' por limpiar</b>'+(limpias?('<span class="ev up">'+limpias+' ya limpias</span>'):'');
+    var l=$('opLim'); if(l){ var hev=''; try{ var empId=await ident(); if(empId){ var h=await horasRango(empId,[hzFmt(mxToday())]); hev=evHoras(h,'hoy'); } }catch(e){} l.innerHTML='<b>'+porLimpiar+' por limpiar</b>'+(limpias?('<span class="ev up">'+limpias+' ya limpias</span>'):'')+hev; }
     var a=$('opAud'); if(a) a.innerHTML='<b>'+porRevisar+' por revisar</b>';
     var c=$('opChk'); if(c){
       var up=0; try{ var pr=(await propHome()); var ptxt=(pr==='febfbef6-7fd1-4b45-84d9-13533e8dcb72')?'puebla':'cdmx';
