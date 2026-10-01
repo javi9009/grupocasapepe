@@ -343,7 +343,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     {k:'casa',   t:'Tu casa'},
     {k:'gente',  t:'Tu gente'},
     {k:'exp',    t:'Tus experiencias'},
-    {k:'impacto',t:'Tu impacto',      pronto:1},
+    {k:'impacto',t:'Tu impacto'},
     {k:'modulos',t:'Tus módulos'},
     {k:'acuerdo',t:'El acuerdo'}
   ];
@@ -490,7 +490,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       lleno(H.llegada_texto) && !!(M&&M.paleta_elegida),
       GENTE.filter(function(u){return u.activo;}).length>0,
       CAT.filter(function(x){return x.escogida;}).length>0,
-      false,
+      !!DECL,
       MIOS.filter(function(x){return x.activo;}).length>0 || MODS.length===0,
       !!H.contrato_firmado_at
     ];
@@ -532,7 +532,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         +'<div class="bloq">Este paso todavía no está listo. Lo estamos construyendo.</div></div>';
       return;
     }
-    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa,gente:pGente,exp:pExp,modulos:pModulos,acuerdo:pAcuerdo})[p.k](c);
+    ({hotel:pHotel,contacto:pContacto,formal:pFormal,pago:pPago,casa:pCasa,gente:pGente,exp:pExp,impacto:pImpacto,modulos:pModulos,acuerdo:pAcuerdo})[p.k](c);
   }
 
   function pieGuardar(fn2){
@@ -792,6 +792,235 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       try{ await api('hotel_catalogo?hotel_id=eq.'+H.id,{method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
            await carga(); pinta(); toast('Quitadas'); }
       catch(e){ toast(String(e.message||e),true); b.disabled=false; }
+    };
+  }
+
+  /* ---------- paso 8: tu impacto ───────────────────────────────────────────
+     Las preguntas no están en este archivo: viven en ods_cuestionario con
+     ambito='hotel', así que se cambian sin volver a desplegar. Cada una trae
+     las metas de los ODS a las que apunta y, si procede, la frase en tercera
+     persona que el huésped acabará leyendo. Lo que no se contesta no se
+     publica; lo que se contesta no se publica tampoco hasta firmar.
+     De dónde salen: criterios de hotelería de la GSTC, Hotel Sustainability
+     Basics del WTTC y las metas de la Agenda 2030. */
+  var QP=null, QR={}, QM={}, QG={}, DECL=null;
+
+  async function cargaOds(){
+    var r=await Promise.all([
+      api('ods_cuestionario?select=*&ambito=eq.hotel&version=eq.1&activo=is.true&order=orden.asc'),
+      api('ods_aportacion?select=clave,respuesta&ambito=eq.hotel&hotel_id=eq.'+H.id),
+      api('sinc_ods_metas?select=meta,ods,ods_nombre,color,titulo,texto'),
+      api('sinc_glosario?select=termino,titulo,texto,ojo'),
+      api('ods_declaracion_empresa?select=*&hotel_id=eq.'+H.id+'&revocada_at=is.null&order=firmado_at.desc')
+    ]);
+    QP=r[0]||[];
+    QR={}; (r[1]||[]).forEach(function(x){ QR[x.clave]=x.respuesta; });
+    QM={}; (r[2]||[]).forEach(function(x){ QM[x.meta]=x; });
+    QG={}; (r[3]||[]).forEach(function(x){ QG[x.termino]=x; });
+    DECL=(r[4]||[])[0]||null;
+  }
+
+  function resp(k){ var v=QR[k]; return v===undefined?null:v; }
+  function contestada(k){
+    var v=resp(k);
+    if(v==null) return false;
+    if(Array.isArray(v)) return v.length>0;
+    return String(v).trim()!=='';
+  }
+
+  /* Una pregunta hija se abre según lo que contestó su madre. Sin abre_si
+     basta con que la madre esté contestada. */
+  function abierta(q){
+    if(!q.padre_clave) return true;
+    var madre=QP.filter(function(x){return x.clave===q.padre_clave;})[0];
+    if(!madre || !abierta(madre) || !contestada(q.padre_clave)) return false;
+    var a=q.abre_si; if(!a) return true;
+    var v=resp(q.padre_clave), s=Array.isArray(v)?v:[String(v)];
+    if(a.igual!==undefined)    return s.indexOf(String(a.igual))>=0;
+    if(a.distinto!==undefined) return s.indexOf(String(a.distinto))<0;
+    return true;
+  }
+
+  /* ¿Esta respuesta enciende la frase que lee el huésped? */
+  function saleFrase(q){
+    if(!q.frase_publica || !contestada(q.clave)) return false;
+    var v=resp(q.clave), fs=q.frase_si;
+    if(Array.isArray(v)){
+      if(!fs) return true;
+      return fs.every(function(x){ return v.indexOf(x)>=0; });
+    }
+    if(!fs) return true;
+    return fs.indexOf(String(v))>=0;
+  }
+
+  async function guardaResp(q,val){
+    var vacia = val==null || (Array.isArray(val)&&!val.length) || (!Array.isArray(val)&&String(val).trim()==='');
+    if(vacia){
+      await api('ods_aportacion?ambito=eq.hotel&hotel_id=eq.'+H.id+'&clave=eq.'+encodeURIComponent(q.clave),
+        {method:'DELETE',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'})});
+      delete QR[q.clave];
+      return;
+    }
+    var fila={respuesta:val, via:q.via||'atributo', meta:(q.metas&&q.metas[0])||null,
+              declarado_at:new Date().toISOString(), declarado_por:(ses&&ses.email)||null};
+    if(QR[q.clave]!==undefined){
+      await api('ods_aportacion?ambito=eq.hotel&hotel_id=eq.'+H.id+'&clave=eq.'+encodeURIComponent(q.clave),
+        {method:'PATCH',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),body:JSON.stringify(fila)});
+    }else{
+      await api('ods_aportacion',{method:'POST',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),
+        body:JSON.stringify(Object.assign({ambito:'hotel',hotel_id:H.id,version:1,clave:q.clave},fila))});
+    }
+    QR[q.clave]=val;
+  }
+
+  function odsChips(qs){
+    var vistos={}, orden=[];
+    qs.forEach(function(q){ (q.metas||[]).forEach(function(m){
+      var o=QM[m]; if(!o) return;
+      if(!vistos[o.ods]){ vistos[o.ods]={ods:o.ods,nombre:o.ods_nombre,color:o.color,on:false}; orden.push(o.ods); }
+      if(contestada(q.clave)) vistos[o.ods].on=true;
+    });});
+    if(!orden.length) return '';
+    return '<div class="odsnum">'+orden.sort(function(a,b){return a-b;}).map(function(n){
+      var o=vistos[n];
+      return '<span class="o'+(o.on?' on':'')+'"'+(o.on?' style="color:'+esc(o.color)+'"':'')+' title="'+esc(o.nombre)+'">'
+        +'<i'+(o.on?' style="background:'+esc(o.color)+'"':'')+'>'+n+'</i>'+esc(o.nombre)+'</span>';
+    }).join('')+'</div>';
+  }
+
+  function ayudaGlos(q){
+    var t=[]; (q.glosario||[]).forEach(function(k){ var g=QG[k]; if(g) t.push(g.ojo||g.texto); });
+    return t.join(' ');
+  }
+
+  function pintaPregunta(q){
+    var v=resp(q.clave), hija=q.padre_clave?' hija':'';
+    var h='<div class="ods-q'+hija+'" data-q="'+esc(q.clave)+'">'
+      +'<label>'+esc(q.pregunta)+(q.opcional?'<span class="opt">opcional</span>':'')+'</label>';
+    if(q.ayuda) h+='<p class="ayuda">'+esc(q.ayuda)+'</p>';
+    var g=ayudaGlos(q); if(g) h+='<p class="ayuda" style="color:var(--tenue)">'+esc(g)+'</p>';
+    if(q.tipo==='si_no'||q.tipo==='si_no_ns'){
+      var ops=q.tipo==='si_no_ns'?[['si','Sí'],['no','No'],['ns','No lo sé']]:[['si','Sí'],['no','No']];
+      h+='<div class="chips">'+ops.map(function(o){
+        return '<span class="chip'+(String(v)===o[0]?' on':'')+'" data-v="'+o[0]+'">'+o[1]+'</span>';
+      }).join('')+'</div>';
+    }else if(q.tipo==='opcion'){
+      h+='<div class="chips">'+(q.opciones||[]).map(function(o){
+        return '<span class="chip'+(String(v)===String(o)?' on':'')+'" data-v="'+esc(o)+'">'+esc(o)+'</span>';
+      }).join('')+'</div>';
+    }else if(q.tipo==='multi'){
+      var sel=Array.isArray(v)?v:[];
+      h+='<div class="chips" data-multi="1">'+(q.opciones||[]).map(function(o){
+        return '<span class="chip'+(sel.indexOf(o)>=0?' on':'')+'" data-v="'+esc(o)+'">'+esc(o)+'</span>';
+      }).join('')+'</div>';
+    }else if(q.tipo==='numero'||q.tipo==='personas'||q.tipo==='dinero'){
+      h+='<input type="number" min="0" value="'+esc(v==null?'':v)+'">';
+    }else{
+      h+='<input type="text" value="'+esc(v==null?'':v)+'">';
+    }
+    return h+'</div>';
+  }
+
+  function pImpacto(c){
+    if(!QP){ c.innerHTML='<div class="card"><h3>Tu impacto</h3><div class="bloq">Cargando las preguntas…</div></div>';
+      cargaOds().then(function(){ pinta(); }).catch(function(e){ c.innerHTML='<div class="card"><h3>Tu impacto</h3><div class="err" style="display:block">'+esc(String(e.message||e))+'</div></div>'; });
+      return; }
+
+    var vis=QP.filter(abierta);
+    var hechas=vis.filter(function(q){return contestada(q.clave);}).length;
+    var bloques=[], porB={};
+    vis.forEach(function(q){ var b=q.bloque||'Otras'; if(!porB[b]){porB[b]=[];bloques.push(b);} porB[b].push(q); });
+    var frases=QP.filter(saleFrase).map(function(q){return q.frase_publica;});
+
+    var h='<div class="card"><h3>Tu impacto</h3>'
+      +'<div class="hint">Esto no es un examen y no lo califica nadie: es tu declaración. '
+      +'Las preguntas salen de los criterios de hotelería de la <b>GSTC</b>, de los '
+      +'<b>Hotel Sustainability Basics</b> del <b>WTTC</b> y de las metas de la Agenda 2030 de la ONU. '
+      +'Contesta lo que sepas de tu propia casa; <b>lo que dejes en blanco no se publica como una falta</b>. '
+      +'Se guarda solo, conforme vas tocando.</div>'
+      +'<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:4px">'
+      +'<span class="etq'+(hechas?' ok':'')+'">'+hechas+' de '+vis.length+' contestadas</span>'
+      +'<span class="etq'+(DECL?' ok':'')+'">'+(DECL?'Declaración firmada':'Sin firmar: todavía no se publica nada')+'</span>'
+      +'</div></div>';
+
+    h+=bloques.map(function(b){
+      var qs=porB[b], n=qs.filter(function(q){return contestada(q.clave);}).length;
+      return '<div class="ods-mod"><span class="hecho'+(n===qs.length?' on':'')+'">'+n+'/'+qs.length+'</span>'
+        +'<h4>'+esc(b)+'</h4>'+odsChips(qs)
+        +qs.map(pintaPregunta).join('')+'</div>';
+    }).join('');
+
+    h+='<div class="card"><h3>Lo que leería tu huésped</h3>'
+      +(frases.length
+        ? '<div class="hint">Tal cual, en tercera persona, dentro de la app de tu hotel. Nada más que esto: '
+          +'ni números, ni nombres, ni lo que dejaste en blanco.</div>'
+          +'<ul class="gpasos">'+frases.map(function(f){return '<li><span>✓</span><span>'+esc(f)+'</span></li>';}).join('')+'</ul>'
+        : '<div class="bloq">Todavía no hay nada que publicar. Conforme contestes, aquí vas viendo exactamente qué se diría de tu hotel.</div>')
+      +'</div>';
+
+    if(DECL){
+      h+='<div class="card"><h3>Tu declaración</h3>'
+        +'<div class="nota">Firmada por <b>'+esc(DECL.firmante_nombre||'')+'</b>'
+        +(DECL.firmante_puesto?' · '+esc(DECL.firmante_puesto):'')
+        +' el '+esc(new Date(DECL.firmado_at).toLocaleDateString('es-MX'))+'. '
+        +'Puedes seguir corrigiendo respuestas cuando quieras; si cambia algo grande, vuelve a firmar.</div>'
+        +'<div class="ft"><button class="btn fantasma" id="bRefirmar">Volver a firmar</button></div></div>';
+    }else{
+      h+='<div class="card"><h3>Firma tu declaración</h3>'
+        +'<div class="hint">'+esc((QG.protesta&&QG.protesta.ojo)||'')+'</div>'
+        +'<div class="aviso">Declaro, bajo protesta de decir verdad, que lo que contesté aquí es cierto a mi mejor '
+        +'conocimiento, y autorizo a Sincrético a publicar únicamente las frases de la lista de arriba.</div>'
+        +'<div class="fgrid" style="margin-top:14px">'
+        +campo('dNom','Quién firma',(GENTE.filter(function(u){return u.rol==="dueno";})[0]||{}).nombre||'')
+        +campo('dPue','Puesto','Dueño')
+        +'</div>'
+        +'<div class="ft"><button class="btn" id="bFirmar">Firmar mi declaración</button></div></div>';
+    }
+    c.innerHTML=h;
+
+    /* ---- los chips y los campos guardan solos ---- */
+    function qDe(el){ var w=el.closest('.ods-q'); return QP.filter(function(x){return x.clave===w.getAttribute('data-q');})[0]; }
+    async function manda(q,val,el){
+      try{ await guardaResp(q,val); pinta(); }
+      catch(e){ toast(String(e.message||e),true); if(el) el.classList.remove('on'); }
+    }
+    Array.prototype.forEach.call(c.querySelectorAll('.ods-q .chip'),function(b){
+      b.onclick=function(){
+        var q=qDe(b), val=b.getAttribute('data-v');
+        if(b.parentNode.getAttribute('data-multi')){
+          var cur=Array.isArray(resp(q.clave))?resp(q.clave).slice():[];
+          var i=cur.indexOf(val); if(i>=0) cur.splice(i,1); else cur.push(val);
+          manda(q,cur,b);
+        }else{
+          manda(q, String(resp(q.clave))===val ? null : val, b);
+        }
+      };
+    });
+    Array.prototype.forEach.call(c.querySelectorAll('.ods-q input'),function(e){
+      e.onchange=function(){ var q=qDe(e); manda(q, e.value.trim()===''?null:(e.type==='number'?Number(e.value):e.value.trim()), null); };
+    });
+
+    if($('bFirmar')) $('bFirmar').onclick=async function(){
+      var b=this, nom=v('dNom');
+      if(!nom){ toast('Falta quién firma',true); return; }
+      b.disabled=true; b.textContent='Firmando…';
+      try{
+        await api('ods_declaracion_empresa',{method:'POST',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),
+          body:JSON.stringify({hotel_id:H.id,version:1,firmante_nombre:nom,firmante_puesto:nulo(v('dPue')),
+            firmante_email:(ses&&ses.email)||null,firmado_at:new Date().toISOString(),
+            texto_firmado:'Declaro, bajo protesta de decir verdad, que lo que contesté en el cuestionario de impacto del hotel '
+              +(H.nombre_comercial||'')+' es cierto a mi mejor conocimiento, y autorizo a Sincrético a publicar únicamente las frases '
+              +'que el propio cuestionario marca como públicas. Cuestionario de hotel, versión 1.'})});
+        await cargaOds(); pinta(); toast('Declaración firmada');
+      }catch(e){ toast(String(e.message||e),true); b.disabled=false; b.textContent='Firmar mi declaración'; }
+    };
+    if($('bRefirmar')) $('bRefirmar').onclick=async function(){
+      var b=this; b.disabled=true;
+      try{
+        await api('ods_declaracion_empresa?id=eq.'+DECL.id,{method:'PATCH',headers:Object.assign({},hdr(),{'Prefer':'return=minimal'}),
+          body:JSON.stringify({revocada_at:new Date().toISOString()})});
+        await cargaOds(); pinta();
+      }catch(e){ toast(String(e.message||e),true); b.disabled=false; }
     };
   }
 
