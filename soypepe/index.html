@@ -3909,17 +3909,29 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
       if(parts.length) el.textContent=parts.join(' · ');
     }catch(e){}
   }
-  // Mi nómina: días trabajados en la quincena + puntualidad (asistencias). Nota: el bono permanente (3 seguidas / 5 de 7) queda pendiente de la regla fina.
+  // Mi nómina: días trabajados en la quincena + puntualidad y BONO.
+  // Regla (Javi): cualquier minuto tarde = retardo; el que NO tiene bono y hace 3 quincenas
+  // seguidas limpias (o 5 de las últimas 7) queda ELEGIBLE; quién ya lo tiene = employees.bono_puntualidad.
   async function fNomina(){
     var el=$('opNom'); if(!el) return; var empId=await ident(); if(!empId) return;
-    var now=mxToday(); var y=now.getFullYear(), m=now.getMonth(), day=now.getDate();
-    var qIni = day<=15 ? new Date(y,m,1) : new Date(y,m,16);
-    try{ var r=await sb.from('asistencias').select('fecha,check_in,minutos_retraso,estatus').eq('employee_id',empId).gte('fecha',hzFmt(qIni)).not('check_in','is',null);
-      var rows=r.data||[]; var dias=rows.length;
-      var ret=rows.filter(function(x){ return (x.minutos_retraso&&x.minutos_retraso>0) || /retard/i.test(x.estatus||''); }).length;
-      if(!dias){ return; }
-      el.textContent=dias+' d · '+(ret?('⚠ '+ret+' ret'):'puntual ✓'); el.style.color = ret?'#C77A1A':'';
-    }catch(e){}
+    var hasBono=false;
+    try{ var rb=await sb.from('employees').select('bono_puntualidad').eq('id',empId).maybeSingle(); hasBono=!!(rb.data&&rb.data.bono_puntualidad); }catch(e){}
+    var now=mxToday(); var desde=new Date(now.getTime()-115*864e5); var rows=[];
+    try{ var r=await sb.from('asistencias').select('fecha,check_in,minutos_retraso,estatus').eq('employee_id',empId).gte('fecha',hzFmt(desde)).not('check_in','is',null); rows=r.data||[]; }catch(e){}
+    function qkey(f){ var p=String(f).split('-'); return p[0]+'-'+p[1]+'-'+(parseInt(p[2],10)<=15?'1':'2'); }
+    var byQ={}; rows.forEach(function(x){ var k=qkey(x.fecha); if(!byQ[k]) byQ[k]={dias:0,ret:0}; byQ[k].dias++; if((x.minutos_retraso&&x.minutos_retraso>0)||/retard/i.test(x.estatus||'')) byQ[k].ret++; });
+    var curK=qkey(hzFmt(now)); var cur=byQ[curK]||{dias:0,ret:0};
+    var done=Object.keys(byQ).filter(function(k){return k!==curK;}).sort().reverse().slice(0,7);
+    var clean=function(k){ return byQ[k].ret===0; };
+    var consec=0; for(var i=0;i<done.length;i++){ if(clean(done[i])) consec++; else break; }
+    var cleanN=done.filter(clean).length;
+    var eligible = consec>=3 || cleanN>=5;
+    var txt=cur.dias+' d'; el.style.color='';
+    if(cur.ret){ txt=cur.dias+' d · ⚠ '+cur.ret+' ret'; el.style.color='#b03434'; }
+    else if(hasBono){ txt+=' · bono ✓'; }
+    else if(eligible){ txt+=' · ¡elegible bono!'; el.style.color='#C77A1A'; }
+    else { txt+=' · puntual ✓'; }
+    el.textContent=txt;
   }
   async function enriquecer(){ await fComida(); fMtto(); fVac(); fVal(); fHorario(); fNomina(); }
   bindUI();
