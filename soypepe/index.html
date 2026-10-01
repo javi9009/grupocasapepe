@@ -230,6 +230,9 @@
   .cc-day .ap{margin-top:auto;border:0;border-radius:999px;padding:6px 0;font-weight:800;font-size:11.5px;cursor:pointer;background:var(--accent,#1d9e75);color:#fff}
   .cc-day .ap.on{background:#e5e2db;color:var(--txt2,#5f5e5a)}
   .cc-day .ap:disabled{opacity:.6;cursor:default}
+  .cc-day.mando{cursor:pointer}
+  .cc-day.mando:active{transform:scale(.985)}
+  .cc-day .verq{font-size:10.5px;font-weight:700;color:var(--accent,#1d9e75);letter-spacing:.02em;margin-top:2px}
 
   /* Mi cuenta */
   .me{display:flex;align-items:center;gap:13px;margin-bottom:4px}
@@ -2740,11 +2743,12 @@ if($('ch-btn')) $('ch-btn').onclick=chMark;
    COMIDAS — menú semanal (cocina) + apuntarse (solo días laborables)
    Corte 12:00 el día en curso. Tablas comidas_menu + comida_inscripciones.
    ============================================================ */
-const CM = { monday:null, chef:false, corp:false, gestor:false, propId:null };
+const CM = { monday:null, chef:false, corp:false, gestor:false, verApuntados:false, propId:null, foco:null };
 const CM_CUTOFF_H = 12;
 
-async function openComidas(){
+async function openComidas(fecha){
   $('comidaSheet').classList.add('show');
+  CM.foco = fecha || null;
   try{ cmRecetarioCarga(); }catch(e){}
   if(!HZ.loaded){ try{ await hzResolveIdentity(); }catch(e){} }
   CM.propId = HZ.propId || REP_PROP || CDMX_PROP;
@@ -2757,6 +2761,15 @@ async function openComidas(){
     CM.corp=/direcc|gerenc|admin|contab|revenue|ecommerce|ecomm|market|sistem|finanz|recursos|rrhh|corpor/.test(ap) || !HZ.propId || HZ.propId==='fde2f615-2c65-40fa-9df3-6336b5ab312c';
   }catch(e){ CM.chef=false; CM.corp=false; }
   try{ const g=await sb.rpc('puede_gestionar_comidas'); CM.gestor=(g&&g.data===true); }catch(e){ CM.gestor=false; }
+  /* Ver quién va y anotar a más gente es cosa de jefes de área, cocina y
+     hacia arriba. NO se puede decidir con el permiso de la página: ese lo
+     tiene casi toda la casa, porque es el permiso de entrar a Comidas y
+     apuntarse uno mismo. Lo dice puede_ver_apuntados_comida, que lee la
+     jerarquía de employees. Javi, 1-oct. */
+  try{ const v=await sb.rpc('puede_ver_apuntados_comida'); CM.verApuntados=(v&&v.data===true); }catch(e){ CM.verApuntados=false; }
+  /* Si te mandan a un día concreto, la semana que se abre es la de ese día,
+     no la de hoy. */
+  if(CM.foco){ try{ CM.monday=hzMonday(new Date(CM.foco+'T12:00:00')); }catch(e){} }
   if(!CM.monday) CM.monday=hzMonday(mxToday());
   await cmLoadWeek();
 }
@@ -2787,15 +2800,25 @@ async function cmLoadWeek(){
     const bloqueado=esPasado||corteHoy||(!trabaja&&!CM.corp);
     let motivo = (!trabaja&&!CM.corp)?'Descansas' : esPasado?'Cerrado' : corteHoy?'Cerró 12:00' : '';
     let right;
-    if(CM.chef||CM.gestor){ right=''; if(!(esPasado||corteHoy)){ right+='<button class="cm-toggle '+(apuntado?'on':'')+'" data-fecha="'+ds+'" data-on="'+(apuntado?1:0)+'">'+(apuntado?'Voy ✓':'Yo como')+'</button>'; } right+='<button class="cnt cm-who" data-fecha="'+ds+'">'+cnt+' 🍽️ ▾</button>'; }
+    const _mando=(CM.chef||CM.verApuntados);
+    if(_mando){ right=''; if(!(esPasado||corteHoy)){ right+='<button class="cm-toggle '+(apuntado?'on':'')+'" data-fecha="'+ds+'" data-on="'+(apuntado?1:0)+'">'+(apuntado?'Voy ✓':'Yo como')+'</button>'; } right+='<button class="cnt cm-who" data-fecha="'+ds+'">'+cnt+' 🍽️ ▾</button>'; }
     else if((trabaja||CM.corp) && !bloqueado){ right='<button class="cm-toggle '+(apuntado?'on':'')+'" data-fecha="'+ds+'" data-on="'+(apuntado?1:0)+'">'+(apuntado?'Apuntado ✓':'Me apunto')+'</button>'; }
     else { right='<span class="cnt">'+(motivo||'—')+'</span>'; }
     const dishHtml=CM.chef
       ? '<input class="cm-dishinput" autocomplete="off" data-fecha="'+ds+'" placeholder="Platillo del día" value="'+dish.replace(/"/g,'&quot;')+'">'
       : '<div class="dish">'+(dish?('🍲 '+dish):'<i>Sin menú aún</i>')+(trabaja?(' · '+cnt+' apuntados'):'')+'</div>';
-    const _gest=(CM.corp||CM.gestor||CM.chef); const whoList=(CM.chef||CM.gestor)?('<div class="cm-who-list" id="who-'+ds+'" style="display:none">'+((quien[ds]&&quien[ds].length)?quien[ds].map(function(p){return '<span class="cm-who-chip'+(p.ext?' ext':'')+'">'+String(p.n).replace(/</g,'&lt;')+(p.ext?' 👤':'')+((_gest&&p.ext)?'<b class="cm-rmext" data-id="'+p.id+'">×</b>':'')+'</span>';}).join(''):'<i style="opacity:.6">Nadie apuntado</i>')+(_gest?'<button class="cm-addext" data-fecha="'+ds+'">+ Externo</button>':'')+'</div>'):'';
+    const _gest=_mando; const whoList=_mando?('<div class="cm-who-list" id="who-'+ds+'" style="display:none">'+((quien[ds]&&quien[ds].length)?quien[ds].map(function(p){return '<span class="cm-who-chip'+(p.ext?' ext':'')+'">'+String(p.n).replace(/</g,'&lt;')+(p.ext?' 👤':'')+((_gest&&p.ext)?'<b class="cm-rmext" data-id="'+p.id+'">×</b>':'')+'</span>';}).join(''):'<i style="opacity:.6">Nadie apuntado</i>')+(_gest?'<button class="cm-addext" data-fecha="'+ds+'">+ Externo</button>':'')+'</div>'):'';
     return '<div class="cm-daywrap"><div class="cm-row"><div class="d"><div class="day">'+hzLbl(dt)+'</div></div><div style="flex:1">'+dishHtml+'</div><div class="right">'+right+'</div></div>'+whoList+'</div>';
   }).join('');
+
+  /* Venías de tocar un día en la portada: su lista se abre sola, que es lo
+     que ibas a buscar. */
+  if(CM.foco){
+    const _el=document.getElementById('who-'+CM.foco);
+    if(_el){ _el.style.display='flex';
+      try{ _el.closest('.cm-daywrap').scrollIntoView({block:'center',behavior:'smooth'}); }catch(e){} }
+    CM.foco=null;
+  }
 
   body.querySelectorAll('.cm-toggle').forEach(b=>b.onclick=()=>cmToggle(b));
   body.querySelectorAll('.cm-who').forEach(b=>b.onclick=()=>{var el=document.getElementById('who-'+b.dataset.fecha);if(el)el.style.display=(el.style.display==='none'?'flex':'none');});
@@ -3927,8 +3950,13 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
       if(b._wired) return; b._wired=1;
       b.onclick=function(){ openEmbed(b.getAttribute('data-href'), b.getAttribute('data-title')||'', b.getAttribute('data-sub')||''); };
     });
+    /* La cabecera de la tarjeta abre el comedor. El '.cc-main' de antes ya no
+       existe en el HTML, y por eso dejó de abrirse: Zuzú, Vero y Bren no
+       podían ver quién iba ni anotar a nadie. Javi, 1-oct. */
     var card=$('comidaCard');
-    if(card&&!card._wired){ card._wired=1; var main=card.querySelector('.cc-main'); if(main) main.onclick=function(){ try{ openComidas(); }catch(e){} }; }
+    if(card&&!card._wired){ card._wired=1;
+      var cab=card.querySelector('.cc-head');
+      if(cab){ cab.style.cursor='pointer'; cab.onclick=function(){ try{ openComidas(); }catch(e){} }; } }
   }
   /* Un área de la que no puedes abrir nada no debería ocupar sitio. Antes esto
      sólo valía para Compras; ahora vale para las cinco, con la misma regla. */
@@ -3984,9 +4012,19 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
   }
 
   // Comidas de la semana: dibuja cada día con menú y su botón de apuntarse (comidas_menu + comida_inscripciones)
+  /* Jefes de área, cocina y hacia arriba. Se pregunta una vez por sesión. */
+  var CC_MANDO=null;
+  async function ccMando(){
+    if(CC_MANDO!==null) return CC_MANDO;
+    try{ var v=await sb.rpc('puede_ver_apuntados_comida'); CC_MANDO=(v&&v.data===true); }
+    catch(e){ CC_MANDO=false; }
+    return CC_MANDO;
+  }
+
   async function fComida(){
     var wrap=$('ccWeek'); if(!wrap) return;
     var prop=await propHome(); var empId=await ident();
+    var mando=await ccMando();
     var mon, dates;
     try{ mon=hzMonday(mxToday()); dates=hzWeekDates(mon); }catch(e){ return; }
     var keys=dates.map(hzFmt);
@@ -4015,15 +4053,28 @@ setTimeout(()=>{ if(!$('login').classList.contains('show') && !$('shell').classL
       var fhtml = (fa && fa.votos)
         ? '<div class="fama">\uD83D\uDC51 '+(fa.coronas||0)+' \uD83D\uDE0B '+(fa.mmm||0)+'</div>'
         : '<div class="fama nueva">aún sin votos</div>';
-      html+='<div class="cc-day'+(k===hoy?' hoy':'')+(nv>=5?' lleno':'')+'" data-d="'+k+'">'+
+      html+='<div class="cc-day'+(k===hoy?' hoy':'')+(nv>=5?' lleno':'')+(mando?' mando':'')+'" data-d="'+k+'">'+
         '<div class="d">'+dname+'</div><div class="pl">'+esc(pl)+'</div>'+
         fhtml+
         '<div class="cnt">\uD83C\uDF7D\uFE0F <b data-n="'+k+'">'+nv+'</b> '+(nv===1?'apuntado':'apuntados')+'</div>'+
-        (empId?('<button class="ap'+(on?' on':'')+'" data-f="'+k+'">'+(on?'Apuntado ✓':'Apuntarme')+'</button>'):'')+'</div>';
+        (empId?('<button class="ap'+(on?' on':'')+'" data-f="'+k+'">'+(on?'Apuntado ✓':'Apuntarme')+'</button>'):'')+
+        (mando?'<div class="verq">ver quién va ›</div>':'')+'</div>';
     });
     wrap.innerHTML = any ? html : '<div class="cc-load">No queda menú por delante esta semana.</div>';
+    /* Tocar el día abre el comedor de ese día: quién va, cuántos y el botón de
+       anotar a más gente. Sólo para quien manda; a los demás el día no les
+       hace nada y siguen usando su botón de apuntarse. */
+    if(mando){
+      var sb2=$('ccSub'); if(sb2) sb2.textContent='Toca un día para ver quién va y anotar gente';
+      wrap.querySelectorAll('.cc-day[data-d]').forEach(function(d){
+        d.onclick=function(ev){
+          if(ev.target.closest('.ap')) return;   /* el botón de apuntarse es suyo */
+          try{ openComidas(d.getAttribute('data-d')); }catch(e){}
+        };
+      });
+    }
     if(!empId){ var s=$('ccSub'); if(s) s.textContent='El menú de la semana'; return; }
-    wrap.querySelectorAll('.ap[data-f]').forEach(function(b){ b.onclick=async function(){ var f=b.getAttribute('data-f'); var next=!b.classList.contains('on'); b.disabled=true;
+    wrap.querySelectorAll('.ap[data-f]').forEach(function(b){ b.onclick=async function(ev){ if(ev&&ev.stopPropagation) ev.stopPropagation(); var f=b.getAttribute('data-f'); var next=!b.classList.contains('on'); b.disabled=true;
       try{ var rr=await sb.from('comida_inscripciones').upsert({property_id:prop,fecha:f,employee_id:empId,nombre_display:(HZ.nombreDisplay||NOMBRE||null),apuntado:next,updated_at:new Date().toISOString()},{onConflict:'property_id,fecha,employee_id'}); if(rr.error) throw rr.error; b.classList.toggle('on',next); b.textContent=next?'Apuntado ✓':'Apuntarme';
         /* El contador se mueve aquí mismo: volver a pedir la semana entera por
            un clic es un viaje de más y se nota. */
