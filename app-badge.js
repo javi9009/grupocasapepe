@@ -91,6 +91,15 @@
     try {
       var r = await Promise.all([contarNotifs(), contarChats()]);
       pintar(r[0] + r[1]);
+      /* El detalle queda a mano para quien quiera pintarlo en pantalla y no
+         sólo en el icono del celular: el dashboard enseña con esto la campana
+         de Pepe Chat. Antes el chat no se veía en ningún sitio del dashboard,
+         asi que los mensajes se quedaban esperando a que alguien abriera el
+         chat a proposito. Javi, 2-oct-2026. */
+      global.cpBadge.ultimo = { notifs: r[0], chats: r[1], total: r[0] + r[1] };
+      if (typeof global.cpBadge.alCambiar === 'function') {
+        try { global.cpBadge.alCambiar(global.cpBadge.ultimo); } catch (e2) { }
+      }
     } catch (e) { /* silencio: el badge nunca debe romper la app */ }
   }
 
@@ -111,6 +120,8 @@
   }
 
   global.cpBadge = {
+    ultimo: null,          // { notifs, chats, total } del ultimo repaso
+    alCambiar: null,       // funcion opcional: se llama con ese detalle
     init: init,
     refrescar: refrescar,
     set: pintar,
