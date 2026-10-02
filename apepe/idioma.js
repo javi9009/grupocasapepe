@@ -351,6 +351,7 @@
     'la casa y su cocina': 'the house and its kitchen',
     'tu nueva habitación': 'your new room',
     '¿Por qué le llamamos Vnums?': 'Why do we call them Vnums?',
+    'toca para acercar': 'tap to zoom in',
     'Abriendo la vitrina…': 'Opening the shop…',
     'Avisarme al teléfono': 'Notify me on my phone',
     'Contraseña copiada ✓': 'Password copied ✓',

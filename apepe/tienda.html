@@ -68,6 +68,31 @@ body.concesta .wrap{padding-bottom:104px}
 .visor .cerrar{position:sticky;top:0;align-self:flex-end;background:none;border:0;color:#fff;
   font-size:30px;line-height:1;padding:10px 16px calc(10px + env(safe-area-inset-top,0px));cursor:pointer;z-index:2}
 .visor .foto{width:100%;max-height:68vh;object-fit:contain;display:block}
+/* LA GALERÍA.
+   Las piezas ya tenían varias fotos cargadas —de -1.jpg a -4.jpg— y la tienda
+   enseñaba sólo la primera. Una tira que se pasa con el dedo, con puntos para
+   saber cuántas hay. Javi, 2-oct. */
+.visor .gal{width:100%;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.visor .gal::-webkit-scrollbar{display:none}
+.visor .gal img{flex:0 0 100%;width:100%;max-height:68vh;object-fit:contain;
+  scroll-snap-align:center;cursor:zoom-in}
+.visor .puntos{display:flex;gap:6px;justify-content:center;align-items:center;padding:9px 0 3px}
+.visor .puntos i{width:6px;height:6px;border-radius:999px;background:rgba(255,255,255,.35);
+  transition:width .18s,background .18s}
+.visor .puntos i.on{background:#fff;width:18px}
+/* LA LUPA. En chaquira el detalle ES el producto: sin ampliar no se vende. */
+.lupa{position:fixed;inset:0;background:#0b0a09;display:none;z-index:95;
+  overflow:auto;-webkit-overflow-scrolling:touch}
+.lupa.on{display:block}
+.lupa .env{min-height:100%;display:flex;align-items:center}
+.lupa img{display:block;width:100%;margin:auto;cursor:zoom-in}
+.lupa.zoom .env{display:block}
+.lupa.zoom img{width:280%;max-width:none;margin:0;cursor:zoom-out}
+.lupa .cerrar{position:fixed;top:0;right:0;background:none;border:0;color:#fff;font-size:30px;
+  line-height:1;padding:10px 16px calc(10px + env(safe-area-inset-top,0px));cursor:pointer;z-index:2}
+.lupa .cuantas{position:fixed;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));
+  text-align:center;color:rgba(255,255,255,.75);font-size:12.5px;pointer-events:none}
 .visor .pie{background:var(--papel);border-radius:18px 18px 0 0;padding:16px 18px calc(22px + env(safe-area-inset-bottom,0px));margin-top:auto}
 .visor .pie h3{font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.03em;font-size:18px;margin:0 0 4px}
 .visor .pie .me{color:var(--tenue);font-size:12.5px}
@@ -181,8 +206,16 @@ function T(f){ try{ return window.apepeT ? window.apepeT(f) : f; }catch(e){ retu
 <!-- Ver la pieza en grande -->
 <div class="visor" id="visor">
   <button class="cerrar" id="visorX" aria-label="Cerrar" data-i18n-aria="Cerrar">×</button>
-  <img class="foto" id="visorFoto" alt="">
+  <div class="gal" id="visorGal"></div>
+  <div class="puntos" id="visorPuntos"></div>
   <div class="pie" id="visorPie"></div>
+</div>
+
+<!-- La lupa: una sola foto, a pantalla completa, con un toque para acercar. -->
+<div class="lupa" id="lupa">
+  <button class="cerrar" id="lupaX" aria-label="Cerrar" data-i18n-aria="Cerrar">×</button>
+  <div class="env"><img id="lupaFoto" alt=""></div>
+  <div class="cuantas" id="lupaPie"></div>
 </div>
 
 <div class="hoja" id="hoja"><div class="in">
@@ -377,11 +410,51 @@ fetch(SB+'/rest/v1/v_tienda_publico?select=*&order=coleccion,orden,nombre',
    La foto a pantalla completa con todo lo que Xika cuenta de la pieza, y el
    botón de añadir ahí mismo: quien abre la foto es quien está a punto de
    comprarla. */
+/* LAS FOTOS QUE YA ESTABAN.
+   Cada pieza se cargó con su carpeta y sus archivos numerados —
+   `pulseras-de-peyote-1.jpg`, `-2`, `-3`…— pero `foto_url` guarda sólo la
+   primera y eso era lo único que se enseñaba. No hace falta tocar la base ni
+   volver a fotografiar nada: de la primera se deducen las demás.
+   Cuántas hay no lo sabe nadie —la carpeta no se puede listar—, así que se
+   piden seis y las que no existan se quitan solas al fallar su carga. Cuesta
+   dos o tres peticiones de 404 y ahorra una columna nueva y un backfill.
+   Javi, 2-oct. */
+function fotosDe(p){
+  var f=String((p&&p.foto_url)||'').trim();
+  if(!f) return [];
+  var m=f.match(/^(.*-)(\d+)(\.(?:jpe?g|png|webp))$/i);
+  if(!m) return [f];
+  var l=[]; for(var i=1;i<=6;i++) l.push(m[1]+i+m[3]);
+  return l;
+}
+var GAL=[];                       /* las que de verdad cargaron, en orden */
+function pintaPuntos(){
+  var c=$('visorPuntos'); if(!c) return;
+  var n=$('visorGal').querySelectorAll('img').length;
+  if(n<2){ c.innerHTML=''; return; }
+  var ancho=$('visorGal').clientWidth||1;
+  var i=Math.round($('visorGal').scrollLeft/ancho);
+  var h=''; for(var k=0;k<n;k++) h+='<i class="'+(k===i?'on':'')+'"></i>';
+  c.innerHTML=h;
+}
+function pintaGaleria(p){
+  var g=$('visorGal'); g.innerHTML=''; GAL=[];
+  fotosDe(p).forEach(function(src,i){
+    var im=document.createElement('img');
+    im.alt=p.nombre||''; im.loading = i?'lazy':'eager';
+    /* Si no existe, se va sin dejar hueco. */
+    im.onerror=function(){ try{ im.remove(); }catch(_){ } pintaPuntos(); };
+    im.onload =function(){ if(GAL.indexOf(src)<0) GAL.push(src); pintaPuntos(); };
+    im.onclick=function(){ abreLupa(src); };
+    im.src=src;
+    g.appendChild(im);
+  });
+  g.scrollLeft=0; pintaPuntos();
+}
+
 function verPieza(id){
   var p=PROD.filter(function(x){ return x.id===id; })[0]; if(!p) return;
-  var f=$('visorFoto');
-  if(p.foto_url){ f.src=p.foto_url; f.alt=p.nombre||''; f.style.display='block'; }
-  else { f.removeAttribute('src'); f.style.display='none'; }
+  pintaGaleria(p);
   var sub=(p.subcategoria && String(p.subcategoria).toLowerCase()!==String(p.nombre||'').toLowerCase())
           ? p.subcategoria : '';
   var de=[sub, p.medidas].filter(Boolean).join(' · ');
@@ -408,7 +481,45 @@ function verPieza(id){
   try{ $('visor').scrollTop=0; }catch(_){}
 }
 $('visorX').onclick=function(){ $('visor').classList.remove('on'); };
-$('visor').onclick=function(e){ if(e.target===$('visor')||e.target===$('visorFoto')) $('visor').classList.remove('on'); };
+/* Tocar el fondo cierra. La foto NO cierra: la foto amplía. */
+$('visor').onclick=function(e){ if(e.target===$('visor')) $('visor').classList.remove('on'); };
+$('visorGal').addEventListener('scroll', function(){
+  clearTimeout(pintaPuntos._t); pintaPuntos._t=setTimeout(pintaPuntos,60);
+}, {passive:true});
+
+/* ---------- la lupa ---------- */
+function abreLupa(src){
+  var l=$('lupa'), im=$('lupaFoto');
+  im.src=src;
+  l.classList.remove('zoom'); l.classList.add('on');
+  l.scrollTop=0; l.scrollLeft=0;
+  var n=GAL.length, i=GAL.indexOf(src)+1;
+  $('lupaPie').textContent = n>1 ? (i+' / '+n+' · '+T('toca para acercar'))
+                                 : T('toca para acercar');
+}
+function cierraLupa(){ $('lupa').classList.remove('on'); $('lupaFoto').removeAttribute('src'); }
+$('lupaX').onclick=cierraLupa;
+/* Un toque acerca y deja la parte tocada a la vista; otro devuelve. Nada de
+   librerías: con la foto al 280% el propio navegador deja arrastrar. */
+$('lupaFoto').onclick=function(e){
+  var l=$('lupa');
+  if(l.classList.contains('zoom')){ l.classList.remove('zoom'); l.scrollTop=0; l.scrollLeft=0; return; }
+  var r=this.getBoundingClientRect();
+  var fx=(e.clientX-r.left)/(r.width||1), fy=(e.clientY-r.top)/(r.height||1);
+  l.classList.add('zoom');
+  /* Después de pintar, se centra en lo que tocó. */
+  setTimeout(function(){
+    l.scrollLeft=Math.max(0,(l.scrollWidth*fx)-(l.clientWidth/2));
+    l.scrollTop =Math.max(0,(l.scrollHeight*fy)-(l.clientHeight/2));
+  },0);
+};
+$('lupa').addEventListener('click',function(e){ if(e.target===this) cierraLupa(); });
+/* Con el teclado, Esc cierra lo que esté abierto, de dentro hacia fuera. */
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape') return;
+  if($('lupa').classList.contains('on')) cierraLupa();
+  else if($('visor').classList.contains('on')) $('visor').classList.remove('on');
+});
 
 /* ---------- pedir ---------- */
 function sede(){ try{ return (window.apepeResv&&window.apepeResv.sede())||localStorage.getItem('apepe_sede')||'cdmx'; }catch(_){ return 'cdmx'; } }
