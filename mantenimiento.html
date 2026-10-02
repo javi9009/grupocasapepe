@@ -697,8 +697,20 @@ async function saveCompra(id){
   if(error)return toast(error.message);closeModal();toast("Compra actualizada");renderTablero();
 }
 async function entregarCompra(id){
+  const {data:s}=await sb.from("mtto_suministros").select("ticket_id").eq("id",id).maybeSingle();
   const {error}=await sb.from("mtto_suministros").update({estatus:'entregado',entregado_at:new Date().toISOString()}).eq("id",id);
-  if(error)return toast(error.message);toast("Marcada como entregada ✓");renderTablero();
+  if(error)return toast(error.message);
+  if(s&&s.ticket_id) await desbloquearCompra(s.ticket_id);   // al entregar, destraba el trabajo
+  toast("Marcada como entregada ✓");renderTablero();
+}
+// Al llegar el material: quita el bloqueo del ticket y lo regresa a la lista del técnico.
+async function desbloquearCompra(ticketId){
+  const {data:t}=await sb.from("mtto_tickets").select("estado,asignado_a,titulo").eq("id",ticketId).maybeSingle();
+  if(!t||["cerrado","cancelado"].includes(t.estado))return;
+  const patch={requiere_compra:false};
+  if(t.estado==='pausado'){ patch.estado='programado'; patch.pausado_at=null; patch.pausa_motivo=null; }
+  await sb.from("mtto_tickets").update(patch).eq("id",ticketId);
+  try{ if(t.asignado_a) await sb.from("notificaciones").insert({employee_id:t.asignado_a,titulo:'📦 Ya llegó tu material',cuerpo:(t.titulo||'Trabajo')+' — ya puedes continuarlo.',icono:'📦',accion:{url:'/m/mis-mtto.html',tipo:'mtto_desbloqueo',ticket:ticketId},leido:false}); }catch(_){}
 }
 async function borrarCompra(id){
   if(!confirm("¿Borrar esta compra? No se puede deshacer."))return;
@@ -743,7 +755,11 @@ async function renderTablero(){
   const corr =open.filter(t=>t.clasificacion==="correctivo").length;
   // Eficiencia = estimado ÷ real (100 = a tiempo, >100 = más rápido)
   const done=T.filter(t=>["resuelto","cerrado"].includes(t.estado)&&t.minutos_reales>0&&t.minutos_estimados>0);
-  const efic=rows=>{const e=rows.reduce((s,r)=>s+r.minutos_estimados,0),r=rows.reduce((s,x)=>s+x.minutos_reales,0);return r?Math.round(e/r*100):null;};
+  // Eficiencia robusta: promedio de (estimado/real) topando cada tarea a [40%,160%], para que
+  // un timer olvidado (real disparado) o un cierre instantáneo no tiren el número. Mínimo 3 tareas.
+  const efic=rows=>{ if(!rows||rows.length<3) return null;
+    const rs=rows.map(t=>Math.max(0.4,Math.min(1.6,t.minutos_estimados/t.minutos_reales)));
+    return Math.round(rs.reduce((s,x)=>s+x,0)/rs.length*100); };
   const eGlobal=efic(done);
   const byTec={}; done.forEach(t=>{const k=t.asignado_nombre||'—';(byTec[k]=byTec[k]||[]).push(t);});
   const eficCol=v=>v==null?'var(--muted)':(v>=95?'var(--ok)':(v>=80?'var(--warn)':'var(--bad)'));
@@ -1068,6 +1084,7 @@ async function saveSolicitarCompra(ticketId){
 async function marcarEntregada(sumId,ticketId){
   const {error}=await sb.from("mtto_suministros").update({estatus:"recibido",entregado_at:new Date().toISOString()}).eq("id",sumId);
   if(error)return toast(error.message);await ev(ticketId,"compra_entregada",{suministro:sumId});
+  if(ticketId) await desbloquearCompra(ticketId);   // destraba el trabajo al recibir
   toast("Compra entregada · ya se puede iniciar");closeModal();render();}
 
 /* PREVENTIVOS */

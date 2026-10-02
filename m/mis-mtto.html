@@ -356,7 +356,11 @@ function paint(){
   let rows=TICKS.slice();
   if(FILT) rows=rows.filter(t=>t.clasificacion===FILT);
   const enr=FILT&&FILT!=='reactivo'?[]:ENTR;
-  const activas=rows.filter(t=>['en_proceso','pausado'].includes(t.estado));
+  // Trabajos bloqueados esperando una compra: fuera de la lista accionable (van a su propia sección).
+  // Si ya están en_proceso, es que la compra llegó y se están trabajando → NO se ocultan.
+  const esEspera=t=>t.requiere_compra && !DONE(t) && t.estado!=='en_proceso';
+  const espera=rows.filter(esEspera).sort((a,b)=>new Date(a.pausado_at||a.created_at)-new Date(b.pausado_at||b.created_at));
+  const activas=rows.filter(t=>['en_proceso','pausado'].includes(t.estado) && !esEspera(t));
   let html='';
 
   // ---- Avance del día y de la semana ----
@@ -384,21 +388,21 @@ function paint(){
 
   const rutFirst=(a,b)=>{const ra=(a.metadata&&a.metadata.rutina)?0:1,rb=(b.metadata&&b.metadata.rutina)?0:1;return ra-rb;};
   if(VIEW==='hoy'){
-    const hoyRows=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado) && !DONE(t) && (t.dia_programado===today || !t.dia_programado)).sort(rutFirst);
+    const hoyRows=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado) && !DONE(t) && !esEspera(t) && (t.dia_programado===today || !t.dia_programado)).sort(rutFirst);
     html+=`<div class="sechd">📋 Para hacer hoy</div>`;
     html+=hoyRows.length?hoyRows.map(t=>card(t,ro)).join(''):'<div class="empty">Nada por hacer hoy. Revisa «Esta semana» o toma un reactivo.</div>';
     const term=rows.filter(t=>DONE(t)&&doneDate(t)===today);
     if(term.length) html+=`<div class="sechd">✅ Terminados hoy</div>`+term.map(t=>card(t,ro)).join('');
   } else {
     // Semana: sin día + un DÍA con su PILA de horas (8h menos reservas) + terminados
-    const sinDia=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!t.dia_programado);
+    const sinDia=rows.filter(t=>!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!esEspera(t)&&!t.dia_programado);
     html+=`<div class="sechd">🗂️ Por hacer (sin día) · arrástralos a un día</div>`;
     html+=sinDia.length?sinDia.map(t=>card(t,ro)).join(''):'<div class="empty" style="padding:16px">Todo agendado 👍</div>';
     for(let d=0;d<7;d++){ const ds=addDays(WK,d);
       const esWork = WORKSET.size? WORKSET.has(ds) : d<6;
       if(!esWork) continue;
-      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)).sort(rutFirst);
-      const act=rows.filter(t=>t.dia_programado===ds&&['en_proceso','pausado'].includes(t.estado));
+      const dr=rows.filter(t=>t.dia_programado===ds&&!['en_proceso','pausado'].includes(t.estado)&&!DONE(t)&&!esEspera(t)).sort(rutFirst);
+      const act=rows.filter(t=>t.dia_programado===ds&&['en_proceso','pausado'].includes(t.estado)&&!esEspera(t));
       // el tiempo de lectura/briefing ya va en la reserva; no lo contamos otra vez
       const planMin=[...dr,...act].filter(t=>!(t.metadata&&t.metadata.rutina)).reduce((s,t)=>s+(t.minutos_estimados||0),0);
       html+=`<div class="daySec"><div class="dhd"><b>${DIAS[d]} ${ds.slice(8,10)}</b>${ds===today?'<span class="hoychip">hoy</span>':''}</div>${pilaDia(planMin,capDiaFor(d))}</div>`;
@@ -407,7 +411,13 @@ function paint(){
     const semTerm=rows.filter(DONE);
     if(semTerm.length) html+=`<div class="sechd">✅ Terminados esta semana (${semTerm.length})</div>`+semTerm.map(t=>card(t,ro)).join('');
   }
-  if(!TICKS.length && !hoyReq.length && !activas.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Revisa 🔔 arriba o «ver sin asignar».</div>';
+  // 🛒 Bloqueados por compra: al final, agrupados, fuera de la lista accionable.
+  if(espera.length){
+    html+=`<div class="sechd">🛒 Esperando compra (${espera.length})</div>`+
+      `<div class="muted" style="font-size:12px;padding:0 2px 8px">En cuanto se surta la compra vuelven solos a tu lista. No tienes que hacer nada con estos.</div>`+
+      espera.map(esperaCard).join('');
+  }
+  if(!TICKS.length && !hoyReq.length && !activas.length && !espera.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Revisa 🔔 arriba o «ver sin asignar».</div>';
   $('list').innerHTML=html;
 }
 
@@ -454,6 +464,29 @@ function entrCard(t){
     <div class="acts"><button class="btn sm" style="flex:1" onclick="tomarEntr('${t.id}','${hoyMX()}',false)">⭐ Hoy</button><button class="btn ghost sm" onclick="entrPlan('${t.id}')">📅 Programar</button></div></div>`;
 }
 
+// Tarjeta compacta para trabajos bloqueados esperando compra (no accionable por el técnico)
+function esperaCard(t){
+  const base=t.pausado_at||t.created_at; const dias=base?Math.floor((Date.now()-new Date(base).getTime())/86400000):0;
+  const mot=(t.pausa_motivo||'').replace(/^Requiere compra:\s*/i,'').split('\n')[0].trim();
+  return `<div class="task" style="opacity:.9">
+    <div class="h"><span class="ic">🛒</span><div style="flex:1;min-width:0">
+      <div class="nm">${esc(t.titulo||'Trabajo')}</div>
+      <div class="meta"><span class="chip c-info">⏳ ${dias} día${dias===1?'':'s'} esperando</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span></div></div></div>
+    <div class="note risk" style="margin-top:6px">🛒 Falta: ${esc(mot||'compra pendiente')}</div>
+    <div class="acts"><button class="btn sm" style="flex:1" onclick="yaLlegoCompra('${t.id}')">✅ Ya me llegó</button><button class="btn ghost sm" onclick="verInfo('${t.id}')">＋ info</button></div>
+  </div>`;
+}
+// El técnico marca que ya le llegó el material → se destraba y vuelve a su lista de trabajo.
+window.yaLlegoCompra=async(id)=>{
+  const {data:t}=await sb.from('mtto_tickets').select('estado').eq('id',id).maybeSingle();
+  if(!t||['cerrado','cancelado'].includes(t.estado)){ toast('Ese trabajo ya no está en espera',false); return render(); }
+  const patch={requiere_compra:false};
+  if(t.estado==='pausado'){ patch.estado='programado'; patch.pausado_at=null; patch.pausa_motivo=null; }
+  const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error)return toast(error.message,false);
+  try{ await sb.from('mtto_suministros').update({estatus:'recibido',entregado_at:new Date().toISOString()}).eq('ticket_id',id).is('entregado_at',null); }catch(_){}
+  try{ await ev(id,'compra_entregada',{por:'tecnico'}); }catch(_){}
+  toast('¡Listo! Ya puedes continuar el trabajo ✅'); render();
+};
 function card(t,ro){
   const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||''];
   const rut=(t.metadata&&t.metadata.rutina)||'';
@@ -539,19 +572,25 @@ window.entrPlan=id=>{ const today=hoyMX(); const btns=[];
 };
 window.tomar=window.tomarEntr;
 window.iniciar=async id=>{
-  const {data:t}=await sb.from('mtto_tickets').select('requiere_compra,minutos_acumulados').eq('id',id).single();
+  const {data:t}=await sb.from('mtto_tickets').select('requiere_compra,minutos_acumulados,estado').eq('id',id).single();
+  // candado anti-reapertura: si ya está terminado (pantalla vieja), no lo reabras.
+  if(t&&['resuelto','cerrado','cancelado'].includes(t.estado)){ toast('Ese trabajo ya está terminado ✅',false); return render(); }
   if(t&&t.requiere_compra){
     const {data:sum}=await sb.from('mtto_suministros').select('estatus,entregado_at').eq('ticket_id',id);
     const ok=(sum||[]).some(x=>x.entregado_at||['comprado','recibido','entregado'].includes(x.estatus));
     if(!ok)return toast('Falta la compra para iniciar',false);
   }
-  const {error}=await sb.from('mtto_tickets').update({estado:'en_proceso',iniciado_at:new Date().toISOString(),dia_programado:hoyMX()}).eq('id',id);
+  // solo arranca si sigue pendiente (evita pisar un cierre hecho en otra pantalla)
+  const {data:upd,error}=await sb.from('mtto_tickets').update({estado:'en_proceso',iniciado_at:new Date().toISOString(),dia_programado:hoyMX()}).eq('id',id).in('estado',['nuevo','validado','programado','en_proceso','pausado']).select('id');
   if(error)return toast(error.message,false);
+  if(!upd||!upd.length){ toast('Ese trabajo ya está terminado ✅',false); return render(); }
   await ev(id,'iniciado'); toast('Iniciado ⏱️'); render();
 };
 window.reanudar=async id=>{
-  const {error}=await sb.from('mtto_tickets').update({estado:'en_proceso',iniciado_at:new Date().toISOString(),pausado_at:null,pausa_motivo:null}).eq('id',id);
-  if(error)return toast(error.message,false); await ev(id,'reanudado'); toast('Reanudado ▶️'); render();
+  const {data:upd,error}=await sb.from('mtto_tickets').update({estado:'en_proceso',iniciado_at:new Date().toISOString(),pausado_at:null,pausa_motivo:null}).eq('id',id).in('estado',['pausado','en_proceso']).select('id');
+  if(error)return toast(error.message,false);
+  if(!upd||!upd.length){ toast('Ese trabajo ya no está en pausa',false); return render(); }
+  await ev(id,'reanudado'); toast('Reanudado ▶️'); render();
 };
 window.pausar=id=>{ curId=id;
   modal(`<h3>Pausar trabajo</h3><p style="color:var(--ink2);font-size:13px;margin:0 0 6px">Se guarda el tiempo trabajado y queda en pausa.</p>
@@ -644,19 +683,21 @@ window.subirYterminar=async(id)=>{
     if(se||!t) throw (se||new Error('No se encontró el trabajo'));
     const now=new Date(); let acc=t.minutos_acumulados||0; if(t.iniciado_at)acc+=Math.max(0,(now-new Date(t.iniciado_at))/60000);
     if(acc===0) acc=t.minutos_estimados||0;
-    const mins=Math.round(acc)||null; const reportado=t.reportado_por;
-    const patch={resuelto_at:now.toISOString(),minutos_reales:mins,comentario_cierre:com||null,pausado_at:null,iniciado_at:null};
+    let mins=Math.round(acc)||null; if(mins&&mins>480) mins=t.minutos_estimados||480;  // topa timers olvidados (>8h en una sesión)
+    const reportado=t.reportado_por;
+    const patch={resuelto_at:now.toISOString(),minutos_reales:mins,comentario_cierre:com||null,pausado_at:null,iniciado_at:null,
+      estado:'cerrado',cerrado_at:now.toISOString(),cerrado_por:ME.id,cerrado_por_nombre:ME.email};  // cierre directo (sin limbo 'resuelto')
     if(foto) patch.foto_resuelto_url=foto;
-    if(reportado){ patch.estado='resuelto'; } else { patch.estado='cerrado'; patch.cerrado_at=now.toISOString(); patch.cerrado_por=ME.id; patch.cerrado_por_nombre=ME.email; }
-    const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error) throw error;
+    const {data:updc,error}=await sb.from('mtto_tickets').update(patch).eq('id',id).in('estado',['nuevo','validado','programado','en_proceso','pausado','resuelto']).select('id'); if(error) throw error;
+    if(!updc||!updc.length){ closeModal(); toast('Ese trabajo ya estaba cerrado ✅',false); return render(); }
     // efectos secundarios: no deben impedir el cierre
     try{
       if(t.preventivo_catalogo_id){ await sb.from('mtto_preventivos_catalogo').update({ultimo_realizado:hoyMX()}).eq('id',t.preventivo_catalogo_id);
         await sb.from('mtto_preventivo_log').insert({catalogo_id:t.preventivo_catalogo_id,property_id:t.property_id,fecha:hoyMX(),por_id:ME.id,por_nombre:ME.email,minutos_reales:mins,evidencia_url:foto,nota:com||null}); }
       if(t.origen==='mto_profundo'){ await sb.from('mtto_profundo_plan').update({estado:'hecho',fecha_realizada:hoyMX(),ultimo_realizado:hoyMX()}).eq('ticket_id',id); }
       if(t.metadata&&t.metadata.prev_plan_id){ await sb.from('mtto_preventivo_plan').update({estado:'hecho',fecha_realizada:hoyMX()}).eq('id',t.metadata.prev_plan_id); }
-      await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins,comentario:com});
-      if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Tu reporte fue atendido',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda, mira la foto y confírmalo.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
+      await ev(id, 'cerrado_conforme', {minutos_reales:mins,comentario:com});
+      if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Ya atendimos tu reporte',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda para ver la foto de cómo quedó.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
     }catch(_){}
     closeModal(); toast('Terminado ✅'+(mins?' · '+fmtDur(mins):'')); render();
   }catch(e){ if(btn){btn.disabled=false;btn.textContent='✅ Marcar terminado';} toast('No se pudo terminar: '+(e.message||e),false); }
@@ -665,12 +706,13 @@ window.terminarSimple=async(id)=>{
   const {data:t}=await sb.from('mtto_tickets').select('*').eq('id',id).single(); if(!t)return;
   const now=new Date(); let acc=t.minutos_acumulados||0; if(t.iniciado_at)acc+=Math.max(0,(now-new Date(t.iniciado_at))/60000);
   if(acc===0) acc=t.minutos_estimados||0;
-  const mins=Math.round(acc)||null; const reportado=t.reportado_por;
-  const patch={resuelto_at:now.toISOString(),minutos_reales:mins,pausado_at:null,iniciado_at:null};
-  if(reportado){ patch.estado='resuelto'; } else { patch.estado='cerrado'; patch.cerrado_at=now.toISOString(); patch.cerrado_por=ME.id; patch.cerrado_por_nombre=ME.email; }
-  const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error)return toast(error.message,false);
+  let mins=Math.round(acc)||null; if(mins&&mins>480) mins=t.minutos_estimados||480;  // topa timers olvidados
+  const patch={resuelto_at:now.toISOString(),minutos_reales:mins,pausado_at:null,iniciado_at:null,
+    estado:'cerrado',cerrado_at:now.toISOString(),cerrado_por:ME.id,cerrado_por_nombre:ME.email};  // cierre directo
+  const {data:updc,error}=await sb.from('mtto_tickets').update(patch).eq('id',id).in('estado',['nuevo','validado','programado','en_proceso','pausado','resuelto']).select('id'); if(error)return toast(error.message,false);
+  if(!updc||!updc.length){ toast('Ese trabajo ya estaba cerrado ✅',false); return render(); }
   if(t.metadata&&t.metadata.prev_plan_id){ await sb.from('mtto_preventivo_plan').update({estado:'hecho',fecha_realizada:hoyMX()}).eq('id',t.metadata.prev_plan_id); }
-  try{ await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins}); }catch(_){}
+  try{ await ev(id, 'cerrado_conforme', {minutos_reales:mins}); }catch(_){}
   toast('Terminado ✅'); render();
 };
 window.doTerminar=async(id,foto)=>{
@@ -678,17 +720,18 @@ window.doTerminar=async(id,foto)=>{
   const {data:t}=await sb.from('mtto_tickets').select('*').eq('id',id).single();
   const now=new Date(); let acc=t.minutos_acumulados||0; if(t.iniciado_at)acc+=Math.max(0,(now-new Date(t.iniciado_at))/60000);
   if(!t.minutos_acumulados&&!t.iniciado_at&&t.iniciado_at===null&&acc===0&&t.estado!=='pausado') acc=t.minutos_estimados||0;
-  const mins=Math.round(acc)||null;
+  let mins=Math.round(acc)||null; if(mins&&mins>480) mins=t.minutos_estimados||480;  // topa timers olvidados
   const reportado=t.reportado_por;
-  const patch={foto_resuelto_url:foto,resuelto_at:now.toISOString(),minutos_reales:mins,comentario_cierre:com||null,pausado_at:null,iniciado_at:null};
-  if(reportado){ patch.estado='resuelto'; } else { patch.estado='cerrado'; patch.cerrado_at=now.toISOString(); patch.cerrado_por=ME.id; patch.cerrado_por_nombre=ME.email; }
-  const {error}=await sb.from('mtto_tickets').update(patch).eq('id',id); if(error)return toast(error.message,false);
+  const patch={foto_resuelto_url:foto,resuelto_at:now.toISOString(),minutos_reales:mins,comentario_cierre:com||null,pausado_at:null,iniciado_at:null,
+    estado:'cerrado',cerrado_at:now.toISOString(),cerrado_por:ME.id,cerrado_por_nombre:ME.email};  // cierre directo
+  const {data:updc,error}=await sb.from('mtto_tickets').update(patch).eq('id',id).in('estado',['nuevo','validado','programado','en_proceso','pausado','resuelto']).select('id'); if(error)return toast(error.message,false);
+  if(!updc||!updc.length){ toast('Ese trabajo ya estaba cerrado ✅',false); return render(); }
   if(t.preventivo_catalogo_id){ await sb.from('mtto_preventivos_catalogo').update({ultimo_realizado:hoyMX()}).eq('id',t.preventivo_catalogo_id);
     await sb.from('mtto_preventivo_log').insert({catalogo_id:t.preventivo_catalogo_id,property_id:t.property_id,fecha:hoyMX(),por_id:ME.id,por_nombre:ME.email,minutos_reales:mins,evidencia_url:foto,nota:com||null}); }
   if(t.origen==='mto_profundo'){ await sb.from('mtto_profundo_plan').update({estado:'hecho',fecha_realizada:hoyMX(),ultimo_realizado:hoyMX()}).eq('ticket_id',id); }
   if(t.metadata&&t.metadata.prev_plan_id){ await sb.from('mtto_preventivo_plan').update({estado:'hecho',fecha_realizada:hoyMX()}).eq('id',t.metadata.prev_plan_id); }
-  await ev(id, reportado?'resuelto':'cerrado_conforme', {minutos_reales:mins,comentario:com});
-  if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Tu reporte fue atendido',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda, mira la foto y confírmalo.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
+  await ev(id, 'cerrado_conforme', {minutos_reales:mins,comentario:com});
+  if(reportado){ await sb.from('notificaciones').insert({user_id:reportado,titulo:'✅ Ya atendimos tu reporte',cuerpo:(t.titulo||'Trabajo')+' — ábrelo en Eloy Queda para ver la foto de cómo quedó.',icono:'✅',accion:{url:'/m/eloy.html',tipo:'mtto_resuelto',ticket:id},leido:false}); }
   closeModal(); toast('Terminado ✅'+(mins?' · '+fmtDur(mins):'')); render();
 };
 
