@@ -350,7 +350,7 @@
     'Ver fotos y detalle': 'See photos and details',
     'la casa y su cocina': 'the house and its kitchen',
     'tu nueva habitación': 'your new room',
-    '¿Quieres saber más?': 'Want to know more?',
+    '¿Por qué le llamamos Vnums?': 'Why do we call them Vnums?',
     'Abriendo la vitrina…': 'Opening the shop…',
     'Avisarme al teléfono': 'Notify me on my phone',
     'Contraseña copiada ✓': 'Password copied ✓',
