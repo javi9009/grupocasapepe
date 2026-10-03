@@ -290,7 +290,18 @@ function tarjeta(r){
 
   // Lo que mas importa saber de un vistazo, segun donde este parado
   let nota='';
-  if(r.etapa==='solicitud')      nota = r.entro ? 'entró, sin avance' : (r.usuario_creado?'nunca ha entrado':'sin usuario');
+  /* Contenido no hace tours ni taller ni juego: lo suyo es el plan de redes,
+     así que su avance se lee de ahí. */
+  const esCont = r.vacante==='contenido';
+  const planDice = !esCont ? '' :
+      r.plan_estado==='validado' ? 'plan validado ✓'
+    : r.plan_estado==='entregado' ? ('PLAN ENTREGADO · '+(r.plan_modalidad==='colab'?'intercambio 2 días':(r.plan_piezas||0)+' referencias')+' · te toca revisarlo')
+    : r.plan_estado==='ajustes'  ? 'le pediste ajustes'
+    : (r.plan_piezas>0 ? 'armando su plan · '+r.plan_piezas+' referencias'
+       : (r.plan_modalidad ? 'empezó su plan' : ''));
+
+  if(esCont && planDice) nota = planDice;
+  else if(r.etapa==='solicitud')      nota = r.entro ? 'entró, sin avance' : (r.usuario_creado?'nunca ha entrado':'sin usuario');
   else if(r.etapa==='preparando')nota = (r.estado==='preaprobado'?'preaprobado · ':'')+(av.join(' · ')||'empezando');
   else if(r.etapa==='fechas')    nota = 'sin contestar';
   else if(r.etapa==='carta_enviada')  nota = 'sin firmar';
@@ -317,18 +328,44 @@ async function bandeja(){
     const mex=a=>{const n=a??0;return '<span style="font-weight:700;color:'+
       (n>=7?'var(--green)':n>=5?'#8a6420':'#8f3d2a')+'">México '+n+'/10</span>';};
 
+    /* El plan de redes es TODO el avance del de contenido: no hace tours, ni
+       taller, ni juego. Así que aquí se lee su estado de un vistazo, y los que
+       ya entregaron suben arriba, que son los que piden algo de ti. */
+    const planTxt = r =>
+        r.plan_estado==='validado'  ? '<span style="color:var(--green);font-weight:700">validado ✓</span>'
+      : r.plan_estado==='entregado' ? '<span style="color:#8a6420;font-weight:700">entregado · '
+          +(r.plan_modalidad==='colab'?'intercambio 2 días':(r.plan_piezas||0)+' ref.')+'</span>'
+      : r.plan_estado==='ajustes'   ? '<span class="chk">le pediste ajustes</span>'
+      : (r.plan_piezas>0            ? '<span class="chk">armando · '+r.plan_piezas+' ref.</span>'
+      : (r.plan_modalidad           ? '<span class="chk">empezó</span>'
+      : (r.plan_estado              ? '<span class="chk">liga mandada, sin abrir</span>'
+                                    : '<span class="chk">— sin liga</span>')));
+    const pend = contacto.filter(r=>r.plan_estado==='entregado');
+    const rank = r => r.plan_estado==='entregado' ? 0 : (r.plan_estado==='ajustes' ? 1 : (r.plan_piezas>0?2:3));
+
     let h='';
+    if(pend.length){
+      h+='<div class="card" style="margin-bottom:16px;border-left:4px solid var(--green)">'+
+         '<h2>Te toca confirmar · '+pend.length+'</h2>'+
+         '<p class="sub" style="margin-bottom:10px">Entregaron su plan y están esperándote. '+
+         'Abre su ficha, mira referencia por referencia cuáles grabamos, valida el plan y mándale la carta con sus fechas.</p>'+
+         pend.map(r=>'<div class="cand" onclick="ficha(\''+r.id+'\')"><b>'+esc(r.nombre||'(sin nombre)')+'</b> '+
+           chipVac(r)+'<div class="meta">'+(r.plan_modalidad==='colab'?'intercambio de 2 días':(r.plan_piezas||0)+' referencias')+
+           (r.pide_desde?' · '+f(r.pide_desde)+(r.pide_hasta?' → '+f(r.pide_hasta):''):'')+'</div></div>').join('')+
+         '</div>';
+    }
     if(contacto.length){
       h+='<div class="card" style="margin-bottom:16px"><h2>Por contactar tú · '+contacto.length+'</h2>'+
          '<p class="sub" style="margin-bottom:10px">Éstos no entran a la app: aplicaron desde la web, '+
          'dejaron su Instagram y las fechas que quieren, y los contactas tú. El marcador de México no '+
          'los reprueba — está para que sepas con quién hablas.</p>'+
-         '<table><thead><tr><th>Candidato</th><th>Vacante</th><th>WhatsApp</th><th>Instagram</th><th>Quiere venir</th>'+
+         '<table><thead><tr><th>Candidato</th><th>Vacante</th><th>Plan de redes</th><th>WhatsApp</th><th>Instagram</th><th>Quiere venir</th>'+
          '<th>Conoce México</th><th>Abierta</th></tr></thead><tbody>';
-      contacto.sort((a,b)=>(b.quiz_aciertos??0)-(a.quiz_aciertos??0)).forEach(r=>{
+      contacto.sort((a,b)=>(rank(a)-rank(b))||((b.quiz_aciertos??0)-(a.quiz_aciertos??0))).forEach(r=>{
         h+='<tr class="row" onclick="ficha(\''+r.id+'\')"><td><b>'+esc(r.nombre||'(sin nombre)')+'</b> '+bandera(r)+
            (r.email?'<br><span class="chk">'+esc(r.email)+'</span>':'')+'</td>'+
            '<td>'+chipVac(r)+'</td>'+
+           '<td>'+(r.vacante==='contenido'?planTxt(r):'<span class="chk">—</span>')+'</td>'+
            '<td>'+(r.whatsapp?chipWa(r.whatsapp):'<span class="chk">— no lo dejó</span>')+'</td>'+
            '<td>'+(r.instagram?chipIg(r.instagram):'<span class="chk">— no lo dejó</span>')+'</td>'+
            '<td class="chk">'+(r.pide_desde?f(r.pide_desde)+(r.pide_hasta?' → '+f(r.pide_hasta):'')
@@ -411,10 +448,12 @@ async function ficha(id){
   if(j) h+='<div class="card"><h2>Juego · '+esc(j.nombre)+'</h2><p>'+esc(j.como_se_juega)+'</p>'+
     (j.por_que?'<div class="quote">'+esc(j.por_que)+'</div>':'')+'</div>';
   const fr=FILA[id]||{};
+  const esContenido = (s.vacante==='contenido');
   if(vc && vc.ruta_quiz===false){
     h+='<div class="card"><h2>Contactar</h2>'+
-       '<p class="sub" style="margin-bottom:10px">Esta vacante no pasa por la app ni por la carta compromiso. '+
-       'Escríbele tú y acuerden lo demás por fuera.</p>'+
+       '<p class="sub" style="margin-bottom:10px">'+(esContenido
+         ? 'No pasa por el quiz: su prueba es el plan de redes de aquí abajo. Mándale su liga por WhatsApp o Instagram, porque los de contenido casi nunca dejan correo.'
+         : 'Esta vacante no pasa por la app ni por la carta compromiso. Escríbele tú y acuerden lo demás por fuera.')+'</p>'+
        '<p>'+(s.whatsapp
          ? '<a class="btn" href="https://wa.me/'+encodeURIComponent(s.whatsapp)+'" target="_blank" rel="noopener">\u{1F4AC} WhatsApp '+esc(waFmt(s.whatsapp))+'</a> '
          : '<span class="chk">No dejó WhatsApp. </span>')+
@@ -424,11 +463,16 @@ async function ficha(id){
        (s.email?' <a class="btn" href="mailto:'+esc(s.email)+'">✉️ '+esc(s.email)+'</a>':'')+'</p>'+
        (s.fecha_desde?'<p class="chk">Quiere venir del <b>'+f(s.fecha_desde)+'</b>'+
           (s.fecha_hasta?' al <b>'+f(s.fecha_hasta)+'</b>':'')+'.</p>':'')+
-       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+       (esContenido?'':'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
        '<button class="btn r" onclick="resolver(\''+id+'\',\'rechazado\')">No nos sirve</button>'+
-       '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>'+
-       '<p class="msg" id="f-msg"></p></div>';
-    c.innerHTML=h; abreFicha(); return;
+       '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>')+
+       (esContenido?'':'<p class="msg" id="f-msg"></p>')+'</div>';
+    /* §plan — El de contenido sí cierra el círculo: plan de redes, y si lo
+       validas, sigue a la carta compromiso igual que los de Guest. */
+    if(esContenido){
+      h+='<div class="card" id="planCard"><h2>Plan de redes</h2>'+
+         '<p class="vacio">Cargando su plan…</p></div>';
+    } else { c.innerHTML=h; abreFicha(); return; }
   }
   h+='<div class="card"><h2>Aceptar candidato · carta compromiso</h2>'+
      '<p class="sub" style="margin-bottom:10px">Al aceptar, sus fechas quedan confirmadas y le llega su carta compromiso a SoyPepe: acepta venir bajo las condiciones de huésped de Casa Pepe y esa aceptación <b>es su check-in</b>. La carta incluye la extensión mes a mes si desbloquea 2 tours más y logra los objetivos de valoraciones y ventas.</p>'+
@@ -443,6 +487,117 @@ async function ficha(id){
      '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>'+
      '<p class="msg" id="f-msg"></p></div>';
   c.innerHTML=h; abreFicha();
+  if(document.getElementById('planCard')) planPanel(id);
+}
+
+/* ================= Plan de redes del creador de contenido =================
+   El círculo: le generas su liga -> él pega sus referencias, sus fechas y con
+   qué graba -> lo entrega -> aquí lo validas pieza por pieza -> y de ahí pasa
+   a la carta compromiso con la fecha final. */
+const PL_TIPO={venta:'Venta',engagement:'Engagement',reel:'Reel en tendencia',entrevista:'Entrevista'};
+const PL_CTA ={sincretico:'Sincrético',cpp:'Casa Pepe',cosmica:'La Cósmica',ateneo:'Ateneo'};
+let PLAN_TOKEN=null;
+
+async function planPanel(id){
+  const c=document.getElementById('planCard'); if(!c) return;
+  const d=await rpc('plan_ver',{p_solicitud_id:id});
+  if(!d||!d.ok){ c.innerHTML='<h2>Plan de redes</h2><p class="msg e">'+esc((d&&d.error)||'No se pudo cargar.')+'</p>'; return }
+
+  if(!d.hay){
+    c.innerHTML='<h2>Plan de redes</h2>'+
+      '<p class="sub" style="margin-bottom:10px">Todavía no tiene liga. Genérasela y mándasela: ahí lee qué le pedimos cada semana y entrega su plan del mes con las referencias que él encuentre.</p>'+
+      '<button class="btn g" onclick="planLiga(\''+id+'\')">Generar su liga</button>'+
+      '<p class="msg" id="pl-msg"></p>';
+    return;
+  }
+
+  const pl=d.plan||{}, pz=d.piezas||[];
+  PLAN_TOKEN=d.token;
+  const liga='https://grupocasapepe.netlify.app/plan?t='+d.token;
+  const est={borrador:['Todavía lo está llenando','w'],entregado:['Entregado, te toca revisarlo','w'],
+             validado:['Validado ✓','k'],ajustes:['Le pediste ajustes','w']}[pl.estado]||[pl.estado,''];
+
+  let h='<h2>Plan de redes</h2>'+
+    '<p class="msg '+est[1]+'">'+esc(est[0])+(pl.entregado_at?' · entregado el '+f(pl.entregado_at):'')+'</p>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'+
+      '<button class="btn" onclick="planCopia(\''+esc(liga)+'\',this)">Copiar su liga</button>'+
+      '<a class="btn" href="'+esc(liga)+'" target="_blank" rel="noopener">Abrir como él la ve</a>'+
+      '<span class="chk" style="word-break:break-all">'+esc(liga)+'</span></div>';
+
+  /* Son dos tratos distintos y se resuelven distinto: el intercambio de dos
+     días lo aprueba Javi directo, el voluntariado pasa por plan y carta. */
+  const esColab = pl.modalidad==='colab';
+  h+='<p class="msg '+(esColab?'w':'')+'" style="margin-bottom:10px"><b>'+
+     (esColab?'Intercambio de 2 días':'Voluntariado de contenido')+'</b> · '+
+     (esColab?'6 historias, una publicación colaborativa y el material en bruto. No arma plan: esto lo apruebas tú directo.'
+             :'De una semana a un mes, con plan de contenido en nuestras cuentas.')+'</p>';
+
+  h+='<div class="grid">'+
+     '<div class="kv"><b>Fechas que puso</b>'+(pl.fecha_desde?f(pl.fecha_desde)+(pl.fecha_hasta?' → '+f(pl.fecha_hasta):''):'—')+'</div>'+
+     '<div class="kv"><b>Cámara</b>'+(pl.camara===true?esc(pl.camara_modelo||'sí'):(pl.camara===false?'no':'—'))+'</div>'+
+     '<div class="kv"><b>Dron</b>'+(pl.dron===true?esc(pl.dron_modelo||'sí'):(pl.dron===false?'no':'—'))+'</div>'+
+     '<div class="kv"><b>Celular</b>'+esc(pl.celular||'—')+'</div>'+
+     '<div class="kv"><b>Edita con</b>'+esc(pl.edita_con||'—')+'</div>'+
+     '<div class="kv"><b>Instagram</b>'+(pl.instagram?('<a href="https://instagram.com/'+esc(pl.instagram)+'" target="_blank" rel="noopener">@'+esc(pl.instagram)+'</a>'+(pl.seguidores?' · '+pl.seguidores:'')):'—')+'</div>'+
+     (esColab?'':'<div class="kv"><b>Referencias</b>'+pz.length+'</div>')+'</div>';
+  if(pl.portafolio) h+='<p class="chk" style="margin-top:8px">Portafolio: <a href="'+esc(pl.portafolio)+'" target="_blank" rel="noopener">'+esc(pl.portafolio)+'</a></p>';
+
+  if(!pz.length){
+    h+=esColab
+      ? '<p class="vacio" style="margin-top:12px">El intercambio no lleva plan de referencias: con sus fechas y su Instagram ya puedes decidir.</p>'
+      : '<p class="vacio" style="margin-top:12px">Todavía no ha pegado ninguna referencia.</p>';
+  } else {
+    for(let w=1;w<=4;w++){
+      const ls=pz.filter(x=>x.semana===w); if(!ls.length) continue;
+      h+='<h3 style="margin:14px 0 6px;font-size:14px">Semana '+w+'</h3>';
+      h+=ls.map(x=>{
+        const mal = x.estado==='descartada', ok = x.estado==='aprobada';
+        return '<div class="kv" style="display:block;border-left:3px solid '+
+          (ok?'#1D6B4A':(mal?'#9E3B2E':'#d9d2c4'))+';padding-left:10px;margin-bottom:8px'+(mal?';opacity:.55':'')+'">'+
+          '<b>'+esc(PL_TIPO[x.tipo]||x.tipo)+(x.cuenta?' · '+esc(PL_CTA[x.cuenta]||x.cuenta):'')+(x.formato?' · '+esc(x.formato):'')+'</b>'+
+          '<a href="'+esc(x.url)+'" target="_blank" rel="noopener" style="word-break:break-all">'+esc(x.url)+'</a>'+
+          (x.idea?'<div class="chk" style="margin-top:3px">'+esc(x.idea)+'</div>':'')+
+          (x.nota_equipo?'<div class="chk" style="margin-top:3px"><b>Tu nota:</b> '+esc(x.nota_equipo)+'</div>':'')+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+
+            '<button class="btn g" onclick="planPieza(\''+id+'\',\''+x.id+'\',\'aprobada\')">Grabamos ésta</button>'+
+            '<button class="btn r" onclick="planPieza(\''+id+'\',\''+x.id+'\',\'descartada\')">Ésta no</button>'+
+          '</div></div>';
+      }).join('');
+    }
+  }
+
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'+
+     '<button class="btn g" onclick="planEstado(\''+id+'\',\'validado\')">✓ Validar el plan</button>'+
+     '<button class="btn" onclick="planEstado(\''+id+'\',\'ajustes\')">Pedirle ajustes</button>'+
+     '<button class="btn r" onclick="resolver(\''+id+'\',\'rechazado\')">No nos sirve</button>'+
+     '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>'+
+     '<p class="sub" style="margin-top:8px">Cuando lo valides, usa sus fechas aquí abajo para mandarle la carta compromiso. Al firmarla queda su check-in.</p>'+
+     '<p class="msg" id="pl-msg"></p>';
+  c.innerHTML=h;
+}
+
+async function planLiga(id){
+  const m=document.getElementById('pl-msg'); if(m){m.className='msg';m.textContent='Generando…';}
+  const d=await rpc('plan_liga',{p_solicitud_id:id});
+  if(!d||!d.ok){ if(m){m.className='msg e';m.textContent=(d&&d.error)||'No se pudo.';} return }
+  planPanel(id);
+}
+async function planPieza(id,piezaId,estado){
+  const d=await rpc('plan_juzgar',{p_token:PLAN_TOKEN,p:{pieza_id:piezaId,pieza_estado:estado}});
+  if(!d||!d.ok){ const m=document.getElementById('pl-msg'); if(m){m.className='msg e';m.textContent=(d&&d.error)||'No se pudo.';} return }
+  planPanel(id);
+}
+async function planEstado(id,estado){
+  let nota=null;
+  if(estado==='ajustes'){ nota=prompt('¿Qué le pides que cambie? Lo verá al abrir su liga.'); if(nota===null) return; }
+  const d=await rpc('plan_juzgar',{p_token:PLAN_TOKEN,p:{estado:estado,nota_para_el:nota||''}});
+  if(!d||!d.ok){ const m=document.getElementById('pl-msg'); if(m){m.className='msg e';m.textContent=(d&&d.error)||'No se pudo.';} return }
+  planPanel(id); bandeja();
+}
+function planCopia(liga,btn){
+  const t=btn.textContent;
+  try{ navigator.clipboard.writeText(liga).then(()=>{btn.textContent='¡Copiada!';setTimeout(()=>btn.textContent=t,1400);}); }
+  catch(e){ prompt('Copia la liga:', liga); }
 }
 /* ---------- ver la carta antes de mandarla ---------- */
 async function verCarta(id){
