@@ -23,7 +23,20 @@ window.sincCargando = (function () {
 
   var SB  = 'https://rehophywchakfapivsbh.supabase.co';
   var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-  var ST  = '/img/apepe/stickers/';
+  /* LOS STICKERS, VISTOS DESDE casapepe.mx. 3-oct-2026.
+     Esto era '/img/apepe/stickers/' a pelo, y el escaparate tambien se
+     sirve por casapepe.mx/sincretico/, donde /img/ no existe: los cinco
+     stickers de la espera salian 404 y el huesped veia huecos mientras
+     carga. Se cuelga de la carpeta de este mismo archivo, que es la que
+     el otro sitio si tiene mapeada; la regla /sinc/img/apepe/* de
+     _redirects cierra el circulo por las dos puertas. */
+  var ST  = (function(){
+    try{
+      var sc=document.currentScript&&document.currentScript.src;
+      if(sc) return sc.replace(/[^/]*$/,'')+'img/apepe/stickers/';
+    }catch(_){}
+    return '/img/apepe/stickers/';
+  })();
 
   /* Arranque: lo mínimo para que la primera pintada no sea un hueco. En cuanto
      responde la tabla, esto se sustituye. */
