@@ -289,5 +289,9 @@ window.sincVitrina = (function () {
     return { filas: orden.length, items: items.length };
   }
 
-  return { monta: monta, ficha: ficha, tapa: tapa, cuando: cuando, money: money };
+  /* `estilo` se exporta para que otra pantalla pueda usar la misma tarjeta sin
+     montar una vitrina entera: la ficha publica de una productora enseña sus
+     eventos, y tienen que verse igual que en el escaparate. */
+  return { monta: monta, ficha: ficha, tapa: tapa, cuando: cuando,
+           money: money, estilo: estilo, mini: mini };
 })();
