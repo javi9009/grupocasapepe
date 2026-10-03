@@ -112,6 +112,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
 .tarj .falta{font-size:11px;color:var(--muted);line-height:1.35}
 </style>
 <link rel="icon" type="image/png" href="/dash-192.png">
+<script src="/sinc-crop.js" defer></script>
 </head><body>
 <div class="top">
   <h1>🎭 Eventos, calendario y espacios</h1>
@@ -191,6 +192,20 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       </div>
       <div class="fld" style="margin-top:10px"><label>Descripción</label><textarea id="edvDesc" rows="2" style="width:100%"></textarea></div>
       <label class="mini" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="edvGratis" style="width:auto"> <b>Es gratis</b> — necesita validación para publicarse</label>
+      <!-- FOTOS Y VIDEO. Javi, 3-oct: el candado pide al menos una foto para
+           poner un evento a la venta, y aqui no habia donde ponerla. Se usa el
+           mismo recortador de Sincretico (sinc-crop) y se puede traer de una
+           liga -Drive incluido-, que la descarga el servidor porque desde la
+           pagina no se puede bajar de otro dominio. -->
+      <div style="margin-top:14px;border-top:1px solid var(--line,#E6DFD6);padding-top:12px">
+        <div class="mini" style="margin-bottom:6px"><b>Fotos y video</b> — la primera es la portada. Sin al menos una, no se puede publicar.</div>
+        <div id="edvFotos" style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:9px"></div>
+        <div class="barra" style="gap:8px;flex-wrap:wrap;margin:0">
+          <button class="btn ghost sm" id="edvFotoSubir" type="button">＋ Subir y recortar</button>
+          <button class="btn ghost sm" id="edvFotoLiga" type="button">Traer de una liga</button>
+          <input type="file" id="edvFotoFile" accept="image/*,video/*" multiple style="display:none">
+        </div>
+      </div>
       <div style="margin-top:12px"><div class="mini" style="margin-bottom:5px">Cómo va quedando</div><div class="semaf" id="edvSem"></div></div>
       <div class="barra" style="margin:14px 0 0;flex-wrap:wrap;gap:8px">
         <button class="btn" id="edvGuarda">Guardar cambios</button>
@@ -320,6 +335,10 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     {k:'precio',l:'$',t:'Precio o gratis',ok:function(e){return !!e.es_gratis||Number(e.precio||0)>0;}},
     {k:'cupo',l:'C',t:'Cupo',ok:function(e){return Number(e.cupo||e.aforo||0)>0;}},
     {k:'texto',l:'D',t:'Descripción',ok:function(e){return !!(e.descripcion&&String(e.descripcion).trim());}},
+    /* La foto estaba en el candado de la base pero no en el semaforo, asi que
+       la ficha salia toda en verde y al pulsar Publicar rebotaba sin aviso.
+       Un semaforo que no mira lo mismo que la puerta es peor que no tenerlo. */
+    {k:'foto',l:'📷',t:'Al menos una foto',ok:function(e){return !!(e.fotos&&e.fotos.length);}},
     {k:'validado',l:'V',t:'Validado (evento gratis)',ok:function(e){return !!e.validado_at;},aplica:function(e){return !!e.es_gratis;}},
     {k:'publicado',l:'P',t:'Publicado / realizado',ok:function(e){return e.estado==='publicado'||e.estado==='realizado';}}
   ];
@@ -491,8 +510,57 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   var evEdit=null;
   function edvTipo(){var v=$('edvTipo').value;for(var i=0;i<TIPOS.length;i++)if(TIPOS[i][0]===v)return TIPOS[i];return TIPOS[0];}
   function edvForma(){var o=edvTipo()[2];$('edvWHasta').style.display=o.rango?'':'none';$('edvLbDesde').textContent=o.rango?'Desde':'Fecha';}
+  /* ---------- FOTOS DEL EVENTO (panel) ---------- */
+  /* Se reutiliza sinc-crop, el mismo recortador de la ficha de experiencia, y
+     la funcion prod-foto, que ya sabia atender a la productora desde su portal
+     y ahora tambien al equipo con su sesion. Una sola puerta para los dos. */
+  var EVFOTOS=[];
+  function sesTok(){
+    try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i);
+      if(k&&/sb-.*-auth-token/.test(k)){ var v=JSON.parse(localStorage.getItem(k)||'null');
+        var x=v&&(v.currentSession||v); if(x&&x.access_token) return x.access_token; } } }catch(_){}
+    return KEY;
+  }
+  async function fotoApi(cuerpo){
+    var r=await fetch(SB+'/functions/v1/prod-foto',{method:'POST',
+      headers:{'apikey':KEY,'Authorization':'Bearer '+sesTok(),'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign({evento_id:evEdit&&evEdit.id},cuerpo))});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok||!j||j.error) throw new Error((j&&j.error)||('no se pudo ('+r.status+')'));
+    return j;
+  }
+  function pintaEvFotos(){
+    var c=$('edvFotos'); if(!c) return;
+    if(!EVFOTOS.length){ c.innerHTML='<div class="mini" style="color:var(--muted,#6E665C)">Todavía sin fotos.</div>'; return; }
+    c.innerHTML=EVFOTOS.map(function(f,i){
+      var esVideo=(f.tipo==='video');
+      return '<div style="position:relative;width:112px">'+
+        (esVideo
+          ? '<video src="'+esc(f.url)+'" muted style="width:112px;height:84px;object-fit:cover;border-radius:8px;display:block;background:#000"></video>'
+          : '<img src="'+esc(f.url)+'" alt="" style="width:112px;height:84px;object-fit:cover;border-radius:8px;display:block">')+
+        (i===0?'<span style="position:absolute;left:4px;bottom:4px;background:rgba(30,26,22,.82);color:#fff;font-size:9.5px;padding:1px 6px;border-radius:99px">PORTADA</span>':'')+
+        '<button type="button" data-quita="'+esc(f.url)+'" title="Quitar" style="position:absolute;top:3px;right:3px;'+
+          'width:20px;height:20px;border-radius:50%;border:0;background:rgba(30,26,22,.78);color:#fff;cursor:pointer;line-height:1;font-size:13px">×</button>'+
+        (i>0?'<button type="button" data-port="'+esc(f.url)+'" title="Hacerla portada" style="position:absolute;top:3px;left:3px;'+
+          'border:0;background:rgba(30,26,22,.78);color:#fff;cursor:pointer;border-radius:99px;font-size:9.5px;padding:2px 6px">portada</button>':'')+
+      '</div>';
+    }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('[data-quita]'),function(b){
+      b.onclick=async function(){ try{ var j=await fotoApi({quitar:b.getAttribute('data-quita')});
+        EVFOTOS=j.fotos||[]; pintaEvFotos(); toast('Quitada'); }catch(x){ toast(x.message,true); } };
+    });
+    Array.prototype.forEach.call(c.querySelectorAll('[data-port]'),function(b){
+      b.onclick=async function(){
+        var u=b.getAttribute('data-port');
+        var ord=[u].concat(EVFOTOS.map(function(f){return f.url;}).filter(function(x){return x!==u;}));
+        try{ var j=await fotoApi({orden:ord}); EVFOTOS=j.fotos||[]; pintaEvFotos(); }
+        catch(x){ toast(x.message,true); }
+      };
+    });
+  }
   function abreEvt(e){
     if(!e)return;evEdit=e;
+    EVFOTOS=Array.isArray(e.fotos)?e.fotos:[]; pintaEvFotos();
     $('edvProd').innerHTML='<option value="">Casa Pepe · es nuestro</option>'+PROD.map(function(p){return '<option value="'+p.id+'">'+esc(p.nombre_comercial||'(sin nombre)')+'</option>';}).join('');
     $('edvEsp').innerHTML='<option value="">— sin sala —</option>'+ESP.filter(function(x){return x.activo||x.id===e.espacio_id;}).map(function(x){return '<option value="'+x.id+'">'+esc(x.nombre)+'</option>';}).join('');
     $('edvTipo').innerHTML=TIPOS.map(function(t){return '<option value="'+t[0]+'">'+esc(t[1])+'</option>';}).join('');
@@ -695,6 +763,55 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   $('nvProd').onchange=function(){$('nvTit').textContent='Nuevo evento de '+nomDueno($('nvProd').value);};
   $('edvTipo').onchange=function(){edvForma();pintaSemForm('edv');if($('edvFianzaN'))$('edvFianzaN').innerHTML=fianzaTxt(edvTipo()[2]);};$('edvCerrar').onclick=cierraEvt;
   $('edvGuarda').onclick=function(){edvSave(null,'Cambios guardados');};
+  /* Subir con recorte: sinc-crop devuelve el blob ya encuadrado, y de ahi va a
+     la misma funcion. Un video no se recorta: se manda tal cual. */
+  if($('edvFotoSubir')) $('edvFotoSubir').onclick=function(){ $('edvFotoFile').click(); };
+  if($('edvFotoFile')) $('edvFotoFile').onchange=async function(){
+    var files=Array.prototype.slice.call(this.files||[]); this.value='';
+    if(!files.length||!evEdit) return;
+    for(var i=0;i<files.length;i++){
+      var f=files[i];
+      try{
+        toast('Subiendo '+(i+1)+' de '+files.length+'…');
+        var dataUri;
+        if((f.type||'').indexOf('video')===0 || !window.sincCrop){
+          dataUri=await new Promise(function(res,rej){
+            var fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.onerror=rej;
+            fr.readAsDataURL(f); });
+        }else{
+          var blob=await new Promise(function(res){
+            sincCrop.open(f,{titulo:'Acomoda la foto del evento'},function(r){
+              res((r&&(r.hBlob||r.vBlob))||null); });
+          });
+          if(!blob){ continue; }   /* cerro el recortador: ni error ni foto */
+          dataUri=await new Promise(function(res,rej){
+            var fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.onerror=rej;
+            fr.readAsDataURL(blob); });
+        }
+        var j=await fotoApi({imagen:dataUri});
+        EVFOTOS=j.fotos||[]; pintaEvFotos();
+      }catch(x){ toast(x.message||'No se pudo subir',true); break; }
+    }
+    toast('Listo');
+  };
+
+  /* Traer de una liga: la descarga el SERVIDOR. Desde la pagina no se puede
+     bajar de otro dominio, y una liga de Drive ni siquiera devuelve el archivo
+     -hay que pedirlo por su id-, que es lo que ya resolvia sinc-media-traer. */
+  if($('edvFotoLiga')) $('edvFotoLiga').onclick=async function(){
+    if(!evEdit) return;
+    var t=prompt('Pega la liga de la foto o el video.\nVale una liga de Drive, o varias separadas por coma.');
+    if(!t) return;
+    var ligas=t.split(/[\s,]+/).filter(Boolean);
+    if(!ligas.length) return;
+    try{
+      toast('Trayéndola…');
+      var j=await fotoApi({ligas:ligas});
+      EVFOTOS=j.fotos||[]; pintaEvFotos();
+      toast(j.fallaron ? ('Algunas no se pudieron: '+(j.detalle||[]).join(' · ')) : 'Listo', !!j.fallaron);
+    }catch(x){ toast(x.message||'No se pudo traer',true); }
+  };
+
   $('edvValidar').onclick=function(){edvSave({estado:'confirmado',requiere_validacion:false,validado_at:new Date().toISOString()},'Validado y confirmado');};
   $('edvPublicar').onclick=function(){if(evEdit&&evEdit.es_gratis&&!evEdit.validado_at){toast('Un evento gratis se valida antes de publicar.',true);return;}edvSave({estado:'publicado'},'Publicado');};
   $('edvCancelEvt').onclick=function(){if(!confirm('¿Cancelar este evento? La sala queda libre.'))return;edvSave({estado:'cancelado'},'Evento cancelado · sala libre');};
