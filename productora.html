@@ -126,6 +126,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       '<button data-f="esencial" aria-selected="true">Lo esencial</button>'+
       '<button data-f="cuando">Cuándo y dónde</button>'+
       '<button data-f="cobro">Cobro</button>'+
+      '<button data-f="fotos">Fotos</button>'+
       '<button data-f="extra" id="fnavExtra" style="display:none">Agenda y boletos</button>'+
     '</div>'+
     // ESENCIAL
@@ -172,6 +173,18 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       '</div>'+
       '<label class="chk" style="margin-top:8px"><input type="checkbox" id="ev-gratis"> <b>Es gratis</b> (pasa por autorización de Casa Pepe antes de publicarse)</label>'+
     '</div>'+
+    // FOTOS
+    /* Javi, 3-oct: sin foto no se aprueba. Y hasta hoy no habia por donde
+       subirla: el portal entra con token, no con sesion, asi que no puede
+       escribir en el almacen. Lo hace la funcion prod-foto, que valida el
+       token y sube con la llave de servicio. */
+    '<div class="fsec" data-fs="fotos">'+
+      '<div class="hint" id="fotoAviso">La primera foto es la que se ve en la tarjeta. '+
+        'Sin al menos una, el evento no se puede poner a la venta.</div>'+
+      '<div id="fotoLista" style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0"></div>'+
+      '<input type="file" id="fotoFile" accept="image/*" multiple style="display:none">'+
+      '<button class="btn ghost sm" id="fotoMas" type="button">＋ Subir foto</button>'+
+    '</div>'+
     // EXTRA (agenda / precios)
     '<div class="fsec" data-fs="extra">'+
       '<div data-ef="agenda" style="margin-bottom:14px"><b style="font-family:Oswald">Agenda de ponencias</b>'+
@@ -194,6 +207,9 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     Array.prototype.forEach.call(document.querySelectorAll('[data-tier]'),function(c){c.onclick=function(){PR.push({nombre:c.getAttribute('data-tier'),precio:null,cupo:null});renPr();};});
     $('fCancel').onclick=function(){$('fichaHost').innerHTML='';};
     $('fGuardar').onclick=guardar;
+    if($('fotoMas')) $('fotoMas').onclick=function(){ $('fotoFile').click(); };
+    if($('fotoFile')) $('fotoFile').onchange=function(){ subeFotos(this.files); this.value=''; };
+    if($('ev-espacio')) $('ev-espacio').onchange=infoEspacio;
   }
   /* Las salas que puede pedir, y solo esas. Si su giro le da una sola, se
      elige sola: no hay nada que decidir. */
@@ -248,9 +264,10 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     Array.prototype.forEach.call($('prBody').querySelectorAll('[data-pr]'),function(el){el.onchange=function(){var v=el.value;if(el.getAttribute('data-f')!=='nombre')v=v===''?null:Number(v);PR[+el.getAttribute('data-pr')][el.getAttribute('data-f')]=v;};});
     Array.prototype.forEach.call($('prBody').querySelectorAll('[data-prdel]'),function(b){b.onclick=function(){PR.splice(+b.getAttribute('data-prdel'),1);renPr();};});}
   function openFicha(){$('fichaHost').innerHTML=fichaHTML();wire();window.scrollTo({top:$('fichaHost').offsetTop-8,behavior:'smooth'});}
-  function nuevo(){evCur=null;AG=[];PR=[];openFicha();$('fTit').textContent='Nuevo evento';$('evTipo').value='reserva_horas';filtra();renAg();renPr();}
+  function nuevo(){evCur=null;AG=[];PR=[];FOTOS=[];openFicha();$('fTit').textContent='Nuevo evento';$('evTipo').value='reserva_horas';filtra();renAg();renPr();pintaFotos();}
   async function abre(id){
     evCur=EV.filter(function(e){return e.id===id;})[0];if(!evCur)return;AG=[];PR=[];openFicha();$('fTit').textContent='Editar evento';
+    FOTOS=Array.isArray(evCur.fotos)?evCur.fotos:[];
     $('evTipo').value=evCur.tipo||'reserva_horas';
     $('ev-nombre').value=evCur.nombre||'';$('ev-desc').value=evCur.descripcion||'';
     /* La sala guardada puede venir del campo viejo de texto libre; se busca por
@@ -278,13 +295,75 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     $('ev-gratis').checked=!!evCur.es_gratis;
     var ra=await fetch(SB+'/rest/v1/evento_agenda?select=*&evento_id=eq.'+id+'&order=orden',{headers:hdrs()});AG=ra.ok?await ra.json():[];
     var rp=await fetch(SB+'/rest/v1/evento_precios?select=*&evento_id=eq.'+id+'&order=orden',{headers:hdrs()});PR=rp.ok?await rp.json():[];
-    filtra();renAg();renPr();
+    filtra();renAg();renPr();pintaFotos();
   }
   function combinaFH(f,h){if(!f)return null;return h?(f+'T'+h+':00'):(f+'T00:00:00');}
   /* NO SE MANDA UN EVENTO SIN DECIR DONDE NI CUANDO. 3-oct-2026.
      «Enviar a Casa Pepe» aceptaba cualquier cosa, incluida nada: por eso habia
      seis eventos esperando aprobacion SIN FECHA DE INICIO. Aprobar uno de esos
      no reserva nada, porque no hay nada que reservar. */
+  /* ---------- LAS FOTOS ---------- */
+  var FOTOS=[];
+  function pintaFotos(){
+    var c=$('fotoLista'), av=$('fotoAviso'), bt=$('fotoMas');
+    if(!c) return;
+    if(!evCur||!evCur.id){
+      c.innerHTML='';
+      if(av) av.textContent='Guarda el evento primero y aqui mismo le subes las fotos.';
+      if(bt) bt.disabled=true;
+      return;
+    }
+    if(bt) bt.disabled=false;
+    if(av) av.textContent=FOTOS.length
+      ? 'La primera es la que se ve en la tarjeta. Toca una para quitarla.'
+      : 'Sin al menos una foto, el evento no se puede poner a la venta.';
+    c.innerHTML=FOTOS.map(function(f,i){
+      return '<button type="button" class="fth" data-quitar="'+esc(f.url)+'" '+
+        'title="Quitar esta foto" style="position:relative;width:104px;height:78px;padding:0;'+
+        'border:1px solid var(--line,#E6DFD6);border-radius:9px;overflow:hidden;cursor:pointer;'+
+        'background:#F4EFE8">'+
+        '<img src="'+esc(f.url)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block">'+
+        (i===0?'<span style="position:absolute;left:4px;bottom:4px;background:rgba(30,26,22,.8);'+
+               'color:#fff;font-size:9.5px;padding:1px 6px;border-radius:99px">PORTADA</span>':'')+
+        '</button>';
+    }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('[data-quitar]'),function(b){
+      b.onclick=function(){ quitaFoto(b.getAttribute('data-quitar')); };
+    });
+  }
+  async function fotoRpc(cuerpo){
+    var r=await fetch(SB+'/functions/v1/prod-foto',{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},hdrs()),
+      body:JSON.stringify(Object.assign({token:TOK,evento_id:evCur&&evCur.id},cuerpo))});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok||!j||j.error) throw new Error((j&&j.error)||('la foto no subio ('+r.status+')'));
+    return j;
+  }
+  async function subeFotos(files){
+    if(!files||!files.length) return;
+    if(!evCur||!evCur.id){ toast('Guarda el evento primero.',true); return; }
+    var lista=Array.prototype.slice.call(files).filter(function(f){
+      return (f.type||'').indexOf('image')===0; });
+    if(!lista.length){ toast('Eso no es una imagen.',true); return; }
+    for(var i=0;i<lista.length;i++){
+      try{
+        toast('Subiendo '+(i+1)+' de '+lista.length+'…');
+        var dataUri=await new Promise(function(res,rej){
+          var fr=new FileReader();
+          fr.onload=function(){res(fr.result);}; fr.onerror=rej;
+          fr.readAsDataURL(lista[i]);
+        });
+        var j=await fotoRpc({imagen:dataUri});
+        FOTOS=j.fotos||[]; pintaFotos();
+      }catch(e){ toast(e.message||'No se pudo subir',true); break; }
+    }
+    toast('Listo');
+  }
+  async function quitaFoto(url){
+    try{ var j=await fotoRpc({quitar:url}); FOTOS=j.fotos||[]; pintaFotos(); toast('Quitada'); }
+    catch(e){ toast(e.message||'No se pudo quitar',true); }
+  }
+
   function faltaPara(F){
     var falta=[];
     if(!$('ev-nombre').value.trim())            falta.push('como se llama');
@@ -347,7 +426,19 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       var r=await rpc('prod_portal_evento',{p_token:TOK,p_id:evCur?evCur.id:null,p_evento:ev,p_agenda:ag,p_precios:pr});
       if(!r||!r.ok)throw new Error((r&&r.error)||'error');
       toast('Enviado a Casa Pepe');$('fichaHost').innerHTML='';
+      var eraNuevo=!(evCur&&evCur.id);
       EV=await rpc('prod_portal_eventos',{p_token:TOK});renTabla();
+      /* Un evento nuevo necesita existir antes de poder colgarle fotos. En vez
+         de mandarlo de vuelta a la tabla y que lo busque, se le reabre ya
+         guardado y directo en Fotos, que es lo unico que le falta. */
+      if(eraNuevo && r && r.id){
+        try{
+          await abre(r.id);
+          var b=document.querySelector('#fnav button[data-f="fotos"]'); if(b)b.click();
+          toast('Guardado. Ahora subele una foto.');
+          return;
+        }catch(_){}
+      }
     }catch(e){ toast('No se pudo enviar',true); }
     $('fGuardar').disabled=false;
   }
