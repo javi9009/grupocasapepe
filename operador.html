@@ -333,7 +333,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       <div class="hint">Lo que el huésped ve primero en la recepción y en el concierge.</div>
       <div class="fgrid">
         <div class="fld ancho"><label>¿Cómo se llama?</label><input data-e="nombre" maxlength="70" placeholder="Centro Histórico a pie"><div class="ay">Corto y claro. Nada de mayúsculas de gritar.</div></div>
-        <div class="fld"><label>Tipo</label><select data-e="categoria"></select></div>
+        <!-- CATEGORIA Y TIPO, DEL CATALOGO. 3-oct-2026.
+             Aqui habia diez valores escritos a mano («A pie», «Gastronomico»,
+             «Nocturno»...) y en la ficha interna habia OTROS catorce que no se
+             parecian en nada. Dos listas distintas para lo mismo: por eso las
+             etiquetas se cruzaban despues en la galeria. Ahora las dos leen
+             exp_categorias y exp_tipos. -->
+        <div class="fld"><label>Categoría</label><select data-e="categoria_slug"></select></div>
+        <div class="fld"><label>Tipo</label><select data-e="tipo_slug"></select></div>
         <div class="fld"><label>¿Cuánto dura?</label><select data-e="duracion_min"></select></div>
         <div class="fld"><label>Edad mínima</label><select data-e="edad_minima"></select></div>
         <div class="fld ancho"><label>Una línea que la venda</label><input data-e="resumen" maxlength="120" placeholder="Del Zócalo al Templo Mayor con quien creció ahí"><div class="ay">Máximo 120 caracteres.</div></div>
@@ -787,6 +794,42 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   var HORAS=['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00','22:00'];
   var INCLUYE=['Guía','Transporte','Entradas','Comida','Bebida','Degustación','Seguro','Equipo','Souvenir','Fotos'];
   var LLEVAR=['Zapato cómodo','Protector solar','Gorra','Agua','Identificación','Efectivo','Ropa abrigada','Impermeable'];
+
+  /* ---------- LA TAXONOMIA, DEL CATALOGO ----------
+     Dos niveles: la CATEGORIA manda la fila en la galeria de Sincretico, el
+     TIPO afina. Se leen de la base, no de una lista escrita aqui. */
+  var TAXC=[], TAXT=[];
+  async function taxonomiaCarga(){
+    try{
+      var r=await Promise.all([
+        fetch(SB+'/rest/v1/exp_categorias?select=slug,nombre,orden&activo=is.true&order=orden',
+          {headers:{apikey:KEY,Authorization:'Bearer '+KEY}}),
+        fetch(SB+'/rest/v1/exp_tipos?select=slug,categoria_slug,nombre,orden&activo=is.true&order=orden',
+          {headers:{apikey:KEY,Authorization:'Bearer '+KEY}})
+      ]);
+      TAXC=r[0].ok?await r[0].json():[];
+      TAXT=r[1].ok?await r[1].json():[];
+    }catch(_){ TAXC=[]; TAXT=[]; }
+  }
+  function taxTipos(){
+    var c=document.querySelector('[data-e="categoria_slug"]');
+    var t=document.querySelector('[data-e="tipo_slug"]');
+    if(!c||!t)return;
+    var sel=t.value;
+    var l=TAXT.filter(function(x){return x.categoria_slug===c.value;});
+    t.innerHTML='<option value="">—</option>'+l.map(function(x){
+      return '<option value="'+esc(x.slug)+'">'+esc(x.nombre)+'</option>';}).join('');
+    if(sel && l.some(function(x){return x.slug===sel;})) t.value=sel;
+    t.disabled=!l.length;
+  }
+  function taxonomiaMonta(){
+    var c=document.querySelector('[data-e="categoria_slug"]');
+    if(!c)return;
+    c.innerHTML='<option value="">—</option>'+TAXC.map(function(x){
+      return '<option value="'+esc(x.slug)+'">'+esc(x.nombre)+'</option>';}).join('');
+    c.onchange=taxTipos;
+    taxTipos();
+  }
 
   function opts(sel,arr,vacio){
     var el=document.querySelector('[data-e="'+sel+'"]');if(!el)return;
@@ -1725,6 +1768,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           +'<br><br>Si eres del equipo de Grupo Casa Pepe, entra en <a href="/" style="font-weight:700">grupocasapepe.netlify.app</a>.'
           +'<br>Si operas experiencias con nosotros y deberías tener acceso, escríbenos.', true);return;}
     $('entrar').style.display='none';$('app').style.display='block';
+    /* La taxonomía antes de montar: si llegara después, los dos desplegables
+       saldrían vacíos justo cuando se mira la ficha. */
+    await taxonomiaCarga();
     montaEditor();
     await detalle();
     await stripeDeVuelta();   /* si venimos de Stripe, cerrar la vinculacion */
@@ -2273,7 +2319,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
   /* ---------- editor de experiencia ---------- */
   function montaEditor(){
-    opts('categoria',CAT);
+    taxonomiaMonta();
     opts('duracion_min',DUR);
     opts('edad_minima',EDAD);
     opts('cupo_min',CUPO);
@@ -2376,6 +2422,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(['duracion_min','edad_minima','cupo_min','cupo_max','precio_adulto','precio_menor'].indexOf(c)>=0)b[c]=v===''?null:Number(v);
       else b[c]=v===''?null:v;
     });
+    /* `categoria` (texto heredado) se mantiene al dia: hay pantallas que
+       todavia lo leen. Y deja de estar marcada como siembra. */
+    if(b.categoria_slug){
+      var _c=TAXC.filter(function(x){return x.slug===b.categoria_slug;})[0];
+      if(_c) b.categoria=_c.nombre;
+      b.taxonomia_siembra=false;
+    }
     b.idiomas=leeChips('chIdiomas');b.dias=leeChips('chDias');b.horas=leeChips('chHoras');
     b.incluye=leeChips('chIncluye');b.que_llevar=leeChips('chLlevar');
     return b;

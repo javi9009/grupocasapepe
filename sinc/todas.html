@@ -194,18 +194,24 @@ body{padding-bottom:64px}
       <div class="cabh"><h2 data-i18n>Filtros</h2>
         <button class="cerrar" id="bCerrar" data-i18n-aria="Cerrar" aria-label="Cerrar">×</button></div>
       <div class="dentro">
-        <div class="grupo"><h3 data-i18n>Tipo de plan</h3><div class="tiras" id="fFam"></div></div>
-        <div class="grupo"><h3 data-i18n>Tipología</h3><div class="tiras" id="fTip"></div></div>
-        <div class="grupo"><h3 data-i18n>Precio por persona</h3>
-          <div class="precio">
-            <input type="range" id="fPre" min="0" max="100" value="100">
-            <span class="val" id="preVal" data-i18n>Cualquiera</span>
-          </div>
-        </div>
+        <!-- EL ORDEN DE LOS FILTROS LO DICTO JAVI, 3-oct-2026: «por categoria de
+             experiencia y luego viene el tipo de experiencia o impacto, fecha y
+             el resto de filtros». Antes ponia primero «Tipo de plan» y
+             «Tipologia», dos nombres distintos para lo mismo que ademas se
+             calculaban al leer y se cruzaban entre si. -->
+        <div class="grupo"><h3 data-i18n>Categoría</h3><div class="tiras" id="fFam"></div></div>
+        <div class="grupo"><h3 data-i18n>Tipo</h3><div class="tiras" id="fTip"></div></div>
+        <div class="grupo"><h3 data-i18n>Impacto</h3><div class="tiras" id="fOds"></div></div>
         <div class="grupo"><h3 data-i18n>Cuándo</h3>
           <div class="dia">
             <div class="tiras" id="fCuando" style="flex:0 0 auto"></div>
             <input type="date" id="fFecha">
+          </div>
+        </div>
+        <div class="grupo"><h3 data-i18n>Precio por persona</h3>
+          <div class="precio">
+            <input type="range" id="fPre" min="0" max="100" value="100">
+            <span class="val" id="preVal" data-i18n>Cualquiera</span>
           </div>
         </div>
       </div>
@@ -258,7 +264,17 @@ var CODIGO=(function(){var q=(P.get('c')||'').trim();
 var QC=CODIGO?'&c='+encodeURIComponent(CODIGO):'';
 
 var CAT=[], TOPE=0, SALIDAS=null;
-var F={q:'',fam:'Todo',tip:'Todo',pre:null,cuando:'',fecha:'',orden:'reco'};
+/* La categoria puede venir en la liga: es el «Ver todas →» de cada fila del
+   escaparate. Y el hotel, si lo hay, recorta el catalogo a SU buffet. */
+var P0=new URLSearchParams(location.search);
+var HOTEL=(function(){
+  var h=(P0.get('h')||'').trim().toLowerCase();
+  if(['no','0','casapepe','casa-pepe','ninguno'].indexOf(h)>=0) h='';
+  if(!h){ try{ var m=window.apepeMarca&&window.apepeMarca.marca(); if(m&&m.slug)h=m.slug; }catch(_){} }
+  return h||null;
+})();
+var BUFFET=null;   // null = sin buffet; array de ids = solo esos
+var F={q:'',fam:'Todo',tip:'Todo',ods:'Todo',pre:null,cuando:'',fecha:'',orden:'reco'};
 
 function $(i){return document.getElementById(i);}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
@@ -338,6 +354,14 @@ function pintaChips(){
   }
   tira('fFam',fam,'fam');
   tira('fTip',tip,'tip');
+  /* El impacto es el otro eje del segundo nivel que pidio Javi. Sale de los
+     grupos de ODS que ya trae el catalogo; si ninguna ficha tiene impacto
+     medido, la tira no se enseña en vez de quedarse vacia. */
+  var ods=[];
+  CAT.forEach(function(e){ (e.ods_grupos||[]).forEach(function(g){ if(ods.indexOf(g)<0)ods.push(g); }); });
+  ods.sort();
+  if(ods.length){ tira('fOds',ods,'ods'); $('fOds').parentNode.style.display=''; }
+  else { $('fOds').parentNode.style.display='none'; }
 
   var CU=[['',T('Cualquier día')],['hoy',T('Hoy')],['manana',T('Mañana')],['semana',T('Esta semana')]];
   $('fCuando').innerHTML=CU.map(function(c){
@@ -359,8 +383,10 @@ function pasa(e){
       .concat(fams(e)).filter(Boolean).join(' ').toLowerCase();
     if(texto.indexOf(q)<0)return false;
   }
+  if(BUFFET&&BUFFET.indexOf(String(e.id))<0)return false;
   if(F.fam!=='Todo'&&fams(e).indexOf(F.fam)<0)return false;
   if(F.tip!=='Todo'&&e.tipologia!==F.tip)return false;
+  if(F.ods!=='Todo'&&(e.ods_grupos||[]).indexOf(F.ods)<0)return false;
   if(F.pre!=null&&F.pre<TOPE){
     if(e.pvp_adulto==null)return false;
     if(Number(e.pvp_promo!=null?e.pvp_promo:e.pvp_adulto)>F.pre)return false;
@@ -482,6 +508,27 @@ async function arranca(){
   var carga=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Trayendo el catálogo…'):'Trayendo el catálogo…')});
   try{ CAT=await rpc('sinc_catalogo_sede',{p_dias:120,p_ciudad:SEDE,p_prueba:PRUEBA})||[]; }
   catch(x){ carga.para(); $('cargando').textContent=T('No pudimos cargar el catálogo. ')+x.message; return; }
+  /* Con hotel delante, el huesped ve SOLO el buffet que su hotel escogio, igual
+     que en el escaparate. Se pregunta a la misma funcion para no tener dos
+     ideas distintas de que entra y que no. */
+  if(HOTEL){
+    try{
+      var bf=await rpc('sinc_escaparate',{p_hotel:HOTEL,p_dias:120,p_ciudad:SEDE,p_prueba:PRUEBA})||[];
+      var ids=bf.filter(function(x){return x.fuente==='experiencia';}).map(function(x){return String(x.id);});
+      if(ids.length) BUFFET=ids;
+    }catch(_){}
+  }
+  /* La categoria del «Ver todas →» de la fila. Llega por slug; se traduce al
+     nombre, que es con lo que se filtra aqui. */
+  var catPedida=(P0.get('cat')||'').trim();
+  if(catPedida){
+    try{
+      var r=await fetch(SB+'/rest/v1/exp_categorias?select=slug,nombre&slug=eq.'+encodeURIComponent(catPedida),
+        {headers:{apikey:KEY,Authorization:'Bearer '+KEY}});
+      var c=r.ok?(await r.json()):[];
+      if(c[0]&&c[0].nombre) F.fam=c[0].nombre;
+    }catch(_){}
+  }
   try{ await sincI18n.aplica('op_experiencias',CAT); }catch(_){}
   /* La promo va pegada a la fila de la experiencia y con otro nombre de campo,
      asi que se pide aparte: si no, la tarjeta salia en ingles con el gancho
@@ -510,7 +557,7 @@ async function arranca(){
   $('fPre').oninput=function(){ F.pre=precioDe(Number(this.value)); pinta(); };
   $('fOrden').onchange=function(){ F.orden=this.value; pinta(); };
   $('bLimpia').onclick=function(){
-    F={q:F.q,fam:'Todo',tip:'Todo',pre:TOPE,cuando:'',fecha:'',orden:F.orden};
+    F={q:F.q,fam:'Todo',tip:'Todo',ods:'Todo',pre:TOPE,cuando:'',fecha:'',orden:F.orden};
     $('fPre').value=100; $('fFecha').value=''; SALIDAS=null; pinta();
   };
   $('bFiltros').onclick=function(){ abreHoja(true); };
