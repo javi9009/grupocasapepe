@@ -482,6 +482,21 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Car
     <div class="carril" id="carrilTal"></div>
   </div>
 
+  <!-- 6b · espacios creativos -->
+  <!-- UN CONCIERTO NO ES UN DAY PASS. 3-oct-2026.
+       Javi: «eventos es que puedes ir a un concierto, espacio creativo es que
+       puedes ir a grabar un podcast o trabajar en el coworking». Son dos cosas
+       distintas y se venden distinto: el evento tiene fecha y hora y se va; el
+       espacio se abre todos los días y lo compras por día o por semana. Por eso
+       son dos secciones y no una. -->
+  <div class="seccion" id="sEspacios">
+    <div class="cab"><h2 data-i18n>Espacios creativos</h2>
+      <div class="mini" id="espNota"></div></div>
+    <p class="dice" data-i18n="No es un evento al que vas un día: es la mesa, el internet y la cocina del Ateneo de Virreyes, por un día o por una semana.">No es un evento al que vas un día: es la mesa, el internet y la cocina del
+      Ateneo de Virreyes, por un día o por una semana.</p>
+    <div class="carril" id="carrilEsp"></div>
+  </div>
+
   <!-- 7 · la puerta al catálogo entero -->
   <!-- Esto era el listado completo metido a presión al final de la portada, con
        un filtro pobre. El catálogo entero merece su pantalla: allí se puede
@@ -668,6 +683,7 @@ async function pintaAtiende(){
       '</span></div>';
 }
 
+var EVREAL=[], ESPAC=[];
 var CARGA=null;
 async function arranca(){
   CARGA=window.CARGA||sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Cargando las experiencias…'):'Cargando las experiencias…')});
@@ -694,6 +710,26 @@ async function arranca(){
       {headers:{'apikey':KEY,'Authorization':'Bearer '+KEY}});
     ODSCAT=r.ok?await r.json():[];
   }catch(_){ ODSCAT=[]; }
+  /* Los eventos y los espacios NO viven en op_experiencias: viven en eventos y
+     en ateneo_planes. Se piden aparte y se pintan aparte, que es justo lo que
+     pedía Javi. Si una de las dos llamadas falla, su sección se apaga sola y
+     el resto del escaparate sigue en pie. */
+  await Promise.all([
+    (async function(){
+      try{
+        var r=await fetch(SB+'/rest/v1/v_concierge_eventos?select=*&order=fecha_inicio',
+          {headers:{'apikey':KEY,'Authorization':'Bearer '+KEY}});
+        EVREAL=r.ok?(await r.json()):[];
+      }catch(_){ EVREAL=[]; }
+    })(),
+    (async function(){
+      try{
+        var r=await fetch(SB+'/rest/v1/v_espacios_creativos?select=*&order=orden',
+          {headers:{'apikey':KEY,'Authorization':'Bearer '+KEY}});
+        ESPAC=r.ok?(await r.json()):[];
+      }catch(_){ ESPAC=[]; }
+    })()
+  ]);
   if(!CAT.length){ CARGA.para(); $('cargando').textContent=T('Todavía no hay experiencias publicadas.'); return; }
 
   CARGA.para();
@@ -708,6 +744,7 @@ async function arranca(){
   pintaTop();
   pintaOds();
   pintaEventos();
+  pintaEspacios();
   pintaTalleres();
   $('cuentaLista').textContent=CAT.length+' '+T('en total · filtra por precio, por día y por tipo');
   $('aTodas').href='todas.html'+(PRUEBA||CODIGO?'?':'')+
@@ -811,7 +848,7 @@ function pintaCats(){
 function pintaBusca(){
   var on=qActivo();
   /* La portada no se borra: se aparta. Al soltar el filtro vuelve entera. */
-  ['sDia','sTop','sOds','sEventos','sTalleres'].forEach(function(id){
+  ['sDia','sTop','sOds','sEventos','sEspacios','sTalleres'].forEach(function(id){
     var el=$(id); if(el)el.classList.toggle('oculto', on || el.dataset.vacia==='1');
   });
   var hero=document.querySelector('.hero'); if(hero)hero.classList.toggle('oculto',on);
@@ -1158,30 +1195,89 @@ function sellosOds(e){
 /* Un concierto no cae en ninguna familia mirando su nombre, así que se los
    marca por formato en la base. Aquí no se esconde ninguno por no traer foto:
    son seis, y si se filtran parece que el Ateneo no programa nada. */
+function evCuando(e){
+  /* La hora viene en UTC desde la base; se enseña en hora de la Ciudad de
+     Mexico, no en la del aparato: un huesped en Madrid no tiene por que leer
+     que el concierto es a las 4 de la madrugada. */
+  if(!e.fecha_inicio)return null;
+  var d=new Date(e.fecha_inicio);
+  if(isNaN(d))return null;
+  var f=new Intl.DateTimeFormat('es-MX',{timeZone:'America/Mexico_City',
+          year:'numeric',month:'2-digit',day:'2-digit'}).format(d).split('/');
+  var ymd=(f[2]||'')+'-'+(f[1]||'')+'-'+(f[0]||'');
+  var hm=new Intl.DateTimeFormat('es-MX',{timeZone:'America/Mexico_City',
+          hour:'2-digit',minute:'2-digit',hour12:false}).format(d);
+  return cuando(ymd, hm==='00:00'?null:hm);
+}
+function evLiga(e){ return 'evento.html?id='+esc(e.id)+QS+QC; }
+function evPrecio(e){
+  if(e.es_gratis||Number(e.precio||0)===0)
+    return '<span class="pre">'+esc(T('Entrada libre'))+'</span>';
+  return '<span class="pre">'+money(e.precio)+
+         '<small>'+esc(T('por persona'))+'</small></span>';
+}
+
+/* ---------- 5 · los eventos del Ateneo ---------- */
+/* ESTA SECCION LEIA LA TABLA EQUIVOCADA. 3-oct-2026.
+   Buscaba la familia 'Eventos' dentro de op_experiencias, y ahi no hay ni uno:
+   los eventos del Ateneo los dan de alta las productoras en la tabla eventos.
+   O sea que la seccion llevaba todo el tiempo apagada mientras habia eventos
+   publicados y a la venta. Ahora lee v_concierge_eventos, que es la vista
+   publica: solo lo que empieza de hoy en adelante y ya esta aprobado. */
 function pintaEventos(){
-  var todos=CAT.filter(function(e){return fams(e).indexOf('Eventos')>=0;});
+  var todos=(EVREAL||[]).filter(function(e){return e.nombre;});
   if(!todos.length){ $('sEventos').classList.add('oculto');
     $('sEventos').dataset.vacia='1'; return; }
-  function ordena(a,b){
-    /* Lo que todavía se puede comprar, delante; lo que ya pasó, al final. */
-    var d=((a.estado==='pasada')?1:0)-((b.estado==='pasada')?1:0);
-    return d||((a.proxima_fecha?0:1)-(b.proxima_fecha?0:1));
-  }
-  var l=conFoto(todos).sort(ordena)
-          .concat(todos.filter(function(e){return !e.portada;}).sort(ordena));
+  $('sEventos').dataset.vacia='';
+  $('sEventos').classList.remove('oculto');
   $('evNota').textContent=todos.length+(todos.length===1?' evento':' eventos');
-  $('carrilEv').innerHTML=l.map(function(e){
-    var c=cuando(e.proxima_fecha,e.proxima_hora);
-    var paso=e.estado==='pasada';
-    return '<a class="grande" href="'+liga(e)+'">'+
-      '<div class="marco">'+marco(e,660)+
+  $('carrilEv').innerHTML=todos.map(function(e){
+    var c=evCuando(e);
+    var tarj={id:e.id,nombre:e.nombre,portada:e.foto_url||null};
+    return '<a class="grande" href="'+evLiga(e)+'">'+
+      '<div class="marco">'+marco(tarj,660)+
         '<div class="velo">'+
-          '<div class="cuando">'+(paso?esc(T('Ya pasó')):(c?esc(c):esc(e.operador||'Ateneo de Virreyes')))+'</div>'+
+          (c?'<div class="cuando">'+esc(c)+'</div>':'')+
           '<div class="nom">'+esc(e.nombre)+'</div>'+
         '</div></div>'+
-      '<div class="cuerpo"><div class="nota">'+esc(e.resumen||'')+'</div></div>'+
-      '<div class="pie"><span class="quien">'+esc(e.operador||'Ateneo de Virreyes')+'</span>'+
-        precioHTML(e)+'</div></a>';
+      '<div class="cuerpo"><div class="nota">'+esc(e.descripcion||'')+'</div></div>'+
+      '<div class="pie"><span class="quien">'+
+        esc(e.espacio||'Ateneo de Virreyes')+
+        (e.productora?'<br>'+esc(e.productora):'')+'</span>'+
+        evPrecio(e)+'</div></a>';
+  }).join('');
+}
+
+/* ---------- 6b · espacios creativos ---------- */
+/* El coworking ya estaba vendido y con precio de lanzamiento en ateneo_planes,
+   pero no tenia escaparate en ningun sitio: no habia una sola pagina publica
+   donde comprar un day pass. Aqui esta. Solo los pases sueltos -dia y semana-:
+   lo mensual lleva contrato y cita, y eso no se cierra en un carril. */
+function pintaEspacios(){
+  var l=(ESPAC||[]).filter(function(x){return x.nombre;});
+  if(!l.length){ $('sEspacios').classList.add('oculto');
+    $('sEspacios').dataset.vacia='1'; return; }
+  $('sEspacios').dataset.vacia='';
+  $('sEspacios').classList.remove('oculto');
+  $('espNota').textContent=l.length+(l.length===1?' pase':' pases');
+  $('carrilEsp').innerHTML=l.map(function(x){
+    var tarj={id:String(x.id),nombre:x.nombre,portada:x.foto_url||null};
+    var promo=x.en_promo&&x.precio_lista!=null&&Number(x.precio)<Number(x.precio_lista);
+    return '<a class="grande" href="espacios.html?plan='+encodeURIComponent(x.id)+QS+QC+'">'+
+      '<div class="marco">'+marco(tarj,660)+
+        '<div class="velo">'+
+          (x.cuando?'<div class="cuando">'+esc(x.cuando)+'</div>':'')+
+          '<div class="nom">'+esc(x.nombre)+'</div>'+
+        '</div></div>'+
+      '<div class="cuerpo"><div class="nota">'+
+        esc(T('Zona de coworking del Ateneo de Virreyes: internet, cocina comunitaria y cabinas de telefono.'))+
+      '</div></div>'+
+      '<div class="pie">'+
+        '<span class="et magenta">'+esc(T('Espacio'))+'</span>'+
+        '<span class="pre">'+
+          (promo?'<s>'+money(x.precio_lista)+'</s>'+money(x.precio):money(x.precio))+
+          '<small>'+esc(T(x.id==='semanal'?'por semana':'por dia'))+'</small></span>'+
+      '</div></a>';
   }).join('');
 }
 
