@@ -70,6 +70,19 @@ select,input,textarea{padding:8px 10px;border:1px solid var(--rule);border-radiu
 .mes .d.off{background:#faf8f2}
 .mes .d .dn{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:3px;display:inline-block}
 .mes .d.hoy .dn{background:var(--accent);color:#fff;border-radius:50%;width:19px;height:19px;text-align:center;line-height:19px;margin-bottom:2px}
+/* Resumen de ocupación (coworking + residencias) en pax, sobre el calendario. */
+.ocWrap{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 12px}
+.ocK{flex:1 1 230px;border:1px solid var(--rule);border-radius:11px;padding:10px 13px;background:var(--surface)}
+.ocH{display:flex;align-items:center;gap:8px}
+.ocH b{font-size:13px}
+.ocXY{margin-left:auto;font-weight:700;font-size:19px;line-height:1}
+.ocY{font-size:11px;color:var(--muted);font-weight:500;margin-left:2px}
+.ocMas{border:1px solid var(--rule);background:none;border-radius:6px;width:23px;height:23px;cursor:pointer;color:var(--muted);font-size:15px;line-height:1;padding:0;flex:none}
+.ocMas:hover{background:var(--surface-2)}
+.ocBar{height:7px;background:#e9e4d8;border-radius:99px;margin:7px 0 0;overflow:hidden}
+.ocBar i{display:block;height:100%;border-radius:99px}
+.ocDes{display:none;font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+.ocK.abierto .ocDes{display:block}
 .mchip{display:block;border-radius:5px;padding:1px 5px;margin-bottom:2px;font-size:10px;line-height:1.3;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* pop-up de evento */
 .pop{position:fixed;inset:0;background:rgba(31,27,22,.5);display:flex;align-items:center;justify-content:center;padding:16px;z-index:80}
@@ -244,6 +257,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
         <span style="flex:1"></span>
         <div class="vista" id="modoCal"><button data-m="dia" aria-pressed="true">Día</button><button data-m="semana" aria-pressed="false">Semana</button><button data-m="mes" aria-pressed="false">Mes</button></div>
       </div>
+      <div id="calOcup"></div>
       <div id="cal"></div>
       <div class="leg" id="calLeg"></div>
     </div>
@@ -341,6 +355,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
 
   var SECS=[['evt','Eventos'],['cal','Qué hay en las salas'],['esp','Los espacios']];
   var sec='evt', ESP=[], PROD=[], EVT=[], ASOC={}, dia=new Date(), lunes=null, mes=new Date(), modoCal='dia';
+  /* Ocupación de coworking y residencias (pax) para el resumen del calendario. */
+  var LUGA=[], INSCA=[], RESA=[];
   var ESPCOL={}, PAL=['#6D4AA0','#1f9d55','#C9A227','#E2188E','#2F6FB0','#D1622A','#5C8A2F','#B3106F','#1F7A8C','#8A6D16','#A0522D','#4A2E70','#3F7D5A','#B5822E','#7A3E9E'];
   function colorEsp(){ESP.forEach(function(e,i){ESPCOL[e.id]=PAL[i%PAL.length];});}
   function colOf(id){return ESPCOL[id]||'#6D4AA0';}
@@ -706,7 +722,35 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     if(!act.length)act=ESP.filter(function(e){return e.activo;}).slice(0,8);
     $('calLeg').innerHTML='<span style="font-weight:600">Salas:</span> '+act.map(function(e){return '<span class="it"><span class="sw" style="background:'+colOf(e.id)+'"></span>'+esc(e.nombre)+'</span>';}).join('');
   }
-  function pintaCal(){modoCal==='dia'?pintaDia():modoCal==='semana'?pintaSem():pintaMes();pintaLeg();}
+  /* ----- OCUPACIÓN (coworking + residencias) en pax, para el resumen ----- */
+  function _od(s){return s?new Date(String(s).slice(0,10)+'T00:00:00'):null;}
+  function _oadd(d,n){var x=new Date(d);x.setDate(x.getDate()+n);return x;}
+  function capPax(cat){return LUGA.filter(function(l){return l.activo!==false&&(l.categoria||'coworking')===cat;}).reduce(function(s,l){return s+(+l.capacidad||0);},0);}
+  function cuartoRes(hab){for(var i=0;i<LUGA.length;i++){var l=LUGA[i];if(l.categoria==='residencias'&&String(l.numero||'').trim()===String(hab||'').trim())return l;}return null;}
+  function planTipo(i){var s=((i.plan_id||'')+' '+(i.plan_nombre||'')).toLowerCase();if(s.indexOf('virtual')>=0)return null;if(s.indexOf('ofi')>=0)return 'oficina';if(s.indexOf('day')>=0)return 'daypass';return 'deck';}
+  function planDias(i){var s=((i.plan_id||'')+' '+(i.plan_nombre||'')).toLowerCase();if(s.indexOf('day')>=0)return 1;if(s.indexOf('seman')>=0)return 7;return 31;}
+  function occCow(D){var r={deck:0,oficina:0,daypass:0,total:0};INSCA.forEach(function(i){if(/cancel|baja|rechaz/i.test(i.estado||''))return;var ini=_od(i.fecha_inicio);if(!ini)return;var fin=_oadd(ini,planDias(i)-1);if(D<ini||D>fin)return;var t=planTipo(i);if(!t)return;var pax=+i.pax||1;r[t]+=pax;r.total+=pax;});return r;}
+  function occRes(D){var r={dorm:0,privada:0,total:0,sin:0};RESA.forEach(function(x){if(/cancel|rechaz/i.test(x.estado||''))return;var ini=_od(x.fecha_inicio),fin=_od(x.fecha_fin);if(!ini||!fin||D<ini||D>fin)return;var cu=cuartoRes(x.habitacion);var esDorm=cu?(String(cu.tipo||'').toLowerCase().indexOf('dorm')>=0):/-\d+$/.test(String(x.unidad||''));if(esDorm){r.dorm+=1;r.total+=1;}else{var pax=cu?(+cu.capacidad||1):1;r.privada+=pax;r.total+=pax;if(!cu)r.sin+=1;}});return r;}
+  function _obar(p){return p>=0.9?'#B5452F':p>=0.7?'#C98A1A':'#1d9e75';}
+  function pintaOcup(){
+    var box=$('calOcup'); if(!box) return;
+    var D=new Date(dia); D.setHours(0,0,0,0);
+    var cw=occCow(D), rs=occRes(D), yc=capPax('coworking'), yr=capPax('residencias');
+    function tarjeta(cat,occ,Y){
+      var p=Y?occ.total/Y:0, col=Y?_obar(p):'#9b968c';
+      var des=cat==='coworking'
+        ? ('Deck (ateneístas) '+occ.deck+' · Oficinas '+occ.oficina+' · Day pass '+occ.daypass)
+        : ('Dorm '+occ.dorm+' camas · Privadas '+occ.privada+(occ.sin?(' · '+occ.sin+' sin cuarto en el editor'):''));
+      return '<div class="ocK"><div class="ocH"><b>'+(cat==='coworking'?'💻 Coworking':'🛏 Residencias')+'</b>'
+        +'<span class="ocXY" style="color:'+col+'">'+occ.total+'<span class="ocY">/'+(Y||'—')+' pax</span></span>'
+        +'<button class="ocMas" title="Desglose">+</button></div>'
+        +'<div class="ocBar"><i style="width:'+(Y?Math.min(100,Math.round(p*100)):0)+'%;background:'+col+'"></i></div>'
+        +'<div class="ocDes">'+des+'</div></div>';
+    }
+    box.innerHTML='<div class="ocWrap">'+tarjeta('coworking',cw,yc)+tarjeta('residencias',rs,yr)+'</div>';
+    Array.prototype.forEach.call(box.querySelectorAll('.ocMas'),function(b){b.onclick=function(){var k=b.parentNode.parentNode;var ab=k.classList.toggle('abierto');b.textContent=ab?'–':'+';};});
+  }
+  function pintaCal(){modoCal==='dia'?pintaDia():modoCal==='semana'?pintaSem():pintaMes();pintaLeg();pintaOcup();}
 
   /* espacios */
   function pintaEsp(){
@@ -754,11 +798,15 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       sb.from('ev_espacios').select('*').order('orden'),
       sb.from('v_productoras').select('id,nombre_comercial,tipo_nombre,estado').order('nombre_comercial'),
       sb.from('eventos').select('*').order('fecha_inicio',{ascending:false}),
-      sb.from('productora_usuarios').select('productora_id,nombre,rol').eq('rol','productor_asociado')
+      sb.from('productora_usuarios').select('productora_id,nombre,rol').eq('rol','productor_asociado'),
+      sb.from('ateneo_lugares').select('numero,categoria,tipo,capacidad,activo'),
+      sb.from('inscripciones_coworking').select('plan_id,plan_nombre,fecha_inicio,pax,estado'),
+      sb.from('ateneo_residencias_reservas').select('unidad,habitacion,fecha_inicio,fecha_fin,estado')
     ]);
     if(r[0].error){$('tEsp').innerHTML='<div class="vacio">No se pudo leer: '+esc(r[0].error.message)+'</div>';}
     ESP=r[0].data||[];PROD=(r[1].data||[]).filter(function(p){return p.estado!=='baja';});EVT=r[2].data||[];
     ASOC={};(r[3]&&r[3].data||[]).forEach(function(u){if(!ASOC[u.productora_id])ASOC[u.productora_id]=u.nombre;});
+    LUGA=(r[4]&&r[4].data)||[]; INSCA=(r[5]&&r[5].data)||[]; RESA=(r[6]&&r[6].data)||[];
     colorEsp();montaGen();pinta();
   }
 
