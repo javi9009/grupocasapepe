@@ -94,13 +94,21 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
         '<div class="tabs" id="tabs">'+
           '<button data-p="eventos" aria-selected="true">🎫 Mis eventos</button>'+
           '<button data-p="pagina" aria-selected="false">🌐 Mi página</button>'+
+          /* ROOM SERVICE. Javi, 3-oct-2026: solo Cumbre. No se decide por el
+             nombre: se decide por el interruptor room_service de su ficha, asi
+             que si manana otra cocina del edificio hace lo mismo, es encenderlo
+             y no copiar el modulo. */
+          ((FICHA&&FICHA.room_service)?'<button data-p="rs" aria-selected="false">🍳 Room service</button>':'')+
           '<button data-p="cuenta" aria-selected="false">🏢 Mi cuenta</button>'+
         '</div>'+
       '</div></div>'+
       '<div class="wrap"><div class="pane on" id="pane-eventos"></div>'+
-        '<div class="pane" id="pane-pagina"></div><div class="pane" id="pane-cuenta"></div></div>';
+        '<div class="pane" id="pane-pagina"></div>'+
+        ((FICHA&&FICHA.room_service)?'<div class="pane" id="pane-rs"></div>':'')+
+        '<div class="pane" id="pane-cuenta"></div></div>';
     Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){ve(b.getAttribute('data-p'));};});
     pintaEventos(); pintaPagina(); pintaCuenta();
+    if(FICHA&&FICHA.room_service) pintaRS();
   }
   function ve(p){Array.prototype.forEach.call($('tabs').children,function(b){b.setAttribute('aria-selected',b.getAttribute('data-p')===p?'true':'false');});document.querySelectorAll('.pane').forEach(function(x){x.classList.toggle('on',x.id==='pane-'+p);});window.scrollTo({top:0,behavior:'smooth'});}
 
@@ -673,6 +681,134 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       toast('Guardado'); await cargaEquipo();
     }catch(e){ toast('No se pudo guardar',true); }
     btn.disabled=false;
+  }
+
+  /* ---------- ROOM SERVICE ----------
+     La cocina ve los pedidos que entran y los mueve de estado, y edita su
+     carta. Los pedidos NO salen por PostgREST: llevan el nombre y el contacto
+     de quien pide, asi que van por funciones que comprueban el token. */
+  var RSP=[], RSI=[], RSTAB='pedidos';
+  var RSEST=[['pedido','Nuevo'],['aceptado','En la cocina'],['en_camino','Subiendo'],
+              ['entregado','Entregado'],['cancelado','Cancelado']];
+  function rsNom(e){ var x=RSEST.filter(function(y){return y[0]===e;})[0]; return x?x[1]:e; }
+
+  function pintaRS(){
+    var f=FICHA||{};
+    $('pane-rs').innerHTML=
+      '<div class="card"><h3>Room service</h3>'+
+        '<div class="hint">Quien está en una sala pide de tu carta y ustedes suben a dejárselo. '+
+          'Horario: <b>'+esc(f.rs_horario||'—')+'</b> · aviso de <b>'+esc(String(f.rs_aviso_min||20))+' min</b>.</div>'+
+        '<div class="fnav" id="rsnav" style="margin-top:10px">'+
+          '<button data-r="pedidos" aria-selected="true">Pedidos</button>'+
+          '<button data-r="carta">Mi carta</button>'+
+        '</div>'+
+        '<div id="rsPedidos"></div><div id="rsCarta" style="display:none"></div>'+
+      '</div>';
+    Array.prototype.forEach.call($('rsnav').children,function(b){
+      b.onclick=function(){
+        RSTAB=b.getAttribute('data-r');
+        Array.prototype.forEach.call($('rsnav').children,function(x){
+          x.setAttribute('aria-selected', x===b ? 'true':'false');});
+        $('rsPedidos').style.display = RSTAB==='pedidos'?'':'none';
+        $('rsCarta').style.display   = RSTAB==='carta'?'':'none';
+        if(RSTAB==='carta') cargaCarta();
+      };
+    });
+    cargaPedidos();
+  }
+
+  async function cargaPedidos(){
+    try{ RSP=await rpc('rs_pedidos_portal',{p_token:TOK})||[]; }catch(_){ RSP=[]; }
+    var vivos=RSP.filter(function(d){return ['entregado','cancelado'].indexOf(d.estado)<0;});
+    var hechos=RSP.filter(function(d){return ['entregado','cancelado'].indexOf(d.estado)>=0;}).slice(0,20);
+    function fila(d){
+      var l=(d.items||[]).map(function(i){return i.cant+'× '+esc(i.nombre);}).join(', ');
+      var sig = d.estado==='pedido' ? 'aceptado'
+              : d.estado==='aceptado' ? 'en_camino'
+              : d.estado==='en_camino' ? 'entregado' : null;
+      var cuando='';
+      try{ cuando=new Intl.DateTimeFormat('es-MX',{timeZone:'America/Mexico_City',
+            hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(d.created_at)); }catch(_){}
+      return '<div class="card" style="margin:0 0 10px;padding:12px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">'+
+          '<b style="font-family:Oswald;text-transform:uppercase">'+esc(d.espacio||'—')+'</b>'+
+          '<span class="mini">'+esc(cuando)+' · <span class="tag">'+esc(rsNom(d.estado))+'</span></span>'+
+        '</div>'+
+        '<div style="margin-top:6px">'+l+'</div>'+
+        '<div class="mini" style="margin-top:4px">'+esc(d.quien||'')+
+          (d.contacto?' · '+esc(d.contacto):'')+' · <b>$'+Number(d.total||0).toLocaleString('es-MX')+'</b></div>'+
+        (d.notas?'<div class="mini" style="margin-top:4px">“'+esc(d.notas)+'”</div>':'')+
+        (sig?'<div class="ft" style="margin-top:8px">'+
+          '<button class="btn ghost sm" data-rsx="'+d.id+'">Cancelar</button>'+
+          '<button class="btn sm" data-rs="'+d.id+'" data-e="'+sig+'">'+esc(rsNom(sig))+'</button></div>':'')+
+      '</div>';
+    }
+    $('rsPedidos').innerHTML=
+      '<div style="margin-top:12px">'+
+        (vivos.length?vivos.map(fila).join('')
+          :'<div class="mini">Ningún pedido ahora mismo.</div>')+
+      '</div>'+
+      (hechos.length?'<div style="margin-top:16px"><div class="mini" style="margin-bottom:6px"><b>Ya atendidos</b></div>'+
+        hechos.map(fila).join('')+'</div>':'');
+    Array.prototype.forEach.call($('rsPedidos').querySelectorAll('[data-rs]'),function(b){
+      b.onclick=function(){ mueve(b.getAttribute('data-rs'), b.getAttribute('data-e'), b); };
+    });
+    Array.prototype.forEach.call($('rsPedidos').querySelectorAll('[data-rsx]'),function(b){
+      b.onclick=function(){ mueve(b.getAttribute('data-rsx'), 'cancelado', b); };
+    });
+  }
+  async function mueve(id,estado,btn){
+    btn.disabled=true;
+    try{
+      var r=await rpc('rs_pedido_estado',{p_token:TOK,p_id:id,p_estado:estado});
+      if(!r||!r.ok)throw new Error();
+      toast(rsNom(estado)); await cargaPedidos();
+    }catch(e){ toast('No se pudo',true); btn.disabled=false; }
+  }
+
+  async function cargaCarta(){
+    try{ RSI=await rpc('rs_items_portal',{p_token:TOK})||[]; }catch(_){ RSI=[]; }
+    $('rsCarta').innerHTML=
+      '<div style="margin-top:12px">'+
+        (RSI.length?'':'<div class="mini" style="margin-bottom:10px">Tu carta está vacía. Añade lo primero y ya se puede pedir.</div>')+
+        RSI.map(function(i,k){
+          return '<div class="card" style="margin:0 0 10px;padding:12px">'+
+            '<div class="fgrid">'+
+              '<div class="fld"><label>Sección</label><input data-c="seccion" data-k="'+k+'" value="'+esc(i.seccion||'')+'"></div>'+
+              '<div class="fld"><label>Nombre</label><input data-c="nombre" data-k="'+k+'" value="'+esc(i.nombre||'')+'"></div>'+
+              '<div class="fld"><label>Precio</label><input type="number" data-c="precio" data-k="'+k+'" value="'+esc(String(i.precio||0))+'"></div>'+
+              '<div class="fld"><label>Foto (liga)</label><input data-c="foto_url" data-k="'+k+'" value="'+esc(i.foto_url||'')+'"></div>'+
+              '<div class="fld ancho"><label>Descripción</label><input data-c="descripcion" data-k="'+k+'" value="'+esc(i.descripcion||'')+'"></div>'+
+            '</div>'+
+            '<div style="display:flex;gap:14px;margin-top:8px">'+
+              '<label class="chk"><input type="checkbox" data-c="activo" data-k="'+k+'"'+(i.activo?' checked':'')+'> En la carta</label>'+
+              '<label class="chk"><input type="checkbox" data-c="agotado" data-k="'+k+'"'+(i.agotado?' checked':'')+'> Se acabó hoy</label>'+
+            '</div>'+
+            '<div class="ft" style="margin-top:8px"><button class="btn ghost sm" data-gi="'+k+'">Guardar</button></div>'+
+          '</div>';
+        }).join('')+
+        '<button class="btn" id="rsMas" type="button">＋ Añadir a la carta</button>'+
+      '</div>';
+    Array.prototype.forEach.call($('rsCarta').querySelectorAll('[data-gi]'),function(b){
+      b.onclick=function(){ guardaItem(Number(b.getAttribute('data-gi')), b); };
+    });
+    $('rsMas').onclick=async function(){
+      this.disabled=true;
+      try{ await rpc('rs_item_set',{p_token:TOK,p_id:null,p:{nombre:'Nuevo platillo'}}); await cargaCarta(); }
+      catch(e){ toast('No se pudo',true); this.disabled=false; }
+    };
+  }
+  async function guardaItem(k,btn){
+    var i=RSI[k]; if(!i)return;
+    var p={};
+    Array.prototype.forEach.call($('rsCarta').querySelectorAll('[data-k="'+k+'"]'),function(el){
+      var c=el.getAttribute('data-c');
+      p[c] = (el.type==='checkbox') ? el.checked : (el.type==='number' ? Number(el.value||0) : el.value.trim());
+    });
+    btn.disabled=true;
+    try{ var r=await rpc('rs_item_set',{p_token:TOK,p_id:i.id,p:p});
+      if(!r||!r.ok)throw new Error(); toast('Guardado'); await cargaCarta(); }
+    catch(e){ toast('No se pudo',true); btn.disabled=false; }
   }
 
   function pintaCuenta(){
