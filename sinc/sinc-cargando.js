@@ -37,6 +37,11 @@ window.sincCargando = (function () {
     }catch(_){}
     return '/img/apepe/stickers/';
   })();
+  function stk(u){
+    u=String(u||'');
+    var i=u.indexOf('/img/apepe/stickers/');
+    return i<0 ? u : ST+u.slice(i+'/img/apepe/stickers/'.length);
+  }
 
   /* Arranque: lo mínimo para que la primera pintada no sea un hueco. En cuanto
      responde la tabla, esto se sustituye. */
@@ -139,8 +144,14 @@ window.sincCargando = (function () {
   /* Una frase sin traducir NO se enseña en inglés a medias: se deja fuera.
      Es preferible que el inglés tenga menos frases a que tenga una en español. */
   function di(f, en) {
-    if (en) return f.frase_en ? [f.sticker, f.frase_en, f.pie_en || ''] : null;
-    return [f.sticker, f.frase, f.pie || ''];
+    /* En la tabla los stickers estan guardados con la ruta entera
+       ('/img/apepe/stickers/x.webp'), que es la del panel. Servido por
+       casapepe.mx/sincretico/ esa ruta no existe, asi que se recuelga de la
+       carpeta que si esta mapeada. Lo que no sea un sticker de la casa -una
+       URL externa, por ejemplo- se deja tal cual. */
+    var img=stk(f.sticker);
+    if (en) return f.frase_en ? [img, f.frase_en, f.pie_en || ''] : null;
+    return [img, f.frase, f.pie || ''];
   }
 
   function arma(filas, set, ventana, en) {
