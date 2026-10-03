@@ -89,6 +89,15 @@
     '.m2-sub .it.pend:after{content:"pendiente";margin-left:auto;font-size:9.5px;letter-spacing:.06em;',
     '  text-transform:uppercase;border:1px solid currentColor;border-radius:99px;padding:1px 5px;opacity:.8}',
     '.m2-sub .it .ic{flex:0 0 20px;text-align:center}',
+    /* Una subcategoría con cosas dentro ya no se lleva la columna entera: se
+       abre aquí mismo y empuja hacia abajo a sus hermanas, para que todo se
+       alcance sin perder de vista dónde estás. Javi, 3-oct. */
+    '.m2-sub .it .fl{margin-left:auto;opacity:.45;font-size:11px;transition:transform .15s ease}',
+    '.m2-sub .it.abierto{color:var(--m2fuerte);font-weight:600}',
+    '.m2-sub .it.abierto .fl{transform:rotate(90deg);opacity:.85}',
+    '.m2-sub .nido{margin:1px 0 5px 15px;padding-left:9px;',
+    '  border-left:1px solid var(--bd,rgba(0,0,0,.13))}',
+    '.m2-sub .nido .it{font-size:13px;padding:7px 9px}',
     '.m2-sub .atras{display:flex;align-items:center;gap:7px;padding:6px 10px;margin-bottom:4px;cursor:pointer;',
     '  color:var(--txt2,#5f5e5a);font-size:12.5px;border-radius:8px}',
     '.m2-sub .atras:hover{background:var(--bg3,#f1efe8)}',
@@ -112,7 +121,8 @@
   var D = null;          // datos y ganchos
   var hijos = {};        // codigo -> [nodos]
   var porCod = {};
-  var estado = { cat:null, rama:null, activa:null, catmin:false, submin:false, vista:'cat' };
+  var estado = { cat:null, rama:null, activa:null, catmin:false, submin:false, vista:'cat',
+               abiertos:{} };   // qué cajones de la columna están desplegados
   var cabecera = null;   // logo + selector de propiedad, prestados del <aside>
   var MQ = (window.matchMedia ? window.matchMedia('(max-width:760px)') : null);
   function esMovil(){ return !!(MQ && MQ.matches); }
@@ -191,13 +201,16 @@
         it.onclick = function(){
           estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
           estado.catmin = false; estado.vista = 'sub';
+          estado.abiertos = {};   // otra área, cajones cerrados
           /* Y se abre lo que esa categoría es: su propia pantalla si la tiene,
              y si no el tablero de su grupo. Antes sólo desplegaba, y había que
              dar un segundo clic para que pasara algo. */
           var d = atajo(n), h = hijosVisibles(d.codigo);
-          /* Si el atajo bajo a otra cosa, la columna se planta ahi: enseñar la
-             del padre con un solo renglon no ayuda a nadie. */
-          if (d.codigo !== n.codigo) estado.rama = d.codigo;
+          /* Si el atajo bajó a un grupo con cosas dentro, la columna se planta
+             ahí. Si bajó hasta una pantalla suelta —un área de una sola página,
+             como RH → Horarios—, la columna se queda en el área: plantarse en
+             la pantalla dejaba la columna vacía. */
+          if (d.codigo !== n.codigo && hijosVisibles(d.codigo).length) estado.rama = d.codigo;
           if (d.ruta) { estado.activa = d.codigo; D.abrir(d.ruta, parte(d).tx, migaja(d)); }
           else if (h.length) { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(d.codigo), parte(d).tx, migaja(d)); }
           pinta();
@@ -234,15 +247,28 @@
           sub.appendChild(vuelve);
         }
         sub.appendChild(el('div','tit', esc(parte(nodoRama).tx)));
-        hijosVisibles(nodoRama.codigo).forEach(function(n){
-          var p = parte(n);
-          var tieneHijos = hijosVisibles(n.codigo).length > 0;
-          var pend = (n.tipo === 'pendiente') || (!n.ruta && !tieneHijos);
-          var it = el('div','it'+(n.codigo===estado.activa?' on':'')+(pend?' pend':''),
-            '<span class="ic">'+esc(p.ic)+'</span><span>'+esc(p.tx)+(tieneHijos?' ›':'')+'</span>');
-          if (!pend) it.onclick = function(){ elige(n); };
-          sub.appendChild(it);
-        });
+        /* Se dibuja recursivamente: cada cajón abierto mete a sus hijos justo
+           debajo, indentados, y las hermanas siguen ahí abajo. */
+        (function renglones(cod, host){
+          hijosVisibles(cod).forEach(function(n0){
+            var d = atajo(n0);                       // un grupo de uno es esa cosa
+            var p = parte(n0);                       // pero el nombre es el de arriba
+            var dentro = hijosVisibles(d.codigo);
+            var pend = (d.tipo === 'pendiente') || (!d.ruta && !dentro.length);
+            var abierto = !!estado.abiertos[d.codigo];
+            var it = el('div','it'+(d.codigo===estado.activa?' on':'')+(pend?' pend':'')
+                               +(abierto?' abierto':''),
+              '<span class="ic">'+esc(p.ic)+'</span><span>'+esc(p.tx)+'</span>'
+              +(dentro.length?'<span class="fl">\u203A</span>':''));
+            if (!pend) it.onclick = function(){ elige(n0); };
+            host.appendChild(it);
+            if (dentro.length && abierto){
+              var nido = el('div','nido');
+              renglones(d.codigo, nido);
+              host.appendChild(nido);
+            }
+          });
+        })(nodoRama.codigo, sub);
       }
       raiz.appendChild(sub);
     }
@@ -283,24 +309,38 @@
   function elige(n){
     n = atajo(n);
     var conHijos = hijosVisibles(n.codigo);
-    /* Si la cosa tiene pantalla propia, manda la pantalla: un grupo que además
-       es una página (Pedidos, Briefing, Desayunos) no debe abrir un tablero de
-       cuadritos en vez de abrirse. Si encima tiene hijos, la columna baja a
-       ellos para poder seguir hacia dentro. */
-    if (n.ruta) {
-      estado.activa = n.codigo;
-      if (conHijos.length) estado.rama = n.codigo;
-      estado.catmin = !esMovil();
-      D.abrir(n.ruta, parte(n).tx, migaja(n));
+    /* Lo que tiene dentro se despliega AQUÍ, en su sitio, empujando abajo a las
+       hermanas; la columna ya no baja un escalón ni se lleva por delante al
+       resto. Y el centro enseña el tablero de ese cajón, para que desde la
+       misma pantalla se alcance todo. Javi, 3-oct. */
+    if (conHijos.length) {
+      var yaEstaba = !!estado.abiertos[n.codigo];
+      estado.abiertos[n.codigo] = !yaEstaba;
+      if (!yaEstaba) {
+        /* Al abrirlo se enseña lo suyo: su pantalla si la tiene, y si no el
+           tablero con lo que lleva dentro. Al cerrarlo no se toca el centro:
+           plegar un cajón no debería sacarte de donde estás leyendo. */
+        if (n.ruta) { estado.activa = n.codigo; D.abrir(n.ruta, parte(n).tx, migaja(n)); }
+        else { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n)); }
+      }
       pinta();
       return;
     }
-    if (conHijos.length) {
-      /* grupo sin pantalla: tablero de cuadritos, y la columna baja un escalón */
-      estado.rama = n.codigo; estado.activa = null;
+    if (n.ruta) {
+      estado.activa = n.codigo;
       estado.catmin = !esMovil();
-      D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n));
+      D.abrir(n.ruta, parte(n).tx, migaja(n));
       pinta();
+    }
+  }
+  /* Al entrar por fuera (un cuadrito del tablero, un enlace profundo) hay que
+     dejar abiertos los cajones por los que se baja, o el renglón activo queda
+     escondido dentro de uno cerrado. */
+  function abreCadena(n){
+    var c = porCod[n.parent_codigo], v = 0;
+    while (c && v++ < 8 && c.codigo !== estado.rama) {
+      estado.abiertos[c.codigo] = true;
+      c = porCod[c.parent_codigo];
     }
   }
   function migaja(n){
@@ -313,8 +353,8 @@
      cuando el huésped del panel pincha un cuadrito). */
   function abreCodigo(cod){
     var n = porCod[cod]; if (!n) return false;
-    estado.cat = raizDe(n); estado.rama = n.parent_codigo || estado.cat;
-    estado.vista = 'sub'; elige(n); return true;
+    estado.cat = raizDe(n); estado.rama = estado.cat;
+    estado.vista = 'sub'; abreCadena(n); elige(n); return true;
   }
   function raizDe(n){ var c=n,v=0; while(c && c.parent_codigo && v++<6) c=porCod[c.parent_codigo]; return c?c.codigo:null; }
 
