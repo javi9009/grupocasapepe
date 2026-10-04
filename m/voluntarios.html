@@ -57,6 +57,11 @@ tr.row:hover{background:#fbf9f6;cursor:pointer}
 .mes h3 b{color:var(--ink);font-weight:700}
 .dow{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;font-size:8.5px;color:#a99e91;
  text-transform:uppercase;text-align:center;font-weight:700;margin-bottom:2px}
+.grupos{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.grupos button{border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:999px;padding:7px 13px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.grupos button b{font-weight:800}
+.grupos button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:1px}
 .cal .hueco{aspect-ratio:1}
 .cal .d{aspect-ratio:1;border-radius:3px;display:grid;place-items:center;
@@ -168,6 +173,9 @@ input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line)
   <section class="pane" id="p-cal">
     <div class="card">
       <h2>Ocupación</h2>
+      <!-- Un calendario por vacante: contenido, guest y yoga ocupan camas
+           distintas y se deciden por separado. Javi, 4-oct. -->
+      <div class="grupos" id="cal-grupos"></div>
       <p class="sub" id="cal-sub">Cargando…</p>
       <div class="quien" id="cal-quien"></div>
       <div class="meses" id="cal"></div>
@@ -621,7 +629,16 @@ async function planEnviada(id){
 
 async function planPanel(id){
   const c=document.getElementById('planCard'); if(!c) return;
-  const d=await rpc('plan_ver',{p_solicitud_id:id});
+  /* Si la llamada truena, rpc() lanza y antes la tarjeta se quedaba en
+     «Cargando su plan…» para siempre, sin decir nada. Ahora avisa y deja
+     reintentar. Javi, 4-oct. */
+  let d=null;
+  try{ d=await rpc('plan_ver',{p_solicitud_id:id}); }
+  catch(e){
+    c.innerHTML='<h2>Plan de redes</h2><p class="msg e">No se pudo cargar su plan. '+
+      '<button class="btn" onclick="planPanel(\''+id+'\')">Reintentar</button></p>';
+    return;
+  }
   if(!d||!d.ok){ c.innerHTML='<h2>Plan de redes</h2><p class="msg e">'+esc((d&&d.error)||'No se pudo cargar.')+'</p>'; return }
 
   if(!d.hay){
@@ -903,6 +920,7 @@ async function resolver(id,e){
   bandeja();
 }
 
+const VAC_CORTO={contenido:'contenido',guest_experiences:'guest',yoga:'yoga',otros:'otros'};
 const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const FASE={pedida:['pedida','pedida'],
             por_aceptar:['por_aceptar','confirmada por nosotros · falta que firme su carta'],
@@ -910,19 +928,59 @@ const FASE={pedida:['pedida','pedida'],
             rechazada:['rechazado','rechazada']};
 const fmtDia=f=>{const d=new Date(f+'T12:00:00');return d.getDate()+' '+MESES[d.getMonth()].slice(0,3);};
 
+/* El calendario se mira por vacante. Contenido, guest y yoga no compiten por lo
+   mismo ni se deciden igual, y verlos revueltos no dice nada: con 'Todos' ves la
+   casa entera y con cada chip ves solo esa fila. Javi, 4-oct. */
+const GRUPOS=[['todos','Todos'],['contenido','Contenido'],
+              ['guest_experiences','Guest'],['yoga','Yoga'],['otros','Otros']];
+let CAL_D=null, CAL_G='todos';
+
 async function calendario(){
-  const d=await rpc('vol_calendario',{});
-  const cupo=d.cupo||4, dias=d.dias||[], es=d.estancias||[];
-  const hoy=new Date().toISOString().slice(0,10);
+  CAL_D=await rpc('vol_calendario',{});
+  pintaGrupos(); pintaCal();
+}
+
+function pintaGrupos(){
+  const es=(CAL_D&&CAL_D.estancias)||[];
+  const cuenta=k=> k==='todos' ? es.length : es.filter(e=>e.vacante===k).length;
+  const c=document.getElementById('cal-grupos'); if(!c) return;
+  c.innerHTML=GRUPOS.filter(g=>g[0]==='todos'||cuenta(g[0])>0)
+    .map(g=>'<button class="'+(CAL_G===g[0]?'on':'')+'" onclick="verGrupo(\''+g[0]+'\')">'+
+            g[1]+' <b>'+cuenta(g[0])+'</b></button>').join('');
+}
+
+function verGrupo(k){ CAL_G=k; pintaGrupos(); pintaCal(); }
+
+function pintaCal(){
+  const d=CAL_D||{};
+  const cupo=d.cupo||4, hoy=new Date().toISOString().slice(0,10);
+  const mio=z=> CAL_G==='todos' || z.vacante===CAL_G;
+  const es=(d.estancias||[]).filter(mio);
+  /* Los dias vienen contados para toda la casa; al filtrar hay que volver a
+     contarlos, si no el «dia mas lleno» miente. */
+  const dias=(d.dias||[]).map(x=>{
+    const q=(x.quien||[]).filter(mio);
+    return {fecha:x.fecha, quien:q,
+      confirmados:q.filter(z=>z.fase==='cerrada'||z.fase==='por_aceptar').length,
+      aceptados:  q.filter(z=>z.fase==='cerrada').length,
+      solicitados:q.filter(z=>z.fase==='pedida').length};
+  });
   const pico=dias.reduce((m,x)=>Math.max(m,x.confirmados||0),0);
+  const quien=(GRUPOS.find(g=>g[0]===CAL_G)||[])[1]||'';
   document.getElementById('cal-sub').textContent=
-    'Tope de '+cupo+' a la vez · '+es.length+(es.length===1?' estancia':' estancias')+
-    ' en los próximos 90 días · día más lleno: '+pico+' de '+cupo+'.';
+    (CAL_G==='todos'?'Tope de '+cupo+' a la vez · ':quien+' · ')+
+    es.length+(es.length===1?' estancia':' estancias')+
+    ' en los próximos 90 días · día más lleno: '+pico+
+    (CAL_G==='todos'?' de '+cupo:'')+'.'+
+    (es.filter(e=>e.fase==='pedida').length
+      ? ' '+es.filter(e=>e.fase==='pedida').length+' sin confirmar, que no cuentan todavía.' : '');
 
   // quién es quién
   document.getElementById('cal-quien').innerHTML = es.length
     ? es.map(e=>'<span class="qchip '+e.fase+'" style="--c:'+e.color+'"><i></i>'+
-        '<b>'+esc(e.nombre)+'</b><span>'+fmtDia(e.desde)+' – '+fmtDia(e.hasta)+'</span></span>').join('')
+        '<b>'+esc(e.nombre)+'</b><span>'+fmtDia(e.desde)+' – '+fmtDia(e.hasta)+
+        (CAL_G==='todos'?' · '+esc(VAC_CORTO[e.vacante]||e.vacante||''):'')+
+        '</span></span>').join('')
     : '';
 
   // pinta el fondo de un dia con los colores de quien lo ocupa
@@ -981,10 +1039,18 @@ async function calendario(){
   c.innerHTML=es.map(e=>{const f=FASE[e.fase]||FASE.pedida; return '<div class="est">'+
     '<span class="n"><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:'+e.color+';margin-right:7px"></i>'+
     esc(e.nombre)+' <span style="color:var(--mut);font-weight:400">· '+(e.noches||0)+' noches</span></span>'+
-    '<input type="date" value="'+e.desde+'" id="d-'+e.id+'"><input type="date" value="'+e.hasta+'" id="h-'+e.id+'">'+
+    /* Los de contenido y yoga no entran a la app, asi que no tienen fila de
+       fechas que mover: su carta YA es la estancia. Sin id no hay nada que
+       confirmar ni rechazar aqui, y ensenar los botones solo enganaria.
+       Javi, 4-oct. */
+    (e.id
+      ? '<input type="date" value="'+e.desde+'" id="d-'+e.id+'"><input type="date" value="'+e.hasta+'" id="h-'+e.id+'">'
+      : '<span class="chk">'+fmtDia(e.desde)+' \u2013 '+fmtDia(e.hasta)+'</span>')+
     '<span class="tag '+f[0]+'" title="'+(e.acepto_at?'Aceptada el '+String(e.acepto_at).slice(0,10):'')+'">'+f[1]+'</span>'+
-    '<button class="btn g" onclick="asignar(\''+e.id+'\',\'confirmada\')">Confirmar</button>'+
-    '<button class="btn r" onclick="asignar(\''+e.id+'\',\'rechazada\')">Rechazar</button>'+
+    (e.id
+      ? '<button class="btn g" onclick="asignar(\''+e.id+'\',\'confirmada\')">Confirmar</button>'+
+        '<button class="btn r" onclick="asignar(\''+e.id+'\',\'rechazada\')">Rechazar</button>'
+      : '')+
     /* Si ya la confirmamos y sigue sin firmar, lo unico que falta es que el
        voluntario vuelva a entrar: esta liga le abre la sesion de un clic. */
     (e.email && f[0]==='por_aceptar'
