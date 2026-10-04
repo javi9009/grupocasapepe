@@ -350,6 +350,16 @@ label{display:block;font:600 11px/1 Oswald,sans-serif;letter-spacing:.09em;text-
 
   <!-- MIS EVENTOS (productora) -->
   <div class="pane" id="p-prod">
+    <!-- LOS PEDIDOS, ANTES QUE LOS EVENTOS.
+         Un pedido de room service caduca en minutos; un evento, no. Así que lo
+         primero que ve quien cocina al abrir su pestaña es lo que hay en la
+         cocina ahora mismo. -->
+    <div id="rsCaja" style="display:none">
+      <div class="lab">Pedidos de room service</div>
+      <p class="sub" id="rsProdSub"></p>
+      <div id="rsProd"></div>
+    </div>
+
     <div class="lab">Mis eventos activos</div>
     <p class="sub" id="prodSub"></p>
     <div id="prodEv"></div>
@@ -1041,6 +1051,53 @@ $('kGuardar').onclick=async function(){
 };
 
 /* ---------- mis eventos (productora) ---------- */
+/* ---------- los pedidos de room service de quien cocina ---------- */
+function rsEstadoEt(e){
+  return e==='entregado' ? '<span class="et ok">Entregado</span>'
+       : e==='aceptado'  ? '<span class="et pend">En la cocina</span>'
+       : e==='cancelado' ? '<span class="et no">Cancelado</span>'
+       : '<span class="et pend">Nuevo</span>';
+}
+async function pintaProdRS(){
+  var r=null; try{ r=await rpc('ate_prod_rs',{p_token:TOK}); }catch(_){ r=null; }
+  if(!r || !r.sirve_rs){ $('rsCaja').style.display='none'; return; }
+  $('rsCaja').style.display='';
+  var l=r.pedidos||[];
+  var pend=Number(r.pendientes||0);
+  $('rsProdSub').textContent = pend
+    ? (pend===1?'Tienes 1 pedido por atender.':'Tienes '+pend+' pedidos por atender.')
+    : 'Nada pendiente ahora mismo. Aquí caen los pedidos en cuanto los hacen.';
+  if(!l.length){ $('rsProd').innerHTML='<div class="vacio">Todavía no hay pedidos.</div>'; return; }
+  $('rsProd').innerHTML=l.map(function(d){
+    var it=(d.items||[]).map(function(x){
+      return '<li>'+(x.cant?('<i>'+(+x.cant)+'×</i> '):'')+esc(x.nombre||'')+'</li>'; }).join('');
+    var ab=[];
+    if(d.estado==='nuevo')    ab.push('<button class="bt" data-rsid="'+esc(d.id)+'" data-rse="aceptado">Acepto, va para allá</button>');
+    if(d.estado==='aceptado') ab.push('<button class="bt" data-rsid="'+esc(d.id)+'" data-rse="entregado">Entregado</button>');
+    if(d.estado==='nuevo'||d.estado==='aceptado')
+      ab.push('<button class="bt g" data-rsid="'+esc(d.id)+'" data-rse="cancelado">No se puede</button>');
+    return '<div class="sala"><div class="n">'+esc(d.espacio||'Sin sala')+' · '+rsEstadoEt(d.estado)+'</div>'+
+      '<div class="c">'+esc(d.quien||'')+(vale(d.contacto)?' · '+esc(d.contacto):'')+
+        ' · '+cuandoMx(d.created_at,true)+'</div>'+
+      (it?'<ul style="margin:8px 0 0;padding-left:18px;font-size:13.5px;line-height:1.6">'+it+'</ul>':'')+
+      (vale(d.notas)?'<div class="c" style="margin-top:6px"><b>Nota:</b> '+esc(d.notas)+'</div>':'')+
+      '<div class="c" style="margin-top:6px">'+money(d.total)+
+        (vale(d.forma_pago)?' · paga en '+esc(d.forma_pago):'')+'</div>'+
+      (ab.length?'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+ab.join('')+'</div>':'')+
+    '</div>';
+  }).join('');
+  Array.prototype.forEach.call($('rsProd').querySelectorAll('[data-rsid]'),function(b){
+    b.onclick=async function(){
+      b.disabled=true;
+      try{
+        var x=await rpc('ate_prod_rs_estado',{p_token:TOK,p_pedido:b.getAttribute('data-rsid'),
+          p_estado:b.getAttribute('data-rse')});
+        if(x && x.error) throw new Error(x.error);
+        await pintaProdRS();
+      }catch(e){ b.disabled=false; }
+    };
+  });
+}
 function pintaProd(r){
   if(!r||!r.es_productora){ $('prodEv').innerHTML='<div class="vacio">Esta cuenta no es de ninguna productora.</div>'; return; }
   var prods=r.productoras||[];
@@ -1101,8 +1158,8 @@ async function arranca(){
   rpc('ate_checkin_estado',{p_token:TOK}).then(function(r){ CHK=r; pintaCheckinCard(); }).catch(function(){});
   /* ¿es productora? entonces se abre la pestaña de sus eventos */
   rpc('ate_prod_eventos',{p_token:TOK}).then(function(r){
-    if(r&&r.es_productora){ $('tabProd').style.display=''; pintaProd(r);
-      if(P.get('ver')==='eventos') ve('prod'); }
+    if(r&&r.es_productora){ $('tabProd').style.display=''; pintaProd(r); pintaProdRS();
+      if(P.get('ver')==='eventos' || P.get('ver')==='pedidos') ve('prod'); }
   }).catch(function(){});
 }
 arranca();
