@@ -28,7 +28,7 @@ Un espacio **no queda reservado hasta que la solicitud aparece como aprobada en 
 
 **TERCERA · Horario, montaje y desmontaje.** La reserva comprende el montaje, el evento y el desmontaje. Los tiempos de montaje y desmontaje se declaran al crear el evento y ocupan el espacio aunque no se vendan al público.
 
-Si el evento se alarga por razones propias de su desarrollo, CASA PEPE lo permitirá siempre que no haya otra reserva después ni se afecte el descanso del hospedaje, y **sin cobro adicional durante la primera hora**. A partir de ahí se cobrará el tiempo extra a la tarifa que se haya pactado por hora en el Anexo A.
+Si el evento se alarga por razones propias de su desarrollo, CASA PEPE lo permitirá siempre que no haya otra reserva después ni se afecte el descanso del hospedaje, y **sin cobro adicional durante la primera hora**. A partir de ahí se cobra el tiempo extra **al precio por hora que LA PRODUCTORA haya declarado para ese evento**; si el Anexo A trae una tarifa fijada para el espacio, aplica ésa.
 
 **CUARTA · Precio al público y comisión.** Este contrato ampara dos modalidades de uso, que se indican al crear cada evento.
 
@@ -43,7 +43,7 @@ Si el evento se alarga por razones propias de su desarrollo, CASA PEPE lo permit
 
    Quedan fuera: las propinas del personal, que son íntegras de quien las recibe.
 
-**B. Uso privado del espacio** —rodajes, sesiones cerradas y usos análogos **sin venta al público**—. No se causa comisión, porque no hay venta. Se cubre la **tarifa por hora o por día** del espacio conforme al Anexo A.
+**B. Uso privado del espacio** —rodajes, sesiones cerradas y usos análogos **sin venta al público**—. No se causa comisión, porque no hay venta. **LA PRODUCTORA declara al crear el evento el precio por hora o por día que va a cubrir**, y CASA PEPE lo confirma al aprobar la fecha. Cuando el Anexo A traiga una tarifa fijada para ese espacio, ésa es la que manda.
 
 La modalidad se elige evento por evento y la determina **quién aporta al asistente**: si llega por Sincrético, aplica la modalidad A; si LA PRODUCTORA trae a sus propios invitados o clientes y no pone lugares a la venta, aplica la B. Una misma actividad puede realizarse en una u otra modalidad en fechas distintas. El resto de este contrato aplica por igual a ambas.
 
