@@ -113,6 +113,22 @@ audio{width:100%;height:32px;margin-top:6px}
  </div>
 </div>
 
+<div id="cwmodal" class="rmodal" style="display:none"><div class="rmodal-card">
+  <h3>Nueva reserva de coworking</h3>
+  <div class="msg err" id="cw-err" style="display:none"></div>
+  <div class="fld"><label>Nombre del cliente</label><input id="cw-nombre" type="text" placeholder="Nombre y apellido"></div>
+  <div class="rm-row"><div class="fld"><label>Email</label><input id="cw-email" type="email" placeholder="correo@ejemplo.com"></div><div class="fld"><label>Teléfono</label><input id="cw-tel" type="text" placeholder="55..."></div></div>
+  <div class="fld"><label>Empresa <span style="color:var(--muted);font-weight:400">(opcional)</span></label><input id="cw-empresa" type="text"></div>
+  <div class="fld"><label>Plan</label><select id="cw-plan"></select></div>
+  <div class="fld"><label>Cómo va a pagar</label>
+    <label style="font-weight:400;display:block"><input type="radio" name="cw-metodo" value="link" checked> Mandarle un link de pago (Stripe)</label>
+    <label style="font-weight:400;display:block;margin-top:4px"><input type="radio" name="cw-metodo" value="efectivo"> Pago en efectivo (lo marco yo al recibirlo)</label>
+  </div>
+  <div class="fld"><label>Notas</label><input id="cw-notas" type="text" placeholder="Opcional"></div>
+  <div id="cw-result" style="display:none;margin:4px 0 2px"></div>
+  <div class="rm-acts"><span style="flex:1"></span><button class="btn btn-o btn-sm" id="cw-cancel">Cerrar</button><button class="btn btn-p btn-sm" id="cw-save">Crear reserva</button></div>
+</div></div>
+
 <div id="evmodal" class="rmodal" style="display:none"><div class="rmodal-card">
   <h3 id="ev-title">Nuevo evento</h3>
   <div class="msg err" id="ev-err" style="display:none"></div>
@@ -908,8 +924,9 @@ async function pintaPlanes(){
       +'<div class="acts"><button class="btn btn-o btn-sm plEdit" data-id="'+p.id+'">✏️ Editar</button><button class="btn btn-o btn-sm plTog" data-id="'+p.id+'">'+(p.activo?'Ocultar':'Activar')+'</button></div>'
       +'</div>';
   }).join('')+'</div>';
-  h+='<h2 style="font-size:17px;margin:22px 0 10px">📋 Solicitudes de coworking</h2>';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:22px 0 10px"><h2 style="font-size:17px;margin:0">📋 Solicitudes y reservas de coworking</h2><button class="btn btn-p btn-sm" id="cwNew">＋ Nueva reserva</button></div>';
   box.innerHTML=h;
+  if($('cwNew'))$('cwNew').onclick=openCwModal;
   $('planNew').onclick=()=>openPlan(null);
   document.querySelectorAll('.plEdit').forEach(b=>b.onclick=()=>openPlan(PLANES_CACHE.find(x=>x.id===b.dataset.id)));
   document.querySelectorAll('.plTog').forEach(b=>b.onclick=async()=>{
@@ -918,6 +935,66 @@ async function pintaPlanes(){
     if(error){alert(error.message);return;} pintaPlanes();
   });
 }
+
+/* ===== Nueva reserva de coworking (con link de pago o efectivo) =====
+   Crea la reserva en ateneo_reservas y, si es con tarjeta, arma el link de
+   ateneo-checkout (el importe sale del plan, no del navegador; el webhook del
+   Ateneo confirma el pago). En efectivo, se marca "Pagado" con el botón de la
+   solicitud cuando entra el dinero. */
+function cwPlanPrecio(p){var l=Number(p.precio_lanzamiento||0);return l>0?l:Number(p.precio||0);}
+function openCwModal(){
+  $('cw-err').style.display='none';
+  $('cw-result').style.display='none';$('cw-result').innerHTML='';
+  $('cw-nombre').value='';$('cw-email').value='';$('cw-tel').value='';$('cw-empresa').value='';$('cw-notas').value='';
+  var sel=$('cw-plan');
+  var activos=(PLANES_CACHE||[]).filter(function(p){return p.activo!==false;});
+  if(!activos.length){ sel.innerHTML='<option value="">(no hay planes activos)</option>'; }
+  else sel.innerHTML=activos.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.nombre)+' · '+dinero(cwPlanPrecio(p))+(p.cobro_recurrente&&p.periodo==='mensual'?'/mes':'')+'</option>';}).join('');
+  Array.prototype.forEach.call(document.getElementsByName('cw-metodo'),function(r){r.checked=(r.value==='link');});
+  $('cw-save').disabled=false;$('cw-save').textContent='Crear reserva';
+  $('cwmodal').style.display='flex';
+}
+async function cwSave(){
+  function er(m){$('cw-err').textContent=m;$('cw-err').style.display='block';}
+  var nombre=$('cw-nombre').value.trim();
+  var email=$('cw-email').value.trim();
+  var planId=$('cw-plan').value;
+  var metodo=(document.querySelector('input[name="cw-metodo"]:checked')||{}).value||'link';
+  if(!nombre)return er('Escribe el nombre del cliente.');
+  if(metodo==='link'&&!email)return er('Para mandar el link de pago necesito su correo.');
+  var plan=(PLANES_CACHE||[]).find(function(p){return p.id===planId;});
+  if(!plan)return er('Elige un plan.');
+  var importe=cwPlanPrecio(plan);
+  $('cw-save').disabled=true;$('cw-save').textContent='Creando…';
+  var notas=$('cw-notas').value.trim();
+  if(metodo==='efectivo')notas=('Efectivo'+(notas?' · '+notas:''));
+  var row={nombre:nombre,persona_contacto:nombre,email:email||null,telefono:$('cw-tel').value.trim()||null,
+    empresa:$('cw-empresa').value.trim()||null,plan:plan.slug||plan.nombre,espacio:plan.nombre,
+    monto:importe,apartado:importe,personas:1,notas:notas||null,origen:'admin',
+    estado:'propuesto',estado_pago:'pendiente'};
+  var ins=await sb.from('ateneo_reservas').insert(row).select('id').single();
+  if(ins.error){$('cw-save').disabled=false;$('cw-save').textContent='Crear reserva';return er('No se pudo crear: '+ins.error.message);}
+  var rid=ins.data.id;
+  if(metodo==='efectivo'){
+    $('cw-result').style.display='block';
+    $('cw-result').innerHTML='<div class="msg ok" style="display:block">Reserva creada en efectivo. Cuando entre el dinero, dale <b>✓ Pagado</b> en la solicitud de abajo.</div>';
+    $('cw-save').style.display='none';render();return;
+  }
+  var link=SB_URL+'/functions/v1/ateneo-checkout?plan='+encodeURIComponent(plan.slug||plan.nombre)+'&reserva='+encodeURIComponent(rid);
+  $('cw-result').style.display='block';
+  $('cw-result').innerHTML='<div class="msg ok" style="display:block">Link de pago listo — mándaselo al cliente:</div>'
+    +'<div style="display:flex;gap:6px;margin-top:6px"><input id="cw-link" type="text" readonly value="'+esc(link)+'" style="flex:1">'
+    +'<button class="btn btn-o btn-sm" id="cw-copy" type="button">Copiar</button>'
+    +'<a class="btn btn-o btn-sm" href="'+esc(link)+'" target="_blank" rel="noopener">Abrir</a></div>'
+    +(email?'<button class="btn btn-v btn-sm" id="cw-mail" type="button" style="margin-top:8px">✉️ Mandárselo a '+esc(email)+'</button>':'');
+  $('cw-copy').onclick=function(){var i=$('cw-link');i.select();try{document.execCommand('copy');this.textContent='Copiado ✓';}catch(_){}};
+  if($('cw-mail'))$('cw-mail').onclick=function(){var s='Tu lugar en el Ateneo de Virreyes';var b='Hola '+nombre+',%0A%0AAquí tienes el link para pagar tu '+(plan.nombre)+':%0A'+link+'%0A%0AGracias.';location.href='mailto:'+encodeURIComponent(email)+'?subject='+encodeURIComponent(s)+'&body='+b;};
+  $('cw-save').style.display='none';
+  render();
+}
+$('cw-cancel').onclick=function(){$('cwmodal').style.display='none';$('cw-save').style.display='inline-flex';};
+$('cw-save').onclick=cwSave;
+$('cwmodal').addEventListener('click',function(e){if(e.target.id==='cwmodal'){$('cwmodal').style.display='none';$('cw-save').style.display='inline-flex';}});
 
 function openPlan(p){
   const campo=(l,inner)=>'<div class="fld"><label>'+l+'</label>'+inner+'</div>';
