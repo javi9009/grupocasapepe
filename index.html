@@ -64,7 +64,21 @@ main>iframe{flex:1 1 auto;height:auto;min-height:0}
 .menu-btn{display:none;background:none;border:1px solid var(--bd);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:14px}
 /* Colapsar menu lateral (desktop) */
 .layout{transition:grid-template-columns .18s ease}
-#navToggle{display:inline-block;background:none;border:1px solid var(--bd);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:14px;margin-right:4px}
+/* Atrás: vive en la pantalla central (la barra de arriba del recuadro). Pastilla
+   con texto para que se lea "volver", no un icono suelto. Javi, 3-oct. */
+#backBtn{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--bd);
+  border-radius:99px;padding:4px 12px 4px 10px;cursor:pointer;font-size:13px;line-height:1.3;
+  color:var(--txt2);font-weight:600;margin-right:4px}
+#backBtn .ar{font-size:17px;line-height:1;position:relative;top:-1px}
+#backBtn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+#backBtn[disabled]{opacity:.3;cursor:default}
+#backBtn[disabled]:hover{background:none;color:var(--txt2);border-color:var(--bd)}
+/* Ocultar menú: vive DENTRO de la barra de la izquierda, con otro símbolo (»),
+   para que no se confunda con el de volver. */
+#navHide{flex:none;background:none;border:1px solid var(--bd);border-radius:6px;width:26px;height:24px;
+  line-height:1;cursor:pointer;color:var(--txt2);font-size:14px;padding:0}
+#navHide:hover{background:var(--bg);color:var(--txt)}
+@media(max-width:760px){#backBtn{font-size:14px;padding:5px 13px 5px 11px} #navHide{display:none}}
 .layout.nav-collapsed{grid-template-columns:0 1fr}
 .layout.nav-collapsed>aside{overflow:hidden;padding:0;border:none;width:0;min-width:0}
 #navReopen{display:none;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:25;background:var(--accent);color:#fff;border:none;border-radius:0 12px 12px 0;padding:18px 6px;font-size:18px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.22)}
@@ -174,6 +188,7 @@ aside .brand{display:flex;align-items:center;gap:9px}
 aside .brand .bl{width:26px;height:26px;object-fit:contain;flex:none}
 </style><link rel="icon" type="image/png" href="/dash-192.png">
 <link rel="apple-touch-icon" href="/dash-192.png">
+<script defer src="/cp-verpass.js"></script>
 </head>
 <body>
 
@@ -208,9 +223,9 @@ aside .brand .bl{width:26px;height:26px;object-fit:contain;flex:none}
   </div>
 </div>
 
-<div class="card">
+<div class="card" style="display:none">
 <!-- PASO LOGIN -->
-<div class="step show" id="s-login">
+<div class="step" id="s-login">
 <div class="logo"><img src="/img/portales/casapepe.png" alt="Casa Pepe"></div>
 <h1>Casa Pepe</h1>
 <div class="s">Equipo del Grupo · entra con tu cuenta</div>
@@ -255,7 +270,7 @@ aside .brand .bl{width:26px;height:26px;object-fit:contain;flex:none}
 <main>
 <div class="portalbar"></div>
 <div class="topbar">
-<button id="navToggle" title="Ocultar menu">⟨</button><button class="menu-btn" id="menuBtn">☰</button>
+<button id="backBtn" title="Página anterior" aria-label="Atrás"><span class="ar">‹</span> Atrás</button><button class="menu-btn" id="menuBtn">☰</button>
 <span class="crumb" id="crumb">—</span>
 <span class="right">
 <span class="who" id="who"></span>
@@ -403,9 +418,14 @@ function showStep(id){
 /* Las cuatro entradas. Casa Pepe entra aquí mismo; las otras tres tienen su
    propia puerta, con su marca. */
 const PUERTA={ sincretico:'/operador.html', ateneo:'/ateneo/admin/', socios:'/socios.html' };
+/* Si ya elegiste una marca, el arranque async (start) NO debe regresarte a la
+   portada cuando termine. En móvil con red lenta, start() seguía corriendo
+   cuando ya habías tocado Casa Pepe y te rebotaba al chooser. */
+var _userStep=false;
 document.querySelectorAll('#login .marca').forEach(function(b){
   b.onclick=function(){
     var m=b.dataset.marca;
+    _userStep=true;
     if(PUERTA[m]){ location.href=PUERTA[m]; return; }
     showStep('s-login'); try{ $('l-email').focus(); }catch(e){}
   };
@@ -418,11 +438,20 @@ $('r-go').onclick=async()=>{
 $('r-ok').className='ok';$('r-err').className='err';
 const email=$('r-email').value.trim().toLowerCase();
 if(!/.+@.+\..+/.test(email)){$('r-err').textContent='Escribe un correo válido.';$('r-err').className='err show';return}
+let portal='cpp'; try{ portal=(new URLSearchParams(location.search).get('portal')||'cpp').toLowerCase(); }catch(e){}
 $('r-go').disabled=true;
-const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
+try{
+  // Correo de recuperación con diseño, tematizado por el portal (función enviar-recuperacion).
+  const resp=await fetch(SB_URL+'/functions/v1/enviar-recuperacion',{method:'POST',
+    headers:{apikey:SB_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email,portal})});
+  const j=await resp.json().catch(()=>({}));
+  if(!resp.ok||j.ok===false) throw new Error(j.error||('No se pudo (HTTP '+resp.status+')'));
+  $('r-ok').textContent='Listo. Revisa tu correo (y la carpeta de spam) y abre el enlace para crear una contraseña nueva.';$('r-ok').className='ok show';
+}catch(e){
+  $('r-err').textContent='No se pudo enviar: '+(e&&e.message||e)+'. Revisa tu internet e inténtalo otra vez.';$('r-err').className='err show';
+}
 $('r-go').disabled=false;
-if(error){$('r-err').textContent='No se pudo enviar: '+error.message;$('r-err').className='err show';return}
-$('r-ok').textContent='Listo. Revisa tu correo y abre el enlace para crear una nueva contraseña.';$('r-ok').className='ok show';
 };
 // Guardar nueva contraseña (tras abrir enlace de recuperación)
 $('z-go').onclick=async()=>{
@@ -552,7 +581,7 @@ const GRP_ALIAS={'Servicio':'Operación'};
    su URL, y quien tenga el enlace entra igual. Lo que se quitó es el
    renglón repetido. */
 const EXP_FAMS=['Experiencias'];
-const EXP_FAM={'/m/sinc-hub.html':0};
+const EXP_FAM={};
 /* Estas viven en `paginas` con area='Experiencias' pero no son de Sincrético:
    son del pensamiento. Sin esto reaparecen en medio del catálogo. */
 const EXP_FUERA={'/experiencias.html':'Espíritu','/m/espiritu.html':'Espíritu','/m/pensamiento.html':'Espíritu'};
@@ -697,7 +726,6 @@ const _pushExp=function(code,it){ it.perm=code; if(!(isGerencia||hasPerm(code)))
    guía del guía, el pricing y PepeQuiz salían aquí Y dentro del centro de
    mando; ahora salen solo allí. El costeo, además, es el paso 10 de la ficha
    del producto: nunca fue una pantalla aparte. */
-_pushExp('PAG-EXP-HUB',{t:'Sincrético · Centro de mando',src:'/m/sinc-hub.html',ic:'🧭'});
 EXP_FAMS.forEach(function(n,i){ if(_expF[i].length) M.push({grp:n, items:_expF[i]}); });
 if(isGerencia||hasPerm('PAG-VOL-SOLICITUDES')){
 M.push({grp:'Residencias', items:[
@@ -749,7 +777,6 @@ const DASHMAP={
 'DASH-EXP-DATOS':{t:'📚 Datos, Ideas y Pensamiento',src:'/experiencias.html',grp:'Espíritu'},
 'DASH-EXP-ESPIRITU':{t:'✨ Frases',src:'/m/espiritu.html',grp:'Espíritu'},
 'DASH-EXP-VENTAS':{t:'Ventas de Tours',src:'/m/ventas-tours',grp:'Experiencias',img:'/iconos/tours.png'},
-'DASH-EXP-HUB':{t:'Sincrético · Centro de mando',src:'/m/sinc-hub.html',grp:'Experiencias',ic:'🧭'},
 'DASH-EXP-OPER':{t:'Portal del touroperador',src:'/operador.html',grp:'Experiencias',ic:'🤝'},
 'DASH-EXP-PRICING':{t:'Pricing Sincrético',grp:'Experiencias',disabled:true,ic:'🏷️'},
 'DASH-EXP-COSTEO':{t:'Costeo de tours',src:'/costeo.html',grp:'Experiencias',ic:'🧮'},
@@ -853,7 +880,8 @@ const a=$('aside');
 const _P=PORTALES[PORTAL_ACTIVO]||PORTALES.casapepe;
 a.innerHTML='<div class="brand" onclick="openHome()" style="cursor:pointer" title="Ir al inicio">'
   +'<img class="bl" src="'+_P.logo+'" alt="">'
-  +'<span>'+(PORTAL_ACTIVO==='casapepe'?'Grupo <b>Casa Pepe</b>':'Grupo Casa Pepe<br><b>'+_P.n+'</b>')+'</span></div>'
+  +'<span>'+(PORTAL_ACTIVO==='casapepe'?'Grupo <b>Casa Pepe</b>':'Grupo Casa Pepe<br><b>'+_P.n+'</b>')+'</span>'
+  +'<button id="navHide" title="Ocultar menú" aria-label="Ocultar menú" onclick="event.stopPropagation();toggleNav()" style="margin-left:auto">»</button></div>'
   +'<div class="projsel" id="projHolder"></div>'+M.map(g=>`
 <div class="grp"><div class="h">${g.grp}<span class="chev">▼</span></div>
 <ul>${g.items.map(it=>{const _i=menuIcon(it,g.grp);return `<li><a ${it.disabled?'class="disabled"':''} data-t="${it.t}" ${it.src?`data-src="${it.src}"`:''} ${it.action?`data-action="${it.action}"`:''}>${it.img?'<img class="mi" src="'+it.img+'" alt="">':'<span class="mi-emo" aria-hidden="true">'+_i.ic+'</span>'}${it.bold?'<b>'+_i.label+'</b>':_i.label}${it.badge?` <span class="nbadge">${it.badge}</span>`:''}</a></li>`;}).join('')}</ul></div>`).join('');
@@ -1026,7 +1054,7 @@ render(M);
 // Enlace profundo desde el correo de convocatoria: ?ir=<ítem del menú>[&sub=<ancla>]
 // Abre el módulo DENTRO del panel, con su barra lateral, para que el socio
 // pueda seguir navegando en vez de caer en la página suelta.
-if(!irDirecto()) { if(esSocioHome()||isJaviSelf) select('/m/mi-casa-pepe.html','🏠 Mi Casa, Pepe','Inicio'); else { var _a=itemAterrizaje(); if(_a&&_a.src) select(_a.src,_a.t,_a.grp); } }
+if(!irDirecto()) { if(esSocioHome()||isJaviSelf) select('/m/hub.html?nodo=root','🏠 Inicio','Panel'); else { var _a=itemAterrizaje(); if(_a&&_a.src) select(_a.src,_a.t,_a.grp); } }
 }
 /* Aterrizaje por defecto: el primer módulo REAL del panel. Se saltan los ítems
    externos (Ateneo /ateneo/admin/ y enlaces http): si el menú viene encabezado
@@ -1087,9 +1115,15 @@ $('crumb').innerHTML=grp.replace('▼','').trim()+' · <b>'+t+'</b>';
 // para que copiar/compartir la barra de direcciones lleve directo aquí (no a la portada).
 try{
  var _k=String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'');
- if(_k){ var _q=new URLSearchParams(location.search); _q.set('ir',_k);
+ if(_k){ var _q=new URLSearchParams(location.search); _q.set('ir',_k); _q.delete('abre');
   var _h=(src&&src.indexOf('#')>=0)?src.replace(/^[^#]*#/,''):''; if(_h)_q.set('sub',_h); else _q.delete('sub');
   history.replaceState(null,'',location.pathname+'?'+_q.toString()); }
+}catch(e){}
+/* Pila de atrás: guardo lo que estaba antes (no cuando el propio ← es quien
+   navega, para no apilar el regreso). */
+try{ if(!window._navBack){ if(window._curSel && window._curSel.src!==src) window._navStack.push(window._curSel); }
+  window._curSel={src:src,t:t,grp:grp};
+  if(typeof _backSync==='function') _backSync();
 }catch(e){}
 $('aside').classList.remove('show');
 }
@@ -1125,7 +1159,11 @@ $('aside').classList.remove('show');
   });
 })();
 function openHome(){ try{
-  if(esSocioHome()||isJaviSelf){ select('/m/mi-casa-pepe.html','🏠 Mi Casa, Pepe','Inicio'); return; }
+  /* "Ir al inicio" limpia el deep-link pegado en la URL (?abre/?ir/?sub): si no,
+     al recargar irDirecto() vuelve a abrir lo último -por eso rebotaba a
+     Touroperadores-. Javi, 3-oct. */
+  try{ history.replaceState(null,'',location.pathname); }catch(_){}
+  if(esSocioHome()||isJaviSelf){ select('/m/hub.html?nodo=root','🏠 Inicio','Panel'); return; }
   if(flat[0]&&flat[0].src) select(flat[0].src,flat[0].t,flat[0].grp);
 }catch(e){} } window.openHome=openHome;
 // Un socio (no gerencia) aterriza por defecto en el home "Mi Casa, Pepe".
@@ -1136,7 +1174,21 @@ function esSocioHome(){ try{
  return !!(DPERMS && ps.some(function(p){return (DPERMS[p]||'none')!=='none';}));
 }catch(e){ return false; } } window.esSocioHome=esSocioHome;
 $('menuBtn').onclick=()=>$('aside').classList.toggle('show');
-(function(){var L=document.getElementById('shell');if(!L)return;function setNav(c){L.classList.toggle('nav-collapsed',c);try{localStorage.setItem('cp_nav_collapsed',c?'1':'0');}catch(e){}var b=document.getElementById('navToggle');if(b)b.textContent=c?'⟩':'⟨';}var t=document.getElementById('navToggle');if(t)t.onclick=function(){setNav(!L.classList.contains('nav-collapsed'));};var r=document.getElementById('navReopen');if(r)r.onclick=function(){setNav(false);};try{if(localStorage.getItem('cp_nav_collapsed')==='1')setNav(true);}catch(e){}})();
+/* Ocultar menú: el botón vive DENTRO de la barra de la izquierda (lo pone render()
+   en la marca). Aquí sólo la lógica, global para que el botón de la barra lo llame. */
+function setNav(c){var L=document.getElementById('shell');if(!L)return;L.classList.toggle('nav-collapsed',!!c);try{localStorage.setItem('cp_nav_collapsed',c?'1':'0');}catch(e){}}
+function toggleNav(){var L=document.getElementById('shell');setNav(!(L&&L.classList.contains('nav-collapsed')));}
+window.setNav=setNav;window.toggleNav=toggleNav;
+(function(){var r=document.getElementById('navReopen');if(r)r.onclick=function(){setNav(false);};try{if(localStorage.getItem('cp_nav_collapsed')==='1')setNav(true);}catch(e){}})();
+/* BOTÓN ATRÁS. El de "ocultar menú" (⇤) se confundía con un «volver». Ahora hay
+   un ← de verdad, que rehace la navegación del panel paso a paso: cada vez que se
+   abre algo (menú, cuadrito, cualquier pantalla) se apila, y ← vuelve a lo anterior.
+   Se apaga cuando no hay a dónde volver. Javi, 3-oct. */
+window._navStack=window._navStack||[]; window._navBack=false; window._curSel=null;
+function _backSync(){ var b=document.getElementById('backBtn'); if(b) b.disabled=!(window._navStack&&window._navStack.length); }
+function goBack(){ try{ if(!window._navStack||!window._navStack.length) return; var p=window._navStack.pop(); window._navBack=true; select(p.src,p.t,p.grp); window._navBack=false; _backSync(); }catch(e){ window._navBack=false; } }
+window.goBack=goBack;
+(function(){ var b=document.getElementById('backBtn'); if(b){ b.onclick=goBack; } _backSync(); })();
 
 // ---------- MI HORARIO (por nombre del horario) ----------
 async function openHorario(){
@@ -1347,7 +1399,8 @@ if(!session){
       history.replaceState(null,'',_u.pathname+(_u.search||'')+_u.hash);
     }catch(_){}
     return}
-  showStep(_rec ? 's-recover' : (_directo ? 's-login' : 's-portada'));
+  // Si el usuario ya tocó una marca mientras cargábamos, respétalo: no lo regreses.
+  if(!_userStep) showStep(_rec ? 's-recover' : (_directo ? 's-login' : 's-portada'));
   return}
 // Los touroperadores no entran al panel del Grupo: lo suyo vive en Sincrético.
 // OJO: es_operador_externo() es «no es equipo casa», y equipo casa exige ficha
@@ -1471,7 +1524,7 @@ await loadAmbito();
 let M=filterByProj(applyPerms(applyCats(buildMenu())));
 render(M);
 if(irDirecto()){ /* deep-link ?ir= tiene prioridad sobre el destino por defecto */ }
-else if(esSocioHome()||isJaviSelf) select('/m/mi-casa-pepe.html','🏠 Mi Casa, Pepe','Inicio');
+else if(esSocioHome()||isJaviSelf) select('/m/hub.html?nodo=root','🏠 Inicio','Panel');
 else { var _a=itemAterrizaje(); if(_a&&_a.src) select(_a.src,_a.t,_a.grp); else sinNadaQueVer(); }
 if(isJaviSelf) checkCierre();
 }

@@ -46,6 +46,8 @@
   var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   var CLAVE_M = 'apepe_marca';      /* la marca resuelta, por sesión */
   var CLAVE_H = 'apepe_hotel';      /* el slug, que sí sobrevive al cierre */
+  var CLAVE_T = 'apepe_hotel_tab';  /* el slug de ESTA pestaña, que manda */
+  var SOLA    = '-';                /* esta pestaña es Casa Pepe, diga lo que diga el aparato */
 
   var M = null, aplicada = false, obs = null;
   try { M = JSON.parse(sessionStorage.getItem(CLAVE_M) || 'null'); } catch (_) {}
@@ -60,10 +62,26 @@
      Y hay que recargar: la sustitución es destructiva — las cadenas originales
      ya no están en el DOM, no se pueden deshacer sin volver a pintar. */
   var VUELVE = { 'no': 1, '0': 1, 'casapepe': 1, 'casa-pepe': 1, 'ninguno': 1 };
+
+  /* DOS APPS A LA VEZ.
+     El aparato recuerda un solo hotel, así que quien lleva varias casas —Javi,
+     recepción, el concierge— no podía tener abierta la suya y la de marca
+     blanca al mismo tiempo: la última pestaña que entraba le cambiaba la marca
+     a la otra. El hotel de la pestaña vive en sessionStorage, que el navegador
+     da por separado a cada pestaña, y manda sobre el del aparato. El
+     localStorage se queda como estaba —el huésped que entró una vez por el QR
+     sigue teniendo su hotel mañana—, pero deja de pisar a la pestaña de al
+     lado. Se fija sólo cuando la liga lo dice:
+       pestaña 1 → /apepe/?h=mundojoven   pestaña 2 → /apepe/?h=no
+     y cada una se queda donde está aunque navegues dentro. Javi, 3-oct. */
+  function tabSlug() { try { return sessionStorage.getItem(CLAVE_T) || ''; } catch (_) { return ''; } }
+  function fijaTab(s) { try { sessionStorage.setItem(CLAVE_T, s || SOLA); } catch (_) {} }
+
   function olvidaHotel() {
     M = null;
     try { sessionStorage.removeItem(CLAVE_M); } catch (_) {}
     try { localStorage.removeItem(CLAVE_H); } catch (_) {}
+    fijaTab(SOLA);
   }
 
   var slug = '', resv = '';
@@ -84,10 +102,14 @@
         } catch (_) {}
         if (habia) { try { location.reload(); } catch (_) {} }
       } else {
+        fijaTab(slug);
         try { localStorage.setItem(CLAVE_H, slug); } catch (_) {}
       }
     } else {
-      try { slug = localStorage.getItem(CLAVE_H) || ''; } catch (_) {}
+      var t = tabSlug();
+      if (t === SOLA) slug = '';
+      else if (t) slug = t;
+      else { try { slug = localStorage.getItem(CLAVE_H) || ''; } catch (_) {} }
     }
   } catch (_) {}
   try { resv = (window.apepeResv && window.apepeResv.token()) || ''; } catch (_) {}
@@ -309,7 +331,9 @@
 
   /* ---------- traerla ---------- */
   /* Sólo se pregunta si hay algo que preguntar, y una vez por sesión. */
-  if ((slug || resv) && !(M && M.hotel_id && (M.slug === slug || !slug))) {
+  /* La pestaña que pidió volver a casa no se deja re-marcar por la reserva:
+     «?h=no» quiere decir Casa Pepe aunque el huésped tenga reserva en otra. */
+  if ((slug || (resv && tabSlug() !== SOLA)) && !(M && M.hotel_id && (M.slug === slug || !slug))) {
     fetch(SB + '/rest/v1/rpc/apepe_marca', {
       method: 'POST',
       headers: { apikey: KEY, Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' },
@@ -321,6 +345,7 @@
         M = j;
         try { sessionStorage.setItem(CLAVE_M, JSON.stringify(j)); } catch (_) {}
         try { localStorage.setItem(CLAVE_H, j.slug || ''); } catch (_) {}
+        if (j.slug) fijaTab(j.slug);
         arranca();
       })
       .catch(function () {});

@@ -385,9 +385,10 @@
       trozos.forEach(function(e){ cabecera.appendChild(e); });
     }
 
-    var prim = hijosVisibles(null)[0];
-    estado.cat = estado.rama = prim ? prim.codigo : null;
-    estado.activa = null; estado.catmin = false; estado.submin = false;
+    /* Inicio = SOLO las categorías: la 2ª columna arranca cerrada. Al tocar una
+       categoría se abre su tablero de subcategorías. Javi, 3-oct. */
+    estado.cat = null; estado.rama = null;
+    estado.activa = null; estado.catmin = false; estado.submin = true;
     estado.vista = 'cat';
     pinta();
     if (MQ && !MQ._cpm2) { MQ._cpm2 = true;
