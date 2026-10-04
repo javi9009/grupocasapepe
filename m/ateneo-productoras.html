@@ -187,6 +187,18 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         <label class="chk" style="margin-top:8px"><input type="checkbox" data-c="poliza_cotizar"> <b>Se la conseguimos nosotros</b> (póliza de grupo del Ateneo)</label>
         <div class="aviso" style="margin-top:10px">Si no tiene póliza y no quiere que se la consigamos, sus eventos no se publican hasta resolverlo.</div>
       </div>
+
+      <!-- SUS PAPELES. Javi, 4-oct-2026: «lo de la póliza muéstramelo en la
+           ficha del productor y ahí lo veo». Hasta hoy los subía por su portal
+           y desde aquí no había por dónde mirarlos. Viven en un bucket PRIVADO:
+           no hay url que pegar, se pide una liga firmada que caduca a los 5
+           minutos y que solo el equipo de casa puede pedir. -->
+      <div class="card">
+        <h3>Sus papeles</h3>
+        <div class="hint">Lo que ella subió desde su liga: constancia fiscal, identificación y póliza.
+          Se abren con una liga que caduca a los 5 minutos — no se pueden reenviar.</div>
+        <div id="docsLista" class="mini" style="margin-top:10px">Revisando…</div>
+      </div>
     </section>
 
     <!-- 4 CÓMO LE PAGAMOS -->
@@ -327,7 +339,7 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
       if(v===true)v='true';else if(v===false)v='false';
       el.value=v==null?'':v;
     });
-    suma();pintaTipo();pintaCobro();pintaLiga(id);pintaFichaPub();
+    suma();pintaTipo();pintaCobro();pintaLiga(id);pintaFichaPub();pintaDocs();
     var r1=await fetch(SB+'/rest/v1/productora_usuarios?select=*&productora_id=eq.'+id+'&order=created_at',{headers:hdr()});
     U=r1.ok?await r1.json():[];pintaEquipo();
     pintaSide();
@@ -336,6 +348,60 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   function n(c){var el=document.querySelector('[data-c="'+c+'"]');return el&&el.value!==''?Number(el.value):0;}
   function suma(){var t=n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct');var tot=document.querySelector('[data-c="comision_pct"]');if(tot)tot.value=t;$('cTot').textContent=String(Math.round(t*100)/100);}
   Array.prototype.forEach.call(document.querySelectorAll('[data-c^="com_"]'),function(el){el.oninput=suma;});
+
+  /* ---------- SUS PAPELES ---------- */
+  var DOCT={csf:'Constancia fiscal',ine:'INE',pasaporte:'Pasaporte',poliza:'Póliza de RC'};
+  async function docFn(cuerpo){
+    var r=await fetch(SB+'/functions/v1/prod-doc',{method:'POST',
+      headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign({productora_id:cur&&cur.id},cuerpo))});
+    var j=await r.json().catch(function(){return null;});
+    if(!r.ok||!j||j.error) throw new Error((j&&j.error)||'no se pudo');
+    return j;
+  }
+  function dias(f){
+    if(!f) return null;
+    var hoy=new Date(), v=new Date(f+'T12:00:00');
+    return Math.round((v-hoy)/86400000);
+  }
+  async function pintaDocs(){
+    var c=$('docsLista'); if(!c) return;
+    if(!cur){ c.textContent='—'; return; }
+    c.textContent='Revisando…';
+    var j; try{ j=await docFn({accion:'lista'}); }catch(e){ c.textContent='No pudimos leer sus papeles: '+e.message; return; }
+    var d=j.docs||[];
+    if(!d.length){ c.innerHTML='<span style="color:var(--muted)">Todavía no ha subido ninguno. '+
+      'Los sube desde su liga, en «Tus papeles».</span>'; return; }
+    c.innerHTML=d.map(function(x){
+      var est='';
+      if(x.tipo==='poliza'){
+        var n=dias(x.vigencia);
+        est = n===null ? '<span style="color:#8C6212">sin fecha de vigencia</span>'
+            : n<0  ? '<span style="color:#9E3B2E;font-weight:700">VENCIDA el '+x.vigencia+'</span>'
+            : n<=30? '<span style="color:#8C6212;font-weight:700">vence en '+n+' días ('+x.vigencia+')</span>'
+            :        '<span style="color:#1D6B4A">vigente hasta '+x.vigencia+'</span>';
+      }
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;'+
+             'border-top:1px solid var(--linea,#E2DCCF)">'+
+               '<div style="flex:1"><b>'+esc(DOCT[x.tipo]||x.tipo)+'</b>'+(est?' · '+est:'')+
+                 '<div class="mini" style="color:var(--muted)">'+esc(x.nombre_archivo||'')+
+                 ' · subido el '+new Date(x.created_at).toLocaleDateString('es-MX')+'</div></div>'+
+               '<button class="btn ghost sm" data-doc="'+x.id+'" type="button">Abrir</button>'+
+             '</div>';
+    }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('[data-doc]'),function(b){
+      b.onclick=async function(){
+        b.disabled=true; var antes=b.textContent; b.textContent='Abriendo…';
+        /* La pestaña se abre ANTES de pedir la liga: si se abre después, el
+           navegador la toma por emergente y la bloquea. */
+        var w=window.open('','_blank');
+        try{ var j=await docFn({accion:'ver',doc_id:b.getAttribute('data-doc')});
+             if(w) w.location.href=j.url; else window.location.href=j.url; }
+        catch(e){ if(w) w.close(); toast(e.message,true); }
+        b.disabled=false; b.textContent=antes;
+      };
+    });
+  }
 
   async function pintaLiga(id){
     var el=$('ligaProd'), en=$('ligaEntrar'); if(!el)return;
