@@ -20,10 +20,16 @@
 (function(){
   var PROVS={google:'Continuar con Google', facebook:'Continuar con Facebook'};
 
+  /* `ruta` es a dónde manda el "no tienes cuenta". Por defecto, a la puerta
+     común (/entrar.html?p=<portal>), que pregunta primero de qué casa eres. El
+     Ateneo tiene la suya propia —ya sabe de qué casa vienes, así que empieza por
+     "¿quién eres?" y no por "¿dónde entras?"—, y es la que la gente recibe por
+     correo: mandar a la común desde la puerta del Ateneo era dar un rodeo para
+     volver al mismo sitio. Javi, 4-oct. */
   var TEMAS={
     casapepe  :{color:'#137A56', alta:'Date de alta aquí'},
     sincretico:{color:'#C9501A', alta:'Date de alta'},
-    ateneo    :{color:'#557B28', alta:'Date de alta en el Ateneo'},
+    ateneo    :{color:'#557B28', alta:'Date de alta en el Ateneo', ruta:'/ateneo/alta.html'},
     socios    :{color:'#906A6F', alta:'Pide tu acceso'}
   };
 
@@ -83,7 +89,7 @@
     }
     html+='<div class="ligas">'
       +'<a data-rec="1">¿Olvidaste tu contraseña?</a><br>'
-      +'¿No tienes cuenta? <a href="/entrar.html?p='+encodeURIComponent(o.portal)+'">'+tema.alta+'</a>'
+      +'¿No tienes cuenta? <a href="'+(tema.ruta||('/entrar.html?p='+encodeURIComponent(o.portal)))+'">'+tema.alta+'</a>'
       +'</div>'
       +'<div class="rec"><input type="email" placeholder="tu@correo.com" autocomplete="email">'
       +'<button type="button">Mandarme el enlace</button><div class="dice"></div></div>'
