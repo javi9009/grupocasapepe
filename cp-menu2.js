@@ -61,6 +61,9 @@
     '  cursor:pointer;color:var(--txt2,#5f5e5a);font-size:13.5px;line-height:1.2;white-space:nowrap}',
     '.m2-cat .it .ic{flex:0 0 22px;text-align:center;font-size:17px}',
     '.m2-cat .it .tx{overflow:hidden;text-overflow:ellipsis}',
+    '.m2 .it.off{opacity:.38;cursor:default}',
+    '.m2 .it.off:hover{background:transparent}',
+    '.m2 .it .cand{margin-left:auto;font-size:11px;opacity:.75}',
     '.m2.catmin .m2-cat .it .tx{display:none}',
     '.m2-cat .it:hover{background:var(--bg3,#f1efe8)}',
     '.m2-cat .it.on{background:var(--m2suave);color:var(--m2fuerte);font-weight:600}',
@@ -145,6 +148,15 @@
     var dentro = function(r){ var i=String(r||'').search(/[#?]/); return i<0 ? '' : String(r).slice(i); };
     return dentro(p.ruta) === dentro(n.ruta);
   }
+  /* APAGADO, NO ESCONDIDO. Javi, 4-oct-2026: «lo que sí podrían ver es el menú
+     general pero apagado, para que vean qué hay creado pero no tienen acceso».
+     Esconder una pantalla hace que nadie sepa que existe y acaben pidiéndola
+     por WhatsApp; dejarla en gris dice «esto existe, no es para ti» y de paso
+     enseña lo que hay montado. El permiso de verdad no cambia: el renglón no
+     abre nada y la pantalla sigue cerrada por su lado. */
+  function apagado(n){
+    return !!D.mostrarApagado && !D.puedeVer(n.codigo);
+  }
   function esVisible(n){
     if (esPestana(n)) return false;
     if (n.tipo === 'contenedor') return (hijos[n.codigo]||[]).some(esVisible);
@@ -155,7 +167,7 @@
        el menú era de seis probadores daba igual; ahora lo ve toda la casa.
        Javi, 1-oct. */
     if (!n.ruta && !(hijos[n.codigo]||[]).some(esVisible)) return false;
-    return D.puedeVer(n.codigo);
+    return D.puedeVer(n.codigo) || apagado(n);
   }
   function hijosVisibles(cod){
     var ord = function(x){ return (x==null || x==='') ? 99 : Number(x); };
@@ -194,11 +206,14 @@
       var cat = el('nav','m2-cat');
       hijosVisibles(null).forEach(function(n){
         var p = parte(n);
-        var it = el('div','it'+(n.codigo===estado.cat?' on':''),
+        var apg = apagado(n) && !hijosVisibles(n.codigo).some(function(h){ return D.puedeVer(h.codigo); });
+        var it = el('div','it'+(n.codigo===estado.cat?' on':'')+(apg?' off':''),
           '<span class="ic">'+esc(p.ic)+'</span><span class="tx">'+esc(p.tx)+'</span>'
+          +(apg?'<span class="cand">\u00b7</span>':'')
           +(movil?'<span style="margin-left:auto;opacity:.5">›</span>':''));
-        it.title = p.tx;
+        it.title = apg ? (p.tx+' — no tienes acceso') : p.tx;
         it.onclick = function(){
+          if (apg) return;
           estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
           estado.catmin = false; estado.vista = 'sub';
           estado.abiertos = {};   // otra área, cajones cerrados
@@ -255,12 +270,15 @@
             var p = parte(n0);                       // pero el nombre es el de arriba
             var dentro = hijosVisibles(d.codigo);
             var pend = (d.tipo === 'pendiente') || (!d.ruta && !dentro.length);
+            var apg = apagado(n0) && !dentro.some(function(h){ return D.puedeVer(h.codigo); });
             var abierto = !!estado.abiertos[d.codigo];
             var it = el('div','it'+(d.codigo===estado.activa?' on':'')+(pend?' pend':'')
-                               +(abierto?' abierto':''),
+                               +(apg?' off':'')+(abierto?' abierto':''),
               '<span class="ic">'+esc(p.ic)+'</span><span>'+esc(p.tx)+'</span>'
+              +(apg?'<span class="cand">\u00b7</span>':'')
               +(dentro.length?'<span class="fl">\u203A</span>':''));
-            if (!pend) it.onclick = function(){ elige(n0); };
+            if (apg) it.title = p.tx+' — no tienes acceso';
+            if (!pend && !apg) it.onclick = function(){ elige(n0); };
             host.appendChild(it);
             if (dentro.length && abierto){
               var nido = el('div','nido');
