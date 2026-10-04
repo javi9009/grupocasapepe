@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sincrético · pagar</title>
+<link rel="icon" href="img/sincretico-isotipo-64.png">
+<meta name="robots" content="noindex,nofollow">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="sinc.css">
+<meta name="theme-color" content="#FBF7F2">
+<style>
+.env{max-width:480px;margin:0 auto;padding:22px 20px 70px}
+h1{font:700 24px/1.14 Oswald,sans-serif;text-transform:uppercase;margin:6px 0 2px}
+.res{background:#fff;border:1px solid var(--linea);border-radius:var(--radio);box-shadow:var(--sombra);padding:14px 16px;margin:14px 0}
+.res .l{display:flex;justify-content:space-between;font-size:14px;color:var(--tinta-2);padding:3px 0}
+.res .l.tot{border-top:1px solid var(--linea);margin-top:7px;padding-top:9px;font:700 17px Oswald;text-transform:uppercase;color:var(--tinta)}
+#pe{margin:16px 0 0}
+.bt{display:block;width:100%;font:600 14px/1 Oswald,sans-serif;letter-spacing:.05em;text-transform:uppercase;padding:14px;border-radius:10px;border:2px solid var(--naranja);background:var(--naranja);color:#fff;cursor:pointer;margin-top:16px}
+.bt:disabled{opacity:.5;cursor:default}
+.msg{margin-top:12px;font-size:14px;border-radius:9px;padding:11px 13px;display:none;line-height:1.5}
+.msg.mal{display:block;background:var(--error-bg);color:var(--error)}
+.msg.bien{display:block;background:var(--ok-bg);color:var(--ok)}
+.cargando{color:var(--gris);padding:40px 0;text-align:center}
+.seguro{font-size:12px;color:var(--gris);text-align:center;margin-top:12px}
+.gracias{text-align:center;padding:24px 0}
+.gracias .folio{font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;margin:8px 0}
+.bt.alt{background:#fff;color:var(--naranja-oscuro)}
+</style>
+</head>
+<body>
+<div class="env" id="env"><div class="cargando">Cargando…</div></div>
+
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+var SB='https://rehophywchakfapivsbh.supabase.co';
+var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+var $=function(i){return document.getElementById(i);};
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function mx(n){return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0});}
+var P=new URLSearchParams(location.search);
+var FOLIO=(P.get('res')||P.get('f')||'').trim().toUpperCase();
+var VUELTA=P.get('redirect_status')||'';
+var stripe=null, elements=null, CTX=null;
+
+async function fn(accion){
+  var r=await fetch(SB+'/functions/v1/evento-checkout',{method:'POST',
+    headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign({folio:FOLIO},accion||{}))});
+  var j=null; try{ j=await r.json(); }catch(_){}
+  return {ok:r.ok,status:r.status,data:j};
+}
+function boletoLink(){ return 'evento-boleto.html?f='+encodeURIComponent(FOLIO); }
+
+function gracias(txt){
+  $('env').innerHTML='<div class="gracias"><h1>¡Listo!</h1>'
+    +'<div class="folio">'+esc(FOLIO)+'</div>'
+    +'<p class="desc" style="color:var(--tinta-2)">'+esc(txt)+'</p>'
+    +'<a class="bt" href="'+boletoLink()+'">Ver mi boleto</a></div>';
+}
+
+async function init(){
+  if(!FOLIO){ $('env').innerHTML='<div class="cargando">Falta la reserva.</div>'; return; }
+  var c=await fn({accion:'contexto'});
+  if(!c.ok||!c.data||c.data.error){ $('env').innerHTML='<div class="cargando">'+esc((c.data&&c.data.error)||'No encontramos tu reserva.')+'</div>'; return; }
+  CTX=c.data;
+  if(CTX.pagado || VUELTA==='succeeded'){ gracias('Tu pago quedó registrado. Te mandamos el boleto con su QR al correo; también lo abres aquí.'); return; }
+
+  $('env').innerHTML=
+    '<h1>Pagar</h1>'
+    +'<div class="res"><div class="l"><span>'+esc(CTX.tier||'Boleto')+' × '+(CTX.pax||1)+'</span><span>'+mx(CTX.total)+'</span></div>'
+      +'<div class="l tot"><span>Total</span><span>'+mx(CTX.total)+'</span></div></div>'
+    +'<div id="pe"></div>'
+    +'<button class="bt" id="pagar" disabled>Pagar '+mx(CTX.total)+'</button>'
+    +'<div class="msg" id="msg"></div>'
+    +'<div class="seguro">Pago seguro con Stripe. El cobro cae en la cuenta del productor.</div>';
+
+  if(!CTX.pk){ msg('El cobro con tarjeta todavía no está configurado. Te mandaremos el enlace de pago.','mal'); return; }
+  var pi=await fn({});
+  if(!pi.ok||!pi.data||!pi.data.client_secret){ msg((pi.data&&pi.data.error)||'No pudimos abrir el pago. Intenta de nuevo.','mal'); return; }
+  stripe = CTX.cuenta ? Stripe(CTX.pk,{stripeAccount:CTX.cuenta}) : Stripe(CTX.pk);
+  elements = stripe.elements({clientSecret:pi.data.client_secret, appearance:{theme:'stripe'}});
+  var pe = elements.create('payment'); pe.mount('#pe');
+  pe.on('ready',function(){ $('pagar').disabled=false; });
+  $('pagar').onclick=pagar;
+}
+function msg(t,cls){ var m=$('msg'); if(!m)return; m.textContent=t; m.className='msg '+cls; }
+
+async function pagar(){
+  $('pagar').disabled=true; msg('Procesando…','bien');
+  var r=await stripe.confirmPayment({
+    elements:elements,
+    confirmParams:{ return_url: location.origin+location.pathname+'?res='+encodeURIComponent(FOLIO) }
+  });
+  if(r.error){ msg(r.error.message||'No se pudo cobrar. Revisa tu tarjeta.','mal'); $('pagar').disabled=false; return; }
+  /* Si no hubo redirección, el pago quedó hecho aquí mismo. La confirmación de
+     verdad la da el webhook; esto solo lleva al boleto. */
+  gracias('Tu pago quedó registrado. Te mandamos el boleto con su QR al correo; también lo abres aquí.');
+}
+init();
+</script>
+</body>
+</html>
