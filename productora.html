@@ -115,6 +115,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
 </head><body>
 <div id="root"><div class="wrap"><div class="card">Cargando…</div></div></div>
 <div class="toast" id="toast"></div>
+<script src="/sinc-crop.js" defer></script>
 <script>
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
@@ -807,6 +808,29 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     }catch(e){ toast('No se pudo guardar',true); }
     $('gGuardar').disabled=false;
   }
+  /* EL MISMO RECORTADOR DE SIEMPRE. Javi, 4-oct-2026: «el subir foto tiene el
+     sistema de centrar que tenemos diseñado?». Lo tenemos desde hace meses
+     (sinc-crop) y lo usan la ficha de experiencia y el alta de eventos; aquí
+     faltaba. Sin él, una foto vertical de alguien del equipo salía cortada por
+     la mitad y nadie entendía por qué. Si por lo que sea no cargó el
+     recortador, se sube tal cual antes que dejar a nadie sin poder subir. */
+  function leeDataUri(b){
+    return new Promise(function(res,rej){
+      var fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.onerror=rej;
+      fr.readAsDataURL(b);
+    });
+  }
+  async function conRecorte(file, titulo, cual){
+    if(!window.sincCrop) return await leeDataUri(file);
+    var blob = await new Promise(function(res){
+      sincCrop.open(file, {titulo:titulo, only:cual}, function(r){
+        res(r ? (cual==='v' ? (r.vBlob||r.hBlob) : (r.hBlob||r.vBlob)) : null);
+      });
+    });
+    if(!blob) return null;            /* cerró el recortador: ni error ni foto */
+    return await leeDataUri(blob);
+  }
+
   /* ---------- equipo: alta, rol y foto ----------
      Javi, 4-oct-2026: «debes permitir que haya más personas del equipo y darles
      su rol». Los roles ya estaban en la base desde septiembre -técnico,
@@ -836,15 +860,14 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   async function subeFotoPersona(i,file){
     var u=EQ[i]; if(!u||!file) return;
     if(file.size>12*1024*1024){ toast('Esa foto pesa más de 12 MB',true); return; }
-    var l=new FileReader();
-    l.onload=async function(){
-      try{
-        var r=await callFn('prod-img',{token:TOK,destino:'persona',persona_id:u.id,imagen:l.result});
-        if(!(r&&r.ok)||(r.data&&r.data.error)) throw new Error((r.data&&r.data.error)||'No se pudo subir');
-        toast('Foto subida'); await cargaEquipo();
-      }catch(e){ toast(e.message,true); }
-    };
-    l.readAsDataURL(file);
+    try{
+      var img=await conRecorte(file,'Acomoda la foto de '+(u.nombre||'tu equipo'),'v');
+      if(!img) return;
+      toast('Subiendo…');
+      var r=await callFn('prod-img',{token:TOK,destino:'persona',persona_id:u.id,imagen:img});
+      if(!(r&&r.ok)||(r.data&&r.data.error)) throw new Error((r.data&&r.data.error)||'No se pudo subir');
+      toast('Foto subida'); await cargaEquipo();
+    }catch(e){ toast(e.message||'No se pudo subir',true); }
   }
 
   /* ---------- la galería del pie ---------- */
@@ -865,16 +888,16 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     var fi=$('galFile'), f=fi.files&&fi.files[0]; if(!f) return;
     if(f.size>12*1024*1024){ toast('Esa foto pesa más de 12 MB',true); fi.value=''; return; }
     var pie=($('galPie').value||'').trim();
-    var l=new FileReader();
-    l.onload=async function(){
-      try{
-        var r=await callFn('prod-img',{token:TOK,destino:'galeria',imagen:l.result,pie:pie});
+    try{
+      var img=await conRecorte(f,'Acomoda la foto de tu galería','h');
+      if(img){
+        toast('Subiendo…');
+        var r=await callFn('prod-img',{token:TOK,destino:'galeria',imagen:img,pie:pie});
         if(!(r&&r.ok)||(r.data&&r.data.error)) throw new Error((r.data&&r.data.error)||'No se pudo subir');
         GAL=(r.data&&r.data.galeria)||GAL; $('galPie').value=''; pintaGaleria(null); toast('Subida');
-      }catch(e){ toast(e.message,true); }
-      fi.value='';
-    };
-    l.readAsDataURL(f);
+      }
+    }catch(e){ toast(e.message||'No se pudo subir',true); }
+    fi.value='';
   }
   async function quitaGaleria(i){
     var g=GAL[i]; if(!g) return;
@@ -1102,15 +1125,6 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
           '<div class="doc"><b>Pasaporte</b><span class="ay2">si no tienes INE</span><span id="d-pasaporte" class="est">Revisando…</span>'+
             '<label class="subir">Subir<input type="file" data-doc="pasaporte" accept="application/pdf,image/*" hidden></label></div>'+
         '</div>'+
-        '<div class="doc" style="margin-top:10px">'+
-          '<b>Póliza de responsabilidad civil</b>'+
-          '<span class="ay2">PDF o foto, con la fecha hasta la que vale</span>'+
-          '<span id="d-poliza" class="est">Revisando…</span>'+
-          '<div class="alta" style="margin-top:6px">'+
-            '<input type="date" id="polVig" style="min-width:150px">'+
-            '<label class="subir">Subir póliza<input type="file" data-doc="poliza" accept="application/pdf,image/*" hidden></label>'+
-          '</div>'+
-        '</div>'+
         '<div class="msgdoc" id="msgDoc"></div>'+
       '</div>'+
       '<div class="card"><h3>Póliza de responsabilidad civil</h3>'+
@@ -1121,6 +1135,18 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
           '<div class="fld"><label>Número de póliza</label><input id="c-poliza_numero" value="'+esc(f.poliza_numero||'')+'"></div>'+
           '<div class="fld"><label>Suma asegurada</label><input id="c-poliza_suma" type="number" value="'+(f.poliza_suma!=null?f.poliza_suma:'')+'"></div>'+
           '<div class="fld"><label>Vigencia</label><input id="c-poliza_vigencia" type="date" value="'+esc(f.poliza_vigencia?String(f.poliza_vigencia).slice(0,10):'')+'"></div>'+
+          /* EL ARCHIVO VA CON EL "SÍ TENGO". Javi, 4-oct-2026: «asocia subir la
+             póliza a si dicen SÍ tengo». Pedirle el PDF a quien acaba de decir
+             que no tiene póliza no tiene sentido; y tenerlo en otra tarjeta
+             hacía que pareciera otra cosa. La fecha que manda es la de aquí. */
+          '<div class="fld ancho" id="polizaArchivo">'+
+            '<label>El documento</label>'+
+            '<div class="alta" style="margin-top:0">'+
+              '<span id="d-poliza" class="est">Revisando…</span>'+
+              '<label class="subir">Subir póliza<input type="file" data-doc="poliza" accept="application/pdf,image/*" hidden></label>'+
+            '</div>'+
+            '<div class="ay">PDF o foto. Se guarda en privado y te avisamos un mes antes de que venza.</div>'+
+          '</div>'+
         '</div>'+
         '<label class="chk" id="polizaCotizarWrap" style="display:'+(f.tiene_poliza?'none':'block')+';margin-top:8px"><input type="checkbox" id="c-poliza_cotizar"'+(f.poliza_cotizar?' checked':'')+'> Quiero que Casa Pepe me ayude a conseguirla</label>'+
       '</div>'+
@@ -1192,7 +1218,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     var pct = Number((f && f.comision_pct) != null ? f.comision_pct : 35);
     var ej = 200, reten = Math.round(ej*pct/100), queda = ej - reten;
     return '<div class="comi">'+
-      '<div class="comi-t">Tu comisión: <b>'+pct+'%</b> de cada boleto que se venda en línea</div>'+
+      '<div class="comi-t">El Ateneo retiene el <b>'+pct+'%</b> de cada boleto que se venda en línea. El resto es tuyo.</div>'+
       '<div class="comi-e">'+
         '<div><span>Boleto de</span><b>'+pesos(ej)+'</b></div>'+
         '<div><span>Se queda el Ateneo</span><b>'+pesos(reten)+'</b></div>'+
@@ -1248,7 +1274,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
         lector.onload=async function(){
           try{
             var t=inp.getAttribute('data-doc');
-            var vg=(t==='poliza' && $('polVig')) ? $('polVig').value : null;
+            var vg=(t==='poliza' && $('c-poliza_vigencia')) ? $('c-poliza_vigencia').value : null;
             if(t==='poliza' && !vg){ if(m)m.textContent='Pon hasta qué día vale la póliza antes de subirla.'; inp.value=''; return; }
             var r=await callFn('prod-doc',{accion:'subir',token:TOK,
               tipo:t, nombre:f.name, archivo:lector.result, vigencia:vg});
