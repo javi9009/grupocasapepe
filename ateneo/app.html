@@ -86,6 +86,14 @@ label{display:block;font:600 11px/1 Oswald,sans-serif;letter-spacing:.09em;text-
 .f .pr{display:block;font:600 13px/1 Oswald,sans-serif;color:var(--naranja-oscuro);margin-top:7px}
 .f .hora{position:absolute;left:7px;bottom:7px;background:rgba(30,26,22,.82);color:#fff;
   font:600 11px/1 Oswald,sans-serif;padding:3px 7px;border-radius:999px}
+/* los planes de coworking: tarjeta sin foto, y el Day Pass marcado */
+.f.pl{flex:0 0 186px;position:relative}
+.f.pl .cu{padding:13px 12px 14px}
+.f.pl .pr s{color:var(--tenue);font-weight:400}
+.f.pl .pr i{font-style:normal;color:var(--gris);font-weight:400;font-size:11.5px}
+.f.pl.dest{border-color:var(--oro);box-shadow:0 0 0 2px rgba(201,162,39,.18),var(--sombra)}
+.f.pl .cinta{display:block;background:var(--oro);color:#fff;font:700 10.5px/1 Oswald,sans-serif;
+  letter-spacing:.06em;text-transform:uppercase;padding:5px 10px}
 
 /* puertas (los módulos que llevan fuera) */
 .puertas{display:grid;gap:10px;grid-template-columns:1fr 1fr}
@@ -268,6 +276,10 @@ label{display:block;font:600 11px/1 Oswald,sans-serif;letter-spacing:.09em;text-
     <p class="sub">Aprende con las manos: artesanía, oficios y más.</p>
     <div class="carr" id="talleres"></div>
 
+    <div class="lab">Apartar un lugar en el coworking</div>
+    <p class="sub" id="planesSub">Los planes del Ateneo. El Day Pass es para venir un día suelto.</p>
+    <div class="carr" id="planes"></div>
+
     <div class="lab">La comunidad de Virreyes</div>
     <p class="sub" id="comuSub">Quién vive y trabaja en el edificio. Toca a alguien para saber más.</p>
     <div class="gente" id="comunidad"></div>
@@ -288,9 +300,28 @@ label{display:block;font:600 11px/1 Oswald,sans-serif;letter-spacing:.09em;text-
   <div class="pane" id="p-salas">
     <div class="lab">Reservar una sala</div>
     <p class="sub" id="salasSub"></p>
+
+    <!-- EL CORREO DEL TRABAJO.
+         El coworking se contrata con un correo y la app se abre con otro, así que
+         la misma persona entraba sin plan y sin horas. Aquí reclama el suyo. -->
+    <div class="card" id="vincBox" style="display:none">
+      <b style="font:700 14px/1.2 Oswald,sans-serif;text-transform:uppercase">¿Tienes un lugar en el coworking?</b>
+      <p class="sub" style="margin:6px 0 10px">Si lo contrataste con otro correo, ponlo aquí y te cargamos tus horas.</p>
+      <div class="rej2">
+        <div style="grid-column:1/-1"><label for="vMail">El correo con el que lo contrataste</label>
+          <input id="vMail" type="email" placeholder="tucorreo@empresa.com"></div>
+      </div>
+      <div style="margin-top:10px"><button class="bt" id="vBtn">Cargar mis beneficios</button></div>
+      <div class="msg" id="vMsg"></div>
+    </div>
+
     <div id="salas"></div>
     <div class="lab">Mis reservas</div>
     <div id="misres"></div>
+
+    <div class="lab" style="margin-top:18px">Apartar un lugar en el coworking</div>
+    <p class="sub">Las horas de las salas vienen con el plan. Si todavía no tienes uno, aquí están.</p>
+    <div class="carr" id="planes2"></div>
   </div>
 
   <!-- ROOM SERVICE -->
@@ -642,6 +673,61 @@ async function pintaInicio(){
     }).join('') : '<div class="vacio" style="flex:1">Sin comunidades cargadas.</div>';
 }
 
+/* ---------- apartar un lugar en el coworking ----------
+   Los planes salen de `ateneo_planes`, que es de donde los lee la web y de donde
+   Stripe saca el importe: si aquí se pintara otro precio, el que cobra manda y el
+   huésped se siente engañado. El Day Pass va primero y marcado, que es la puerta
+   de entrada: se prueba un día y se queda. */
+function planesHtml(l){
+  if(!l || !l.length) return '<div class="vacio" style="flex:1">Sin planes publicados.</div>';
+  return l.map(function(p){
+    var pr = (p.precio_lanzamiento!=null && Number(p.precio_lanzamiento)>0)
+      ? money(p.precio_lanzamiento) : (p.precio!=null?money(p.precio):'');
+    var antes = (p.precio_lanzamiento!=null && Number(p.precio_lanzamiento)>0 && Number(p.precio)>Number(p.precio_lanzamiento))
+      ? money(p.precio) : '';
+    var per = p.periodo==='mensual'?'al mes':(p.periodo==='semana'?'la semana':(p.periodo==='dia'?'el día':''));
+    var dest = p.slug==='day-pass';
+    var inc = (p.incluye||[]).slice(0,3).join(' · ');
+    return '<a class="f pl'+(dest?' dest':'')+'" href="https://ateneoturistico.org/#membresias" target="_blank" rel="noopener">'+
+      (dest?'<span class="cinta">Para empezar</span>':'')+
+      '<span class="cu">'+
+        '<span class="nm">'+esc(p.nombre)+'</span>'+
+        (inc?'<span class="de">'+esc(inc)+'</span>':'')+
+        '<span class="pr">'+(antes?'<s>'+antes+'</s> ':'')+pr+(per?' <i>'+per+'</i>':'')+'</span>'+
+        (p.agotado?'<span class="de">Ocupado ahora mismo</span>':'')+
+      '</span>'+
+    '</a>';
+  }).join('');
+}
+async function pintaPlanes(){
+  var l=[];
+  try{ l=await get('ateneo_planes?select=slug,nombre,periodo,precio,precio_lanzamiento,incluye,agotado&activo=is.true&order=periodo.asc,orden.asc'); }catch(_){ l=[]; }
+  /* el Day Pass delante, el resto como vienen */
+  l=(l||[]).slice().sort(function(a,b){ return (b.slug==='day-pass'?1:0)-(a.slug==='day-pass'?1:0); });
+  var h=planesHtml(l);
+  if($('planes'))  $('planes').innerHTML=h;
+  if($('planes2')) $('planes2').innerHTML=h;
+}
+
+/* ---------- reclamar el correo del coworking ---------- */
+function pintaVinc(){
+  var b=$('vincBox'); if(!b) return;
+  /* sólo le hace falta a quien no tiene plan: al que ya es ateneísta le estorba */
+  b.style.display = (YO && YO.ateneista) ? 'none' : '';
+}
+$('vBtn').onclick=async function(){
+  var m=$('vMsg'); m.className='msg'; this.disabled=true;
+  try{
+    var r=await rpc('ate_vincula',{p_token:TOK,p_email:$('vMail').value.trim()});
+    if(r && r.error) throw new Error(r.error);
+    m.className='msg bien';
+    m.textContent = r && r.ya ? 'Ese correo ya era tuyo.'
+      : (r && r.plan ? 'Listo. Te cargamos tu plan y tus horas.' : 'Listo. Te enlazamos tu residencia.');
+    YO=await rpc('ate_yo',{p_token:TOK}); pintaYo(); pintaVinc(); await pintaSalas();
+  }catch(x){ m.className='msg mal'; m.textContent=x.message; }
+  this.disabled=false;
+};
+
 /* ---------- la comunidad de Virreyes ----------
    Residentes y ateneístas que encendieron su ficha. Nadie sale por el hecho de
    haber reservado: el teléfono que dejaron al reservar es para que el Ateneo les
@@ -719,8 +805,11 @@ async function pintaSalas(){
       ? '<div class="c ok">Te quedan '+s.libres+' h de cortesía este '+(s.periodo==='semana'?'semana':'mes')+
         (s.horas_plan?' (de '+s.horas_plan+' h)':'')+'</div>'
       : (s.puede
+          /* Sin precio por hora no es que falte el dato: es que esa sala va incluida
+             en los planes y todavía no se abre al público. Decir "pídela al Ateneo"
+             hacía pensar que era un hueco. */
           ? '<div class="c no">'+(s.precio_hora!=null?('Sin cortesía · '+money(s.precio_hora)+' la hora')
-                                                     :'Sin cortesía · pídela al Ateneo')+'</div>'
+                                                     :'Incluida en los planes del Ateneo · todavía no se vende al público')+'</div>'
           : '<div class="c no">'+esc(s.motivo||'')+'</div>');
     return '<div class="sala"><div class="n">'+esc(s.nombre)+'</div>'+cort+
       (s.puede?'<div class="rej2" style="margin-top:10px">'+
@@ -1007,6 +1096,7 @@ async function arranca(){
   pintaYo();
   ve(P.get('rs')?'rs':'inicio');
   pintaInicio(); pintaCartera(); pintaSalas(); pintaRS(); pintaGente(); pintaComunidad();
+  pintaPlanes(); pintaVinc();
   /* ¿tiene residencia vigente con check-in pendiente? */
   rpc('ate_checkin_estado',{p_token:TOK}).then(function(r){ CHK=r; pintaCheckinCard(); }).catch(function(){});
   /* ¿es productora? entonces se abre la pestaña de sus eventos */
