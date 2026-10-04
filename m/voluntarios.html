@@ -301,6 +301,8 @@ function tarjeta(r){
        : (r.plan_modalidad ? 'empezó su plan' : ''));
 
   if(esCont && planDice) nota = planDice;
+  else if(r.vacante==='yoga' && r.etapa==='fechas' && !r.desde)
+    nota = 'pidió fechas al aplicar · mándale la carta';
   else if(r.etapa==='solicitud')      nota = r.entro ? 'entró, sin avance' : (r.usuario_creado?'nunca ha entrado':'sin usuario');
   else if(r.etapa==='preparando')nota = (r.estado==='preaprobado'?'preaprobado · ':'')+(av.join(' · ')||'empezando');
   else if(r.etapa==='fechas')    nota = 'sin contestar';
@@ -308,11 +310,23 @@ function tarjeta(r){
   else if(r.etapa==='carta_aceptada') nota = 'firmada ✓';
   else if(r.etapa==='descartado')     nota = (r.nota_interna||'').slice(0,70) || (r.estado==='rechazado'?'rechazado en el filtro':'estancia rechazada');
 
+  /* A los de contenido y yoga se les escribe por fuera: no entran a la app,
+     así que la tarjeta lleva encima por dónde localizarlos. Eso es lo que daba
+     la tabla de «por contactar tú» que ya no está. */
+  let via='';
+  if(r.ruta_quiz===false){
+    const vs=[];
+    if(r.whatsapp)  vs.push(chipWa(r.whatsapp));
+    if(r.instagram) vs.push(chipIg(r.instagram));
+    if(vs.length) via='<div class="meta">'+vs.join(' ')+'</div>';
+  }
+
   return '<div class="cand" onclick="ficha(\''+r.id+'\')" title="'+esc(r.email||'')+'">'+
     '<b>'+esc(r.nombre||'(sin nombre)')+' '+bandera(r)+'</b>'+
     vacChip(r)+
     (cuando?'<div class="meta">'+cuando+'</div>':'')+
     (nota?'<div class="meta">'+esc(nota)+'</div>':'')+
+    via+
   '</div>';
 }
 
@@ -322,9 +336,11 @@ async function bandeja(){
     const todo=await rpc('vol_embudo');
     if(!todo.length){c.innerHTML='<p class="vacio">Todavía no hay candidatos con correo.</p>';return;}
     FILA={}; todo.forEach(r=>{FILA[r.id]=r;});
-    // Contenido y yoga se quedan en la web: a la app sólo entran los de Guest Experiences.
-    const contacto=todo.filter(r=>r.ruta_quiz===false);
-    const d=todo.filter(r=>r.ruta_quiz!==false);
+    /* Todos en el mismo embudo. Hasta hoy contenido y yoga vivían en una tabla
+       aparte «por contactar tú», porque no entran a la app y no tenían con qué
+       avanzar; ahora sí lo tienen —el plan de redes ellos, sus fechas los de
+       yoga— y recorren las mismas siete etapas hasta el check-in. Javi, 4-oct. */
+    const d=todo;
     const mex=a=>{const n=a??0;return '<span style="font-weight:700;color:'+
       (n>=7?'var(--green)':n>=5?'#8a6420':'#8f3d2a')+'">México '+n+'/10</span>';};
 
@@ -340,7 +356,7 @@ async function bandeja(){
       : (r.plan_modalidad           ? '<span class="chk">empezó</span>'
       : (r.plan_estado              ? '<span class="chk">liga mandada, sin abrir</span>'
                                     : '<span class="chk">— sin liga</span>')));
-    const pend = contacto.filter(r=>r.plan_estado==='entregado');
+    const pend = todo.filter(r=>r.plan_estado==='entregado');
     const rank = r => r.plan_estado==='entregado' ? 0 : (r.plan_estado==='ajustes' ? 1 : (r.plan_piezas>0?2:3));
 
     let h='';
@@ -354,28 +370,7 @@ async function bandeja(){
            (r.pide_desde?' · '+f(r.pide_desde)+(r.pide_hasta?' → '+f(r.pide_hasta):''):'')+'</div></div>').join('')+
          '</div>';
     }
-    if(contacto.length){
-      h+='<div class="card" style="margin-bottom:16px"><h2>Por contactar tú · '+contacto.length+'</h2>'+
-         '<p class="sub" style="margin-bottom:10px">Éstos no entran a la app: aplicaron desde la web, '+
-         'dejaron su Instagram y las fechas que quieren, y los contactas tú. El marcador de México no '+
-         'los reprueba — está para que sepas con quién hablas.</p>'+
-         '<table><thead><tr><th>Candidato</th><th>Vacante</th><th>Plan de redes</th><th>WhatsApp</th><th>Instagram</th><th>Quiere venir</th>'+
-         '<th>Conoce México</th><th>Abierta</th></tr></thead><tbody>';
-      contacto.sort((a,b)=>(rank(a)-rank(b))||((b.quiz_aciertos??0)-(a.quiz_aciertos??0))).forEach(r=>{
-        h+='<tr class="row" onclick="ficha(\''+r.id+'\')"><td><b>'+esc(r.nombre||'(sin nombre)')+'</b> '+bandera(r)+
-           (r.email?'<br><span class="chk">'+esc(r.email)+'</span>':'')+'</td>'+
-           '<td>'+chipVac(r)+'</td>'+
-           '<td>'+(r.vacante==='contenido'?planTxt(r):'<span class="chk">—</span>')+'</td>'+
-           '<td>'+(r.whatsapp?chipWa(r.whatsapp):'<span class="chk">— no lo dejó</span>')+'</td>'+
-           '<td>'+(r.instagram?chipIg(r.instagram):'<span class="chk">— no lo dejó</span>')+'</td>'+
-           '<td class="chk">'+(r.pide_desde?f(r.pide_desde)+(r.pide_hasta?' → '+f(r.pide_hasta):'')
-                                           :'<span style="color:#8f3d2a">sin fechas</span>')+'</td>'+
-           '<td>'+mex(r.quiz_aciertos)+'</td>'+
-           '<td class="chk">'+r.dias_abierta+' d</td></tr>';
-      });
-      h+='</tbody></table></div>';
-    }
-    if(!d.length){c.innerHTML=h+'<p class="vacio">Nadie en la ruta de Guest Experiences todavía.</p>';return;}
+    if(!d.length){c.innerHTML=h+'<p class="vacio">Todavía no hay nadie en el embudo.</p>';return;}
 
     const vivos=d.filter(r=>r.etapa!=='descartado').length;
     h+='<p class="sub" style="margin:0 0 12px">'+vivos+' candidato'+(vivos===1?'':'s')+' en el embudo · '+
@@ -418,9 +413,12 @@ async function ficha(id){
        vacante_emoji:vc&&vc.emoji,vacante_color:vc&&vc.color})+
      chipWa(s.whatsapp)+(s.instagram?chipIg(s.instagram):'')+'</p>';
   if(vc&&vc.desc_es) h+='<p class="sub" style="margin:-6px 0 12px">'+esc(vc.desc_es)+'</p>';
-  if(vc&&vc.ruta_quiz===false) h+='<p class="msg">Aplicó desde la web y ahí se queda: a la app sólo entran los de Guest Experiences. '+
-    'Te dejó su Instagram y sus fechas para que lo contactes tú. Contestó el test igual — <b>'+(s.quiz_aciertos??0)+' de 10</b> — '+
-    'pero no lo puede reprobar: está ahí para que sepas cuánto conoce México antes de escribirle.</p>';
+  if(vc&&vc.ruta_quiz===false) h+='<p class="msg">No entra a la app, pero sí recorre el embudo hasta el check-in: '+
+    (s.vacante==='contenido'
+      ? 'su preparación es el <b>plan de redes</b> de aquí abajo, y al validarlo le mandas la carta.'
+      : 'con las fechas que puso al aplicar ya le puedes mandar la carta.')+
+    ' Contestó el test igual — <b>'+(s.quiz_aciertos??0)+' de 10</b> — pero no lo puede reprobar: está ahí '+
+    'para que sepas cuánto conoce México antes de escribirle.</p>';
   h+='<div class="grid">'+
      (s.vacante?'<div class="kv"><b>Vacante</b>'+esc((vc&&vc.nombre_es)||s.vacante)+'</div>':
                 '<div class="kv"><b>Vacante</b>no eligió</div>')+
@@ -453,7 +451,7 @@ async function ficha(id){
     h+='<div class="card"><h2>Contactar</h2>'+
        '<p class="sub" style="margin-bottom:10px">'+(esContenido
          ? 'No pasa por el quiz: su prueba es el plan de redes de aquí abajo. Mándale su liga por WhatsApp o Instagram, porque los de contenido casi nunca dejan correo.'
-         : 'Esta vacante no pasa por la app ni por la carta compromiso. Escríbele tú y acuerden lo demás por fuera.')+'</p>'+
+         : 'No prepara nada antes de venir: con las fechas que puso ya le puedes mandar la carta compromiso de aquí abajo. Escríbele para confirmarlas.')+'</p>'+
        '<p>'+(s.whatsapp
          ? '<a class="btn" href="https://wa.me/'+encodeURIComponent(s.whatsapp)+'" target="_blank" rel="noopener">\u{1F4AC} WhatsApp '+esc(waFmt(s.whatsapp))+'</a> '
          : '<span class="chk">No dejó WhatsApp. </span>')+
@@ -472,7 +470,10 @@ async function ficha(id){
     if(esContenido){
       h+='<div class="card" id="planCard"><h2>Plan de redes</h2>'+
          '<p class="vacio">Cargando su plan…</p></div>';
-    } else { c.innerHTML=h; abreFicha(); return; }
+    }
+    /* Antes la ficha se cortaba aquí para todo el que no fuera de contenido, y
+       con eso yoga se quedaba sin carta compromiso. Ya no: sigue hacia abajo
+       como los demás. Javi, 4-oct. */
   }
   h+='<div class="card"><h2>Aceptar candidato · carta compromiso</h2>'+
      '<p class="sub" style="margin-bottom:10px">Al aceptar, sus fechas quedan confirmadas y le llega su carta compromiso a SoyPepe: acepta venir bajo las condiciones de huésped de Casa Pepe y esa aceptación <b>es su check-in</b>. La carta incluye la extensión mes a mes si desbloquea 2 tours más y logra los objetivos de valoraciones y ventas.</p>'+
