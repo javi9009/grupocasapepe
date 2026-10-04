@@ -300,7 +300,8 @@ function tarjeta(r){
     : (r.plan_piezas>0 ? 'armando su plan · '+r.plan_piezas+' referencias'
        : (r.plan_modalidad ? 'empezó su plan' : ''));
 
-  if(esCont) nota = planDice || (r.plan_estado ? 'liga mandada, sin abrir' : 'sin liga · genérasela en su ficha');
+  if(r.etapa==='descartado' && r.motivo_frio) nota = r.motivo_frio;
+  else if(esCont) nota = planDice || (r.plan_estado ? 'liga mandada, sin abrir' : 'sin liga · genérasela en su ficha');
   else if(r.vacante==='yoga')
     nota = r.etapa==='fechas' && !r.desde ? 'pidió fechas al aplicar · mándale la carta'
          : (r.pide_desde ? '' : 'no puso fechas · pídeselas');
@@ -311,7 +312,7 @@ function tarjeta(r){
   else if(r.etapa==='fechas')    nota = 'sin contestar';
   else if(r.etapa==='carta_enviada')  nota = 'sin firmar';
   else if(r.etapa==='carta_aceptada') nota = 'firmada ✓';
-  else if(r.etapa==='descartado')     nota = (r.nota_interna||'').slice(0,70) || (r.estado==='rechazado'?'rechazado en el filtro':'estancia rechazada');
+  else if(r.etapa==='descartado')     nota = r.motivo_frio || (r.nota_interna||'').slice(0,70) || (r.estado==='rechazado'?'rechazado en el filtro':'estancia rechazada');
 
   /* A los de contenido y yoga se les escribe por fuera: no entran a la app,
      así que la tarjeta lleva encima por dónde localizarlos. Eso es lo que daba
@@ -333,11 +334,48 @@ function tarjeta(r){
   '</div>';
 }
 
+let BUSCA='', VER_TODO=false;
+/* Casa con lo que se escribió en el buscador: nombre, correo, Instagram o
+   WhatsApp, sin acentos ni mayúsculas ni signos del teléfono. */
+function sinTildes(x){ return String(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+function casa(r){
+  if(!BUSCA.trim()) return true;
+  const q=sinTildes(BUSCA.trim());
+  const tel=String(r.whatsapp||'').replace(/\D/g,''), qtel=BUSCA.replace(/\D/g,'');
+  return sinTildes(r.nombre).indexOf(q)>=0 || sinTildes(r.email).indexOf(q)>=0
+      || sinTildes(r.instagram).indexOf(q)>=0 || (qtel && tel.indexOf(qtel)>=0);
+}
+
+function pinta(){ if(TODO_EMB) dibuja(TODO_EMB); }
+let TODO_EMB=null;
+
+/* Sacar a alguien de Descartado. */
+async function recuperar(id){
+  const m=document.getElementById('f-msg'); if(m){ m.className='msg'; m.textContent='Devolviéndolo…'; }
+  try{
+    const d=await rpc('vol_recuperar',{p_id:id});
+    if(!d||!d.ok){ if(m){ m.className='msg e'; m.textContent=(d&&d.error)||'No se pudo.'; } return; }
+    /* Primero se repinta y se vuelve a abrir la ficha, y DESPUÉS el aviso:
+       al revés, el repintado se lo llevaba por delante y parecía que no pasó nada. */
+    await bandeja(); await ficha(id);
+    const m2=document.getElementById('f-msg');
+    if(m2){ m2.className='msg k'; m2.textContent='Listo: vuelve al embudo con 10 días nuevos.'; }
+  }catch(e){ if(m){ m.className='msg e'; m.textContent='No se pudo.'; } }
+}
+
 async function bandeja(){
   const c=document.getElementById('bandeja');
   try{
     const todo=await rpc('vol_embudo');
+    TODO_EMB=todo;
     if(!todo.length){c.innerHTML='<p class="vacio">Todavía no hay candidatos con correo.</p>';return;}
+    dibuja(todo);
+  }catch(e){ c.innerHTML='<p class="vacio">No se pudo cargar. ¿Tienes permiso sobre esta página?</p>'; }
+}
+
+function dibuja(todo){
+  const c=document.getElementById('bandeja');
+  try{
     FILA={}; todo.forEach(r=>{FILA[r.id]=r;});
     /* Todos en el mismo embudo. Hasta hoy contenido y yoga vivían en una tabla
        aparte «por contactar tú», porque no entran a la app y no tenían con qué
@@ -376,19 +414,38 @@ async function bandeja(){
     if(!d.length){c.innerHTML=h+'<p class="vacio">Todavía no hay nadie en el embudo.</p>';return;}
 
     const vivos=d.filter(r=>r.etapa!=='descartado').length;
-    h+='<p class="sub" style="margin:0 0 12px">'+vivos+' candidato'+(vivos===1?'':'s')+' en el embudo · '+
+    h+='<p class="sub" style="margin:0 0 10px">'+vivos+' candidato'+(vivos===1?'':'s')+' en el embudo · '+
        (d.length-vivos)+' descartado'+((d.length-vivos)===1?'':'s')+
        '. Toca a cualquiera para abrir su ficha. Quien nunca dejó correo no aparece: no hay a quién escribirle.</p>';
+    /* Un buscador por nombre, correo, Instagram o WhatsApp: con cien fichas,
+       encontrar a alguien bajando la página ya no es viable. Javi, 4-oct. */
+    h+='<p style="margin:0 0 12px"><input id="busca" placeholder="Buscar por nombre, correo, Instagram o WhatsApp…" '+
+       'value="'+esc(BUSCA)+'" style="width:100%;max-width:420px;padding:9px 12px;border:1.5px solid var(--linea);'+
+       'border-radius:9px;font:inherit;font-size:13.5px"></p>';
     h+='<div class="emb">';
     ETAPAS.forEach(function(E){
-      const gente=d.filter(r=>r.etapa===E[0]);
+      let gente=d.filter(r=>r.etapa===E[0]).filter(casa);
+      /* Descartado crece para siempre y hacía la página larguísima: se enseñan
+         los 10 más recientes y el resto detrás de un «+». Si hay búsqueda, se
+         enseñan todos los que casen, que para eso se busca. */
+      const tope = (E[0]==='descartado' && !BUSCA && !VER_TODO);
+      const sobran = tope ? Math.max(0, gente.length-10) : 0;
+      const lista = tope ? gente.slice(0,10) : gente;
       h+='<div class="col '+E[2]+'">'+
          '<h3><span>'+esc(E[1])+'</span><b>'+gente.length+'</b></h3>'+
          (E[3]?'<p class="pie">'+esc(E[3])+'</p>':'<p class="pie">&nbsp;</p>')+
-         (gente.length?gente.map(tarjeta).join(''):'<div class="nadie">nadie</div>')+
+         (lista.length?lista.map(tarjeta).join(''):'<div class="nadie">nadie</div>')+
+         (sobran?'<div class="cand" id="verTodo" style="text-align:center;font-weight:600;color:var(--green)">+ ver los '+sobran+' restantes</div>':'')+
+         (E[0]==='descartado' && VER_TODO && !BUSCA?'<div class="cand" id="verMenos" style="text-align:center;color:var(--gris)">— ver solo los 10 últimos</div>':'')+
          '</div>';
     });
     c.innerHTML=h+'</div>';
+    const bi=document.getElementById('busca');
+    if(bi){ bi.oninput=function(){ BUSCA=bi.value; clearTimeout(bi._t);
+              bi._t=setTimeout(function(){ pinta(); const n=document.getElementById('busca');
+                if(n){ n.focus(); n.setSelectionRange(n.value.length,n.value.length); } }, 220); }; }
+    const vt=document.getElementById('verTodo');  if(vt) vt.onclick=function(){ VER_TODO=true;  pinta(); };
+    const vm=document.getElementById('verMenos'); if(vm) vm.onclick=function(){ VER_TODO=false; pinta(); };
   }catch(e){ c.innerHTML='<p class="vacio">No se pudo cargar. ¿Tienes permiso sobre esta página?</p>'; }
 }
 
@@ -488,7 +545,13 @@ async function ficha(id){
      '<button class="btn" onclick="verCarta(\''+id+'\')">Ver la carta</button>'+
      '<button class="btn g" onclick="aceptarCarta(\''+id+'\')">✓ Aceptar y enviar carta</button>'+
      '<button class="btn r" onclick="resolver(\''+id+'\',\'rechazado\')">Rechazar</button>'+
-     '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button></div>'+
+     '<button class="btn" onclick="resolver(\''+id+'\',\'archivado\')">Archivar</button>'+
+     /* Y la vuelta: sacarlo de Descartado. Sale solo si está fuera, para no
+        ofrecer un botón que no hace nada. El reloj de los 10 días se reinicia
+        al recuperarlo, para que no vuelva a caerse solo. Javi, 4-oct. */
+     ((fr.etapa==='descartado')
+       ? '<button class="btn g" onclick="recuperar(\''+id+'\')">↩ Devolver al embudo</button>' : '')+
+     '</div>'+
      '<p class="msg" id="f-msg"></p></div>';
   c.innerHTML=h; abreFicha();
   if(document.getElementById('planCard')) planPanel(id);
