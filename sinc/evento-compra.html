@@ -42,6 +42,11 @@ input:focus{outline:none;border-color:var(--naranja);box-shadow:0 0 0 3px var(--
 .msg.mal{display:block;background:var(--error-bg);color:var(--error)}
 .msg.bien{display:block;background:var(--ok-bg);color:var(--ok)}
 .cargando{color:var(--gris);padding:40px 0;text-align:center}
+.btcod{flex:none;width:auto;font:600 12px/1 Oswald,sans-serif;letter-spacing:.04em;text-transform:uppercase;padding:0 15px;border-radius:9px;border:1.5px solid var(--naranja);background:#fff;color:var(--naranja-oscuro);cursor:pointer}
+.codmsg{font-size:13px;margin-top:7px;line-height:1.4}
+.codmsg.ok{color:var(--ok)} .codmsg.mal{color:var(--error)}
+.total .sub{font:600 14px/1 Oswald,sans-serif;color:var(--gris);text-decoration:line-through;margin-right:9px}
+#cod{text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -55,7 +60,10 @@ var $=function(i){return document.getElementById(i);};
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function mx(n){return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0});}
 function fFecha(s){ if(!s) return ''; try{ var d=new Date(s); return d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'})+' · '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }catch(_){ return String(s).slice(0,16).replace('T',' '); } }
-var ID=new URLSearchParams(location.search).get('id')||'';
+var _Q=new URLSearchParams(location.search);
+var ID=_Q.get('id')||'';
+var COD=(_Q.get('codigo')||'').trim().toUpperCase();
+var CODEINFO=null;
 async function rpc(fn,body){
   var r=await fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',
     headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
@@ -97,6 +105,10 @@ function pinta(){
     +(tiers.length?('<div class="caja"><h2>Elige tu boleto</h2>'+th
       +'<div id="cantWrap" style="display:none"><label>Cuántos</label>'
         +'<div class="cant"><button type="button" id="menos">−</button><span id="cant">1</span><button type="button" id="mas">+</button></div></div>'
+      +'<div id="codWrap" style="display:none"><label>¿Tienes un código?</label>'
+        +'<div style="display:flex;gap:8px"><input type="text" id="cod" placeholder="Ej. ATENEO2X1">'
+        +'<button type="button" class="btcod" id="aplicar">Aplicar</button></div>'
+        +'<div class="codmsg" id="codMsg"></div></div>'
       +'<label>Tu nombre</label><input type="text" id="nom" placeholder="Nombre y apellido">'
       +'<label>Tu correo</label><input type="email" id="mail" placeholder="para mandarte el boleto con su QR">'
       +'<label>WhatsApp</label><div id="telCaja"></div>'
@@ -108,17 +120,35 @@ function pinta(){
   Array.prototype.forEach.call(document.querySelectorAll('.tier input'),function(r){
     r.onchange=function(){ SEL=+r.value; CANT=1;
       Array.prototype.forEach.call(document.querySelectorAll('.tier'),function(e){e.classList.toggle('on',+e.getAttribute('data-i')===SEL);});
-      $('cantWrap').style.display=''; $('cant').textContent='1'; refresca(); };
+      $('cantWrap').style.display=''; $('codWrap').style.display=''; $('cant').textContent='1';
+      if(COD && $('cod') && !$('cod').value) $('cod').value=COD;
+      updateTotal(); };
   });
-  $('menos').onclick=function(){ if(CANT>1){CANT--;$('cant').textContent=CANT;refresca();} };
-  $('mas').onclick=function(){ var t=EV.tiers[SEL]; var max=disponibles(t); if(CANT<max){CANT++;$('cant').textContent=CANT;refresca();} };
+  $('menos').onclick=function(){ if(CANT>1){CANT--;$('cant').textContent=CANT;updateTotal();} };
+  $('mas').onclick=function(){ var t=EV.tiers[SEL]; var max=disponibles(t); if(CANT<max){CANT++;$('cant').textContent=CANT;updateTotal();} };
+  $('aplicar').onclick=updateTotal;
   $('pagar').onclick=reservar;
   TEL = telPais.monta('telCaja');
 }
-function refresca(){
+async function updateTotal(){
   var t=EV.tiers[SEL]; if(!t){return;}
-  $('total').textContent=mx((t.precio||0)*CANT);
-  $('pagar').disabled=false;
+  var sub=(t.precio||0)*CANT;
+  var cm=$('codMsg'); CODEINFO=null;
+  var codTxt=(($('cod')&&$('cod').value)||'').trim().toUpperCase();
+  if(codTxt){
+    var r=await rpc('evento_codigo_ver',{p_codigo:codTxt,p_precio_id:t.id,p_pax:CANT});
+    var info=r.data;
+    if(info && info.valido){
+      CODEINFO={codigo:codTxt,total:Number(info.total)};
+      $('total').innerHTML='<span class="sub">'+mx(info.subtotal)+'</span>'+mx(info.total);
+      cm.textContent=info.etiqueta||'Código aplicado'; cm.className='codmsg ok';
+      $('pagar').disabled=false; return;
+    }
+    cm.textContent=(info&&info.mensaje)||'Ese código no aplica.'; cm.className='codmsg mal';
+    $('total').textContent=mx(sub); $('pagar').disabled=true; return;
+  }
+  cm.textContent=''; cm.className='codmsg';
+  $('total').textContent=mx(sub); $('pagar').disabled=false;
 }
 function msg(t,cls){ var m=$('msg'); m.textContent=t; m.className='msg '+cls; }
 
@@ -132,7 +162,7 @@ async function reservar(){
   if(!TEL||!TEL.valido()){ msg('Nos falta tu WhatsApp con su país: es por donde te avisamos.','mal'); if(TEL)TEL.foco(); return; }
   var tel=TEL.valor();
   $('pagar').disabled=true; msg('Apartando tu lugar…','bien');
-  var r=await rpc('evento_reserva_crear',{p_evento_id:EV.id,p_precio_id:t.id,p_pax:CANT,p_nombre:nom,p_email:mail,p_telefono:tel});
+  var r=await rpc('evento_reserva_crear',{p_evento_id:EV.id,p_precio_id:t.id,p_pax:CANT,p_nombre:nom,p_email:mail,p_telefono:tel,p_codigo:(CODEINFO&&CODEINFO.codigo)||''});
   if(!r.ok||!r.data||r.data.error){ msg((r.data&&r.data.error)||'No se pudo apartar tu lugar. Intenta de nuevo.','mal'); $('pagar').disabled=false; return; }
   var folio=r.data.folio;
   /* El lugar queda apartado 1 hora; se va a la pantalla de pago (Elements). El

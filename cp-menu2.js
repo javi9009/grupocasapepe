@@ -50,7 +50,7 @@
        Javi se quedaba sin poder cambiar de hotel-, y debajo el menu. */
     '.m2wrap{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg2,#f7f6f1)}',
     '.m2head{flex:0 0 auto;padding:1rem .75rem 0}',
-    '.m2head .projsel{margin:.55rem 0 .7rem}',
+    '.m2head .projsel{margin:.55rem 0 .7rem}',   /* por si vuelve al aside */
     '.m2{display:flex;flex:1 1 auto;min-height:0;background:var(--bg2,#f7f6f1);position:relative}',
     '.m2 *{box-sizing:border-box}',
     /* --- el riel de categorías --- */
@@ -388,9 +388,12 @@
       var st = document.createElement('style'); st.id='cpMenu2css'; st.textContent = CSS;
       document.head.appendChild(st);
     }
-    /* El <aside> trae el logo y el selector de propiedad recien pintados por
-       index.html. Se toman prestados (no se clonan: asi conservan sus manejadores)
-       para que sigan arriba del menu nuevo. */
+    /* El <aside> trae el logo recien pintado por index.html. Se toma prestado
+       (no se clona: asi conserva sus manejadores) para que siga arriba del menu.
+       El selector de ubicacion ya NO esta aqui: desde el 4-oct-2026 vive en el
+       header, que es donde Javi queria verlo. La linea que lo buscaba se deja
+       porque no estorba y porque si alguien lo devuelve al aside, se vuelve a
+       tomar solo. */
     cabecera = null;
     var trozos = [];
     ['.brand','.projsel'].forEach(function(q){
