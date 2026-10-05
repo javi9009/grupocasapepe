@@ -29,6 +29,12 @@
     if (window.CP_SUELTA === true) return;
     var q = new URLSearchParams(location.search);
     if (q.get('suelta') === '1' || q.has('t') || q.has('token')) return;
+    /* Instalada como app propia (Pepe Atender): el sistema la abre a pantalla
+       completa y meterla en el panel le quitaría justo lo que la hace app. */
+    try {
+      if ((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+          window.navigator.standalone === true) return;
+    } catch (_) {}
     /* ?t= / ?token= son las ligas personales de fuera (la de la productora, la
        del operador): quien llega con una de ésas no tiene panel al que entrar. */
     var yo = location.pathname + location.search + location.hash;
