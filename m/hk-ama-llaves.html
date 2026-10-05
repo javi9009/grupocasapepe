@@ -1724,17 +1724,31 @@ async function moverTarea(tareaId,desde,hacia){
 
 // ---------------- INFORME ----------------
 async function cargarInforme(){
-  const [{data:pr},{data:asg},c]=await Promise.all([
+  const [{data:pr},{data:asg},{data:je},c]=await Promise.all([
     sb.from('hk_v_productividad_dia').select('*').eq('property_id',P()).eq('fecha',F()),
     sb.from('hk_asignaciones').select('id,nombre_display,turno,hora_inicio,hora_fin,employee_id,metadata,estado,validado_at,hk_tareas(id,estado,estatus_area,minutos_estimados,minutos_reales,iniciado_at,terminado_at,es_extra,reasignada_desde,created_at,metadata,titulo,comentario,hk_areas(codigo,nombre,tipo,piso),hk_tareas_op(nombre))')
       .eq('property_id',P()).eq('fecha',F()),
+    sb.from('v_hk_jornada_efectiva').select('*').eq('property_id',P()).eq('fecha',F()),
     confA(),
   ]);
+  // La jornada efectiva vive en su propia vista: el reloj de los cuartos sin
+  // doble conteo, mas el apoyo y pendientes que reparti� cada una. Se pega a la
+  // fila de productividad por employee_id para no cambiar firmas.
+  const porEmp={}; (je||[]).forEach(j=>{ if(j.employee_id) porEmp[j.employee_id]=j; });
+  const prJ=(pr||[]).map(r=>{
+    const j=porEmp[r.employee_id]; if(!j) return r;
+    return Object.assign({},r,{
+      min_tareas:Number(j.tareas_min||0),
+      min_apoyo:Number(j.apoyo_min||0),
+      apoyo_n:Number(j.apoyo_n||0),
+      min_checador:j.checador_min==null?null:Number(j.checador_min),
+      min_sin_repartir:Number(j.sin_repartir_min||0)});
+  });
   // Front no limpia: el informe es del equipo de limpieza.
   const noMide=t=>t==='front'||t==='nocturno';
   const conGente=(asg||[]).filter(a=>!noMide(a.turno)&&a.employee_id);
-  pintarCapacidad(conGente,(asg||[]).filter(a=>!a.employee_id),c,(pr||[]).filter(r=>!noMide(String(r.turno||''))));
-  pintarProdCards((pr||[]).filter(r=>!noMide(String(r.turno||''))),conGente, c);
+  pintarCapacidad(conGente,(asg||[]).filter(a=>!a.employee_id),c,prJ.filter(r=>!noMide(String(r.turno||''))));
+  pintarProdCards(prJ.filter(r=>!noMide(String(r.turno||''))),conGente, c);
 
   await cargarHistorico();
 }
@@ -1827,7 +1841,11 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   // Papel contra reloj: si el estándar va alto, cuánto habría que bajarlo.
   const stdHecho=gente.reduce((s,p)=>s+p.k.estHechas,0);
   const relojHecho=gente.reduce((s,p)=>s+p.k.dedicado,0);
-  const ritmoGrupo=(stdHecho>=180&&relojHecho>0)?stdHecho/relojHecho:1;
+  // Para calibrar el estándar solo cuenta el reloj de los cuartos: el apoyo y
+  // pendientes es trabajo, pero no es tiempo de limpiar y meterlo aquí haría
+  // parecer que los tiempos van cortos cuando lo que hubo fue un briefing largo.
+  const relojCuartos=gente.reduce((s,p)=>s+(p.k.medido||0),0);
+  const ritmoGrupo=(stdHecho>=180&&relojCuartos>0)?stdHecho/relojCuartos:1;
   const bajar=Math.round((1-1/ritmoGrupo)*100);
 
   // ---------- lo que de verdad se ha gastado ----------
@@ -1862,14 +1880,17 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   const movidas=[];
   let evitable=0;
   for(const p of gente.filter(p=>p.k.horasExtra>0)){
-    let movido=0;
+    let movido=0;                                    // en minutos de RELOJ suyos
+    const ritmoP=p.k.ritmo>0?p.k.ritmo:1;
     const suyas=p.k.extras.slice().sort((x,y)=>(y.minutos_estimados||0)-(x.minutos_estimados||0));
     for(const t of suyas){
       if(movido>=p.k.horasExtra) break;              // ya se le quitó todo lo que le sobraba
-      const min=t.minutos_estimados||0;
+      const min=t.minutos_estimados||0;              // papel de la tarea
       const h=huecos.filter(h=>h.libre>=min/h.ritmo).sort((m,n)=>n.libre-m.libre)[0];
       if(!h) continue;
-      h.libre-=min/h.ritmo; movido+=min; movidas.push({t,de:p.nombre,min,a:h.nombre,rec:h});
+      h.libre-=min/h.ritmo;
+      movido+=min/ritmoP;                            // lo que le ahorra A ELLA, a su ritmo
+      movidas.push({t,de:p.nombre,min,a:h.nombre,rec:h});
     }
     evitable+=Math.min(movido,p.k.horasExtra);
   }
@@ -1879,6 +1900,10 @@ function pintarCapacidad(asigs,sueltas,c,filas){
   // le sobran al grupo entero mirando todas las horas juntas, y las que de verdad
   // habría que pagar una vez colocado lo que cabía en el hueco de otra.
   const extraProg=gente.reduce((s,p)=>s+Math.max(0,p.carga-p.jornada),0);
+  // El apoyo y pendientes cuenta en la jornada pero no se le puede pasar a otra:
+  // nadie va al briefing en tu lugar. Se enseña aparte para que no parezca que
+  // la recomendación se quedó corta.
+  const apoyoTotal=gente.reduce((s,p)=>s+(p.k.apoyo||0),0);
 
   // La recomendación, agrupada por pareja: cuánto pasarle a quién.
   const pares=new Map();
@@ -1910,7 +1935,8 @@ function pintarCapacidad(asigs,sueltas,c,filas){
         :bascular>=20&&arriba.length&&abajo.length
           ? fila('warn',`${esc(arriba[0].nombre.split(' ')[0])} → ${esc(abajo[0].nombre.split(' ')[0])}`,hm(bascular))
           : fila('ok','Reparto','sin cambios')}
-      ${sinCubrir?fila('bad','Sin cubrir',hm(sinCubrir)):''}</div>
+      ${sinCubrir?fila('bad','Sin cubrir',hm(sinCubrir)):''}
+      ${apoyoTotal>=30?fila('','De apoyo y pendientes',hm(apoyoTotal)+' · no se reparte'):''}</div>
     <div class="gcaj"><div class="t">Tiempo del día</div>
       ${fila('','Papel repartido',hm(cargaStd))}
       ${fila('','Papel efectuado',hm(stdHecho))}
@@ -2110,13 +2136,16 @@ function metricasProd(a,r,c){
   const pct=Math.round(objetivo/jornada*100);
 
   // ---- pila 2: lo que lleva hecho y a dónde va ----
-  // Todo se mide en tiempos PREVISTOS: la pila y las horas extra hablan de
-  // estándar, no de reloj. El reloj solo manda al cerrar el turno, para pagar.
+  // El PAPEL (estimado) sirve para repartir y para medir eficiencia. Las HORAS
+  // EXTRA ya no: salen de la jornada efectiva -reloj de cuartos mas apoyo y
+  // pendientes-, porque pagar sobre el estándar premiaba al que va despacio y
+  // castigaba al que va rápido pero se queda mas tiempo en el hotel.
   const estHechas=Number(r.min_est_hechas ?? ts.filter(t=>t.estado==='terminada').reduce((s,t)=>s+(t.minutos_estimados||0),0));
 
   // ---- ordinarias y extraordinarias ----
-  // Extraordinario es lo que hizo DESPUÉS de completar sus 8 h de estándar. Si no
-  // llega a las 8 h, no hay horas extra por mucho que le hayan repartido de más.
+  // Esto solo ORDENA las tareas: cuales cayeron despues de llenar su turno de
+  // papel. Sirve para enseñar la lista, no para contar las horas, que salen
+  // del reloj mas abajo.
   const hechasOrden=ts.filter(t=>t.estado==='terminada'&&(t.minutos_estimados||0)>0)
     .sort((x,y)=>String(x.terminado_at||'').localeCompare(String(y.terminado_at||'')));
   const ordinarias=[], extras=[];
@@ -2128,7 +2157,10 @@ function metricasProd(a,r,c){
     else extras.push(t);           // la que cruza la línea ya es extraordinaria
     acum+=m;
   });
-  let horasExtra=Math.max(0,estHechas-jornada);
+  // LA HORA EXTRA ES REAL: jornada efectiva menos el turno asignado. Antes
+  // salía del estándar (estHechas) y el reloj solo podía tumbarla, nunca
+  // sumarla; por eso de 127 h trabajadas solo se validaban 20.
+  let horasExtra=Math.max(0,dedicado-jornada);
   const minExtra=extras.reduce((s,t)=>s+(t.minutos_estimados||0),0);
   const nExtra=extras.length;
   const lleno=Math.min(estHechas,jornada);
@@ -2136,11 +2168,21 @@ function metricasProd(a,r,c){
   // El cuarto abierto cuenta en vivo, pero con tope: uno que se quedó sin cerrar
   // desde ayer no puede inflar el día.
   const vivo=enCurso?Math.min(240,Math.max(0,(Date.now()-new Date(enCurso.iniciado_at))/60000)):0;
-  const dedicado=Number(r.min_reales ?? 0)+vivo;
+  // Horas reales de verdad: el reloj de los cuartos por union de intervalos
+  // -dos tareas solapadas no suman el doble, que es lo que descuadraba cuando
+  // le daban una tarea sobre otra- mas el apoyo y pendientes que ella repartió:
+  // briefing, atender a un huésped, esperar a mantenimiento. Si la vista nueva
+  // no trajo fila se cae a la suma vieja para no quedarse en blanco.
+  const medido=r.min_tareas!=null?Number(r.min_tareas):Number(r.min_reales ?? 0);
+  const apoyo=Number(r.min_apoyo ?? 0);
+  const sinRepartir=Number(r.min_sin_repartir ?? 0);
+  const dedicado=medido+apoyo+vivo;
   const falta=Math.max(0,objetivo-estHechas);
   // El ritmo real de la persona. Si siempre cierra muy por debajo del estándar
   // (el caso de Ali), su carga no es la del papel: es la que de verdad le cuesta.
-  const ritmo=(estHechas>=30&&dedicado>0)?estHechas/dedicado:1;
+  // El ritmo es de limpiar, así que se mide solo contra el tiempo de cuartos:
+  // meter el apoyo aquí la haría parecer lenta por haber estado en el briefing.
+  const ritmo=(estHechas>=30&&(medido+vivo)>0)?estHechas/(medido+vivo):1;
   const faltaReal=ritmo>0?falta/ritmo:falta;
   // La pila del previsto habla de estándar: lo que se le repartió contra su turno.
   const nv1=nivel(pct,0);
@@ -2162,10 +2204,9 @@ function metricasProd(a,r,c){
   // Solo se paga si además trabajó de verdad sus 8 h, y a partir de la primera hora.
   const ocho=dedicado>=jornada;
   const minPagar=(ocho&&minFuera>=60)?minFuera:0;
-  // Con el turno cerrado manda el reloj: si estuvo menos de sus 8 h, no hubo horas
-  // extra por mucho estándar que acumulara yendo rápido.
-  const extraCaida=cerrado&&!ocho&&horasExtra>0?horasExtra:0;
-  if(extraCaida) horasExtra=0;
+  // Ya no hace falta tumbar nada: la hora extra nace del reloj, no del estándar.
+  // Se deja la variable porque la tarjeta la lee, siempre en cero.
+  const extraCaida=0;
 
   // Los cuartos que no quisieron limpieza no cuentan ni a favor ni en contra:
   // salieron de su carga en cuanto se marcaron.
@@ -2174,14 +2215,14 @@ function metricasProd(a,r,c){
   const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
   const efi=r.eficiencia_pct?Number(r.eficiencia_pct):null;
   return {ts,jornada,objetivo,especiales,pct,estHechas,ordinarias,extras,horasExtra,minExtra,nExtra,lleno,
-    dedicado,falta,faltaReal,ritmo,nv1,forecast,avance,nv2,cerrado,minFuera,ocho,minPagar,extraCaida,
-    noQuisieron,tareas,hechas,efi};
+    dedicado,medido,apoyo,sinRepartir,falta,faltaReal,ritmo,nv1,forecast,avance,nv2,cerrado,minFuera,
+    ocho,minPagar,extraCaida,noQuisieron,tareas,hechas,efi};
 }
 
 function tarjetaProd(a,r,c){
   const k=metricasProd(a,r,c);
-  const {ts,jornada,objetivo,especiales,pct,estHechas,extras,horasExtra,nExtra,dedicado,faltaReal,
-    nv1,forecast,avance,nv2,extraCaida,noQuisieron,tareas,hechas,efi}=k;
+  const {ts,jornada,objetivo,especiales,pct,estHechas,extras,horasExtra,nExtra,dedicado,medido,apoyo,
+    sinRepartir,faltaReal,nv1,forecast,avance,nv2,noQuisieron,tareas,hechas,efi}=k;
   const w=x=>Math.max(0,Math.min(100,x/jornada*100));
   const hm=m=>`${Math.round(m/60*10)/10} h`;
   const hora=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
@@ -2204,7 +2245,10 @@ function tarjetaProd(a,r,c){
       <i class="${nv2}" style="width:${w(faltaReal)}%"></i>
       ${forecast>jornada?'<i class="tope"></i>':''}</div>
     <div class="pfila"><span class="ppct ${nv2}">${avance}%</span>
-      <span class="pmin">lleva ${hm(dedicado)} reales · le faltan ${hm(faltaReal)}</span></div>
+      <span class="pmin">lleva ${hm(dedicado)} reales · le faltan ${hm(faltaReal)}${
+        apoyo>0?` · incluye ${hm(apoyo)} de apoyo`:''}</span></div>
+    ${sinRepartir>=15?`<div class="pfila"><span class="pext" title="El reloj marca mas de lo que esta explicado">
+      ⚠ ${hm(sinRepartir)} del reloj sin repartir en apoyo y pendientes</span></div>`:''}
 
     <div class="pgrid">
       <div class="abre ${ts.length?'':'muda'}" data-caj="hechas"><b>${hechas}/${tareas}</b><span>tareas hechas</span></div>
@@ -2216,11 +2260,13 @@ function tarjetaProd(a,r,c){
     <div class="cajon" data-caj="extra" hidden>${listaTareas(extras,'Todavía ninguna: no ha pasado de sus '+hm(jornada)+' de papel.')}</div>
     <div class="cajon" data-caj="horas" hidden>
       <div class="expl">${horasExtra>0
-        ? `Ya completó sus ${hm(jornada)} de papel y siguió: lo que hizo después son <b>${hm(horasExtra)} de horas extra</b>, de estas ${extras.length} ${extras.length===1?'tarea':'tareas'}.
-           Se cuentan en papel; al cerrar el turno se confirman con las horas reales.`
-        : extraCaida
-          ? `De papel sí se pasó (${hm(estHechas)} de las ${hm(jornada)} del turno), pero en horas reales estuvo ${hm(dedicado)}: no llegó a su jornada, así que <b>no hay horas extra</b>. Fue rápida, no fue tiempo de más.`
-          : `Lleva ${hm(estHechas)} de papel efectuado de las ${hm(jornada)} de su turno. Hasta que no complete su tiempo no hay horas extra, aunque le hayan repartido ${hm(objetivo)}.`}</div>
+        ? `Trabajó <b>${hm(dedicado)}</b> contra las ${hm(jornada)} de su turno: <b>${hm(horasExtra)} de horas extra</b>.
+           Son ${hm(medido)} de cuartos y áreas${apoyo>0?` más ${hm(apoyo)} de apoyo y pendientes`:''}.
+           La hora extra sale del reloj, no del estándar.`
+        : `Lleva <b>${hm(dedicado)}</b> de jornada efectiva de las ${hm(jornada)} de su turno: todavía no hay horas extra.
+           ${sinRepartir>=15
+             ? `Ojo: el reloj marca <b>${hm(sinRepartir)}</b> más que no ha repartido en apoyo y pendientes. Cuando los reparta pueden volverse horas extra.`
+             : `De papel lleva ${hm(estHechas)} de los ${hm(objetivo)} que le repartieron.`}`}</div>
       ${horasExtra>0?listaTareas(extras,'—'):''}
     </div>
     <div class="ppie">
