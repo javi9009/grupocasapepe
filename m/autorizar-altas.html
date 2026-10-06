@@ -80,6 +80,7 @@ async function load(){
   const { data, error } = await sb.from('employees')
     .select('id,empleado_id,nombre,apellido,nombre_display,email,property_id,area,rol,estatus,alta_etapa,fecha_inicio_labores')
     .in('alta_etapa',['solicitado','autorizado','datos_contrato','integrada'])
+    .neq('estatus','baja')
     .order('estatus',{ascending:true});
   if(error){ $('auth-msg').style.display='block'; $('auth-msg').textContent='No se pudo cargar (¿tu rol tiene permiso de admin?): '+error.message; return; }
   const rows=[];
@@ -111,11 +112,38 @@ function render(rows){
       ? '<div class="faltan">Faltan para contrato: <b>'+e.faltan.join(', ')+'</b></div>'
       : '<div class="ok-contrato">✓ Lista para generar contrato</div>';
     if(!e.faltan.length && e.empleado_id) acc='<a class="link" href="/m/contratos.html?emp='+e.id+'">Generar contrato →</a>';
+    // Dar de baja durante la incorporación (si no pasó el proceso). Avisa a nómina.
+    const bajaBtn='<button class="ghost" style="color:#e57373;border-color:#5a2a26" onclick="darBaja(\''+e.id+'\',\''+(nom.replace(/'/g,"&#39;"))+'\')">Dar de baja</button>';
     L.innerHTML+='<div class="card"><div class="row"><div><div class="nm">'+nom+'</div>'
       +'<div class="meta">'+prop+idm+' · '+(e.rol||'sin rol')+'</div></div>'
       +'<div>'+badge+'</div></div>'+estado
-      +'<div style="margin-top:12px">'+acc+'</div></div>';
+      +'<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+acc+bajaBtn+'</div></div>';
   }
+}
+
+async function darBaja(id,nombre){
+  const motivo=prompt('Dar de baja a '+nombre+' durante la incorporación.\n\nMotivo (por qué no pasó el proceso):');
+  if(motivo===null) return;               // canceló
+  const s=await sb.auth.getSession();
+  const por=(s.data&&s.data.session&&s.data.session.user&&s.data.session.user.email)||null;
+  try{
+    const r=await sb.rpc('dar_de_baja',{p_id:id,p_motivo:motivo||'Baja en incorporación'});
+    if(r.error){ alert('No se pudo dar de baja: '+r.error.message); return; }
+    // Cablea con nómina: avisa a contabilidad y tesorería para que registren la baja.
+    try{
+      const nr=await sb.from('employees').select('id').in('email',['contabilidad@casapepe.mx','pagos@casapepe.mx']).neq('estatus','baja');
+      for(const n of ((nr&&nr.data)||[])){
+        await sb.rpc('crear_notificacion',{
+          p_employee_id:n.id,
+          p_titulo:'Baja en incorporación: '+nombre,
+          p_cuerpo:'Se dio de baja a '+nombre+' durante la incorporación'+(motivo?(' — motivo: '+motivo):'')+'. Favor de registrar la baja en nómina.'+(por?(' (por '+por+')'):''),
+          p_icono:'🚪'
+        });
+      }
+    }catch(_){ }
+    alert('Baja registrada. Se avisó a nómina y se apagó su acceso.');
+    load();
+  }catch(err){ alert('Error de red: '+err); }
 }
 
 async function autorizar(id){
@@ -166,13 +194,30 @@ $('m-save').onclick=async function(){
   if(upd.salario_bruto && !upd.salario_desde){ upd.salario_desde = upd.fecha_inicio_labores || CUR.fecha_inicio_labores || new Date().toISOString().slice(0,10); }
   if(upd.rol && !upd.puesto) upd.puesto=upd.rol;
   if(!Object.keys(upd).length){ $('m-err').textContent='No capturaste ningun dato.'; return; }
+  upd.updated_at=new Date().toISOString();
   $('m-save').disabled=true; $('m-save').textContent='Guardando…';
-  const { error } = await sb.from('employees').update(upd).eq('id',CUR.id);
-  $('m-save').disabled=false; $('m-save').textContent='Guardar';
-  if(error){ $('m-err').textContent='Error: '+error.message; return; }
-  $('ov').classList.remove('show'); CUR=null; load();
+  /* Guardar con Prefer: return=minimal (igual que rh-ficha). Si pidiéramos que la
+     base nos devuelva la fila, incluiría columnas sensibles (sueldo, RFC, CURP…)
+     que están ocultas a la lectura por seguridad, y entonces rechaza TODO el
+     guardado con "permission denied". Con return=minimal no se lee nada y guarda. */
+  try{
+    const s=await sb.auth.getSession();
+    const tok=(s.data&&s.data.session&&s.data.session.access_token)||SB_KEY;
+    const r=await fetch(SB_URL+'/rest/v1/employees?id=eq.'+encodeURIComponent(CUR.id),{
+      method:'PATCH',
+      headers:{'apikey':SB_KEY,'Authorization':'Bearer '+tok,'Content-Type':'application/json','Prefer':'return=minimal'},
+      body:JSON.stringify(upd)
+    });
+    $('m-save').disabled=false; $('m-save').textContent='Guardar';
+    if(!r.ok){
+      let msg=String(r.status);
+      try{ const e=await r.json(); msg=e.message||e.hint||e.details||JSON.stringify(e); }catch(_){ try{ msg=await r.text(); }catch(__){} }
+      $('m-err').textContent='No se guardó: '+msg; return;
+    }
+    $('ov').classList.remove('show'); CUR=null; load();
+  }catch(err){ $('m-save').disabled=false; $('m-save').textContent='Guardar'; $('m-err').textContent='Error de red: '+err; }
 };
-window.autorizar=autorizar; window.completar=completar;
+window.autorizar=autorizar; window.completar=completar; window.darBaja=darBaja;
 load();
 </script>
 </body></html>

@@ -223,6 +223,38 @@ button{font-family:inherit}
 .hecho.nom .tk{color:#a58348}
 .auditcard.dnd{border-left-color:#8a6212}
 .auditcard.val{border-left-color:var(--gold,#c79a3a);background:#fffaf0}
+/* Apoyo y pendientes: el tiempo del dia que no es un cuarto ni un area
+   -briefing, atender a un huesped, esperar a mantenimiento-. Es trabajo y
+   hasta ahora no se contaba en ningun lado: el reloj lo medía y la app no. */
+.auditcard.apoyo{border-left-color:#7a5ea8;background:#fbf9fe}
+.apoyo .reparto{display:flex;gap:10px;margin:2px 0 11px}
+.apoyo .reparto div{flex:1;font-size:11.5px;color:var(--txt3,#8e8c85);line-height:1.3}
+.apoyo .reparto b{display:block;font-size:17px;color:var(--txt);font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em;margin-bottom:1px}
+.apoyo .reparto .falta b{color:#7a5ea8}
+.apoyo .cats{display:flex;flex-wrap:wrap;gap:7px}
+.apoyo .cat{border:1px solid var(--bd);background:var(--bg2);color:var(--txt);
+  border-radius:99px;padding:9px 13px;font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.apoyo .cat.on{border-color:#7a5ea8;background:#f0e9fa;color:#4a3570}
+.apoyo .caja{margin-top:11px;padding:11px;border:1px solid #e0d5f0;border-radius:12px;background:#fff}
+.apoyo .caja .ay{font-size:12px;color:var(--txt3,#8e8c85);line-height:1.45;margin-bottom:9px}
+.apoyo .mins{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px}
+.apoyo .mins button{border:1px solid var(--bd);background:var(--bg2);color:var(--txt);
+  border-radius:10px;padding:9px 12px;font:inherit;font-size:14px;font-weight:800;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.apoyo .mins button.on{border-color:#7a5ea8;background:#7a5ea8;color:#fff}
+.apoyo .caja input{width:100%;padding:11px;border:1px solid var(--bd);border-radius:11px;
+  background:var(--bg2);color:var(--txt);font:inherit;font-size:15px}
+.apoyo .caja .ok{margin-top:9px;width:100%;border:none;border-radius:12px;padding:13px;
+  background:#7a5ea8;color:#fff;font:inherit;font-size:15px;font-weight:800;cursor:pointer}
+.apoyo .caja .ok[disabled]{opacity:.45}
+.apoyo .puesto{margin-top:11px;border-top:1px solid var(--bg3);padding-top:5px}
+.apoyo .it{display:flex;align-items:flex-start;gap:9px;padding:7px 0;font-size:13.5px}
+.apoyo .it .nm{flex:1;font-weight:700}
+.apoyo .it .cm{display:block;font-size:12px;color:var(--txt3,#8e8c85);font-weight:400;margin-top:2px;line-height:1.4}
+.apoyo .it .mn{font-weight:800;font-variant-numeric:tabular-nums}
+.apoyo .it .x{border:none;background:none;color:var(--txt3,#8e8c85);font-size:19px;line-height:1;
+  cursor:pointer;padding:0 2px}
 .dndlista{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
 .dndlista .ch{font-size:12px;font-weight:700;background:#fff0d6;color:#8a6212;border:1px solid #e8d4a8;
   border-radius:999px;padding:4px 10px;display:inline-flex;align-items:center;gap:6px}
@@ -340,6 +372,9 @@ const esAudit=t=>String(t.hk_tareas_op?.codigo||'')==='ROOM_AUDIT';
 const n1=v=>Math.round(Number(v||0)*10)/10;
 // Turnos que apoyan pero no se miden con las horas de limpieza del día.
 const SIN_MEDIR=new Set(['front','nocturno','experiencias']);
+// Apoyo y pendientes: el hueco entre lo que marca el reloj checador y la suma
+// del tiempo real de los cuartos y las areas. Lo reparte cada recamarista.
+let APOYO=[],APOYO_CAT=[],ASIS=null,APOYO_SEL=null,APOYO_MIN=0,APOYO_COM='';
 // Quien supervisa ve el reparto de todas las recamaristas del día, tenga o no
 // cuartos propios. El ama de llaves lo ve siempre por su turno.
 const SUPERVISORES=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casapepe.mx','housekeeping.cdmx@casapepe.mx','housekeeping.puebla@casapepe.mx'];
@@ -488,6 +523,7 @@ async function cargar(){
   AUDIT=(MIA?.hk_tareas||[]).filter(esAudit);
   if(MIA) MIA.hk_tareas=(MIA.hk_tareas||[]).filter(t=>!esAudit(t));
   await calcularEncargada();
+  await cargarApoyo();
   const veTodas = llevaElDia();
   if(veTodas && PROP){
     const {data:t}=await sb.from('hk_asignaciones')
@@ -582,6 +618,7 @@ function pintar(){
   </div>`;
 
   html+=tarjetaValidar();
+  html+=tarjetaApoyo();
 
   if(MIA && (MIA.turno==='nocturno' || llevaElDia())){
     html+=`<div class="auditcard dnd">
@@ -913,6 +950,115 @@ async function reanudar(id){
   cargar();
 }
 
+// ------------------------------------------------- Apoyo y pendientes
+// El tiempo del dia que no es un cuarto ni un area. Hasta ahora el reloj
+// checador lo medía y la app no lo contaba en ningun lado, asi que la jornada
+// de la recamarista salia mas corta de lo que fue. Lo reparte ella al cerrar.
+async function cargarApoyo(){
+  if(!EMP) return;
+  if(!APOYO_CAT.length){
+    const {data:c}=await sb.from('hk_apoyo_catalogo').select('*').eq('activo',true).order('orden');
+    APOYO_CAT=c||[];
+  }
+  const {data:a}=await sb.from('hk_apoyo').select('*')
+    .eq('fecha',FECHA).eq('employee_id',EMP).order('created_at');
+  APOYO=a||[];
+  const {data:s}=await sb.from('asistencias').select('check_in,check_out')
+    .eq('fecha',FECHA).eq('employee_id',EMP).maybeSingle();
+  ASIS=s||null;
+}
+
+// Lo que llevas en el hotel: el reloj completo si ya checaste salida, y lo
+// corrido desde que entraste si todavia estas dentro.
+function minApoyoHotel(){
+  if(!ASIS||!ASIS.check_in) return 0;
+  const ini=new Date(ASIS.check_in);
+  const fin=ASIS.check_out?new Date(ASIS.check_out):new Date();
+  return Math.max(0,Math.round((fin-ini)/60000));
+}
+// Union de intervalos: dos cuartos solapados no suman el doble.
+function minApoyoTareas(){
+  const its=(MIA&&MIA.hk_tareas?MIA.hk_tareas:[])
+    .filter(t=>t.iniciado_at && t.minutos_reales!=null)
+    .map(t=>{ const a=new Date(t.iniciado_at).getTime();
+              return {a:a, b:a+Number(t.minutos_reales)*60000}; })
+    .sort((x,y)=>x.a-y.a);
+  let total=0, hasta=0;
+  its.forEach(i=>{ const a=Math.max(i.a,hasta);
+    if(i.b>a) total+=i.b-a; hasta=Math.max(hasta,i.b); });
+  return Math.round(total/60000)+Math.round(minutosEnCurso().min);
+}
+const apoyoHM=m=>m>=60?`${Math.floor(m/60)}h ${Math.round(m%60)}m`:`${Math.round(m)} min`;
+const apoyoCat=c=>APOYO_CAT.find(x=>x.codigo===c)||{nombre:c,icono:'',ayuda:''};
+
+function tarjetaApoyo(){
+  if(!MIA || SIN_MEDIR.has(MIA.turno)) return '';
+  const hotel=minApoyoHotel();
+  if(!hotel) return `<div class="auditcard apoyo">
+    <div class="t">&#128995; Apoyo y pendientes</div>
+    <div class="s">Aqui vas a repartir el tiempo del dia que no es un cuarto ni un area
+      &mdash;el briefing, atender a un hu&eacute;sped, esperar a mantenimiento&mdash;.
+      Aparece en cuanto checas tu entrada.</div></div>`;
+
+  const tareas=minApoyoTareas();
+  const puesto=APOYO.reduce((s,x)=>s+(x.minutos||0),0);
+  const falta=Math.max(0,hotel-tareas-puesto);
+  const sel=APOYO_SEL?apoyoCat(APOYO_SEL):null;
+
+  let opciones=[15,30,45,60,90].filter(m=>m<=falta);
+  if(falta>0 && opciones.indexOf(falta)<0) opciones.push(falta);
+  if(!opciones.length) opciones=[Math.max(falta,5)];
+
+  const caja=!sel?'':`<div class="caja">
+    ${sel.ayuda?`<div class="ay">${esc(sel.ayuda)}</div>`:''}
+    <div class="mins">${opciones.map(m=>`<button data-apmin="${m}"
+      class="${APOYO_MIN===m?'on':''}">${m===falta&&falta>0?'todo ('+m+')':m+' min'}</button>`).join('')}</div>
+    <input id="apCom" placeholder="&iquest;Qu&eacute; fue? (opcional)" maxlength="140" value="${esc(APOYO_COM)}">
+    <button class="ok" id="apOk" ${APOYO_MIN?'':'disabled'}>Guardar${APOYO_MIN?' '+apoyoHM(APOYO_MIN):''}</button>
+  </div>`;
+
+  const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>`<div class="it">
+    <span>${apoyoCat(x.categoria).icono||''}</span>
+    <span class="nm">${esc(apoyoCat(x.categoria).nombre)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}</span>
+    <span class="mn">${apoyoHM(x.minutos)}</span>
+    <button class="x" data-apdel="${x.id}" aria-label="Quitar">&times;</button></div>`).join('')}</div>`;
+
+  const completo = falta<=0;
+  return `<div class="auditcard apoyo">
+    <div class="t">&#128995; Apoyo y pendientes</div>
+    <div class="s">${completo
+      ? 'Tu d&iacute;a est&aacute; completo: todo lo que marc&oacute; el reloj queda explicado.'
+      : 'El tiempo que no es un cuarto ni un &aacute;rea tambi&eacute;n es trabajo. Rep&aacute;rtelo para que cuente en tus horas.'}</div>
+    <div class="reparto">
+      <div><b>${apoyoHM(hotel)}</b>en el hotel</div>
+      <div><b>${apoyoHM(tareas)}</b>cuartos y &aacute;reas</div>
+      <div class="falta"><b>${apoyoHM(falta)}</b>por repartir</div>
+    </div>
+    ${falta>0?`<div class="cats">${APOYO_CAT.map(c=>`<button class="cat ${APOYO_SEL===c.codigo?'on':''}"
+      data-apcat="${c.codigo}">${c.icono||''} ${esc(c.nombre)}</button>`).join('')}</div>`:''}
+    ${caja}${lista}</div>`;
+}
+
+async function guardarApoyo(){
+  if(!APOYO_SEL||!APOYO_MIN||!MIA) return;
+  const com=(($('apCom')||{}).value||'').trim();
+  const {error}=await sb.from('hk_apoyo').insert({
+    property_id:MIA.property_id, fecha:FECHA, employee_id:EMP, asignacion_id:MIA.id,
+    categoria:APOYO_SEL, minutos:APOYO_MIN, comentario:com||null,
+    capturado_por:USER?USER.id:null, capturado_por_nombre:NOMBRE});
+  if(error) return toast('No se pudo guardar: '+error.message);
+  APOYO_SEL=null; APOYO_MIN=0; APOYO_COM='';
+  toast('Apuntado · ya cuenta en tus horas');
+  cargar();
+}
+
+async function borrarApoyo(id){
+  const {error}=await sb.from('hk_apoyo').delete().eq('id',id);
+  if(error) return toast('No se pudo quitar: '+error.message);
+  toast('Quitado');
+  cargar();
+}
+
 function engancharCuartos(root){
   root.querySelectorAll('.cuarto .lin').forEach(l=>l.onclick=()=>l.parentElement.classList.toggle('on'));
   root.querySelectorAll('[data-ini]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); iniciar(b.dataset.ini); });
@@ -923,6 +1069,15 @@ function engancharCuartos(root){
   root.querySelectorAll('[data-pau]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); pausar(b.dataset.pau); });
   root.querySelectorAll('[data-rea]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); reanudar(b.dataset.rea); });
   root.querySelectorAll('[data-nom]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirNoMolestar(b.dataset.nom); });
+  root.querySelectorAll('[data-apcat]').forEach(b=>b.onclick=()=>{
+    APOYO_SEL = APOYO_SEL===b.dataset.apcat ? null : b.dataset.apcat;
+    APOYO_MIN=0; APOYO_COM=''; pintar(); });
+  root.querySelectorAll('[data-apmin]').forEach(b=>b.onclick=()=>{
+    const c=root.querySelector('#apCom'); if(c) APOYO_COM=c.value;
+    APOYO_MIN=Number(b.dataset.apmin); pintar(); });
+  const apc=root.querySelector('#apCom'); if(apc) apc.oninput=()=>{ APOYO_COM=apc.value; };
+  const apo=root.querySelector('#apOk'); if(apo) apo.onclick=guardarApoyo;
+  root.querySelectorAll('[data-apdel]').forEach(b=>b.onclick=()=>borrarApoyo(b.dataset.apdel));
   const bd=root.querySelector('#btnDnd'); if(bd){ bd.onclick=abrirDnd; pintarDndChips(); }
 }
 // Busca una tarea esté donde esté (mi orden o el reparto completo).

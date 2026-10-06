@@ -1583,4 +1583,169 @@ $('l-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('l-go').click()}
 $('logout').onclick=async()=>{await sb.auth.signOut();location.reload();};
 start();
 </script>
+
+<!-- ============================================================
+     SAN JOSÉ — el que sabe dónde está cada cosa.
+     Javi, 5-oct-2026: «un asistente del dashboard para que ayudes a los
+     colaboradores: consultar dudas o buscar dónde están las pantallas».
+     No inventa: busca SOLO entre las pantallas que esa persona ya tiene
+     (flat, que sale del menú con sus permisos aplicados). Si algo no le
+     toca, no existe para él y no se lo enseña ni como pista.
+     ============================================================ -->
+<style>
+#sjBtn{position:fixed;right:18px;bottom:18px;z-index:70;display:flex;align-items:center;gap:8px;
+  background:var(--accent);color:#fff;border:none;border-radius:999px;padding:11px 16px;
+  font:600 14px/1 inherit;cursor:pointer;box-shadow:0 8px 24px -8px rgba(0,0,0,.45)}
+#sjBtn:hover{filter:brightness(1.06)}
+#sjBtn .em{font-size:16px}
+@media(max-width:600px){#sjBtn .tx{display:none}#sjBtn{padding:13px;bottom:14px;right:14px}}
+#sjBg{position:fixed;inset:0;background:rgba(20,20,18,.45);z-index:71;display:none}
+#sjBg.on{display:block}
+#sjPanel{position:fixed;z-index:72;right:18px;bottom:18px;width:min(460px,calc(100vw - 28px));
+  max-height:min(76vh,680px);background:#fff;border-radius:16px;border:1px solid var(--bd);
+  box-shadow:0 24px 60px -18px rgba(0,0,0,.5);display:none;flex-direction:column;overflow:hidden}
+#sjPanel.on{display:flex}
+@media(max-width:600px){#sjPanel{right:10px;left:10px;bottom:10px;width:auto;max-height:84vh}}
+.sj-hd{padding:14px 16px 12px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px}
+.sj-hd b{font-size:15px}
+.sj-hd .sub{color:var(--txt3);font-size:12px;display:block;font-weight:400;margin-top:1px}
+.sj-x{margin-left:auto;background:none;border:none;font-size:20px;color:var(--txt3);cursor:pointer;line-height:1}
+.sj-bus{padding:12px 16px;border-bottom:1px solid var(--bd)}
+.sj-bus input{width:100%;font:inherit;font-size:15px;padding:11px 12px;border:1.5px solid var(--bd);
+  border-radius:10px;background:var(--bg2);color:var(--txt)}
+.sj-bus input:focus{outline:none;border-color:var(--accent);background:#fff}
+.sj-cuerpo{overflow:auto;padding:10px 10px 14px;flex:1}
+.sj-tit{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--txt3);
+  font-weight:700;padding:10px 6px 6px}
+.sj-it{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;
+  border:none;padding:9px 10px;border-radius:10px;cursor:pointer;font:inherit;color:var(--txt)}
+.sj-it:hover,.sj-it:focus{background:var(--bg3);outline:none}
+.sj-it .ic{width:28px;height:28px;border-radius:8px;background:var(--bg3);display:grid;
+  place-items:center;font-size:14px;flex:none}
+.sj-it b{display:block;font-size:14px;font-weight:600}
+.sj-it span{display:block;font-size:12px;color:var(--txt3)}
+.sj-it .fl{margin-left:auto;color:var(--txt3);font-size:16px}
+.sj-nada{padding:16px 12px;color:var(--txt2);font-size:13.5px;line-height:1.5}
+.sj-pie{border-top:1px solid var(--bd);padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;background:var(--bg2)}
+.sj-pie button{background:#fff;border:1px solid var(--bd);border-radius:999px;padding:7px 12px;
+  font:600 12.5px/1 inherit;color:var(--txt);cursor:pointer}
+.sj-pie button:hover{border-color:var(--accent);color:var(--accent)}
+</style>
+
+<button id="sjBtn" title="San José, el que sabe dónde está cada cosa">
+  <span class="em">🧭</span><span class="tx">San José</span></button>
+<div id="sjBg"></div>
+<div id="sjPanel" role="dialog" aria-label="San José">
+  <div class="sj-hd"><span style="font-size:20px">🧭</span>
+    <div><b>San José</b><span class="sub">Dime qué buscas y te digo dónde está.</span></div>
+    <button class="sj-x" id="sjX" aria-label="Cerrar">×</button></div>
+  <div class="sj-bus"><input id="sjQ" placeholder="vacaciones, factura, tarifas, un ticket…" autocomplete="off"></div>
+  <div class="sj-cuerpo" id="sjBody"></div>
+  <div class="sj-pie">
+    <button data-sj="soypepe">Lo mío del día</button>
+    <button data-sj="ticket">No encuentro lo que busco</button>
+  </div>
+</div>
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i);};
+  var btn=$('sjBtn'), pan=$('sjPanel'), bg=$('sjBg'), q=$('sjQ'), body=$('sjBody');
+  if(!btn||!pan) return;
+
+  /* Las palabras con las que la gente pregunta no son las del menú: nadie dice
+     "PAG-RH-VAC", dicen "mis días". Esto es ese puente, y se amplía solo
+     añadiendo renglones. */
+  var PISTAS=[
+    {re:/vacacion|dias libres|descanso|permiso/i,      busca:/vacacion/i},
+    {re:/falta|retardo|asistencia|checador|incidencia/i,busca:/incidencia|asistencia/i},
+    {re:/nomina|sueldo|salario|quincena|raya/i,        busca:/nomina|salarial/i},
+    {re:/factura|cfdi|xml|comprobante/i,               busca:/cfdi|factura|contabil/i},
+    {re:/pago|proveedor|transferencia|viernes/i,       busca:/pago/i},
+    {re:/gasto|caja|efectivo|arqueo|cuadre/i,          busca:/caja|cuadre|auditor/i},
+    {re:/tarifa|precio|revenue|adr|ocupacion/i,        busca:/tarifa|revenue|pricing/i},
+    {re:/tour|experiencia|guia|sincretico/i,           busca:/tour|experiencia|sincretico|guia/i},
+    {re:/mantenimiento|descompuso|fuga|foco|aire/i,    busca:/mantenimiento/i},
+    {re:/limpieza|camarista|cuarto|housekeeping/i,     busca:/housekeeping|limpieza|ama de llaves/i},
+    {re:/evento|sala|productora|renta/i,               busca:/evento|espacio|productora|ateneo/i},
+    {re:/socio|aportacion|asamblea|accion/i,           busca:/socio|asamblea|gobierno/i},
+    {re:/contrato|alta|expediente|nuevo compañero|ingreso/i, busca:/contrato|alta|expediente/i},
+    {re:/ticket|queja|sugerencia|idea|mejora/i,        busca:/incidencia|ticket/i},
+    {re:/huesped|reserva|checkin|check in|recepcion/i, busca:/recepcion|huesped|apepe|reserva/i},
+    {re:/permiso|acceso|quien ve|contrasena|password/i,busca:/acceso|permiso|usuario/i}
+  ];
+  var norm=function(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');};
+
+  function pantallas(){ try{ return (flat||[]).filter(function(x){return x && x.t && (x.src||x.action);}); }catch(e){ return []; } }
+
+  function busca(txt){
+    var t=norm(txt).trim();
+    var todas=pantallas();
+    if(!t) return [];
+    var extra=null;
+    PISTAS.forEach(function(p){ if(p.re.test(t) && !extra) extra=p.busca; });
+    var out=[];
+    todas.forEach(function(it){
+      var heno=norm(it.t+' '+(it.grp||'')+' '+(it.src||''));
+      var pts=0;
+      if(heno.indexOf(t)>=0) pts=10;
+      else { var ok=t.split(/\s+/).filter(function(w){return w.length>2 && heno.indexOf(w)>=0;}); if(ok.length) pts=5+ok.length; }
+      if(!pts && extra && extra.test(it.t+' '+(it.grp||'')+' '+(it.src||''))) pts=3;
+      if(pts) out.push({it:it,pts:pts});
+    });
+    out.sort(function(a,b){return b.pts-a.pts;});
+    return out.slice(0,12).map(function(x){return x.it;});
+  }
+
+  function fila(it){
+    return '<button class="sj-it" data-src="'+(it.src||'')+'" data-t="'+(it.t||'').replace(/"/g,'&quot;')+
+      '" data-grp="'+(it.grp||'').replace(/"/g,'&quot;')+'">'+
+      '<span class="ic">📄</span><span style="min-width:0"><b>'+it.t+'</b><span>'+(it.grp||'')+'</span></span>'+
+      '<span class="fl">›</span></button>';
+  }
+
+  function pinta(){
+    var t=q.value.trim();
+    if(!t){
+      var todas=pantallas(), areas={}, orden=[];
+      todas.forEach(function(it){ var g=it.grp||'Panel'; if(!areas[g]){areas[g]=0;orden.push(g);} areas[g]++; });
+      body.innerHTML='<div class="sj-nada">Escribe lo que buscas con tus palabras — <b>«mis días»</b>, <b>«una factura»</b>, <b>«se descompuso algo»</b> — y te llevo a la pantalla.<br><br>'+
+        'Tienes <b>'+todas.length+'</b> pantallas en '+orden.length+' áreas: '+orden.join(' · ')+'.</div>';
+      return;
+    }
+    var r=busca(t);
+    if(!r.length){
+      body.innerHTML='<div class="sj-nada">No tengo ninguna pantalla que cuadre con <b>'+t.replace(/[<>&]/g,'')+'</b>.<br><br>'+
+        'Puede ser que exista pero no esté entre las tuyas: yo solo veo lo que tú puedes abrir. '+
+        'Mándanos un ticket con el botón de abajo y lo revisamos.</div>';
+      return;
+    }
+    body.innerHTML='<div class="sj-tit">'+r.length+(r.length===1?' pantalla':' pantallas')+'</div>'+r.map(fila).join('');
+  }
+
+  function abre(src,t,grp){ cierra(); try{ select(src,t,grp); }catch(e){ location.href=src; } }
+  function cierra(){ pan.classList.remove('on'); bg.classList.remove('on'); }
+  function open(){ pan.classList.add('on'); bg.classList.add('on'); q.value=''; pinta(); setTimeout(function(){q.focus();},40); }
+
+  btn.onclick=open; bg.onclick=cierra; $('sjX').onclick=cierra;
+  q.addEventListener('input',pinta);
+  q.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){ cierra(); return; }
+    if(e.key==='Enter'){ var b=body.querySelector('.sj-it'); if(b) b.click(); }
+  });
+  body.addEventListener('click',function(e){
+    var b=e.target.closest&&e.target.closest('.sj-it'); if(!b) return;
+    abre(b.getAttribute('data-src'), b.getAttribute('data-t'), b.getAttribute('data-grp'));
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-sj]'),function(b){
+    b.onclick=function(){
+      var a=b.getAttribute('data-sj');
+      if(a==='soypepe'){ cierra(); window.open('/soypepe/','_blank','noopener'); return; }
+      if(a==='ticket'){ abre('/m/incidencias.html?g=tickets','Incidencias','Control'); return; }
+    };
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape' && pan.classList.contains('on')) cierra();
+  });
+})();
+</script>
 </body></html>
