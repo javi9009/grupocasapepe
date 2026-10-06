@@ -181,6 +181,7 @@ let DB_OT={},DB_US={};
 let BC=[],BQ={},QNOW=(function(){const d=new Date();return d.toISOString().slice(0,7)+(d.getDate()<=15?"-Q1":"-Q2");})();
 /* Etiqueta corta de cada KPI, para enseñar en "Otorgar bono" a qué indicador
    está atado el objetivo. El catálogo completo vive en Bonos → KPIs. */
+let CTIPOS=[],ROLCAT=[],CPLAN={};
 const KPINOM={ventas_poster:"Ventas (Poster)",propinas:"Propinas (Poster)",forecast_cump:"% vs forecast",pace_yoy:"Pace vs año ant.",revpar_pct:"RevPAR vs año ant.",ocupacion_prom:"Ocupación (unid/día)",ocupacion_pct:"Ocupación %",dif_efectivo:"Descuadre de efectivo",auditoria_pct:"Auditoría % resueltas",pl_partida:"P&L real vs plan",puntualidad_pct:"% puntualidad",faltas_mes:"Faltas del mes",rotacion_mes:"Bajas del mes",coste_salarial:"Coste salarial",eval_promedio:"Evaluación desempeño",hk_eficiencia:"Eficiencia de limpieza",hk_extras:"Tareas extra HK",room_audit:"Room audits",rep_limpieza:"Limpieza en reputación (Booking/HW)",gasto_limpieza:"Gasto de limpieza vs presupuesto",preventivos:"Preventivos",mtto_cerrados:"% tickets mtto",consumo_luz:"Consumos luz/agua/gas",manual:"sin KPI (se valida a mano)"};
 function kpiNom(k){return KPINOM[k]||k;}
 function bonoAreaDe(e){
@@ -530,11 +531,127 @@ function sSituacion(p,e){
   </div>
  </div>`;
 }
+/* ===== planes de carrera (propuestas editables) ===== */
+function catDeRol(rol){const x=ROLCAT.find(r=>r.rol===rol);return x?x.categoria:null;}
+function nomTipo(cod){const t=CTIPOS.find(c=>c.codigo===cod);return t?(t.nombre||cod):cod;}
+function mesesTipo(cod){const t=CTIPOS.find(c=>c.codigo===cod);return t?t.meses:null;}
+function caminosDe(cat){const prim=CTIPOS.find(c=>c.categoria_origen===cat);return CTIPOS.filter(c=>c.categoria_origen===cat||(prim&&c.categoria_origen===prim.categoria_destino));}
+function destinoPuesto(dcat,sede,hk,front){
+ const cand=RANGOS.filter(r=>r.activo!==false&&r.junior!=null&&r.sede===sede&&catDeRol(r.rol)===dcat);
+ if(!cand.length)return null;
+ const sc=r=>(hk&&/ama de llaves/i.test(r.puesto))?2:(front&&/front/i.test(r.puesto))?2:((!hk&&!front)?1:0);
+ cand.sort((a,b)=>sc(b)-sc(a)||(Number(b.junior)-Number(a.junior)));
+ return cand[0];
+}
+function addMeses(d,m){const x=new Date(String(d).slice(0,10)+"T12:00:00");x.setMonth(x.getMonth()+Number(m||0));return x.toISOString().slice(0,10);}
+async function recargarPlanes(empId){
+ try{const cp=await sb("/carrera_planes?select=*&employee_id=eq."+empId+"&order=created_at.desc")||[];
+  try{const ids=cp.map(p=>'"'+p.id+'"').join(",");if(ids){const tr=await sb("/carrera_bono_tramos?select=plan_id,escalon,pct,monto_mensual,requisitos_min,estatus&plan_id=in.("+ids+")")||[];const byP={};tr.forEach(t=>{(byP[t.plan_id]=byP[t.plan_id]||[]).push(t);});cp.forEach(p=>{p.tramos=byP[p.id]||[];});}}catch(_){}
+  CPLAN[empId]=cp;}catch(_){}
+}
+async function generarPropuestas(empId){
+ const e=E[empId]; if(!e){alert("Sin datos de la persona.");return;}
+ const cat=e.categoria; if(!cat){alert("La persona no tiene categoría en su ficha. Asígnasela primero en Datos laborales.");return;}
+ const sede=e.sede||""; const sal=Number(e.salario_bruto)||0;
+ const txt=((e.rol||e.puesto||"")+" "+(e.area||"")).toLowerCase();
+ const hk=/camarist|limpieza|ama de|housekeep|recamar|cuartos|áreas? p|areas p/.test(txt);
+ const front=/recepcion|recepción|cajero|front|auditor/.test(txt);
+ const yaTengo=(CPLAN[empId]||[]).filter(p=>p.estatus==="activo"||p.estatus==="propuesta").map(p=>p.puesto_destino);
+ const nuevos=[];
+ caminosDe(cat).forEach(c=>{[c.categoria_destino,c.destino_alterno].filter(Boolean).forEach(dcat=>{
+  const dp=destinoPuesto(dcat,sede,hk,front); if(!dp)return;
+  if(yaTengo.includes(dp.puesto)||nuevos.some(n=>n.puesto_destino===dp.puesto))return;
+  const dest=Number(dp.junior)||0, br=Math.max(dest-sal,0), hoy=new Date().toISOString().slice(0,10);
+  nuevos.push({employee_id:empId,tipo_codigo:c.codigo,puesto_destino:dp.puesto,sede:sede,salario_origen:sal,
+   salario_destino_n1:dest,inicio:hoy,fin_previsto:addMeses(hoy,c.meses),estatus:"propuesta",
+   creado_por:ME||null,nota:"Propuesta automática · revisar y validar",_br:br});
+ });});
+ if(!nuevos.length){alert("No encontré caminos nuevos con tabulador para su sede. Puede que ya tenga planes abiertos o que el puesto destino no tenga tabulador en su sede.");return;}
+ st("creando propuestas…");
+ try{
+  for(const pl of nuevos){const br=pl._br; delete pl._br;
+   const ins=await sb("/carrera_planes",{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify(pl)});
+   const id=ins&&ins[0]&&ins[0].id; if(!id)continue;
+   const tr=[[1,25,1],[2,50,3],[3,75,4],[4,100,5]].map(a=>({plan_id:id,escalon:a[0],pct:a[1],requisitos_min:a[2],monto_mensual:Math.round(br*a[1]/100),estatus:"pendiente"}));
+   try{await sb("/carrera_bono_tramos",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify(tr)});}catch(_){}
+  }
+  await recargarPlanes(empId); st("✓ propuestas creadas","ok"); pinta();
+ }catch(err){st("⚠ no se pudieron crear","err");alert("No se pudieron crear las propuestas. ¿Tienes permiso de RH?");}
+}
+async function validarPropuesta(planId,empId){
+ const pl=(CPLAN[empId]||[]).find(x=>x.id===planId); if(!pl)return;
+ if(!confirm("¿Validar y activar el plan hacia "+(pl.puesto_destino||"")+"?\n\nSe genera el addendum de complemento de contrato para que lo firme en SoyPepe.")) return;
+ st("activando plan…"); const hoy=new Date().toISOString().slice(0,10);
+ try{
+  await sb("/carrera_planes?id=eq."+planId,{method:"PATCH",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({estatus:"activo",inicio:hoy})});
+  const br=Math.max((Number(pl.salario_destino_n1)||0)-(Number(pl.salario_origen)||0),0);
+  const nom=(E[empId]||{}).nombre_display||(E[empId]||{}).nombre||"El colaborador";
+  try{await sb("/contrato_addendums",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({employee_id:empId,origen:"plan_carrera",plan_id:planId,concepto:"Plan de carrera: "+nomTipo(pl.tipo_codigo)+" hacia "+pl.puesto_destino,monto:Math.round(br),periodicidad:"mensual (por escalones)",vigencia_desde:hoy,cuerpo_html:"<h3>Complemento de contrato · Plan de carrera</h3><p><strong>"+esc(nom)+"</strong> inicia el camino <strong>"+esc(nomTipo(pl.tipo_codigo))+"</strong> hacia <strong>"+esc(pl.puesto_destino)+"</strong>. La brecha de "+mxn(Math.round(br))+" mensuales se cubre por la vía del bono por escalones y no forma parte del salario base.</p>",estatus:"pendiente",created_by:ME||null})});}catch(_){}
+  await recargarPlanes(empId); st("✓ plan activado","ok"); pinta();
+ }catch(e){st("⚠ no se pudo activar","err");alert("No se pudo activar el plan.");}
+}
+async function descartarPropuesta(planId,empId){
+ const pl=(CPLAN[empId]||[]).find(x=>x.id===planId); if(!pl)return;
+ if(pl.estatus!=="propuesta"){alert("Solo se descartan propuestas.");return;}
+ if(!confirm("¿Descartar esta propuesta hacia "+(pl.puesto_destino||"")+"?")) return;
+ try{
+  await sb("/carrera_bono_tramos?plan_id=eq."+planId,{method:"DELETE",headers:{...H,Prefer:"return=minimal"}});
+  await sb("/carrera_planes?id=eq."+planId,{method:"DELETE",headers:{...H,Prefer:"return=minimal"}});
+  await recargarPlanes(empId); st("✓ descartada","ok"); pinta();
+ }catch(e){alert("No se pudo descartar.");}
+}
+async function crearPlanManual(empId){
+ const e=E[empId]||{}; const tipo=$("#cpTipo").value, dv=$("#cpDest").value;
+ if(!tipo||!dv){alert("Elige el camino y el puesto destino.");return;}
+ const parts=dv.split("|"), puesto=parts[0], sede=parts[1], dest=Number(parts[2])||0;
+ const sal=Number(e.salario_bruto)||0, hoy=new Date().toISOString().slice(0,10), br=Math.max(dest-sal,0);
+ if((CPLAN[empId]||[]).some(x=>x.puesto_destino===puesto&&(x.estatus==="activo"||x.estatus==="propuesta"))){alert("Ya tiene un plan abierto hacia ese puesto.");return;}
+ st("creando propuesta…");
+ try{
+  const ins=await sb("/carrera_planes",{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify({employee_id:empId,tipo_codigo:tipo,puesto_destino:puesto,sede:sede||e.sede||null,salario_origen:sal,salario_destino_n1:dest,inicio:hoy,fin_previsto:addMeses(hoy,mesesTipo(tipo)),estatus:"propuesta",creado_por:ME||null,nota:"Propuesta a la medida · revisar y validar"})});
+  const id=ins&&ins[0]&&ins[0].id;
+  if(id){const tr=[[1,25,1],[2,50,3],[3,75,4],[4,100,5]].map(a=>({plan_id:id,escalon:a[0],pct:a[1],requisitos_min:a[2],monto_mensual:Math.round(br*a[1]/100),estatus:"pendiente"}));try{await sb("/carrera_bono_tramos",{method:"POST",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify(tr)});}catch(_){}}
+  await recargarPlanes(empId); st("✓ propuesta creada","ok"); pinta();
+ }catch(err){st("⚠ no se pudo","err");alert("No se pudo crear la propuesta.");}
+}
+function cardCarrera(p,e){
+ const planes=(CPLAN[p.id]||[]);
+ const orden={activo:0,propuesta:1};
+ const fila=pl=>{
+  const br=Math.max((Number(pl.salario_destino_n1)||0)-(Number(pl.salario_origen)||0),0);
+  const tr=(pl.tramos||[]).slice().sort((a,b)=>a.escalon-b.escalon);
+  const escs=tr.map(t=>mxn(t.monto_mensual)).join(" · ");
+  const prp=pl.estatus==="propuesta";
+  return `<div style="border-bottom:1px solid var(--rule,#eee);padding:8px 0">
+   <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+    <span><strong>${esc(nomTipo(pl.tipo_codigo))}</strong> → ${esc(pl.puesto_destino||"—")} <span class="pill ${prp?"warn":"ok"}">${prp?"propuesta":esc(pl.estatus)}</span></span>
+   </div>
+   <div class="faint" style="font-size:.76rem;margin-top:2px">Hoy ${mxn(pl.salario_origen)} → destino ${mxn(pl.salario_destino_n1)} · brecha <strong>${mxn(br)}</strong>/mes${br===0?' <span class="pill warn" style="font-size:.58rem">brecha cero</span>':""}</div>
+   ${escs?`<div class="faint" style="font-size:.72rem">Escalones del bono: ${escs}</div>`:""}
+   ${prp?`<div style="display:flex;gap:6px;margin-top:5px"><button class="bt" data-cval="${pl.id}" style="color:#1F5E3F">✔ Validar</button><button class="bt" data-cdesc="${pl.id}" style="color:#9E3B2E">✕ Descartar</button></div>`:`<div style="margin-top:4px"><a class="bt" href="/m/rh-carrera.html" target="_top">Ver seguimiento →</a></div>`}
+  </div>`;
+ };
+ const ord=planes.slice().sort((a,b)=>(orden[a.estatus]??9)-(orden[b.estatus]??9));
+ return `<div class="card" style="grid-column:1/-1"><h2>Plan de carrera</h2>
+  ${ord.length?ord.map(fila).join(""):'<p class="vacia">Sin plan de carrera todavía.</p>'}
+  <button class="bt" id="genCarrera" style="margin-top:10px">✨ Generar propuestas (siguiente nivel y saltos)</button>
+  <details style="margin-top:8px"><summary class="faint" style="cursor:pointer;font-size:.78rem">➕ Crear un plan a la medida (elige camino y destino)</summary>
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+    <select id="cpTipo" class="in" style="max-width:100%"><option value="">— camino —</option>${CTIPOS.map(c=>`<option value="${esc(c.codigo)}">${esc(c.nombre||c.codigo)} · ${c.meses}m</option>`).join("")}</select>
+    <select id="cpDest" class="in" style="max-width:100%"><option value="">— puesto destino —</option>${RANGOS.filter(r=>r.junior!=null).slice().sort((a,b)=>String(a.puesto+a.sede).localeCompare(String(b.puesto+b.sede),"es")).map(r=>`<option value="${esc(r.puesto)}|${esc(r.sede||"")}|${r.junior}">${esc(r.puesto)} · ${esc(r.sede||"")} · ${mxn(r.junior)}</option>`).join("")}</select>
+   </div>
+   <button class="bt" id="cpCrear" style="margin-top:6px">Crear propuesta a la medida</button>
+   <p class="faint" style="font-size:.72rem;margin:4px 0 0">Para casos sin tabulador en su sede (p. ej. Virreyes) o cuando el destino está en otra plaza.</p>
+  </details>
+  <p class="faint" style="font-size:.72rem;margin:6px 0 0">Se arman como <strong>propuesta pendiente de validar</strong>, con la brecha y los escalones del bono sacados del tabulador. Revísalas, descártalas o valídalas; al validar se genera el addendum para firma.</p>
+ </div>`;
+}
 function sCrecimiento(p,e){
  const m=p.maestria,mov=p.movimientos||[];const g=rango(e);
  let sig="";
  if(g&&(e&&e.tramo||p.tramo)){const t=e&&e.tramo||p.tramo;const i=TRAMOS.indexOf(t);if(i>-1&&i<TRAMOS.length-1){sig=dato("Siguiente tramo",TRAMO[TRAMOS[i+1]]+" · "+mxn(g[TRAMOS[i+1]]));}}
  return `<div class="grid">
+  ${cardCarrera(p,e)}
   <div class="card"><h2>Potencial de crecimiento</h2>
    ${m?dato("Maestría","<strong>"+esc(m.maestria)+"</strong>")+dato("Avance",m.cerrados+" de "+m.modulos+" módulos"+(m.cerrados>=m.modulos?' <span class="pill ok">lista para ascenso</span>':""))+dato("Destraba",esc(m.destraba||"—"))+(m.requisito?dato("Requisito extra",esc(m.requisito)):"")+sig+`<div class="mods">${(m.detalle||[]).map(d=>`<div class="mod"><span>${esc(d.categoria)}</span><span class="num">${d.mejor??"—"}/${d.minimo}</span><span>${d.cerrado?"✅":"⬜"}</span></div>`).join("")}</div>`
     :'<p class="vacia">Sin maestría asignada — su rol o tramo no tienen ruta todavía.</p>'+sig}
@@ -617,6 +734,10 @@ function pinta(){
  $("#pane").querySelectorAll("[data-drive]").forEach(b=>b.onclick=()=>pickFromDrive(b.dataset.drive));
  const bb=$("#btnBaja");if(bb)bb.onclick=darBaja;
  const bd=$("#btnDel");if(bd)bd.onclick=cancelarUsr;
+ const gc=$("#genCarrera");if(gc)gc.onclick=()=>generarPropuestas(cur);
+ const cpc=$("#cpCrear");if(cpc)cpc.onclick=()=>crearPlanManual(cur);
+ $("#pane").querySelectorAll("[data-cval]").forEach(b=>b.onclick=()=>validarPropuesta(b.dataset.cval,cur));
+ $("#pane").querySelectorAll("[data-cdesc]").forEach(b=>b.onclick=()=>descartarPropuesta(b.dataset.cdesc,cur));
  const js=$("#jefeSel");if(js)js.onchange=async()=>{
    const jid=js.value; if(!jid){return;}
    const jn=(F.find(x=>x.id===jid)||{}).nombre||"ese jefe";
@@ -743,6 +864,10 @@ function llenaSel(){
  }catch(e){}
  try{RANGOS=await sb("/rangos_salariales?select=rol,puesto,sede,activo,practicas,junior,junior2,senior&activo=is.true");}catch(e){}
  try{BC=await sb("/bonos_config?select=id,area,tipo,nombre,monto_mensual,monto_trimestral,monto_anual,variable,activo,orden,tramos,sedes,indicador,umbral,detalle&activo=is.true&order=area,orden")||[];}catch(e){}
+ try{CTIPOS=await sb("/carrera_tipos?select=*&activo=is.true&order=orden")||[];}catch(e){}
+ try{ROLCAT=await sb("/roles_catalogo?select=rol,categoria")||[];}catch(e){}
+ try{CPLAN={};const cp=await sb("/carrera_planes?select=*&order=created_at.desc")||[];cp.forEach(x=>{(CPLAN[x.employee_id]=CPLAN[x.employee_id]||[]).push(x);});
+   try{const tr=await sb("/carrera_bono_tramos?select=plan_id,escalon,pct,monto_mensual,requisitos_min,estatus")||[];const byP={};tr.forEach(t=>{(byP[t.plan_id]=byP[t.plan_id]||[]).push(t);});Object.values(CPLAN).forEach(a=>a.forEach(p=>{p.tramos=byP[p.id]||[];}));}catch(_){}}catch(e){}
  try{const _bq=await sb("/bonos_quincena?select=*&quincena=eq."+encodeURIComponent(QNOW))||[];_bq.forEach(x=>{(BQ[x.employee_id]=BQ[x.employee_id]||[]).push(x);});}catch(e){}
  try{const _db=await sb("/dias_bonificados?select=employee_id")||[];_db.forEach(x=>{DB_OT[x.employee_id]=(DB_OT[x.employee_id]||0)+1;});}catch(e){}
  try{const _du=await sb("/vacaciones_solicitudes?select=employee_id,dias_solicitados&tipo=eq.bonificado&estado=in.(pendiente,pre_aprobada,aprobada,tomada,confirmada)")||[];_du.forEach(x=>{DB_US[x.employee_id]=(DB_US[x.employee_id]||0)+(Number(x.dias_solicitados)||1);});}catch(e){}
