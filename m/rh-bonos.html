@@ -74,6 +74,17 @@ details.pers label{display:block;font-size:11.5px;padding:2px 0;text-align:left;
 </div>
 
 <div class="params">
+ <h3>🗂️ Historial de bonos por colaborador</h3>
+ <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+  <select id="hFiltEmp" style="padding:7px;border:1px solid var(--bd);border-radius:8px;font-size:13px"><option value="">Todos los colaboradores</option></select>
+  <select id="hFiltQ" style="padding:7px;border:1px solid var(--bd);border-radius:8px;font-size:13px"><option value="">Todas las quincenas</option></select>
+  <select id="hFiltEst" style="padding:7px;border:1px solid var(--bd);border-radius:8px;font-size:13px"><option value="">Todos los estatus</option><option value="validado">Logrados (validados)</option><option value="propuesto">Por validar</option><option value="rechazado">Rechazados</option></select>
+  <span class="fuente" id="hResumen"></span>
+ </div>
+ <div id="hBody"><span class="fuente">cargando…</span></div>
+</div>
+
+<div class="params">
  <h3>Parámetros generales</h3>
  <div class="pgrid" id="pgrid"></div>
  <div class="esc" id="escRow"></div>
@@ -101,6 +112,7 @@ function status(t,c){const s=$('status');s.textContent=t||'';s.className='status
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=n=>'$'+Number(n||0).toLocaleString('es-MX');
 let CFG=[],PAR={},EMPS=[],BM={},VALS={},MESQ='';
+let HIST=[],EMPN={};
 /* ============================================================
    REGISTRO DE KPIs — todo lo que YA se mide en la base de datos.
    menor:true = el objetivo es que el valor sea MENOR o igual a la meta.
@@ -434,6 +446,35 @@ async function guardarInforme(mes,aplicar){
  status(aplicar?('✓ '+aplicados+' bonos aplicados a '+pago+' ('+personasTot+' persona-bonos)'):'✓ informe guardado','ok');
  evaluar();
 }
+/* ===== historial de bonos ===== */
+async function cargarHist(){
+ try{
+  HIST=await sb('/bonos_quincena?select=id,quincena,employee_id,nombre,monto,estatus,nota,otorgado_por,validado_por,bono_config_id,tipo_monto,pct,motivo_rechazo&order=quincena.desc,created_at.desc')||[];
+  const ids=[...new Set(HIST.map(x=>x.employee_id).filter(Boolean))];
+  if(ids.length){try{const em=await sb('/employees?select=id,nombre,apellido,nombre_display,sede&id=in.('+ids.map(i=>'"'+i+'"').join(',')+')')||[];em.forEach(e=>{EMPN[e.id]={nombre:e.nombre_display||[e.nombre,e.apellido].filter(Boolean).join(' ')||e.nombre,sede:e.sede};});}catch(_){}}
+  llenaFiltrosHist(); pintaHist();
+ }catch(e){$('hBody').innerHTML='<span class="fuente">No se pudo cargar el historial (¿sesión?).</span>';}
+}
+function llenaFiltrosHist(){
+ const m=new Map();HIST.forEach(x=>{if(x.employee_id)m.set(x.employee_id,(EMPN[x.employee_id]||{}).nombre||x.employee_id);});
+ const emps=[...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),'es'));
+ $('hFiltEmp').innerHTML='<option value="">Todos los colaboradores</option>'+emps.map(e=>`<option value="${e[0]}">${esc(e[1])}</option>`).join('');
+ const qs=[...new Set(HIST.map(x=>x.quincena).filter(Boolean))].sort().reverse();
+ $('hFiltQ').innerHTML='<option value="">Todas las quincenas</option>'+qs.map(q=>`<option value="${esc(q)}">${esc(q)}</option>`).join('');
+ ['hFiltEmp','hFiltQ','hFiltEst'].forEach(id=>{const el=$(id);if(el)el.onchange=pintaHist;});
+}
+function pintaHist(){
+ const fe=$('hFiltEmp').value,fq=$('hFiltQ').value,fst=$('hFiltEst').value;
+ const rows=HIST.filter(x=>(!fe||x.employee_id===fe)&&(!fq||x.quincena===fq)&&(!fst||(x.estatus||'propuesto')===fst));
+ const tot=rows.reduce((s,x)=>s+(Number(x.monto)||0),0);
+ const logr=rows.filter(x=>x.estatus==='validado').length;
+ $('hResumen').textContent=rows.length+' bonos · '+logr+' logrados · '+money(tot);
+ if(!rows.length){$('hBody').innerHTML='<span class="fuente">Sin bonos con esos filtros.</span>';return;}
+ const estPill=e=>{e=e||'propuesto';const m={validado:['Logrado','ok'],propuesto:['Por validar','warn'],rechazado:['Rechazado','bad']}[e]||[e,'warn'];return '<span class="pill '+m[1]+'">'+m[0]+'</span>';};
+ const kpiDe=x=>{const c=CFG.find(c=>c.id===x.bono_config_id);if(!c||!c.indicador||c.indicador==='manual')return '<span class="fuente">se valida a mano</span>';const K=KPIS[c.indicador]||{};return '<span title="'+esc(K.f||'')+'">'+esc(K.n||c.indicador)+(c.umbral!=null?' · meta '+esc(c.umbral):'')+'</span>';};
+ $('hBody').innerHTML='<div class="twrap"><table><thead><tr><th class="tl">Colaborador</th><th>Quincena</th><th class="tl">Bono</th><th>Monto</th><th>Estatus</th><th class="tl">KPI / cómo se mide</th><th class="tl">Justificación</th></tr></thead><tbody>'+
+  rows.map(x=>{const e=EMPN[x.employee_id]||{};return '<tr><td class="tl"><strong>'+esc(e.nombre||'—')+'</strong><br><span class="fuente">'+esc(e.sede||'')+'</span></td><td>'+esc(x.quincena||'')+'</td><td class="tl">'+esc(x.nombre||'')+'</td><td>'+money(x.monto)+(x.tipo_monto==='pct'&&x.pct?' <span class="fuente">('+x.pct+'%)</span>':'')+'</td><td>'+estPill(x.estatus)+'</td><td class="tl">'+kpiDe(x)+'</td><td class="tl fuente">'+esc(x.motivo_rechazo||x.nota||'—')+'</td></tr>';}).join('')+'</tbody></table></div>';
+}
 $('evaluar').onclick=evaluar;
 (async()=>{
  status('cargando…');
@@ -446,6 +487,7 @@ $('evaluar').onclick=evaluar;
  try{VALS=await medirTodos($('mes').value);}catch(e){}
  pintaKpis();
  if(!EDIT)status('solo lectura del catálogo (edita Dirección) · el informe sí lo puedes correr','ok');else status('✓','ok');
+ cargarHist();
 })();
 </script>
 <script>/* Bitacora de accesos: deja constancia de quien abre esta pantalla, cuanto se
