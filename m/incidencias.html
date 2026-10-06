@@ -136,7 +136,23 @@ async function boot(){
 }
 $('lbtn').onclick=async()=>{$('lerr').textContent='';const {error}=await sb.auth.signInWithPassword({email:$('lemail').value.trim(),password:$('lpass').value});if(error){$('lerr').textContent=error.message;return;}boot();};
 
-async function loadEmployees(){const {data}=await sb.from('employees').select('id,nombre,apellido,puesto,area,sede,estatus');(data||[]).forEach(e=>EMP[e.id]=e);}
+async function loadEmployees(){const {data}=await sb.from('employees').select('id,nombre,apellido,puesto,area,sede,estatus');(data||[]).forEach(e=>EMP[e.id]=e);
+  /* Quién NO compite por el bono de puntualidad, porque no le toca fichar.
+     Los voluntarios no chequen (decisión de Javi, 6-oct): se les mide por si
+     dieron el tour, no por su hora de entrada. Lo mismo para los exentos del
+     checador y para quien no tiene cuenta o la tiene apagada: salían como
+     "sin registro" todos los días sin poder hacer nada al respecto. */
+  try{ const {data:ls}=await sb.from('empleado_login').select('employee_id,exento_checador,activo');
+    (ls||[]).forEach(l=>{ const e=EMP[l.employee_id]; if(e){ e._exento=!!l.exento_checador; e._loginActivo=l.activo!==false; e._tieneLogin=true; } });
+  }catch(_){}
+}
+function noFicha(id){
+  const e=EMP[id]||{};
+  if(e.area==='Voluntariado' || e.puesto==='Voluntario') return true;
+  if(e._exento) return true;
+  if(!e._tieneLogin || !e._loginActivo) return true;
+  return false;
+}
 /* LA SEDE DE UNA INCIDENCIA QUE NO ES DE NADIE.
    Casi todas las incidencias cuelgan de un colaborador y de ahí sale su sede.
    Pero las que levanta la casa sola —el efectivo de caja, el descuadre de la
@@ -411,7 +427,7 @@ async function loadPuntualidad(){
     (SCH[r.employee_id]=SCH[r.employee_id]||{}); if(!(r.fecha in SCH[r.employee_id]) || (r.hora_inicio&&!SCH[r.employee_id][r.fecha])) SCH[r.employee_id][r.fecha]=r.hora_inicio||null; });
   const A={};
   Object.keys(SCH).forEach(emp=>{
-    if(esBaja(emp)) return; if(!(isAdmin||allAsis||inScope(EMP[emp]||{}))) return;
+    if(esBaja(emp)) return; if(noFicha(emp)) return; if(!(isAdmin||allAsis||inScope(EMP[emp]||{}))) return;
     const dias=Object.keys(SCH[emp]); if(!dias.length) return;
     let malos=0, det=[];
     dias.forEach(f=>{
@@ -429,7 +445,7 @@ async function loadPuntualidad(){
   ok.sort((x,y)=>y.dias-x.dias); no.sort((x,y)=>y.malos-x.malos);
   const filtro='<input id="fPersonaP" placeholder="🔎 Filtrar persona…" style="width:100%;box-sizing:border-box;background:#0000001f;border:1px solid var(--line,#34291c);color:inherit;border-radius:8px;padding:8px 10px;font:inherit;margin-bottom:8px">';
   c.innerHTML=filtro
-    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b> (evaluado hasta <b>'+fin+'</b>). Gana quien cumplió <b>TODOS sus días programados</b> (según su horario, sin contar descansos) y entró <b>a la hora exacta o antes</b> — <b>sin tolerancia</b>. Un día sin checar, una falta, un retardo o cualquier minuto tarde lo saca.</div>'
+    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b> (evaluado hasta <b>'+fin+'</b>). Gana quien cumplió <b>TODOS sus días programados</b> (según su horario, sin contar descansos) y entró <b>a la hora exacta o antes</b> — <b>sin tolerancia</b>. Un día sin checar, una falta, un retardo o cualquier minuto tarde lo saca. <b>No entran</b> los voluntarios, los exentos del checador ni quien no tiene cuenta activa: ésos no fichan.</div>'
     +'<div class="item"><div class="top"><span class="nm">✅ Van por el bono ('+ok.length+')</span></div>'+(ok.length?ok.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🟢 <b>'+esc(persona(a))+'</b> · '+a.dias+' día(s) programado(s), todos a la hora · '+esc(areaDe(a))+'</div>').join(''):'<div class="det">Aún nadie con quincena perfecta.</div>')+'</div>'
     +(no.length?('<div class="item"><div class="top"><span class="nm">❌ Perdieron el bono ('+no.length+')</span></div>'+no.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🔴 <b>'+esc(persona(a))+'</b> · '+a.malos+'/'+a.dias+' día(s) con problema: '+esc(a.det.slice(0,8).join(', '))+'</div>').join('')):'');
   const f=$('fPersonaP'); if(f) f.oninput=()=>{ const t=f.value.toLowerCase().trim(); c.querySelectorAll('[data-nm]').forEach(el=>{ el.style.display=(!t||(el.dataset.nm||'').includes(t))?'':'none'; }); };
