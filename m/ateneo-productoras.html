@@ -250,6 +250,14 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div class="fld"><label>Quién firmó</label><input data-c="contrato_firmante"></div>
           <div class="fld"><label>Estado</label><select data-c="estado"><option value="borrador">Borrador</option><option value="en_revision">En revisión</option><option value="activo">Activo</option><option value="suspendido">Suspendido</option><option value="baja">Baja</option></select></div>
         </div>
+        <!-- SIN CONVENIO FIRMADO NO HAY EVENTO NI CLIENTE (Javi, 6-oct-2026).
+             Hasta hoy la única manera de que lo firmara era pasarle la liga de su
+             portal por WhatsApp; este botón se lo manda por correo y deja
+             constancia de a quién y cuándo. -->
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost sm" id="btnConvenio" type="button">✉️ Mandarle el convenio</button>
+          <span class="mini" id="convEstado"></span>
+        </div>
         <!-- EVENTOS GRATUITOS: SOLO CUMBRE. Javi, 3-oct-2026: «Ana en Cumbre es
              la unica que puede hacer eventos gratuitos». Es un permiso de la
              productora, no un nombre escrito en un if: si manana se le da a
@@ -403,13 +411,50 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     });
   }
 
+  /* Mandarle el convenio por correo. El botón vive en «Acuerdo y estado» y se
+     apaga solo cuando ya está firmado: mandárselo dos veces no hace nada, pero
+     confunde a quien lo mira. */
+  function pintaConvenio(){
+    var b=$('btnConvenio'), e=$('convEstado'); if(!b||!e||!cur) return;
+    if(cur.contrato_firmado_at){
+      b.style.display='none';
+      e.innerHTML='<span style="color:var(--ok,#1D6B4A)">✓ firmado</span>'+
+        (cur.contrato_firmante?' por '+esc(cur.contrato_firmante):'')+
+        (cur.contrato_version?' · '+esc(cur.contrato_version):'');
+      return;
+    }
+    b.style.display='';
+    e.textContent = cur.convenio_enviado_at
+      ? 'mandado el '+String(cur.convenio_enviado_at).slice(0,10)+' a '+(cur.convenio_enviado_a||'')+', sin firmar'
+      : 'sin mandar';
+    b.onclick=async function(){
+      if(!confirm('¿Le mandamos el convenio por correo para que lo firme?')) return;
+      b.disabled=true; var antes=b.textContent; b.textContent='Mandando…';
+      try{
+        var r=await fetch(SB+'/functions/v1/productora-convenio',{method:'POST',headers:hdr(),
+          body:JSON.stringify({productora_id:cur.id})});
+        var j=await r.json();
+        if(!j||!j.ok) throw new Error((j&&j.error)||'no se pudo mandar');
+        toast(j.mensaje||'Convenio mandado.');
+        cur.convenio_enviado_at=new Date().toISOString(); cur.convenio_enviado_a=j.a;
+        pintaConvenio();
+      }catch(err){ toast(err.message,true); }
+      b.disabled=false; b.textContent=antes;
+    };
+  }
+
   async function pintaLiga(id){
     var el=$('ligaProd'), en=$('ligaEntrar'); if(!el)return;
     el.value=''; if(en){ en.removeAttribute('href'); en.style.opacity='.5';
       en.title='Esta productora todavia no tiene liga'; }
     try{
-      var r=await fetch(SB+'/rest/v1/productoras?select=portal_token&id=eq.'+id,{headers:hdr()});
+      /* De paso se traen los tres campos del convenio: la vista v_productoras se
+         quedó sin ellos —una vista no hereda columnas nuevas— y recrearla por
+         esto sería mover 62 columnas que usa media pantalla. */
+      var r=await fetch(SB+'/rest/v1/productoras?select=portal_token,convenio_enviado_at,convenio_enviado_a&id=eq.'+id,{headers:hdr()});
       var j=r.ok?await r.json():[]; var t=j[0]&&j[0].portal_token;
+      if(j[0]&&cur&&cur.id===id){ cur.convenio_enviado_at=j[0].convenio_enviado_at; cur.convenio_enviado_a=j[0].convenio_enviado_a; }
+      pintaConvenio();
       if(t){
         el.value=location.origin+'/productora.html?t='+t;
         /* Javi, 4-oct-2026: entrar al portal desde aqui, sin tener que copiar
