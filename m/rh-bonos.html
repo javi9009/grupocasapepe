@@ -89,7 +89,11 @@ const KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const H={apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'};
 let ME='';try{const _r=localStorage.getItem('sb-rehophywchakfapivsbh-auth-token');if(_r){const _j=JSON.parse(_r);const _t=_j.access_token||(_j.currentSession&&_j.currentSession.access_token)||(_j.session&&_j.session.access_token);if(_t){H.Authorization='Bearer '+_t;try{ME=(JSON.parse(atob(_t.split('.')[1])).email||'').toLowerCase();}catch(e){}}}}catch(e){}
 const $=id=>document.getElementById(id);
-const EDIT=(ME==='javi@casapepe.mx');
+/* Quién edita el catálogo de bonos: Dirección y Corporativo/RH (no solo Javi).
+   La seguridad real es la RLS (authenticated que no sea operador externo); esto
+   es solo la llave del candado en pantalla. Javi, oct. */
+const BONO_EDIT=['javi@casapepe.mx','hola.puebla@casapepe.mx','contabilidad@casapepe.mx','administracion@casapepe.mx','administracion.cdmx@casapepe.mx','administracion.puebla@casapepe.mx','direccion@casapepe.mx'];
+const EDIT=BONO_EDIT.includes(ME);
 /* Visibilidad: bonos solo de tu equipo hacia abajo, nunca superiores */
 async function _visRango(arr){try{const v=await sb('/rpc/empleados_visibles_nomina',{method:'POST',body:'{}'})||[];const ids=new Set(v.map(function(x){return x&&x.id?x.id:x;}));return (arr||[]).filter(function(e){return ids.has(e.id);});}catch(e){return arr;}}
 async function sb(p,o){const r=await fetch(SB+p,{headers:H,...o});if(!r.ok){throw new Error(await r.text())}const c=await r.text();return c?JSON.parse(c):null}
@@ -120,6 +124,8 @@ const KPIS={
  hk_eficiencia:   {n:'Eficiencia de limpieza promedio',    u:'%',   f:'Limpieza · productividad diaria (min reales vs estimados)', g:'Limpieza'},
  hk_extras:       {n:'Tareas extraordinarias atendidas',   u:'',    f:'Limpieza · hk_extras / tareas extra', g:'Limpieza'},
  room_audit:      {n:'Room audits del mes',                u:'',    f:'Limpieza · hk_auditoria (hallazgos por cuarto)', g:'Limpieza'},
+ rep_limpieza:    {n:'Limpieza en reputación (Booking/HW)', u:'%',  f:'Reputación · cp_objetivo_limpieza (nota de limpieza sobre 100 por plaza, OTAs)', g:'Limpieza'},
+ gasto_limpieza:  {n:'Gasto de limpieza vs presupuesto',   u:'%',  f:'Compras · cmp_v_presupuesto (suministros de limpieza + lavandería: real vs plan ajustado al forecast). 100% = justo en presupuesto; menos es mejor', g:'Limpieza', menor:true},
  preventivos:     {n:'Preventivos completados',            u:'',    f:'Mantenimiento · mtto_preventivo_log', g:'Mantenimiento'},
  mtto_cerrados:   {n:'% tickets de mtto cerrados',         u:'%',   f:'Mantenimiento · mtto_tickets (cerrados vs abiertos del mes)', g:'Mantenimiento'},
  consumo_luz:     {n:'Consumos luz/agua/gas (lecturas)',   u:'',    f:'Mantenimiento · mtto_lecturas del mes', g:'Mantenimiento', param:true},
@@ -197,7 +203,26 @@ async function medirTodos(mes){
   t(async()=>{const r=await sb('/mtto_lecturas?select=id&limit=1000&created_at=gte.'+d0+'T00:00:00')||[];v.consumo_luz=r.length?r.length+' lecturas':null;}),
   t(async()=>{const r=await sb('/rpc/kpi_auditoria_mes',{method:'POST',body:JSON.stringify({p_mes:mes})});
    if(r&&r.pct_resueltas!=null)v.auditoria_pct=+r.pct_resueltas;
-   if(r)v._auditoria=r;})
+   if(r)v._auditoria=r;}),
+  /* Limpieza en reputación: la nota de limpieza (sobre 100) que dan Booking y
+     Hostelworld por plaza. cp_objetivo_limpieza es una foto (última captura), no
+     una serie por mes: tomamos la captura vigente por plaza+fuente OTA. */
+  t(async()=>{const r=await sb('/cp_objetivo_limpieza?select=plaza,fuente,valor100,objetivo,fecha_captura&order=fecha_captura.desc')||[];
+   const ota=r.filter(x=>/booking|hostel/i.test(x.fuente||'')&&x.valor100!=null);
+   const seen={},keep=[];for(const x of ota){const key=(x.plaza||'')+'|'+(x.fuente||'');if(!seen[key]){seen[key]=1;keep.push(x);}}
+   const byPlaza={};keep.forEach(x=>{(byPlaza[x.plaza]=byPlaza[x.plaza]||[]).push(+x.valor100);});
+   v._replimp=Object.keys(byPlaza).map(p=>({plaza:p,valor100:Math.round(byPlaza[p].reduce((s,n)=>s+n,0)/byPlaza[p].length*10)/10}));
+   const all=keep.map(x=>+x.valor100);if(all.length)v.rep_limpieza=Math.round(all.reduce((s,n)=>s+n,0)/all.length*10)/10;}),
+  /* Gasto de limpieza vs presupuesto: suministros de limpieza + lavandería del
+     mes, real contra el plan ajustado al forecast de ocupación. No hay un
+     "departamento recamaristas" ni un forecast de mano de obra de recámaras en
+     la plataforma; esto mide el gasto de insumos de limpieza, por plaza. */
+  t(async()=>{const r=await sb('/cmp_v_presupuesto?select=loc,cuenta_nombre,real,plan,plan_ajustado&anio=eq.'+y+'&mes=eq.'+mo)||[];
+   const lim=r.filter(x=>/limpieza|lavand/i.test(x.cuenta_nombre||''));
+   const byLoc={};lim.forEach(x=>{const L=(x.loc||'').toLowerCase();(byLoc[L]=byLoc[L]||{real:0,plan:0}); byLoc[L].real+=(+x.real||0); byLoc[L].plan+=(+x.plan_ajustado||+x.plan||0);});
+   v._gastolimp=Object.keys(byLoc).map(L=>({plaza:L,pct:byLoc[L].plan>0?Math.round(byLoc[L].real/byLoc[L].plan*100):null})).filter(o=>o.pct!=null);
+   const tR=lim.reduce((s,x)=>s+(+x.real||0),0),tP=lim.reduce((s,x)=>s+(+x.plan_ajustado||+x.plan||0),0);
+   if(tP>0)v.gasto_limpieza=Math.round(tR/tP*100);})
  ]);
  return v;
 }
@@ -215,7 +240,7 @@ function pintaKpis(){
    <span class="kv">${fmtKpi(k,val)}</span></div>`;}).join('')}
   </div>`;}).join('')
  +`<div class="kcard" style="border-color:#e0b3b3"><h4 style="color:var(--bad)">Sin fuente en la plataforma (por ahora)</h4>
-   <div class="fuente" style="line-height:1.6">Reputación limpieza · puntuaciones Booking / Hostelworld · Welcome Back y extensiones (Front) · seguidores IG · caja chica en cash · dividendos / GOPPAR (viven en el Reporte a Socios). Los bonos que dependen de esto están <span style="background:var(--red-soft);padding:0 4px;border-radius:3px">en rojo</span> en el catálogo: cámbiales el KPI o se validan a mano.</div></div>`;
+   <div class="fuente" style="line-height:1.6">Welcome Back y extensiones (Front) · seguidores IG · caja chica en cash · dividendos / GOPPAR (viven en el Reporte a Socios). Los bonos que dependen de esto están <span style="background:var(--red-soft);padding:0 4px;border-radius:3px">en rojo</span> en el catálogo: cámbiales el KPI o se validan a mano.</div></div>`;
  document.querySelectorAll('[data-mkbono]').forEach(b=>b.onclick=()=>crearBonoKpi(b.dataset.mkbono));
 }
 async function crearBonoKpi(k){
@@ -309,6 +334,16 @@ function valorKpiDe(x){
   const sede=String(x.sedes).toLowerCase();
   const row=VALS._forecast.find(f=>sede.includes(String(f.plaza||'').toLowerCase())||String(f.plaza||'').toLowerCase().includes(sede.split(/[,;]/)[0].trim()));
   if(row){const m={forecast_cump:'pct_cump',pace_yoy:'pace_yoy_pct',revpar_pct:'revpar_pct'}[k];if(row[m]!=null)return Math.round(+row[m]*10)/10;}
+ }
+ if(k==='rep_limpieza'&&VALS._replimp&&x.sedes){
+  const sede=String(x.sedes).toLowerCase();
+  const row=VALS._replimp.find(f=>sede.includes(String(f.plaza||'').toLowerCase())||String(f.plaza||'').toLowerCase().includes(sede.split(/[,;]/)[0].trim()));
+  if(row&&row.valor100!=null)return row.valor100;
+ }
+ if(k==='gasto_limpieza'&&VALS._gastolimp&&x.sedes){
+  const sede=String(x.sedes).toLowerCase();
+  const row=VALS._gastolimp.find(f=>sede.includes(String(f.plaza||'').toLowerCase())||String(f.plaza||'').toLowerCase().includes(sede.split(/[,;]/)[0].trim()));
+  if(row&&row.pct!=null)return row.pct;
  }
  if(k==='pl_partida'&&VALS._pl&&x.variable){
   const q=String(x.variable).toLowerCase();
