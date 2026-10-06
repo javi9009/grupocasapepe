@@ -1960,7 +1960,7 @@ function lavKg(v){ return String(v).replace(/\.?0+$/,''); }
 
 var LAVNOTA={
   efectivo:'El dinero entra a Cash Protect al cerrar tu turno. Queda cobrada desde ya.',
-  cuenta:'Se le añade a lo que debe y recepción se lo cobra al salir. Queda pendiente hasta entonces.',
+  cuenta:'Se le carga al folio de su reserva en Cloudbeds, en cuanto tomes la ropa. Lo paga al salir, como el resto de su cuenta.',
   stripe:'Todavía no está conectado el cobro con tarjeta. En cuanto lo esté, aquí sale el QR.'
 };
 
@@ -1997,7 +1997,13 @@ function pintaCasa(){
             (f.pares_tenis?' · '+f.pares_tenis+' par'+(f.pares_tenis>1?'es':'')+' de tenis':'')+
             '<br>Vuelve el '+esc(cuando)+' después de las 2</div>'+
           '<span class="lavet '+esc(f.estado)+'">'+esc(nombra[f.estado]||f.estado)+'</span>'+
-          (f.cobrado_at?'':' <span class="lavet deuda">Sin cobrar</span>')+
+          (f.cobrado_at ? ' <span class="lavet lavada">Cobrada</span>'
+            : f.cargado_at ? ' <span class="lavet lavada">En su cuenta</span>'
+            : ' <span class="lavet deuda">Sin cobrar</span>')+
+          ((f.cobro==='cuenta' && !f.cargado_at)
+            ? '<button class="go sec2" data-cargo="'+esc(f.id)+'" style="margin-top:9px;padding:9px;font-size:13px">Reintentar el cargo a su cuenta</button>'+
+              (f.cargo_error?'<div class="d3" style="color:#9E3B2E;font-size:12px;margin-top:5px">'+esc(f.cargo_error)+'</div>':'')
+            : '')+
         '</div>';
       }).join('')
     : '<div class="empty">Todavía no has tomado ninguna ropa. En cuanto tomes la primera, aquí la sigues hasta que vuelve al cuarto.</div>';
@@ -2030,12 +2036,25 @@ function pintaCasa(){
     '</div></div>'+
     '<p class="grh">Lo que llevas tomado</p>'+ lista;
 
+  document.querySelectorAll('[data-cargo]').forEach(b=>{
+    b.onclick=async()=>{
+      b.disabled=true; const t0=b.textContent; b.textContent='Mandando a Cloudbeds…';
+      try{
+        const r=await fetch(SB_URL+'/functions/v1/lavanderia-cargo',{method:'POST',headers:lavHdr(),
+          body:JSON.stringify({pedido_id:b.getAttribute('data-cargo')})});
+        const d=await r.json().catch(()=>null);
+        if(d&&d.ok){ await cargaLavPedidos(); pintaCasa(); return; }
+        b.textContent=(d&&d.error)||'No se pudo';
+      }catch(e){ b.textContent='No se pudo: '+e.message; }
+      b.disabled=false; setTimeout(()=>{ b.textContent=t0; },4000);
+    };
+  });
   const a=document.getElementById('lavAbrir'); if(a) a.onclick=abreLavSheet;
   const b=document.getElementById('lavExt');
   if(b) b.onclick=()=>window.open('/apepe/extender.html','_blank','noopener');
 }
 
-function pintaLavSheet(hecho){
+function pintaLavSheet(hecho, avisoCargo){
   const c=document.getElementById('lavCard'); if(!c) return;
   if(hecho){
     const cuando=new Date(hecho.compromiso_at).toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'});
@@ -2045,7 +2064,10 @@ function pintaLavSheet(hecho){
         '<div class="lavnota"><b>'+esc(hecho.folio)+' · '+lavPesos(hecho.importe)+'</b><br>'+
           'Mete la ropa en la bolsa de red con el nombre de <b>'+esc(hecho.huesped)+'</b> y déjala lista para que salga a Virreyes.<br>'+
           'Le dijiste que la tiene el <b>'+esc(cuando)+' después de las 2</b>.<br>'+
-          (hecho.cobrado_at?'Cobrada en efectivo.':'Queda pendiente de cobro.')+'</div>'+
+          (hecho.cobrado_at ? 'Cobrada en efectivo.'
+            : hecho.cargado_at ? 'Cargada a su cuenta en Cloudbeds.'
+            : 'Queda pendiente de cobro.')+
+          (avisoCargo?'<br>'+esc(avisoCargo):'')+'</div>'+
         '<button class="go" id="lavOtra">Tomar otra</button>'+
       '</div>';
     document.getElementById('lavX').onclick=cierraLavSheet;
@@ -2166,8 +2188,21 @@ async function guardaLav(){
         p_cobro:LAVCOBRO, p_sede:'CDMX'})});
     const d=await r.json();
     if(!r.ok) throw new Error((d&&(d.message||d.hint))||'No se pudo guardar');
-    const f=Array.isArray(d)?d[0]:d;
-    pintaLavSheet(f);
+    let f=Array.isArray(d)?d[0]:d;
+    /* «A su cuenta» no es una etiqueta: el cargo tiene que llegar al folio de su
+       reserva. Si Cloudbeds lo rechaza, se dice aquí mismo en vez de dejar un
+       pedido que parece cobrado y no lo está. */
+    let avisoCargo='';
+    if(LAVCOBRO==='cuenta'){
+      try{
+        const rc=await fetch(SB_URL+'/functions/v1/lavanderia-cargo',{method:'POST',headers:lavHdr(),
+          body:JSON.stringify({pedido_id:f.id})});
+        const dc=await rc.json().catch(()=>null);
+        if(dc&&dc.ok){ f=dc.pedido||f; avisoCargo='Cargado a su cuenta en Cloudbeds.'; }
+        else{ avisoCargo='⚠️ No se pudo cargar a su cuenta: '+((dc&&dc.error)||'intenta de nuevo desde la lista'); }
+      }catch(e){ avisoCargo='⚠️ No se pudo cargar a su cuenta: '+e.message; }
+    }
+    pintaLavSheet(f, avisoCargo);
     await cargaLavPedidos();
     pintaCasa();
   }catch(e){
