@@ -29,6 +29,8 @@ button,select,input,textarea{font-family:inherit}
 label.cmp{display:block;font-size:11px;font-weight:800;color:var(--txt3);text-transform:uppercase;letter-spacing:.03em;margin:15px 0 6px}
 input.txt,textarea.txt,select.txt{width:100%;padding:12px;border:1px solid var(--bd);border-radius:12px;background:#fff;font-size:15px}
 textarea.txt{min-height:70px;resize:vertical}
+.dosf{display:flex;gap:8px}.dosf #hab{flex:0 0 38%}
+.mini{font-size:11.5px;color:var(--txt3);margin-top:6px;line-height:1.5}
 .foto{width:100%;padding:16px 12px;border:1px dashed var(--bd);border-radius:12px;background:#fff;font-size:13.5px}
 .previa img{width:100%;border-radius:12px;margin-top:9px;display:block}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
@@ -117,15 +119,12 @@ const DONDES=[
   {d:'publico',    n:'🏛 Un espacio público', eq:'front'},
   {d:'terraza',    n:'☀️ La terraza', eq:'terraza'},
 ];
-const DUENOS=[
-  {k:'presente', n:'Sí, y está aquí — se lo doy en mano'},
-  {k:'ido',      n:'Sí, pero ya se fue'},
-  {k:'nose',     n:'No sé de quién es'},
-];
 const ETIQ={en_custodia:'En custodia',avisado:'Avisado al huésped',reclamado:'Lo reclamó',
   entregado:'Entregado',donado:'Donado',desechado:'Desechado',sin_dueno:'Sin dueño'};
 
-let F={cat:'', valor:'', donde:'', hab:'', ubi:'', desc:'', dueno:'', huesped:null};
+// modo: '' sin decidir · 'auto' el huésped que salió de ese cuarto ese día
+//       'presente' se lo dio en mano · 'nose' no se sabe de quién es
+let F={cat:'', valor:'', donde:'', hab:'', fecha:'', ubi:'', desc:'', modo:'', huesped:null};
 
 async function arranca(){
   const {data:{session}}=await sb.auth.getSession();
@@ -180,7 +179,7 @@ function ficha(o){
 /* ─────────────────────────── el alta ─────────────────────────── */
 function formulario(){
   $('titulo').textContent='Encontré algo'; $('atras').onclick=lista;
-  F={cat:'',valor:'',donde:'',hab:'',ubi:'',desc:'',dueno:'',huesped:null}; FOTO=null;
+  F={cat:'',valor:'',donde:'',hab:'',fecha:hoy(),ubi:'',desc:'',modo:'',huesped:null}; FOTO=null;
   $('wrap').innerHTML=
     '<label class="cmp">1. La foto</label>'+
     '<input class="foto" id="foto" type="file" accept="image/*" capture="environment">'+
@@ -202,11 +201,7 @@ function formulario(){
     '<div class="chips" id="cDonde">'+DONDES.map(d=>
       '<button data-d="'+d.d+'">'+esc(d.n)+'</button>').join('')+'</div>'+
     '<div id="zDonde"></div>'+
-
-    '<div id="zDueno" hidden><label class="cmp">6. ¿Sabes de quién es?</label>'+
-    '<div class="chips" id="cDueno">'+DUENOS.map(x=>
-      '<button data-k="'+x.k+'">'+esc(x.n)+'</button>').join('')+'</div>'+
-    '<div id="zHuesped"></div></div>'+
+    '<div id="zHuesped"></div>'+
 
     '<div class="barra"><span class="info" id="pie">Con la foto y la descripción ya basta.</span>'+
     '<button class="g" id="bCanc">Dejarlo</button>'+
@@ -226,7 +221,6 @@ function formulario(){
   });
   chips('cVal','v',v=>{ F.valor=v; explicaValor(); });
   chips('cDonde','d',v=>{ F.donde=v; pintaDonde(); });
-  chips('cDueno','k',v=>{ F.dueno=v; F.huesped=null; pintaHuesped(); });
   $('bCanc').onclick=lista;
   $('bOk').onclick=guardar;
 }
@@ -248,56 +242,100 @@ function explicaValor(){
 function pintaDonde(){
   const z=$('zDonde');
   z.innerHTML = F.donde==='habitacion'
-    ? '<label class="cmp">¿Qué habitación?</label>'+
-      '<input class="txt" id="hab" inputmode="numeric" placeholder="213">'+
+    // Habitación y fecha son las dos cosas que identifican al huésped. Con eso
+    // basta: el huésped sale solo y ella solo confirma que es ese. Antes había
+    // un botón de "buscar en Cloudbeds" y Javi tenía razón, es un paso de más:
+    // si ya le dijo el cuarto y el día, el sistema ya sabe quién era.
+    ? '<label class="cmp">6. ¿Qué habitación y de qué día?</label>'+
+      '<div class="dosf">'+
+        '<input class="txt" id="hab" inputmode="numeric" placeholder="213">'+
+        '<input class="txt" id="fecha" type="date" value="'+esc(F.fecha)+'" max="'+esc(hoy())+'">'+
+      '</div>'+
+      '<div class="mini">El día que se fue el huésped. Si lo encontraste hoy limpiando, deja hoy.</div>'+
       '<label class="cmp">¿Dónde exactamente?</label>'+
       '<input class="txt" id="ubi" placeholder="En el cajón de la mesita">'
-    : '<label class="cmp">¿Dónde exactamente?</label>'+
+    : '<label class="cmp">6. ¿Dónde exactamente?</label>'+
       '<input class="txt" id="ubi" placeholder="'+(F.donde==='terraza'?'Bajo la mesa del fondo':'En el sofá del lobby')+'">';
-  $('zDueno').hidden=false;
-  if($('hab')) $('hab').oninput=e=>F.hab=e.target.value.trim();
   if($('ubi')) $('ubi').oninput=e=>F.ubi=e.target.value.trim();
-  // Si apareció en una habitación, lo normal es que se sepa de quién era.
-  if(F.donde==='habitacion' && !F.dueno){ F.dueno='ido'; marca('cDueno','k','ido'); pintaHuesped(); }
+  if(F.donde==='habitacion'){
+    let t;
+    const dispara=()=>{ clearTimeout(t); t=setTimeout(buscaHuesped,600); };
+    $('hab').oninput=e=>{ F.hab=e.target.value.trim(); F.huesped=null; F.modo=''; dispara(); };
+    $('fecha').onchange=e=>{ F.fecha=e.target.value||hoy(); F.huesped=null; F.modo=''; dispara(); };
+    pintaHuesped('<div class="nota">Escribe la habitación y te digo quién dormía ahí.</div>');
+  }else{
+    // En un espacio público no hay cuarto que cruzar: o lo tiene delante su
+    // dueño, o no se sabe de quién es.
+    F.modo='nose';
+    pintaHuesped(
+      '<div class="chips" id="cModo">'+
+        '<button data-k="presente">Se lo di en mano</button>'+
+        '<button data-k="nose" class="on">No sé de quién es</button>'+
+      '</div><div id="zModo"></div>');
+    chips('cModo','k',v=>{ F.modo=v; F.huesped=null; pintaModo(); });
+    pintaModo();
+  }
 }
-function pintaHuesped(){
-  const z=$('zHuesped');
-  if(F.dueno==='ido'){
-    z.innerHTML='<button class="grande sec" id="bBusca">🔎 Buscar al huésped en Cloudbeds</button>'+
-      '<div id="resHu"></div>';
-    $('bBusca').onclick=buscaHuesped;
-  }else if(F.dueno==='presente'){
-    z.innerHTML='<div class="nota bien">Dáselo y ya. Lo registramos igual, marcado como entregado en mano, '+
+function pintaHuesped(html){ $('zHuesped').innerHTML=html||''; }
+
+function pintaModo(){
+  const z=$('zModo'); if(!z) return;
+  if(F.modo==='auto'){ z.innerHTML=''; return; }
+  if(F.modo==='presente'){
+    const nom=F.huesped?.nombre||'';
+    z.innerHTML='<div class="nota bien">Dáselo y ya. Lo registramos igual, cerrado como entregado en mano, '+
       'para que quede el rastro de que apareció y volvió a su dueño.</div>'+
       '<label class="cmp">¿Cómo se llama? (si lo sabes)</label>'+
-      '<input class="txt" id="hnom" placeholder="Nombre del huésped">';
-    if($('hnom')) $('hnom').oninput=e=>F.huesped={nombre:e.target.value.trim(),email:'',reserva_id:''};
-  }else if(F.dueno==='nose'){
+      '<input class="txt" id="hnom" placeholder="Nombre del huésped" value="'+esc(nom)+'">';
+    $('hnom').oninput=e=>F.huesped={...(F.huesped||{}),nombre:e.target.value.trim(),email:''};
+  }else{
     z.innerHTML='<div class="nota">Queda en custodia como «no sé quién es este niño». Si alguien lo reclama, '+
       'aparece aquí; si no, a los 7 días la jefa de front decide.</div>';
-  }else{ z.innerHTML=''; }
+  }
 }
 
+// Habitación + fecha -> el huésped. Se dispara solo al escribir.
 async function buscaHuesped(){
-  if(F.donde==='habitacion' && !F.hab) return toast('Pon primero la habitación.');
-  $('resHu').innerHTML='<div class="ph">Buscando en Cloudbeds…</div>';
+  if(!F.hab){ pintaHuesped('<div class="nota">Escribe la habitación y te digo quién dormía ahí.</div>'); return; }
+  const pedida=F.hab+'|'+F.fecha;
+  pintaHuesped('<div class="ph">Viendo quién estaba en la '+esc(F.hab)+'…</div>');
   const {data:{session}}=await sb.auth.getSession();
   const r=await fetch(SB_URL+'/functions/v1/tanfos',{
     method:'POST',
     headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:'Bearer '+(session?.access_token||'')},
-    body:JSON.stringify({accion:'buscar',prop:PROP===PUEBLA?'puebla':'cdmx',habitacion:F.hab,fecha:hoy()})
+    body:JSON.stringify({accion:'buscar',prop:PROP===PUEBLA?'puebla':'cdmx',habitacion:F.hab,fecha:F.fecha})
   }).then(x=>x.json()).catch(()=>({ok:false,error:'sin conexión'}));
+  // Si siguió escribiendo mientras tardaba, esta respuesta ya no vale.
+  if(pedida!==F.hab+'|'+F.fecha) return;
+
   if(!r.ok||!r.encontrado){
-    $('resHu').innerHTML='<div class="nota">No dimos con la reserva'+(r.motivo?' ('+esc(r.motivo)+')':'')+
-      '. Guárdalo igual: la jefa de front lo puede ligar después.</div>';
-    F.huesped=null; return;
+    F.huesped=null; F.modo='nose';
+    pintaHuesped('<div class="nota">No dimos con la reserva de la '+esc(F.hab)+' ese día'+
+      (r.motivo?' — '+esc(r.motivo):'')+'. Guárdalo igual: queda sin dueño y la jefa de front '+
+      'lo puede ligar después.</div>');
+    return;
   }
   F.huesped={nombre:r.nombre,email:r.email,reserva_id:r.reserva_id,salida:r.salida};
-  $('resHu').innerHTML='<div class="nota '+(r.email?'bien':'')+'"><b>'+esc(r.nombre||'sin nombre')+'</b><br>'+
-    (r.email?esc(r.email)+'<br>Al guardar le mandamos el correo con la foto.':'No tiene correo en la reserva: no se le puede avisar solo.')+
-    (r.salida?'<br>Salió el '+esc(r.salida):'')+
-    (r.varias?'<br>⚠ Había más de una reserva en esa habitación esas noches. Si no es esta, dile a la jefa de front.':'')+
-    '</div>';
+  F.modo='auto';
+  pintaHuesped(
+    '<div class="nota '+(r.email?'bien':'')+'">En la <b>'+esc(F.hab)+'</b> estaba <b>'+esc(r.nombre||'sin nombre')+'</b>'+
+      (r.salida?', salió el '+esc(r.salida):'')+'.<br>'+
+      (r.email?esc(r.email)+' — al guardar le mandamos el correo con la foto.'
+             :'No tiene correo en la reserva, así que no se le puede avisar solo.')+
+      (r.varias?'<br>⚠ Hubo más de una reserva en ese cuarto esas noches.':'')+
+    '</div>'+
+    '<div class="chips" id="cConf">'+
+      '<button data-k="auto" class="on">✓ Sí, es '+esc((r.nombre||'ese huésped').split(' ')[0])+'</button>'+
+      '<button data-k="nose">✕ No es, no sé de quién es</button>'+
+      '<button data-k="presente">Se lo di en mano</button>'+
+    '</div><div id="zModo"></div>');
+  chips('cConf','k',v=>{
+    F.modo=v;
+    if(v==='nose'){ F.huesped=null; }
+    if(v==='auto'){ F.huesped={nombre:r.nombre,email:r.email,reserva_id:r.reserva_id,salida:r.salida}; }
+    if(v==='presente'){ F.huesped={nombre:r.nombre,email:'',reserva_id:r.reserva_id}; }
+    pintaModo();
+  });
 }
 
 /* ─────────────────────────── guardar ─────────────────────────── */
@@ -318,7 +356,7 @@ async function guardar(){
   }
 
   const eq=(DONDES.find(d=>d.d===F.donde)||{}).eq||null;
-  const enMano=F.dueno==='presente';
+  const enMano=F.modo==='presente';
   const fila={
     property_id:PROP, descripcion:desc, categoria:F.cat||'otros', valor:F.valor||'normal',
     foto_path, donde:F.donde, ubicacion_texto:($('ubi')?.value||'').trim()||null,
@@ -329,7 +367,7 @@ async function guardar(){
     reserva_id:F.huesped?.reserva_id||null, fecha_salida:F.huesped?.salida||null,
     entregado_en_mano:enMano,
     // En mano se cierra solo: ya está con su dueño, no hay nada que custodiar.
-    estado: enMano?'entregado':(F.dueno==='nose'?'sin_dueno':'en_custodia'),
+    estado: enMano?'entregado':(F.modo==='auto'?'en_custodia':'sin_dueno'),
     cerrado_at: enMano?new Date().toISOString():null,
     cerrado_por: enMano?EMP:null, cerrado_por_nombre: enMano?NOMBRE:null,
     cerrado_nota: enMano?'Se lo dio en mano quien lo encontró':null,
