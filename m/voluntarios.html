@@ -388,6 +388,7 @@ function correoDe(s){
   return (s&&String(s.email||'').trim()) || (CORREO_REAL||'') || '';
 }
 let CORREO_REAL='';
+let CARTA_VIVA=null;
 
 async function ponCorreo(id){
   const i=document.getElementById('ac-mail'), m=document.getElementById('f-msg');
@@ -556,6 +557,12 @@ async function ficha(id){
   if(!String(s.email||'').trim()){
     try{ CORREO_REAL=(await rpc('vol_correo_de',{p_id:id}))||''; }catch(e){}
   }
+  /* Las cajas de fechas se llenaban con lo que pidio al aplicar, no con lo que
+     dice su carta. A quien no entra a la app no le queda fila de fechas, asi
+     que salian las viejas: dar a Aceptar le cancelaba la firma y le emitia otro
+     contrato con otras fechas, el dia antes de llegar. Manda la carta. Javi, 6-oct. */
+  CARTA_VIVA=null;
+  try{ CARTA_VIVA=await rpc('vol_carta_vigente',{p_id:id}); }catch(e){}
   const prog=(d.progreso||[]).map(p=>'<div class="kv"><b>'+esc(p.tour)+'</b>'+p.puntos+' pts '+(p.desbloqueado?'<span class="ok">✓</span>':'')+'</div>').join('');
   const w=(d.taller||[])[0], j=(d.juego||[])[0];
   let h='<div class="card"><h2>'+esc(s.nombre||'(sin nombre)')+' '+bandera(s)+' · '+esc(s.email)+'</h2>';
@@ -650,8 +657,14 @@ async function ficha(id){
          '<input type="email" id="ac-mail" placeholder="sucorreo@ejemplo.com" style="min-width:230px">'+
          '<button class="btn" onclick="ponCorreo(\''+id+'\')">Guardar correo</button></div></div>')+
      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
-     'Llegada <input type="date" id="ac-desde" value="'+(fr.fechas_desde||s.fecha_desde||'')+'"> '+
-     'Salida <input type="date" id="ac-hasta" value="'+(fr.fechas_hasta||s.fecha_hasta||'')+'"> '+
+     'Llegada <input type="date" id="ac-desde" value="'+((CARTA_VIVA&&CARTA_VIVA.desde)||fr.fechas_desde||s.fecha_desde||'')+'"> '+
+     'Salida <input type="date" id="ac-hasta" value="'+((CARTA_VIVA&&CARTA_VIVA.hasta)||fr.fechas_hasta||s.fecha_hasta||'')+'"> '+
+     /* Y si ya firmo, avisar de que reenviar le anula la firma. */
+     ((CARTA_VIVA&&CARTA_VIVA.estatus==='aceptada')
+       ? '<p class="msg e" style="flex-basis:100%;margin:6px 0 0">Ya firmo este contrato'+
+         (CARTA_VIVA.firmado_nombre?' como <b>'+esc(CARTA_VIVA.firmado_nombre)+'</b>':'')+
+         '. Si vuelves a darle a Aceptar, <b>esa firma se anula</b> y hay que pedirsela otra vez.</p>'
+       : '')+
      '<button class="btn" onclick="verCarta(\''+id+'\')">Ver la carta</button>'+
      '<button class="btn g" onclick="aceptarCarta(\''+id+'\')">✓ Aceptar y enviar carta</button>'+
      '<button class="btn r" onclick="resolver(\''+id+'\',\'rechazado\')">Rechazar</button>'+
@@ -663,8 +676,89 @@ async function ficha(id){
        ? '<button class="btn g" onclick="recuperar(\''+id+'\')">↩ Devolver al embudo</button>' : '')+
      '</div>'+
      '<p class="msg" id="f-msg"></p></div>';
+  h+='<div class="card" id="expCard"><h2>Expediente</h2><p class="vacio">Cargando…</p></div>';
   c.innerHTML=h; abreFicha();
   if(document.getElementById('planCard')) planPanel(id);
+  expediente(id);
+}
+
+/* El expediente: todo lo que le hemos mandado y todo lo que ha firmado, en un
+   sitio y descargable. Hasta ahora esto no vivía en ningún lado y para saber si
+   a alguien le había llegado su contrato había que mirar la base. Javi, 6-oct. */
+const TIPO_CORREO={contrato:'Contrato de voluntariado',estancia:'Confirmación de estancia',
+                   plan:'Liga de su plan',recuperacion:'Recuperar su liga'};
+async function expediente(id){
+  const c=document.getElementById('expCard'); if(!c) return;
+  let d=null;
+  try{ d=await rpc('vol_expediente',{p_id:id}); }
+  catch(e){ c.innerHTML='<h2>Expediente</h2><p class="msg e">No se pudo cargar. '+
+    '<button class="btn" onclick="expediente(\''+id+'\')">Reintentar</button></p>'; return; }
+  if(!d||!d.solicitud){ c.innerHTML='<h2>Expediente</h2><p class="vacio">Sin expediente.</p>'; return; }
+
+  const ks=d.correos||[], cs=d.contratos||[], es=d.estancias||[];
+  let h='<h2>Expediente</h2>'+
+    '<p class="sub" style="margin-bottom:12px">Todo lo que le hemos mandado y todo lo que ha firmado. '+
+    'Los contratos se abren y se descargan tal cual los firmó, con su rúbrica y su acuse.</p>';
+
+  h+='<h3 style="margin:12px 0 6px;font-size:14px">Correos que le salieron</h3>';
+  h+= ks.length
+    ? '<table><tbody>'+ks.map(k=>'<tr><td class="chk" style="white-space:nowrap">'+fh(k.at)+'</td>'+
+        '<td><b>'+esc(TIPO_CORREO[k.tipo]||k.tipo)+'</b>'+(k.asunto?'<br><span class="chk">'+esc(k.asunto)+'</span>':'')+'</td>'+
+        '<td>'+(k.ok?'<span class="ok">✓ salió</span>':'<span style="color:#9E3B2E">no salió'+(k.detalle?': '+esc(k.detalle):'')+'</span>')+
+        (k.por?'<br><span class="chk">'+esc(k.por)+'</span>':'')+'</td></tr>').join('')+'</tbody></table>'
+    : '<p class="vacio">Todavía no le hemos mandado ningún correo.</p>';
+
+  h+='<h3 style="margin:16px 0 6px;font-size:14px">Documentos</h3>';
+  h+= cs.length
+    ? cs.map(x=>'<div class="kv" style="display:block;border-left:3px solid '+
+        (x.estatus==='aceptada'?'#1D6B4A':(x.estatus==='cancelada'?'#b9ae95':'#cd9a4b'))+
+        ';padding-left:10px;margin-bottom:8px'+(x.estatus==='cancelada'?';opacity:.55':'')+'">'+
+        '<b>Contrato de voluntariado</b> · '+f(x.desde)+' → '+f(x.hasta)+
+        '<div class="chk">'+
+          (x.estatus==='aceptada'
+            ? 'Firmado el '+fh(x.firmada)+(x.firmado_por?' por <b>'+esc(x.firmado_por)+'</b>':'')+
+              (x.tiene_firma?' · con rúbrica autógrafa':' · aceptado con un clic, sin rúbrica')
+            : (x.estatus==='cancelada'?'Cancelado':'Mandado, sin firmar todavía'))+
+        '</div>'+
+        '<div style="margin-top:6px"><button class="btn" onclick="verDoc(\''+x.id+'\')">Ver y descargar</button></div>'+
+      '</div>').join('')
+    : '<p class="vacio">Sin contratos.</p>';
+
+  h+='<h3 style="margin:16px 0 6px;font-size:14px">Estancias en Virreyes</h3>';
+  h+= es.length
+    ? '<div class="grid">'+es.map(x=>'<div class="kv"><b>'+esc(x.unidad)+'</b>'+
+        f(x.desde)+' → '+f(x.hasta)+' · '+esc(x.estado)+'</div>').join('')+'</div>'
+    : '<p class="vacio">Todavía no tiene cama apartada en Residencias.</p>';
+
+  c.innerHTML=h;
+}
+
+/* El documento firmado, con su rúbrica debajo. Se imprime o se guarda en PDF
+   desde el navegador, que es lo que hace falta para archivarlo. */
+async function verDoc(cartaId){
+  let x=null;
+  try{ x=await rpc('vol_contrato_doc',{p_carta:cartaId}); }catch(e){}
+  if(!x){ alert('No se pudo abrir el documento.'); return; }
+  const ac=x.acuse||{};
+  const firma = x.firma_png
+    ? '<img src="'+x.firma_png+'" alt="firma" style="max-width:280px;display:block;margin:6px 0">'
+    : '<p style="color:#9E3B2E;margin:6px 0">Aceptado con un clic — sin rúbrica autógrafa.</p>';
+  const pie = x.estatus==='aceptada'
+    ? '<div style="margin-top:26px;border-top:1px solid #ddd;padding-top:14px">'+
+      '<p style="margin:0 0 2px;font-size:13px;color:#555">Firma del voluntario</p>'+firma+
+      '<p style="margin:0;font-size:13px"><b>'+esc(x.firmado_nombre||x.nombre||'')+'</b></p>'+
+      '<p style="margin:6px 0 0;font-size:11.5px;color:#777">Firmado el '+fh(x.firmada)+
+        (ac.ip?' · IP '+esc(ac.ip):'')+(ac.device?'<br>'+esc(String(ac.device).slice(0,120)):'')+'</p></div>'
+    : '<p style="margin-top:26px;color:#9E3B2E"><b>Sin firmar.</b></p>';
+  const w=window.open('','_blank');
+  if(!w){ alert('El navegador bloque\u00f3 la ventana. Permite las ventanas emergentes.'); return; }
+  w.document.write('<!doctype html><html lang="es"><head><meta charset="utf-8">'+
+    '<title>Contrato · '+esc(x.nombre||'')+'</title>'+
+    '<style>body{font-family:Georgia,serif;max-width:720px;margin:34px auto;padding:0 22px;color:#241f19;line-height:1.6}'+
+    'h3{font-family:system-ui,sans-serif} @media print{.no{display:none}}</style></head><body>'+
+    '<p class="no" style="font-family:system-ui,sans-serif"><button onclick="print()">Descargar o imprimir</button></p>'+
+    (x.cuerpo_html||'')+pie+'</body></html>');
+  w.document.close();
 }
 
 /* ================= Plan de redes del creador de contenido =================
