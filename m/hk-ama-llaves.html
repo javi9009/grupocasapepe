@@ -240,6 +240,12 @@ tr.op .who{color:#5b4bab}
    explicado. Los tres juntos son el tiempo que estuvo en la empresa. */
 .ppila i.tarea{background:var(--accent)}
 .ppila i.apoyo{background:#9b7fc9}
+/* Morado = el reloj lo marco pero todavia no es trabajo validado. En cuanto
+   Deisy lo valida se vuelve verde y entra en las horas efectivas. */
+.ppila i.entre{background:#9b7fc9}
+.pley i.entre{background:#9b7fc9}
+.pval{font-size:11px;font-weight:700;color:#4a3570;background:#f0e9fa;
+  border-radius:6px;padding:2px 7px}
 .ppila i.nada{background:repeating-linear-gradient(135deg,#cfc6b6 0 3px,#e4dccc 3px 6px)}
 .ppila i.proy{background:repeating-linear-gradient(135deg,#d9cfbe 0 3px,#efe6d4 3px 6px)}
 .ppila .marca{position:absolute;top:-2px;bottom:-2px;width:2px;background:#16130f;
@@ -1755,6 +1761,7 @@ async function cargarInforme(){
     return Object.assign({},r,{
       min_tareas:Number(j.tareas_min||0),
       min_apoyo:Number(j.apoyo_min||0),
+      min_apoyo_pend:Number(j.apoyo_pendiente_min||0),
       apoyo_n:Number(j.apoyo_n||0),
       min_checador:j.checador_min==null?null:Number(j.checador_min),
       min_sin_repartir:Number(j.sin_repartir_min||0)});
@@ -2176,9 +2183,15 @@ function metricasProd(a,r,c){
   const nExtra=extras.length;
   const lleno=Math.min(estHechas,jornada);
   const enCurso=ts.find(t=>t.estado==='en_curso'&&t.iniciado_at);
-  // El cuarto abierto cuenta en vivo, pero con tope: uno que se quedó sin cerrar
-  // desde ayer no puede inflar el día.
-  const vivo=enCurso?Math.min(240,Math.max(0,(Date.now()-new Date(enCurso.iniciado_at))/60000)):0;
+  // El cuarto abierto solo cuenta en vivo si el dia sigue abierto: hoy y sin
+  // haber checado salida. Un cuarto que se quedo sin cerrar estaba sumando
+  // horas en dias ya cerrados -a Laura le inflaba el dia en dos horas-, y un
+  // dia pasado no puede seguir creciendo. Tope de 2 h: mas que eso no es un
+  // cuarto en curso, es un boton que se quedo sin pulsar.
+  const esHoy=F()===hoyMX();
+  const yaSalio=Number(r.min_checador ?? 0)>0;
+  const vivo=(enCurso&&esHoy&&!yaSalio)
+    ? Math.min(120,Math.max(0,(Date.now()-new Date(enCurso.iniciado_at))/60000)) : 0;
   // Horas reales de verdad: el reloj de los cuartos por union de intervalos
   // -dos tareas solapadas no suman el doble, que es lo que descuadraba cuando
   // le daban una tarea sobre otra- mas el apoyo y pendientes que ella repartió:
@@ -2192,16 +2205,24 @@ function metricasProd(a,r,c){
   //   trabajadas = el reloj de cuartos y areas (medido + la que tiene abierta)
   //   en la empresa = el checador, de que llego a que se fue
   //   entre tareas = en la empresa - trabajadas - apoyo; de ese no se sabe nada
-  const trabajadas=medido+vivo;
   const empresa=Number(r.min_checador ?? 0)||0;
-  const sinRepartir=empresa>0 ? Math.max(0,empresa-trabajadas-apoyo)
+  // Lo trabajado no puede pasar de lo que marco el reloj de entrada y salida.
+  // Si pasa es que una tarea quedo abierta o falta un checado, no que trabajara
+  // mas horas de las que estuvo dentro.
+  const trabajadas=empresa>0 ? Math.min(medido+vivo, empresa) : medido+vivo;
+  // HORAS EFECTIVAS REALES: cuartos y areas mas el apoyo que Deisy valido.
+  // Lo que la recamarista apunto pero nadie ha validado todavia NO es trabajo:
+  // cuenta como tiempo entre tareas hasta que alguien diga que si.
+  const efectivas=trabajadas+apoyo;
+  const apoyoPend=Number(r.min_apoyo_pend ?? 0);
+  const sinRepartir=empresa>0 ? Math.max(0,empresa-efectivas)
                               : Number(r.min_sin_repartir ?? 0);
-  // LA HORA EXTRA ES REAL: jornada efectiva menos el turno asignado. Antes
-  // salía del estándar (estHechas) y el reloj solo podía tumbarla, nunca
-  // sumarla; por eso de 127 h trabajadas solo se validaban 20.
-  // Va aquí y no más arriba porque necesita `dedicado`, y con const no existe
-  // hasta su línea: calcularla antes lanzaba un error y la tarjeta no pintaba.
-  let horasExtra=Math.max(0,dedicado-jornada);
+  // LA HORA EXTRA SE MIDE CONTRA EL CONTRATO: horas efectivas reales menos las
+  // horas de turno. Ni el estandar ni el tiempo dentro del hotel: lo que de
+  // verdad trabajo, ya validado, contra lo que tenia que trabajar.
+  // Va aqui y no mas arriba porque necesita `efectivas`, y con const no existe
+  // hasta su linea: calcularla antes lanzaba un error y la tarjeta no pintaba.
+  let horasExtra=Math.max(0,efectivas-jornada);
   const falta=Math.max(0,objetivo-estHechas);
   // El ritmo real de la persona. Si siempre cierra muy por debajo del estándar
   // (el caso de Ali), su carga no es la del papel: es la que de verdad le cuesta.
@@ -2240,14 +2261,15 @@ function metricasProd(a,r,c){
   const hechas=Number(r.tareas_terminadas ?? ts.filter(t=>t.estado==='terminada').length);
   const efi=r.eficiencia_pct?Number(r.eficiencia_pct):null;
   return {ts,jornada,objetivo,especiales,pct,estHechas,ordinarias,extras,horasExtra,minExtra,nExtra,lleno,
-    dedicado,medido,apoyo,trabajadas,empresa,sinRepartir,falta,faltaReal,ritmo,nv1,forecast,avance,
-    nv2,cerrado,minFuera,ocho,minPagar,extraCaida,noQuisieron,tareas,hechas,efi};
+    dedicado,medido,apoyo,apoyoPend,trabajadas,efectivas,empresa,sinRepartir,falta,faltaReal,ritmo,
+    nv1,forecast,avance,nv2,cerrado,minFuera,ocho,minPagar,extraCaida,noQuisieron,tareas,hechas,efi};
 }
 
 function tarjetaProd(a,r,c){
   const k=metricasProd(a,r,c);
   const {ts,jornada,objetivo,especiales,pct,estHechas,extras,horasExtra,nExtra,dedicado,medido,apoyo,
-    trabajadas,empresa,sinRepartir,faltaReal,nv1,forecast,avance,nv2,noQuisieron,tareas,hechas,efi}=k;
+    apoyoPend,trabajadas,efectivas,empresa,sinRepartir,faltaReal,nv1,forecast,avance,nv2,
+    noQuisieron,tareas,hechas,efi}=k;
   const w=x=>Math.max(0,Math.min(100,x/jornada*100));
   const hm=m=>`${Math.round(m/60*10)/10} h`;
   const hora=iso=>new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'});
@@ -2265,33 +2287,33 @@ function tarjetaProd(a,r,c){
       <span class="pmin">${hm(objetivo)} de papel · el turno son ${hm(jornada)}</span>
       ${horasExtra>0?`<span class="pext">⚠ ${hm(horasExtra)} extra</span>`:''}</div>
 
-    <div class="pet">${empresa>0?'En la empresa':'Horas reales'}</div>
+    <div class="pet">Horas efectivas reales</div>
     ${(()=>{
-      // Esta barra se escala contra lo que haya salido mas largo -el turno o el
-      // dia de verdad-, porque el tiempo en la empresa puede pasarse del turno.
-      // La raya negra marca donde acababa su turno.
-      const tot=Math.max(jornada, trabajadas+apoyo+sinRepartir, trabajadas+apoyo+faltaReal, 1);
+      // Verde lo que YA es trabajo: cuartos, areas y el apoyo que Deisy valido.
+      // Morado lo que el reloj marco y todavia no lo es. Si Deisy lo valida,
+      // pasa a verde y, si con eso se pasa de las 8 h, se vuelve hora extra.
+      // La raya negra son las horas de contrato.
+      const tot=Math.max(jornada, efectivas+sinRepartir, efectivas+faltaReal, 1);
       const p=x=>Math.max(0,Math.min(100,x/tot*100));
       return `<div class="ppila">
-        <i class="tarea" style="width:${p(trabajadas)}%"></i>
-        ${apoyo>0?`<i class="apoyo" style="width:${p(apoyo)}%"></i>`:''}
-        ${sinRepartir>0?`<i class="nada" style="width:${p(sinRepartir)}%"></i>`:''}
+        <i class="${efectivas>jornada?'extra':'tarea'}" style="width:${p(efectivas)}%"></i>
+        ${sinRepartir>0?`<i class="entre" style="width:${p(sinRepartir)}%"></i>`:''}
         ${empresa<=0&&faltaReal>0?`<i class="proy" style="width:${p(faltaReal)}%"></i>`:''}
         <span class="marca" style="left:${p(jornada)}%"></span></div>`;
     })()}
     <div class="pfila">
-      <span class="ppct ${empresa>jornada?'bad':'ok'}">${hm(empresa>0?empresa:dedicado)}</span>
-      <span class="pmin">${empresa>0
-        ? `en la empresa · su turno son ${hm(jornada)}`
-        : `trabajadas hasta ahora · le faltan ${hm(faltaReal)} al ritmo que lleva`}</span>
+      <span class="ppct ${efectivas>jornada?'bad':'ok'}">${hm(efectivas)}</span>
+      <span class="pmin">efectivas de las ${hm(jornada)} de contrato${
+        empresa>0?` · ${hm(empresa)} en la empresa`:''}</span>
+      ${horasExtra>0?`<span class="pext">⚠ ${hm(horasExtra)} extra</span>`:''}
     </div>
     <div class="pley">
-      <span><i class="tarea"></i>${hm(trabajadas)} trabajadas</span>
-      ${apoyo>0?`<span><i class="apoyo"></i>${hm(apoyo)} de apoyo</span>`:''}
-      ${sinRepartir>0?`<span><i class="nada"></i>${hm(sinRepartir)} entre tareas</span>`:''}
+      <span><i class="${efectivas>jornada?'extra':'tarea'}"></i>${hm(trabajadas)} en tareas${
+        apoyo>0?` + ${hm(apoyo)} de apoyo validado`:''}</span>
+      ${sinRepartir>0?`<span><i class="entre"></i>${hm(sinRepartir)} entre tareas, sin validar</span>`:''}
     </div>
-    ${sinRepartir>=15?`<div class="pfila"><span class="pext" title="El reloj marca mas de lo que esta explicado">
-      ⚠ ${hm(sinRepartir)} sin especificar en qué se usaron</span></div>`:''}
+    ${sinRepartir>=15?`<div class="pfila"><span class="pval" title="Deisy lo valida en Incidencias quincenal">
+      ${apoyoPend>0?`${hm(apoyoPend)} apuntados esperando validación · `:''}${hm(sinRepartir)} sin contar como trabajo</span></div>`:''}
 
     <div class="pgrid">
       <div class="abre ${ts.length?'':'muda'}" data-caj="hechas"><b>${hechas}/${tareas}</b><span>tareas hechas</span></div>
