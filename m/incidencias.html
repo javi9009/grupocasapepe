@@ -153,6 +153,12 @@ function noFicha(id){
   if(!e._tieneLogin || !e._loginActivo) return true;
   return false;
 }
+/* Las dos tolerancias, que no son la misma (Javi, 6-oct):
+   - TOL_BONO (5 min): pasarse de aquí te saca del bono de puntualidad.
+   - TOL_ASIS (15 min): a partir de aquí el checador lo marca retardo y se
+     reporta. Por debajo no se valida ni se persigue.
+   - RET_FALTA: más de 3 retardos en la quincena cuentan como una falta. */
+const TOL_BONO=5, TOL_ASIS=15, RET_FALTA=3;
 /* LA SEDE DE UNA INCIDENCIA QUE NO ES DE NADIE.
    Casi todas las incidencias cuelgan de un colaborador y de ahí sale su sede.
    Pero las que levanta la casa sola —el efectivo de caja, el descuadre de la
@@ -224,12 +230,14 @@ function qBounds(){const d=new Date();const p=n=>(n<10?'0':'')+n;const y=d.getFu
 async function resumenQuincena(){try{
   const b=qBounds();
   const {data}=await sb.from('asistencias').select('employee_id,estatus,minutos_retraso').gte('fecha',b.ini).lte('fecha',b.fin);
-  const agg={};(data||[]).forEach(r=>{const e=EMP[r.employee_id]||{};if(!inScope(e))return;const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,min:0,sinT:0,falta:0});if(r.estatus==='retardo'){a.ret++;a.min+=(r.minutos_retraso||0);}else if(r.estatus==='sin_turno')a.sinT++;else if(r.estatus==='falta')a.falta++;});
-  let arr=Object.keys(agg).map(k=>Object.assign({id:k},agg[k])).filter(a=>a.ret||a.sinT||a.falta);
+  const agg={};(data||[]).forEach(r=>{const e=EMP[r.employee_id]||{};if(!inScope(e))return;if(noFicha(r.employee_id))return;const a=agg[r.employee_id]||(agg[r.employee_id]={ret:0,min:0,sinT:0,falta:0});if(r.estatus==='retardo'&&(r.minutos_retraso||0)>TOL_ASIS){a.ret++;a.min+=(r.minutos_retraso||0);}else if(r.estatus==='sin_turno')a.sinT++;else if(r.estatus==='falta')a.falta++;});
+  /* M\u00e1s de 3 retardos en la quincena = una falta. */
+  Object.values(agg).forEach(a=>{ a.faltaRet=(a.ret>RET_FALTA)?1:0; a.faltaTotal=(a.falta||0)+a.faltaRet; });
+  let arr=Object.keys(agg).map(k=>Object.assign({id:k},agg[k])).filter(a=>a.ret||a.sinT||a.faltaTotal);
   arr.sort((x,y)=>y.ret-x.ret||y.min-x.min);
-  const hd='<div class="rqh"><b>Resumen de la quincena</b> <span class="mut">'+b.ini+' \u2192 '+b.fin+' \u00b7 desde el checador</span></div>';
+  const hd='<div class="rqh"><b>Resumen de la quincena</b> <span class="mut">'+b.ini+' \u2192 '+b.fin+' \u00b7 desde el checador \u00b7 retardo = m\u00e1s de '+TOL_ASIS+' min \u00b7 m\u00e1s de '+RET_FALTA+' retardos cuentan como una falta</span></div>';
   if(!arr.length)return '<div class="rq">'+hd+'<div class="mut">Sin retardos ni faltas esta quincena \ud83c\udf89</div></div>';
-  const tr=arr.map(a=>{const e=EMP[a.id]||{};const nom=(e.nombre||'\u2014')+(e.apellido?(' '+e.apellido):'');return '<tr><td>'+esc(nom)+'</td><td class="ar">'+esc(e.area||'')+'</td><td class="n">'+(a.ret||'')+'</td><td class="n">'+(a.min||'')+'</td><td class="n">'+(a.sinT||'')+'</td><td class="n">'+(a.falta||'')+'</td></tr>';}).join('');
+  const tr=arr.map(a=>{const e=EMP[a.id]||{};const nom=(e.nombre||'\u2014')+(e.apellido?(' '+e.apellido):'');return '<tr><td>'+esc(nom)+'</td><td class="ar">'+esc(e.area||'')+'</td><td class="n">'+(a.ret||'')+'</td><td class="n">'+(a.min||'')+'</td><td class="n">'+(a.sinT||'')+'</td><td class="n">'+(a.faltaTotal||'')+(a.faltaRet?' <span class="mut" title="Una de ellas por acumular m\u00e1s de '+RET_FALTA+' retardos">(+1 por retardos)</span>':'')+'</td></tr>';}).join('');
   return '<div class="rq">'+hd+'<div style="overflow-x:auto"><table class="rqt"><tr><th>Colaborador</th><th>\u00c1rea</th><th>Ret.</th><th>Min</th><th>S/turno</th><th>Faltas</th></tr>'+tr+'</table></div></div>';
 }catch(e){return '';}}
 
@@ -238,7 +246,11 @@ async function loadAsis(){
   // Solo quien llegó tarde (retardo) o no checó a su hora (falta) — no listamos a quien checó bien.
   const {data,error}=await sb.from('asistencias').select('*').gte('fecha',desde).in('estatus',['retardo','falta']).order('fecha',{ascending:false});
   if(error){const _ae=$('asis');if(_ae)_ae.innerHTML='<div class="empty">Error: '+error.message+'</div>';return;}
-  let rows=(data||[]).filter(r=>{if(esBaja(r.employee_id))return false;if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;const e=EMP[r.employee_id]||{};return inScope(e);});
+  let rows=(data||[]).filter(r=>{if(esBaja(r.employee_id))return false;if(noFicha(r.employee_id))return false;
+    /* Sólo se valida un retardo si pasó de los 15 minutos. Por debajo es
+       tolerancia y no se persigue (Javi, 6-oct). */
+    if(r.estatus==='retardo'&&(r.minutos_retraso||0)<=TOL_ASIS)return false;
+    if(r.validado_por)return false;if(r.requiere_validacion&&r.validacion_estatus&&r.validacion_estatus!=='pendiente')return false;const e=EMP[r.employee_id]||{};return inScope(e);});
   {const _cs=$('c-asis');if(_cs)_cs.textContent=rows.length;}
   const c=$('asis');const resumenHTML=await resumenQuincena(); if(!c)return;
   if(!rows.length){c.innerHTML=resumenHTML+'<div class="empty">Sin retrasos ni faltas por validar 🎉</div>';return;}
@@ -436,7 +448,9 @@ async function loadPuntualidad(){
       if(a.estatus==='falta'){ malos++; det.push(f+' (falta)'); return; }
       if(a.estatus==='retardo'){ malos++; det.push(f+' (retardo)'); return; }
       const ci=_hmLocal(a.check_in), tt=_tmin(hi||a.hora_turno);
-      if(ci!=null && tt!=null && ci>tt){ malos++; det.push(f+' (llegó tarde)'); return; }
+      /* Bono: 5 minutos de tolerancia (Javi, 6-oct). La asistencia tiene 15;
+         el bono es más estricto a propósito. */
+      if(ci!=null && tt!=null && ci>tt+TOL_BONO){ malos++; det.push(f+' (llegó tarde)'); return; }
     });
     A[emp]={dias:dias.length, malos, det};
   });
@@ -445,7 +459,7 @@ async function loadPuntualidad(){
   ok.sort((x,y)=>y.dias-x.dias); no.sort((x,y)=>y.malos-x.malos);
   const filtro='<input id="fPersonaP" placeholder="🔎 Filtrar persona…" style="width:100%;box-sizing:border-box;background:#0000001f;border:1px solid var(--line,#34291c);color:inherit;border-radius:8px;padding:8px 10px;font:inherit;margin-bottom:8px">';
   c.innerHTML=filtro
-    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b> (evaluado hasta <b>'+fin+'</b>). Gana quien cumplió <b>TODOS sus días programados</b> (según su horario, sin contar descansos) y entró <b>a la hora exacta o antes</b> — <b>sin tolerancia</b>. Un día sin checar, una falta, un retardo o cualquier minuto tarde lo saca. <b>No entran</b> los voluntarios, los exentos del checador ni quien no tiene cuenta activa: ésos no fichan.</div>'
+    +'<div class="det">Bono de puntualidad · quincena <b>'+q.ini+'</b> a <b>'+q.fin+'</b> (evaluado hasta <b>'+fin+'</b>). Gana quien cumplió <b>TODOS sus días programados</b> (según su horario, sin contar descansos) y entró dentro de los <b>'+TOL_BONO+' minutos</b> de tolerancia del bono. Un día sin checar, una falta, un retardo o pasarse de esos '+TOL_BONO+' minutos lo saca. <b>Ojo:</b> la asistencia tiene '+TOL_ASIS+' minutos de tolerancia; el bono es más estricto a propósito. <b>No entran</b> los voluntarios, los exentos del checador ni quien no tiene cuenta activa: ésos no fichan.</div>'
     +'<div class="item"><div class="top"><span class="nm">✅ Van por el bono ('+ok.length+')</span></div>'+(ok.length?ok.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🟢 <b>'+esc(persona(a))+'</b> · '+a.dias+' día(s) programado(s), todos a la hora · '+esc(areaDe(a))+'</div>').join(''):'<div class="det">Aún nadie con quincena perfecta.</div>')+'</div>'
     +(no.length?('<div class="item"><div class="top"><span class="nm">❌ Perdieron el bono ('+no.length+')</span></div>'+no.map(a=>'<div class="det" data-nm="'+esc(persona(a)).toLowerCase()+'" style="margin:3px 0 0">🔴 <b>'+esc(persona(a))+'</b> · '+a.malos+'/'+a.dias+' día(s) con problema: '+esc(a.det.slice(0,8).join(', '))+'</div>').join('')):'');
   const f=$('fPersonaP'); if(f) f.oninput=()=>{ const t=f.value.toLowerCase().trim(); c.querySelectorAll('[data-nm]').forEach(el=>{ el.style.display=(!t||(el.dataset.nm||'').includes(t))?'':'none'; }); };
