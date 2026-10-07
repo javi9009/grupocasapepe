@@ -126,10 +126,19 @@ async function ocupadas(slug: string) {
     for (const r of d) {
       const st = String(r.status || "").toLowerCase();
       if (/cancel|no_show|void|checked_out/.test(st)) continue;
-      const llega = String(r.startDate || ""), sale = String(r.endDate || "");
+      /* LAS FECHAS NO SE LLAMAN COMO UNO CREE.
+         Esta llamada NO devuelve startDate/endDate —eso es getReservations—:
+         devuelve reservationCheckIn y reservationCheckOut. Leyendo el nombre
+         equivocado las dos fechas salían vacías, el filtro de «quién duerme hoy»
+         no dejaba pasar a nadie y la pantalla decía «no hay nadie en casa» con la
+         casa llena. Probado contra la casa: 25 reservas esta noche, 27 camas.
+         Javi, 7-oct-2026. */
+      const llega = String(r.reservationCheckIn || r.startDate || "").slice(0, 10);
+      const sale  = String(r.reservationCheckOut || r.endDate || "").slice(0, 10);
+      if (!llega || !sale) continue;
       if (!(llega <= hoy && hoy < sale)) continue;           // en casa esta noche
-      const nombre = String(r.guestName || "").trim() ||
-        `${r.guestFirstName ?? ""} ${r.guestLastName ?? ""}`.trim() || "Huésped";
+      const nombreResv = String(r.guestName || "").trim() ||
+        `${r.guestFirstName ?? ""} ${r.guestLastName ?? ""}`.trim();
       for (const rm of (Array.isArray(r.rooms) ? r.rooms : [])) {
         const roomID = String(rm.roomID || "");
         if (!roomID || vistas.has(roomID)) continue;
@@ -138,9 +147,13 @@ async function ocupadas(slug: string) {
           room_id: roomID,
           cama: String(rm.roomName || rm.roomNumber || roomID),
           reservation_id: String(r.reservationID || ""),
-          huesped: nombre,
-          llega, sale,
-          le_quedan: dias(hoy, sale),
+          /* Cada cama trae el nombre de quien duerme EN ELLA. En una reserva de
+             tres, el de la reserva es uno solo y los otros dos no se llamarían
+             así delante del huésped. */
+          huesped: String(rm.guestName || "").trim() || nombreResv || "Huésped",
+          llega: String(rm.roomCheckIn || llega).slice(0, 10),
+          sale: String(rm.roomCheckOut || sale).slice(0, 10),
+          le_quedan: dias(hoy, String(rm.roomCheckOut || sale).slice(0, 10)),
         });
       }
     }
