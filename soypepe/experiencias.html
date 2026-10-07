@@ -2084,7 +2084,11 @@ function pintaLavSheet(hecho, avisoCargo){
       '<div class="hero"><button class="x" id="lavX" aria-label="Volver">‹</button><h2>Ropa tomada</h2></div>'+
       '<div class="body">'+
         '<div class="lavnota"><b>'+esc(hecho.folio)+' · '+lavPesos(hecho.importe)+'</b><br>'+
-          'Mete la ropa en la bolsa de red con el nombre de <b>'+esc(hecho.huesped)+'</b> y déjala lista para que salga a Virreyes.<br>'+
+          /* La bolsa se rotula con la cama, que es lo que no se confunde: dos
+             huéspedes se pueden llamar igual, dos camas no. El nombre va detrás. */
+          'Mete la ropa en la bolsa de red marcada <b>'+
+            esc(hecho.cuarto ? hecho.cuarto+' · '+hecho.huesped : hecho.huesped)+
+          '</b> y déjala lista para que salga a Virreyes.<br>'+
           'Le dijiste que la tiene el <b>'+esc(cuando)+' después de las 2</b>.<br>'+
           (hecho.cobrado_at ? 'Cobrada en efectivo.'
             : hecho.cargado_at ? 'Cargada a su cuenta en Cloudbeds.'
@@ -2104,8 +2108,8 @@ function pintaLavSheet(hecho, avisoCargo){
     '<div class="hero"><button class="x" id="lavX" aria-label="Volver">‹</button><h2>Lavandería</h2></div>'+
     '<div class="body lavf">'+
       (tarifa?'<div class="lavnota">'+esc(tarifa)+'</div>':'')+
-      '<label for="lvSel">¿De quién es la ropa?</label>'+
-      '<select class="lavsel" id="lvSel"><option value="">Cargando huéspedes en casa…</option></select>'+
+      '<label for="lvSel">¿De qué cama es la ropa?</label>'+
+      '<select class="lavsel" id="lvSel"><option value="">Cargando las camas ocupadas…</option></select>'+
       '<label for="lvK">Kilos <span style="font-weight:600;color:var(--muted)">— lo que marca la báscula</span></label>'+
       '<div class="step" id="stK">'+
         '<button type="button" data-k="-">−</button>'+
@@ -2156,23 +2160,55 @@ function pintaPasos(){
 function pasoK(d){ LAVK=Math.max(0, Math.round((LAVK+(d==='+'?0.5:-0.5))*10)/10); pintaPasos(); cotizaLav(); }
 function pasoT(d){ LAVT=Math.max(0, LAVT+(d==='+'?1:-1)); pintaPasos(); cotizaLav(); }
 
+/* LA CAMA PRIMERO, EL NOMBRE DETRÁS.
+   La recamarista está parada delante de la cama y la conoce por su nombre de
+   reparto —«4MD(241)»—, no por el del huésped: una lista de nombres sueltos no
+   le dice de quién es la bolsa que tiene en la mano. Así que cada opción abre
+   con la cama y el nombre va después, para leerlo cuando ya sabe a quién le
+   habla. La fuente es la misma que el módulo de extensiones (hk-extension, op
+   ocupadas), que devuelve cama + huésped + reserva y ya traduce el nombre de
+   Cloudbeds al de hk_areas. Si esa no contesta, se cae a la lista de nombres de
+   huespedes-encasa: peor, pero mejor que una pantalla muerta.
+   Javi, 7-oct-2026. */
 async function cargaHuespedes(){
   const sel=document.getElementById('lvSel'); if(!sel) return;
+  LAVHUESPED=null;
   const t=lavTok();
   if(!t){ sel.innerHTML='<option value="">(entra con tu cuenta para ver la lista)</option>'; return; }
+  const hdr={'Content-Type':'application/json',Authorization:'Bearer '+t,apikey:SB_KEY};
+  var hs=[], porCama=false;
+
   try{
-    const r=await fetch(SB_URL+'/functions/v1/huespedes-encasa',{method:'POST',
-      headers:{'Content-Type':'application/json',Authorization:'Bearer '+t,apikey:SB_KEY},body:'{}'});
+    const r=await fetch(SB_URL+'/functions/v1/hk-extension',{method:'POST',headers:hdr,
+      body:JSON.stringify({op:'ocupadas',prop:'cdmx'})});
     const d=await r.json().catch(()=>null);
-    const hs=(d&&d.huespedes)||[];
-    if(!hs.length){ sel.innerHTML='<option value="">(no hay huéspedes en casa ahora)</option>'; LAVHUESPED=null; return; }
-    sel.innerHTML='<option value="">Escoge al huésped…</option>'+hs.map((h,i)=>
-      '<option value="'+i+'">'+esc(h.nombre)+(h.cuarto?' · '+esc(h.cuarto):'')+'</option>').join('');
-    sel.onchange=()=>{ LAVHUESPED = sel.value==='' ? null : hs[Number(sel.value)]; };
-    LAVHUESPED=null;
-  }catch(e){
-    sel.innerHTML='<option value="">(no se pudo cargar la lista)</option>'; LAVHUESPED=null;
+    const camas=(d&&d.camas)||[];
+    hs=camas.map(c=>({
+      nombre:String(c.huesped||'').trim()||'Huésped',
+      cuarto:String(c.cama||'').trim()||null,
+      reserva:c.reservation_id?String(c.reservation_id):null
+    })).filter(h=>h.cuarto);
+    hs.sort((a,b)=>String(a.cuarto).localeCompare(String(b.cuarto),'es',{numeric:true,sensitivity:'base'}));
+    porCama=hs.length>0;
+  }catch(e){ hs=[]; }
+
+  if(!hs.length){
+    try{
+      const r=await fetch(SB_URL+'/functions/v1/huespedes-encasa',{method:'POST',headers:hdr,body:'{}'});
+      const d=await r.json().catch(()=>null);
+      hs=((d&&d.huespedes)||[]).map(h=>({
+        nombre:String(h.nombre||'').trim()||'Huésped',
+        cuarto:h.cuarto?String(h.cuarto):null,
+        reserva:h.reserva?String(h.reserva):null
+      }));
+    }catch(e){ hs=[]; }
   }
+
+  if(!hs.length){ sel.innerHTML='<option value="">(no hay nadie en casa ahora)</option>'; return; }
+  sel.innerHTML='<option value="">'+(porCama?'Escoge la cama…':'Escoge al huésped…')+'</option>'+
+    hs.map((h,i)=>'<option value="'+i+'">'+
+      (h.cuarto?esc(h.cuarto)+' · ':'')+esc(h.nombre)+'</option>').join('');
+  sel.onchange=()=>{ LAVHUESPED = sel.value==='' ? null : hs[Number(sel.value)]; };
 }
 
 async function cotizaLav(){
@@ -2197,7 +2233,7 @@ async function cotizaLav(){
 async function guardaLav(){
   const b=document.getElementById('lvGo');
   const msg=document.getElementById('lvMsg');
-  if(!LAVHUESPED){ msg.textContent='Escoge al huésped de la lista. Así el cargo cae en su cuenta y no en la de otro.'; return; }
+  if(!LAVHUESPED){ msg.textContent='Escoge la cama de la lista. Así el cargo cae en la cuenta de quien duerme ahí y no en la de otro.'; return; }
   const nombre=String(LAVHUESPED.nombre||'').trim();
   if(!lavTok()){ msg.textContent='No encuentro tu sesión. Vuelve a entrar a Soy Pepe y lo tomamos.'; return; }
   b.disabled=true; b.textContent='Guardando…';
