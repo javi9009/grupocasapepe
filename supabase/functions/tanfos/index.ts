@@ -1,8 +1,10 @@
-// tanfos — Lost & Found («los niños perdidos»).
+// tanfos — «Los Olvidados», el lost & found. La función se sigue llamando así
+// porque su URL ya está en las pantallas y en los correos que ya salieron.
 //
 //   accion=buscar       { prop, habitacion, fecha }  -> quién dormía ahí, con su correo
-//   accion=avisar       { objeto_id }                -> le manda el correo con los tres botones
-//   accion=vencimientos { prop? }                    -> lo que cumple plazo, a la jefa de front
+//   accion=previo       { objeto_id }                -> lo que se le mandaría, para validarlo
+//   accion=avisar       { objeto_id }                -> lo manda por correo Y por APePe
+//   accion=vencimientos { }                          -> lo que cumple plazo, a la jefa de front
 //
 // Dos reglas que no se negocian y por eso viven aquí y no en la pantalla:
 //
@@ -12,7 +14,9 @@
 //     los siete días: le aparecen a la jefa de front enseguida (lf_config:
 //     dias_valor_alto = 1, dias_documento = 0) y `puede_donarse` sale en
 //     false, así que el botón de donar no existe para ellos. Los custodia
-//     front directamente, no la bolsita de los tanfos.
+//     front directamente, no la bolsita.
+//  3. NADA SALE HACIA EL HUÉSPED SIN QUE UNA PERSONA LO LEA. Por eso hay
+//     `previo` y por eso `avisar` es una llamada aparte.
 import { quienLlama, noAutorizado, CORS_EQUIPO as CORS } from "./equipo.ts";
 
 const CB = "https://hotels.cloudbeds.com/api/v1.2";
@@ -78,7 +82,9 @@ async function bitacora(objeto_id: string, que: string, detalle: unknown, quien:
 // ---------------------------------------------------------------- 1. BUSCAR
 // Quién dormía en esa habitación esa noche. Se cruza por el roomID de Cloudbeds
 // que ya tenemos guardado en hk_areas, no por el nombre del cuarto: los nombres
-// se escriben de diez maneras y el id es uno.
+// se escriben de diez maneras y el id es uno. En un dormitorio el que identifica
+// al huésped es la CAMA, no el cuarto: son seis u ocho personas distintas, y por
+// eso solo las camas y las privadas tienen cloudbeds_room_id.
 async function buscarHuesped(prop: string, habitacion: string, fecha: string) {
   const cfg = PROPS[prop] ?? PROPS.cdmx;
   const key = Deno.env.get(cfg.keyEnv);
@@ -87,12 +93,15 @@ async function buscarHuesped(prop: string, habitacion: string, fecha: string) {
 
   const cod = habitacion.trim();
   const areas = await rest(
-    `hk_areas?property_id=eq.${cfg.supaId}&select=codigo,nombre,cloudbeds_room_id&limit=1000`,
-  ) as Array<{ codigo: string; nombre: string | null; cloudbeds_room_id: string | null }>;
+    `hk_areas?property_id=eq.${cfg.supaId}&select=codigo,nombre,tipo,cloudbeds_room_id&limit=1000`,
+  ) as Array<{ codigo: string; nombre: string | null; tipo: string; cloudbeds_room_id: string | null }>;
   const area = areas.find((a) =>
     String(a.codigo ?? "").toLowerCase() === cod.toLowerCase() ||
     String(a.nombre ?? "").toLowerCase() === cod.toLowerCase()
   );
+  if (area && area.tipo === "dorm") {
+    return { ok: true, encontrado: false, motivo: "es un dormitorio: hace falta la cama para saber de quién es" };
+  }
   const roomId = area?.cloudbeds_room_id ? String(area.cloudbeds_room_id) : "";
 
   // Salidas de ese día y del anterior: un objeto se encuentra al limpiar, y la
@@ -104,7 +113,7 @@ async function buscarHuesped(prop: string, habitacion: string, fecha: string) {
   const lista = await cb(key, "getReservations", params);
   let cands = (Array.isArray(lista?.data) ? lista.data : []).filter((x: Record<string, unknown>) => VIVAS.has(String(x.status)));
   if (cands.length > 40) cands = cands.slice(0, 40);
-  if (!cands.length) return { ok: true, encontrado: false, motivo: "no hay salidas de esa habitación en esas fechas" };
+  if (!cands.length) return { ok: true, encontrado: false, motivo: "no hay salidas de ahí en esas fechas" };
 
   // El detalle es el que trae el cuarto concreto y el correo.
   const detalles = await Promise.all(cands.map(async (x: Record<string, unknown>) => {
@@ -124,7 +133,7 @@ async function buscarHuesped(prop: string, habitacion: string, fecha: string) {
     );
   });
   const elegido = casa[0] ?? (roomId ? null : detalles[0]);
-  if (!elegido) return { ok: true, encontrado: false, motivo: "ninguna reserva de esas fechas estaba en esa habitación" };
+  if (!elegido) return { ok: true, encontrado: false, motivo: "ninguna reserva de esas fechas estaba ahí" };
 
   const d = elegido.det;
   const gl = d.guestList && typeof d.guestList === "object" ? Object.values(d.guestList) as Array<Record<string, unknown>> : [];
@@ -162,29 +171,66 @@ function correoHtml(o: Record<string, unknown>, foto: string, base: string, cfg:
 </div></body></html>`;
 }
 
-async function avisar(objeto_id: string, quien: string) {
+const ASUNTO = "¿Esto es tuyo? Se te quedó en Casa Pepe";
+
+// Un solo sitio arma el aviso, para que lo que se valida en pantalla y lo que
+// sale de verdad sean lo mismo. Si esto estuviera duplicado, el día que alguien
+// cambie el texto la pantalla seguiría mostrando el viejo.
+async function contenido(objeto_id: string) {
   const arr = await rest(`v_lf_objetos?id=eq.${objeto_id}&select=*&limit=1`) as Array<Record<string, unknown>>;
   const o = arr?.[0];
-  if (!o) return { ok: false, error: "no existe ese objeto" };
-  if (!o.huesped_email) return { ok: false, error: "ese objeto no tiene huésped identificado con correo" };
-  if (!RESEND) return { ok: false, error: "falta RESEND_API_KEY" };
-
+  if (!o) return null;
   const prop = porSupaId(String(o.property_id));
   const foto = await fotoFirmada(String(o.foto_path ?? ""));
-  const base = `${SB}/functions/v1/tanfos-huesped`;
-  const html = correoHtml(o, foto, base, { ...o, casa: PROPS[prop].casa });
+  const html = correoHtml(o, foto, `${SB}/functions/v1/tanfos-huesped`, { ...o, casa: PROPS[prop].casa });
+  return { o, html, foto, dias: Number(o.dias_sin_reclamar ?? 7) };
+}
 
-  const r = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: FROM, to: [String(o.huesped_email)],
-      subject: "¿Esto es tuyo? Se te quedó en Casa Pepe",
-      html,
-    }),
-  });
-  const rj = await r.json().catch(() => ({}));
-  if (!r.ok) return { ok: false, error: `Resend ${r.status}: ${JSON.stringify(rj).slice(0, 200)}` };
+// Lo que se le va a mandar, antes de mandarlo. Nada sale sin que una persona
+// lo lea: Javi lo pidió así y es lo correcto, porque el correo lleva la foto de
+// algo que puede ser de otro huésped.
+async function previo(objeto_id: string) {
+  const c = await contenido(objeto_id);
+  if (!c) return { ok: false, error: "no existe ese objeto" };
+  return {
+    ok: true, asunto: ASUNTO, html: c.html, dias: c.dias,
+    descripcion: c.o.descripcion ?? "",
+    canales: {
+      correo: RESEND ? (String(c.o.huesped_email ?? "") || null) : null,
+      apepe: !!String(c.o.reserva_id ?? ""),
+    },
+  };
+}
+
+async function avisar(objeto_id: string, quien: string) {
+  const c = await contenido(objeto_id);
+  if (!c) return { ok: false, error: "no existe ese objeto" };
+  const o = c.o;
+
+  // Los dos canales van por separado: que falle uno no tumba el otro. Un correo
+  // rebotado no debe dejar al huésped sin el aviso de su APePe.
+  let correo: string | null = null, apepe = false;
+  const fallos: string[] = [];
+
+  if (RESEND && o.huesped_email) {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM, to: [String(o.huesped_email)], subject: ASUNTO, html: c.html }),
+    });
+    const rj = await r.json().catch(() => ({}));
+    if (r.ok) correo = String(o.huesped_email);
+    else fallos.push(`correo: Resend ${r.status} ${JSON.stringify(rj).slice(0, 140)}`);
+  } else if (!o.huesped_email) fallos.push("no tiene correo en la reserva");
+  else fallos.push("falta RESEND_API_KEY");
+
+  if (o.reserva_id) {
+    const a = await rest("rpc/lf_avisar_apepe", { method: "POST", body: JSON.stringify({ p_objeto: objeto_id }) })
+      .catch((e) => ({ ok: false, error: String(e) })) as Record<string, unknown>;
+    if (a?.ok) apepe = true; else fallos.push(`APePe: ${a?.error ?? "no se pudo"}`);
+  } else fallos.push("sin reserva ligada: por APePe no se puede");
+
+  if (!correo && !apepe) return { ok: false, error: fallos.join(" · ") };
 
   // El reloj de los siete días empieza a contar cuando se avisa, no cuando se
   // encontró: no es justo gastarle días al huésped mientras nadie le escribía.
@@ -192,11 +238,11 @@ async function avisar(objeto_id: string, quien: string) {
     method: "PATCH", headers: { Prefer: "return=minimal" },
     body: JSON.stringify({
       estado: "avisado", aviso_at: new Date().toISOString(),
-      vence_at: mas(hoyTZ(), Number(o.dias_sin_reclamar ?? 7)), updated_at: new Date().toISOString(),
+      vence_at: mas(hoyTZ(), c.dias), updated_at: new Date().toISOString(),
     }),
   });
-  await bitacora(objeto_id, "avisado", { email: o.huesped_email, resend: rj?.id ?? null }, quien);
-  return { ok: true, email: o.huesped_email };
+  await bitacora(objeto_id, "avisado", { correo, apepe, fallos }, quien);
+  return { ok: true, correo, apepe, fallos };
 }
 
 // ---------------------------------------------------- 3. VENCIMIENTOS
@@ -225,10 +271,10 @@ Deno.serve(async (req) => {
       if (!hab) return J({ ok: false, error: "falta la habitación" }, 400);
       return J(await buscarHuesped(prop, hab, String(b.fecha ?? hoyTZ())));
     }
-    if (accion === "avisar") {
+    if (accion === "previo" || accion === "avisar") {
       const id = String(b.objeto_id ?? "");
       if (!id) return J({ ok: false, error: "falta objeto_id" }, 400);
-      return J(await avisar(id, quien));
+      return J(accion === "previo" ? await previo(id) : await avisar(id, quien));
     }
     if (accion === "vencimientos") return J(await vencimientos());
     return J({ ok: false, error: "acción desconocida" }, 400);

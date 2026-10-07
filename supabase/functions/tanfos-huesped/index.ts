@@ -1,4 +1,6 @@
-// tanfos-huesped — la página que abre el huésped desde el correo de los tanfos.
+// tanfos-huesped — la página que abre el huésped desde el aviso de Los Olvidados
+// (correo o APePe). Se sigue llamando tanfos-huesped porque su URL ya está en
+// correos que salieron y en los avisos de APePe: cambiarla los rompería.
 //
 // Pública a propósito (verify_jwt = false): el huésped ya se fue y no tiene
 // cuenta. La llave es el token del objeto, que es aleatorio de 18 bytes y solo
@@ -16,7 +18,7 @@ const RESP: Record<string, { et: string; conf: string; grac: string }> = {
   voy: {
     et: "Voy a por ello",
     conf: "Te lo guardamos en recepción con tu nombre.",
-    grac: "Perfecto. Te lo guardamos en recepción con tu nombre. Pregunta por los tanfos cuando llegues.",
+    grac: "Perfecto. Te lo guardamos en recepción con tu nombre. Pregúntale por él a recepción cuando llegues.",
   },
   envio: {
     et: "Mándenmelo",
@@ -138,7 +140,7 @@ Deno.serve(async (req) => {
   const ya = o.respuesta ? `<p class="s">Ya nos habías dicho «${esc(RESP[String(o.respuesta)]?.et ?? o.respuesta)}». Si cambiaste de idea, elige otra cosa.</p>` : "";
   const cab = `${foto ? `<img src="${esc(foto)}" alt="">` : ""}
     <p class="d">${esc(o.descripcion)}</p>
-    <p class="s">Lo tenemos guardado en recepción${o.habitacion ? `, apareció en la ${esc(o.habitacion)}` : ""}.</p>${ya}`;
+    <p class="s">Lo tenemos guardado en recepción${o.habitacion ? `, apareció en ${esc(o.habitacion)}` : ""}.</p>${ya}`;
 
   if (cerrado) {
     return pagina(`${cab}<h1>Esto ya está cerrado</h1>
