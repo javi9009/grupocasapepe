@@ -38,7 +38,15 @@ async function rest(path: string, init: RequestInit = {}) {
 }
 
 const UUID = /^[0-9a-f-]{36}$/i;
-const VALE = 30 * 60 * 1000;   // el papelito caduca a la media hora
+/* El papelito duraba media hora, y esa media hora era el muro: quien pulsa
+   «vincular mi Stripe» casi nunca TIENE ya una cuenta de Stripe —la abre en ese
+   momento—, y abrirla es razon social, identificacion, domicilio y la CLABE.
+   Eso no se hace en 30 minutos. Al volver, con todo lleno, la funcion contestaba
+   «la vinculacion caduco» y se perdia el trabajo entero. Desde el 26-sep: cuatro
+   intentos, cero vinculaciones. Ahora el papelito dura una semana. Sigue siendo
+   un numero aleatorio de 64 caracteres, de un solo uso, atado a ese touroperador
+   y borrado al cerrar. Javi, 8-oct. */
+const VALE = 7 * 24 * 60 * 60 * 1000;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -95,9 +103,9 @@ Deno.serve(async (req: Request) => {
     const code = String(b.code ?? "");
     const state = String(b.state ?? "");
     if (!code || !state) return json({ error: "falta el codigo" }, 400);
-    if (!op.stripe_oauth_state || op.stripe_oauth_state !== state) return json({ error: "esa vinculacion no cuadra" }, 409);
+    if (!op.stripe_oauth_state || op.stripe_oauth_state !== state) return json({ error: "Esa vinculacion no cuadra con la que empezaste. Vuelve al portal y pulsa otra vez «Quiero vincular mi Stripe»." }, 409);
     const cuando = op.stripe_oauth_state_at ? Date.parse(op.stripe_oauth_state_at) : 0;
-    if (!cuando || Date.now() - cuando > VALE) return json({ error: "la vinculacion caduco, vuelve a empezar" }, 409);
+    if (!cuando || Date.now() - cuando > VALE) return json({ error: "Esta vinculacion ya caduco. Tu cuenta de Stripe sigue hecha: vuelve al portal, pulsa «Quiero vincular mi Stripe» y entra con ella; no tienes que volver a capturar nada." }, 409);
 
     const f = new URLSearchParams({ grant_type: "authorization_code", code });
     const r = await fetch("https://connect.stripe.com/oauth/token", {
