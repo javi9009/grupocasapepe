@@ -440,32 +440,59 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   /* Mandarle el convenio por correo. El botón vive en «Acuerdo y estado» y se
      apaga solo cuando ya está firmado: mandárselo dos veces no hace nada, pero
      confunde a quien lo mira. */
+  async function mandaConvenio(b){
+    var antes=b.textContent; b.disabled=true; b.textContent='Mandando…';
+    try{
+      var r=await fetch(SB+'/functions/v1/productora-convenio',{method:'POST',headers:hdr(),
+        body:JSON.stringify({productora_id:cur.id})});
+      var j=await r.json();
+      if(!j||!j.ok) throw new Error((j&&j.error)||'no se pudo mandar');
+      toast(j.mensaje||'Convenio mandado.');
+      cur.convenio_enviado_at=new Date().toISOString(); cur.convenio_enviado_a=j.a;
+      pintaConvenio();
+    }catch(err){ toast(err.message,true); }
+    b.disabled=false; b.textContent=antes;
+  }
+
   function pintaConvenio(){
     var b=$('btnConvenio'), e=$('convEstado'); if(!b||!e||!cur) return;
+    b.style.display='';
+
+    /* YA FIGURA FIRMADO. Victor, 7-oct-2026: «no aparece enviar contrato».
+       El boton se escondia del todo al ver una fecha de firma, y la fecha se
+       puede teclear a mano en esta misma pantalla: si alguien la pone por
+       error, te quedas sin manera de mandarle el convenio nunca mas. Ahora el
+       boton sigue ahi y sirve para deshacer esa firma y remandarlo. La funcion
+       edge rechaza mandar el convenio a quien ya figura firmado (409), asi que
+       primero hay que quitar la firma; por eso van juntos y con confirmacion. */
     if(cur.contrato_firmado_at){
-      b.style.display='none';
       e.innerHTML='<span style="color:var(--ok,#1D6B4A)">✓ firmado</span>'+
         (cur.contrato_firmante?' por '+esc(cur.contrato_firmante):'')+
         (cur.contrato_version?' · '+esc(cur.contrato_version):'');
+      b.textContent='↩️ Quitar la firma y remandarlo';
+      b.onclick=async function(){
+        if(!confirm('Esta ficha ya figura firmada'+
+            (cur.contrato_firmante?' por '+cur.contrato_firmante:'')+'.\n\n'+
+            '¿Quitamos esa firma y le mandamos el convenio para que lo firme él?\n'+
+            'Se borran la fecha y el nombre de quien firmó.')) return;
+        var g=await parchea(SB+'/rest/v1/productoras?id=eq.'+cur.id,
+          {contrato_firmado_at:null, contrato_firmante:null});
+        if(!g.ok){ toast(g.msg,true); return; }
+        cur.contrato_firmado_at=null; cur.contrato_firmante=null;
+        cur.convenio_enviado_at=null;
+        await mandaConvenio(b);
+        await load(cur.id);
+      };
       return;
     }
-    b.style.display='';
+
+    b.textContent='✉️ Mandarle el convenio';
     e.textContent = cur.convenio_enviado_at
       ? 'mandado el '+String(cur.convenio_enviado_at).slice(0,10)+' a '+(cur.convenio_enviado_a||'')+', sin firmar'
       : 'sin mandar';
     b.onclick=async function(){
       if(!confirm('¿Le mandamos el convenio por correo para que lo firme?')) return;
-      b.disabled=true; var antes=b.textContent; b.textContent='Mandando…';
-      try{
-        var r=await fetch(SB+'/functions/v1/productora-convenio',{method:'POST',headers:hdr(),
-          body:JSON.stringify({productora_id:cur.id})});
-        var j=await r.json();
-        if(!j||!j.ok) throw new Error((j&&j.error)||'no se pudo mandar');
-        toast(j.mensaje||'Convenio mandado.');
-        cur.convenio_enviado_at=new Date().toISOString(); cur.convenio_enviado_a=j.a;
-        pintaConvenio();
-      }catch(err){ toast(err.message,true); }
-      b.disabled=false; b.textContent=antes;
+      await mandaConvenio(b);
     };
   }
 
