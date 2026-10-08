@@ -712,11 +712,32 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
   /* El token de Supabase caduca a la hora. Antes nadie lo renovaba: pasado ese
      rato el portal se quedaba vacío sin decir por qué. Envolvemos fetch una vez
-     y así lo cubrimos todo: si la base contesta 401, renovamos y repetimos. */
+     y así lo cubrimos todo: si la base contesta 401, renovamos y repetimos.
+
+     8-oct-2026 — lo que había aquí era una trampa de lazo. Si el refresco
+     fallaba, hacía `olvida(); location.reload()`. Pero `olvida()` solo borra
+     ESTA sesión (sinc_op_sesion); la del panel sigue en su sitio, así que al
+     recargar la página la vuelve a tomar, vuelve a dar 401, vuelve a fallar el
+     refresco y vuelve a recargar. Un navegador estuvo así cuatro minutos: 695
+     refrescos, 125 rechazados y 570 frenados por el límite de Auth, y de paso
+     dejó TODAS las demás pantallas de ese navegador en 401. Ahora un refresco
+     fallido se dice una vez y se para. Y si ya falló hace nada, no se vuelve a
+     pedir: el enfriamiento es lo que evita que un token muerto se convierta en
+     cientos de peticiones por minuto. */
+  var CADUCO=false;
+  function sesionCaducada(){
+    if(CADUCO)return; CADUCO=true;
+    olvida();
+    try{ $('entrar').style.display='block'; $('app').style.display='none'; montaExtras(); }catch(_){}
+    try{ errLogin('Tu sesión caducó. Entra otra vez con tu correo para seguir donde ibas.', true); }catch(_){}
+  }
   (function(){
-    var orig=window.fetch, renovando=null;
+    var orig=window.fetch, renovando=null, ultimoFallo=0;
+    var ESPERA=60000;   /* tras un fallo, un minuto sin volver a pedir */
     function renueva(){
       if(renovando)return renovando;
+      if(CADUCO)return Promise.resolve(false);
+      if(Date.now()-ultimoFallo < ESPERA)return Promise.resolve(false);
       var rt=ses&&ses.refresh_token;
       if(!rt)return Promise.resolve(false);
       renovando=orig(SB+'/auth/v1/token?grant_type=refresh_token',{
@@ -725,7 +746,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         .then(function(r){return r.ok?r.json():null;})
         .then(function(s){if(!s||!s.access_token)return false;guarda(s);return true;})
         .catch(function(){return false;})
-        .then(function(ok){renovando=null;return ok;});
+        .then(function(ok){renovando=null;if(!ok)ultimoFallo=Date.now();return ok;});
       return renovando;
     }
     window.fetch=function(u,o){
@@ -733,7 +754,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       return orig(u,o).then(function(r){
         if(r.status!==401)return r;
         return renueva().then(function(ok){
-          if(!ok){olvida();location.reload();return r;}
+          if(!ok){sesionCaducada();return r;}
           var o2=Object.assign({},o||{});
           o2.headers=Object.assign({},o2.headers||{},{'Authorization':'Bearer '+ses.access_token});
           return orig(u,o2);

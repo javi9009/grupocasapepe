@@ -393,17 +393,35 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   function hdr(){return {apikey:KEY,'Authorization':'Bearer '+((ses&&ses.access_token)||KEY),'Content-Type':'application/json'};}
 
   /* El token de Supabase caduca a la hora. Se renueva solo: si no, el portal se
-     queda vacío al rato sin decir por qué. Mismo truco que en /operador.html. */
-  var orig=window.fetch.bind(window), renovando=null;
+     queda vacío al rato sin decir por qué. Mismo truco que en /operador.html.
+
+     8-oct-2026 — y el mismo lazo que había allí. Si el refresco fallaba, esto
+     hacía `olvida(); location.reload()`; como `olvida()` solo borra ESTA sesión
+     y la del panel sigue guardada, al recargar la vuelve a tomar y vuelve a
+     fallar, en bucle. Un token muerto se convertía en cientos de peticiones por
+     minuto hasta que Auth frenaba al navegador entero y TODAS las pantallas de
+     esa persona se quedaban en 401. Ahora se dice una vez y se para, con un
+     minuto de enfriamiento antes de volver a intentarlo. */
+  var CADUCO=false;
+  function sesionCaducada(){
+    if(CADUCO)return; CADUCO=true;
+    olvida();
+    try{ $('entrar').style.display='block'; $('app').style.display='none'; }catch(_){}
+    try{ var e=$('lErr'); if(e){ e.textContent='Tu sesión caducó. Entra otra vez con tu correo.'; e.style.display='block'; } }catch(_){}
+  }
+  var orig=window.fetch.bind(window), renovando=null, ultimoFallo=0;
+  var ESPERA_REF=60000;
   window.fetch=async function(u,o){
     var r=await orig(u,o);
     if(r.status!==401||!ses||!ses.refresh_token||String(u).indexOf('/auth/v1/token')>=0) return r;
+    if(CADUCO||Date.now()-ultimoFallo<ESPERA_REF) return r;
     if(!renovando) renovando=orig(SB+'/auth/v1/token?grant_type=refresh_token',{
       method:'POST',headers:{apikey:KEY,'Content-Type':'application/json'},
       body:JSON.stringify({refresh_token:ses.refresh_token})
     }).then(function(x){return x.json();}).then(function(j){
-      renovando=null; if(j&&j.access_token){guarda(j);return true;} olvida(); location.reload(); return false;
-    }).catch(function(){renovando=null;return false;});
+      renovando=null; if(j&&j.access_token){guarda(j);return true;}
+      ultimoFallo=Date.now(); sesionCaducada(); return false;
+    }).catch(function(){renovando=null;ultimoFallo=Date.now();return false;});
     if(!(await renovando)) return r;
     var o2=Object.assign({},o||{}); o2.headers=Object.assign({},(o&&o.headers)||{},{'Authorization':'Bearer '+ses.access_token});
     return orig(u,o2);
