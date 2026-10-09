@@ -53,6 +53,28 @@ textarea{min-height:54px;resize:vertical}
 </div>
 
 <div class="card">
+<h2>🚪 Dar de baja</h2>
+<div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:8px">Marca la baja de un colaborador y sube la foto (o PDF) del documento de baja firmado para cerrar su expediente.</div>
+<button id="btnBaja" style="font:inherit;font-weight:700;border:1px solid #137A56;background:#137A56;color:#fff;border-radius:9px;padding:9px 14px;cursor:pointer">Dar de baja a un colaborador</button>
+</div>
+<dialog id="bajaDlg" style="border:0;border-radius:14px;padding:0;max-width:440px;width:92%;box-shadow:0 20px 60px -20px rgba(0,0,0,.5)">
+ <form method="dialog">
+  <div style="padding:14px 16px;border-bottom:1px solid #E2DCCF;font-weight:700">Dar de baja a un colaborador</div>
+  <div style="padding:14px 16px;display:grid;gap:10px">
+    <div><label style="font-size:12px;color:#6B6459;display:block;margin-bottom:3px">Colaborador</label><input id="bj_emp" list="bj_list" placeholder="Escribe el nombre" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #E2DCCF;border-radius:8px"><datalist id="bj_list"></datalist></div>
+    <div><label style="font-size:12px;color:#6B6459;display:block;margin-bottom:3px">Fecha de baja</label><input id="bj_fecha" type="date" style="width:100%;font:inherit;padding:8px 10px;border:1px solid #E2DCCF;border-radius:8px"></div>
+    <div><label style="font-size:12px;color:#6B6459;display:block;margin-bottom:3px">Motivo</label><input id="bj_motivo" placeholder="Renuncia, término de contrato, etc." style="width:100%;font:inherit;padding:8px 10px;border:1px solid #E2DCCF;border-radius:8px"></div>
+    <div><label style="font-size:12px;color:#6B6459;display:block;margin-bottom:3px">Documento de baja firmado (foto o PDF)</label><input id="bj_file" type="file" accept="image/*,application/pdf" capture="environment" style="width:100%;font:inherit"></div>
+    <div id="bj_msg" style="font-size:12.5px"></div>
+  </div>
+  <div style="padding:12px 16px;border-top:1px solid #E2DCCF;display:flex;justify-content:flex-end;gap:8px">
+    <button value="cancel" style="font:inherit;font-weight:700;border:1px solid #D2C8B6;background:#efe9dd;color:#2a2118;border-radius:9px;padding:9px 14px;cursor:pointer">Cancelar</button>
+    <button type="button" id="bj_ok" style="font:inherit;font-weight:700;border:1px solid #137A56;background:#137A56;color:#fff;border-radius:9px;padding:9px 14px;cursor:pointer">Aplicar baja</button>
+  </div>
+ </form>
+</dialog>
+
+<div class="card">
 <h2>1 · Pendientes de aceptar / generar contrato</h2>
 <div class="hint" style="font-size:12px;color:var(--muted);margin-bottom:8px">Colaboradores activos sin contrato firmado. Clic para aceptar el alta y generar el contrato; al generarlo entra al buzón de firmas.</div>
 <div id="pend" class="state">Cargando…</div>
@@ -568,6 +590,36 @@ $('doc').setAttribute('contenteditable','false');PENDING=null;$('ov').classList.
 m.className='msg ok';m.textContent=esIndet?'✓ Contrato de PLANTA enviado al trabajador para firma.':'✓ Contrato enviado al trabajador para firma ('+(c.numero||1)+' de '+(c.total_contratos||ch.n)+').';load();
 }catch(e){m.className='msg err';m.textContent='⚠ '+e.message;$('ovSend').disabled=false;}
 }
+/* ---- Dar de baja + documento firmado (cierra expediente) ---- */
+function bajaEmpSel(){ const v=(($('bj_emp').value||'').split('—')[0]||'').trim().toLowerCase(); if(!v)return null; return (EMPS||[]).find(e=>((e.nombre||'').trim().toLowerCase())===v) || (EMPS||[]).find(e=>v.length>2&&((e.nombre||'').toLowerCase()).includes(v)); }
+async function aplicarBaja(){
+  const msg=$('bj_msg'); msg.style.color='#9E3B2E';
+  const e=bajaEmpSel(); if(!e){ msg.textContent='Elige un colaborador de la lista.'; return; }
+  const fecha=$('bj_fecha').value, motivo=($('bj_motivo').value||'').trim();
+  if(!fecha){ msg.textContent='Pon la fecha de baja.'; return; }
+  if(!motivo){ msg.textContent='Pon el motivo.'; return; }
+  const f=$('bj_file').files[0];
+  $('bj_ok').disabled=true; msg.style.color='#6B6459'; msg.textContent='Guardando…';
+  let docPath=null;
+  try{
+    if(f){ const ext=((f.name.match(/\.([a-z0-9]+)$/i)||[])[1]||'bin').toLowerCase(); docPath='bajas/'+e.id+'/baja_'+Date.now()+'.'+ext;
+      const up=await sb.storage.from('empleados').upload(docPath,f,{contentType:f.type||'application/octet-stream',upsert:true});
+      if(up.error) throw new Error('No se pudo subir el documento: '+up.error.message); }
+    const upd={estatus:'baja',baja_fecha:new Date(fecha+'T12:00:00').toISOString(),baja_motivo:motivo};
+    if(docPath) upd.baja_doc_url=docPath;
+    const r=await sb.from('employees').update(upd).eq('id',e.id);
+    if(r.error) throw new Error(r.error.message);
+    msg.style.color='#1D6B4A'; msg.textContent='✓ Baja aplicada'+(docPath?' con documento':' (sin documento — puedes subirlo después)')+'.';
+    setTimeout(()=>{ try{$('bajaDlg').close();}catch(_){} load(); },900);
+  }catch(err){ msg.style.color='#9E3B2E'; msg.textContent='⚠ '+err.message; }
+  $('bj_ok').disabled=false;
+}
+(function bajaInit(){
+  const b=$('btnBaja'); if(!b) return;
+  b.onclick=()=>{ const dl=$('bj_list'); if(dl) dl.innerHTML=(EMPS||[]).slice().sort((a,c)=>(a.nombre||'').localeCompare(c.nombre||'')).map(e=>`<option value="${esc(e.nombre||'')} — ${esc(e.empleado_id||'')}">`).join('');
+    $('bj_fecha').value=new Date().toISOString().slice(0,10); $('bj_emp').value=''; $('bj_motivo').value=''; try{$('bj_file').value='';}catch(_){} $('bj_msg').textContent=''; try{$('bajaDlg').showModal();}catch(_){} };
+  const ok=$('bj_ok'); if(ok) ok.onclick=aplicarBaja;
+})();
 loadMachote();loadFirma();loadBonosCat();load();
 </script><script src="/m/tablekit.js" defer></script>
 </body></html>
