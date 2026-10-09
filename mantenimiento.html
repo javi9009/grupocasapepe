@@ -2075,7 +2075,7 @@ const DONEP=t=>["resuelto","cerrado"].includes(t.estado);
 const doneWk=t=>{const d=(t.resuelto_at||t.cerrado_at||"").slice(0,10);return d?mondayOf(d):null;};
 async function renderProductividad(){
   const [tkR,puR,catR]=await Promise.all([
-    sb.from("mtto_tickets").select("id,titulo,clasificacion,estado,asignado_a,asignado_nombre,minutos_estimados,minutos_reales,semana_programada,resuelto_at,cerrado_at,dia_programado, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id),
+    sb.from("mtto_tickets").select("id,titulo,clasificacion,estado,asignado_a,asignado_nombre,minutos_estimados,minutos_reales,semana_programada,resuelto_at,cerrado_at,dia_programado,created_at,reportado_at, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id),
     sb.from("mtto_puesto").select("*"),
     sb.from("mtto_preventivos_catalogo").select("id,tarea,periodicidad,ultimo_realizado,critico").eq("property_id",PROP.id).eq("activo",true)
   ]);
@@ -2122,7 +2122,8 @@ async function termInfo(id){
   if(!t)return toast("No encontrado");
   const dur=(a,b)=>{if(!a||!b)return null;return Math.round((new Date(b)-new Date(a))/60000);};
   const trab=dur(t.iniciado_at,t.resuelto_at||t.cerrado_at);
-  const foto=t.foto_resuelto_url||t.foto_url;
+  const fAntes=t.foto_url||(Array.isArray(t.fotos)&&t.fotos.length?(t.fotos[0].url||t.fotos[0]):null);
+  const fDespues=t.foto_resuelto_url||null;
   const ef=(t.minutos_reales&&t.minutos_estimados)?Math.round(t.minutos_reales/t.minutos_estimados*100):null;
   modal(`<h3>${esc(t.titulo||'Trabajo')} ${t.folio?`<span class="chip c-prev" style="font-family:ui-monospace,monospace;font-size:12px">${esc(t.folio)}</span>`:''}</h3><div class="pad">
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
@@ -2141,31 +2142,55 @@ async function termInfo(id){
       ${trab?`<div class="kpi"><div class="n">${trab}m</div><div class="l">cronómetro</div></div>`:''}
     </div>
     <div class="muted" style="font-size:12px">Reportó: ${esc(repName(t.reportado_por_nombre)||'—')}${t.reportado_at?' · '+t.reportado_at.slice(0,10):''} · Terminó: ${(t.resuelto_at||t.cerrado_at||'').slice(0,10)||'—'}</div>
-    ${foto?`<details class="reco" style="margin-top:10px"><summary>📷 Ver foto</summary><img loading="lazy" src="${esc(foto)}" style="max-width:100%;border-radius:10px;margin-top:6px"></details>`:''}
+    ${(fAntes||fDespues)?`<div style="margin-top:12px"><b style="font-size:13px">Fotos</b>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <div style="flex:1;min-width:0"><div class="muted" style="font-size:11px;margin-bottom:3px">📸 Cómo estaba</div>${fAntes?`<img loading="lazy" src="${esc(fAntes)}" style="width:100%;border-radius:10px;cursor:zoom-in" onclick="window.open('${esc(fAntes)}','_blank')">`:'<div class="muted" style="font-size:12px;padding:16px 0;text-align:center;border:1px dashed var(--rule);border-radius:10px">Sin foto</div>'}</div>
+        <div style="flex:1;min-width:0"><div class="muted" style="font-size:11px;margin-bottom:3px">✅ Cómo quedó</div>${fDespues?`<img loading="lazy" src="${esc(fDespues)}" style="width:100%;border-radius:10px;cursor:zoom-in" onclick="window.open('${esc(fDespues)}','_blank')">`:'<div class="muted" style="font-size:12px;padding:16px 0;text-align:center;border:1px dashed var(--rule);border-radius:10px">Sin foto</div>'}</div>
+      </div></div>`:''}
   </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);
 }
 function techProdCard(t,tks,pu,wk){
   const cap=puestoCap(pu); const capMin=cap.prog*60||1;
-  const mine=tks.filter(r=>r.asignado_a===t.id&&r.semana_programada&&mondayOf(r.semana_programada)===wk);
-  const prog=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);
-  const done=mine.filter(DONEP);
-  const hecho=done.reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0);
+  const NP='#005b80';                                  // color de lo NO programado
+  const isProg=r=>r.semana_programada&&mondayOf(r.semana_programada)===wk;
+  const mine=tks.filter(r=>r.asignado_a===t.id&&isProg(r));          // programados de la semana
+  const prog=mine.reduce((s,r)=>s+(r.minutos_estimados||0),0);        // horas de plan
+  const doneProg=mine.filter(DONEP);
+  // terminados ESTA semana que NO estaban programados (reactivos que cayeron y sí trabajó)
+  const doneNoProg=tks.filter(r=>r.asignado_a===t.id&&DONEP(r)&&doneWk(r)===wk&&!isProg(r));
+  const hProg=doneProg.reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0);
+  const hNoProg=doneNoProg.reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0);
+  const hTotal=hProg+hNoProg;
+  // demanda nueva que le entró en la semana
+  const openWk=tks.filter(r=>r.asignado_a===t.id&&mondayOf((r.reportado_at||r.created_at||'').slice(0,10))===wk);
   const prevMin=mine.filter(r=>r.clasificacion==="preventivo").reduce((s,r)=>s+(r.minutos_estimados||0),0);
-  const react=mine.filter(r=>r.clasificacion==="reactivo").length;
-  const sumR=done.reduce((s,r)=>s+(r.minutos_reales||0),0), sumE=done.filter(r=>r.minutos_reales).reduce((s,r)=>s+(r.minutos_estimados||0),0);
+  // eficiencia: terminados de la semana (prog + no prog) con real y estimado
+  const doneAll=doneProg.concat(doneNoProg);
+  const sumR=doneAll.reduce((s,r)=>s+(r.minutos_reales||0),0), sumE=doneAll.filter(r=>r.minutos_reales).reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const ef=sumE?Math.round(sumR/sumE*100):null;
   const efCol=ef==null?"var(--muted)":(ef<=100?"var(--ok)":(ef<=120?"var(--warn)":"var(--bad)"));
-  const pct=prog?Math.min(100,Math.round(hecho/prog*100)):0;
-  const cls=pct>=100?"full":(pct>=60?"":"warn");
+  // pila: horas atendidas (verde=prog + azul=no prog) sobre horas programadas
+  const base=Math.max(prog,hTotal,1);
+  const w1=Math.round(hProg/base*100), w2=Math.round(hNoProg/base*100);
   const capPct=Math.min(100,Math.round(prog/capMin*100));
+  // detalle por tipo (programado atendido/total + extras no programados)
+  const det=[['preventivo','🛠️ Preventivo'],['correctivo','🔧 Correctivo'],['reactivo','⚡ Reactivo']].map(([k,lbl])=>{
+    const pT=mine.filter(r=>r.clasificacion===k), pD=pT.filter(DONEP);
+    const npD=doneNoProg.filter(r=>r.clasificacion===k);
+    const npH=npD.reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0);
+    if(!pT.length&&!npD.length)return '';
+    return `<div class="prodrow"><span>${lbl}</span><span>${pD.length}/${pT.length} prog${npD.length?` · <span style="color:${NP}">+${npD.length} extra (${(npH/60).toFixed(1)}h)</span>`:''}</span></div>`;
+  }).join('');
   return `<div class="card"><div class="pad">
     <div style="display:flex;align-items:center;gap:8px"><b>${esc(t.nombre_display||t.nombre)}</b><span class="ef" style="margin-left:auto;color:${efCol}">${ef==null?'—':ef+'%'} ef.</span></div>
-    <div class="prodrow"><span class="muted">Avance de la semana</span><span><b>${(hecho/60).toFixed(1)}h</b> / ${(prog/60).toFixed(1)}h programado</span></div>
-    <div class="hpila ${cls}"><i style="width:${pct}%"></i></div>
+    <div class="prodrow"><span class="muted">Horas atendidas</span><span><b>${(hTotal/60).toFixed(1)}h</b> / ${(prog/60).toFixed(1)}h prog${hNoProg?` · <span style="color:${NP}">+${(hNoProg/60).toFixed(1)}h no prog</span>`:''}</span></div>
+    <div style="height:8px;background:var(--surface-2,#EFE9DD);border-radius:5px;overflow:hidden;display:flex;margin:4px 0"><i style="display:block;height:100%;width:${w1}%;background:var(--ok)"></i><i style="display:block;height:100%;width:${w2}%;background:${NP}"></i></div>
     <div class="prodrow"><span class="muted">Carga vs capacidad (${cap.prog.toFixed(1)}h)</span><span>${capPct}%</span></div>
     <div class="prodrow"><span>🛠️ Preventivos ${(prevMin/60).toFixed(1)}h / ${cap.minPrev}h</span><span>${prevMin>=cap.minPrev*60?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)">∗ bajo</b>'}</span></div>
-    <div class="prodrow"><span>⚡ Reactivos atendidos</span><span>${done.filter(r=>r.clasificacion==='reactivo').length} / ${react}</span></div>
-    <div class="prodrow"><span>✅ Terminados</span><span>${done.length} / ${mine.length}</span></div>
+    <div class="prodrow"><span>✅ Programados atendidos</span><span>${doneProg.length} / ${mine.length}</span></div>
+    <div class="prodrow"><span>➕ No programados atendidos</span><span style="color:${hNoProg?NP:'inherit'}">${doneNoProg.length}${hNoProg?` · ${(hNoProg/60).toFixed(1)}h`:''}</span></div>
+    <div class="prodrow"><span>📂 Abiertos esta semana</span><span>${openWk.length}</span></div>
+    ${det?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">➕ Detalle por tipo</summary><div style="margin-top:4px">${det}</div></details>`:''}
   </div></div>`;
 }
 window.shiftWkProd=n=>{const d=new Date(PROG_WK+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+n*7);PROG_WK=d.toISOString().slice(0,10);renderProductividad();};
