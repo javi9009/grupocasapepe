@@ -287,6 +287,15 @@ function opcionesPropina(){
 
 /* ---------- arranque ---------- */
 var CARGA=null;
+/* El precio de la ficha, antes de que el código del concierge lo pise: de aquí
+   sale el neto del operador, que es lo único que no se mueve. */
+var ANT0=null;
+function guardaPrecioFicha(){
+  if(ANT0)return;
+  ANT0={pvpAd:Number((E&&E.pvp_adulto)||0), antAd:Number((E&&E.anticipo_adulto)||0),
+        pvpMe:Number((E&&(E.pvp_menor||E.pvp_adulto))||0),
+        antMe:Number((E&&(E.anticipo_menor||E.anticipo_adulto))||0)};
+}
 async function arranca(){
   CARGA=window.CARGA||sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Preparando tu compra…'):'Preparando tu compra…')});
   /* Si vuelve de pagar, esta pantalla ya no vende: informa. */
@@ -303,6 +312,7 @@ async function arranca(){
   var a=await get(VEXP+'?select=*&id=eq.'+ID+'&limit=1');
   E=a[0];
   if(!E){ CARGA.para(); $('cargando').textContent=T('No encontramos esta experiencia.'); return; }
+  guardaPrecioFicha();   /* antes de que el código del concierge toque el precio */
 
   var r=await Promise.all([
     get('v_sinc_publico?select=*'),
@@ -323,11 +333,17 @@ async function arranca(){
       if(pr&&pr.pvp_adulto){
         E.pvp_adulto=Number(pr.pvp_adulto);
         E.pvp_menor=pr.pvp_menor!=null?Number(pr.pvp_menor):Number(pr.pvp_adulto);
-        /* Si cambia el precio, cambia con él el anticipo del cobro dividido:
-           es nuestra comisión sobre ESTE precio, no sobre el de la ficha. */
-        if(E.cobro_dividido&&pr.comision_pct!=null){
-          E.anticipo_adulto=Math.round(E.pvp_adulto*Number(pr.comision_pct)/100);
-          E.anticipo_menor =Math.round(Number(E.pvp_menor||E.pvp_adulto)*Number(pr.comision_pct)/100);
+        /* Si cambia el precio, cambia con él el anticipo del cobro dividido.
+           Se saca como PVP − neto del operador, NO como un porcentaje: lo que
+           el guía cobra en mano es el precio del operador, y ése no se mueve
+           aunque el concierge traiga otro PVP. Por porcentaje salían unos
+           centavos de diferencia con lo que cobra la base, y en un cobro
+           dividido esa diferencia se ve, porque es dinero que una persona le
+           pone en la mano a otra. Javi, 8-oct. */
+        if(E.cobro_dividido&&ANT0&&ANT0.antAd>0){
+          var netoAd=ANT0.pvpAd-ANT0.antAd, netoMe=ANT0.pvpMe-ANT0.antMe;
+          E.anticipo_adulto=Math.max(0,Number(E.pvp_adulto)-netoAd);
+          E.anticipo_menor =Math.max(0,Number(E.pvp_menor||E.pvp_adulto)-netoMe);
         }
       }
       QUIEN=(await rpc('sinc_quien_te_atiende',{p_codigo:CODIGO})||[])[0]||null;
@@ -394,8 +410,13 @@ function pintaDividido(){
     '<div class="r"><span>'+esc(T('Pagas ahora con tarjeta'))+'</span><b>'+money(ahora())+'</b></div>'+
     '<div class="r"><span>'+esc(T('Al llegar, al operador'))+'</span><b>'+money(resto())+'</b></div>'+
     '<div class="q">'+esc(T('Hoy sólo se te cobra esa parte. Los '))+money(resto())+
-    esc(T(' restantes los pagas el día del tour, directo con '))+
-    esc(E.operador||T('la operadora'))+'.</div>';
+    esc(T(' restantes los pagas el día del tour, en mano, directo con '))+
+    esc(E.operador||T('la operadora'))+'. '+
+    /* Aquí y no en la letra chica: es la única parte del dinero que no vuelve,
+       y el huésped tiene derecho a saberlo antes de teclear la tarjeta, no
+       después. Javi, 8-oct. */
+    '<b>'+esc(T('El anticipo de '))+money(ahora())+
+    esc(T(' no se devuelve: es lo que aparta tu lugar.'))+'</b></div>';
 }
 
 function pintaRecuerda(){
