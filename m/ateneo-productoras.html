@@ -210,9 +210,21 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         <div class="hint">El cobro cae directo en su Stripe y la comisión se retiene sola. Sin CLABE: la captura ella en Stripe.</div>
         <div class="fgrid">
           <div class="fld"><label>Estado de su cuenta</label><div id="stEstado" style="padding:9px 0"><span class="tag">sin vincular</span></div><div class="ay">Lo dice Stripe, no se captura aquí.</div></div>
-          <div class="fld"><label>Cuenta conectada</label><input data-c="stripe_account_id" readonly placeholder="todavía ninguna" style="background:var(--surface-3);border-style:dashed"></div>
+          <!-- PEGAR LA CUENTA. Javi, 9-oct-2026: «no deja pegar la cuenta».
+               Estaba en solo-lectura para que nadie dejara una ficha diciendo
+               «vinculada» sin estarlo. Ahora se pega y se COMPRUEBA contra
+               Stripe antes de guardar. Sin data-c a propósito: el «Guardar» de
+               la ficha no la toca, porque guardarla sin comprobar es el bug
+               que esto cierra. -->
+          <div class="fld"><label>Cuenta conectada</label>
+            <input id="stAcctPega" placeholder="acct_… o vacío si todavía ninguna" autocapitalize="off" spellcheck="false">
+            <div class="ay">Se llena sola al vincular. Si ya tienes su <b>acct_</b>, pégalo y se comprueba con Stripe.</div></div>
           <div class="fld"><label>¿Quién factura?</label><select data-c="quien_factura"><option value="productora">La productora</option><option value="casa_pepe">Casa Pepe</option></select></div>
         </div>
+        <div class="ft" style="justify-content:flex-start;margin-top:10px">
+          <button class="btn fantasma" id="btnAcctGuardar">Comprobar y guardar la cuenta</button>
+        </div>
+        <div id="acctMsg" style="margin-top:10px"></div>
       </div>
       <!-- El COBRO DIVIDIDO se quita de aquí. Javi, 7-oct-2026: «en productores
            no lo metamos». La casilla existía pero no hacía nada: evento-checkout
@@ -604,7 +616,56 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   $('ligaCopiar').onclick=function(){var el=$('ligaProd');if(!el.value)return;el.select();try{document.execCommand('copy');toast('Liga copiada');}catch(_){toast('Copia manual',true);}};
   function pintaTipo(){var t=TIPOS.filter(function(x){return x.clave===(cur&&cur.tipo);})[0];$('ayEspacio').textContent=t?('Espacio: '+t.espacio):'';}
   $('selTipo').onchange=pintaTipo;
-  function pintaCobro(){var e=$('stEstado');if(!e||!cur)return;var a=cur.stripe_account_id;e.innerHTML=a?'<span class="tag ok">vinculada</span>':'<span class="tag">sin vincular</span>';}
+  function pintaCobro(){
+    var e=$('stEstado');if(!e||!cur)return;
+    var a=cur.stripe_account_id;
+    e.innerHTML=a?'<span class="tag ok">vinculada</span> <span class="mini">'+esc(a)+'</span>':'<span class="tag">sin vincular</span>';
+    var i=$('stAcctPega'); if(i)i.value=a||'';
+    var m=$('acctMsg'); if(m)m.innerHTML='';
+  }
+
+  /* Pegar la cuenta a mano, comprobándola. La comprobación la hace la función
+     edge: aquí no hay ninguna llave de Stripe y no puede haberla. Si Stripe no
+     la ve, no se guarda y sale el botón de guardarla igual, que la deja
+     apuntada y marcada como sin comprobar. Javi, 9-oct-2026. */
+  async function guardaAcct(forzar){
+    if(!cur)return;
+    var i=$('stAcctPega'), m=$('acctMsg'), b=$('btnAcctGuardar');
+    var v=(i.value||'').trim();
+    if(!v){ m.innerHTML='<div class="mini">Pega su <b>acct_…</b> para poder comprobarla.</div>'; return; }
+    b.disabled=true; var antes=b.textContent; b.textContent='Preguntando a Stripe…';
+    m.innerHTML='';
+    try{
+      var r=await fetch(SB+'/functions/v1/stripe-revision',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'pegar',tipo:'productora',id:cur.id,cuenta:v,forzar:!!forzar})});
+      var d=await r.json().catch(function(){return null;});
+      if(d&&d.ok){
+        var det = d.comprobada
+          ? 'Stripe la reconoce · '+(d.cobra?'cobra':'<b>todavía no cobra</b>')+
+            ' · '+(d.le_pagan?'le pagan':'sin pagos')+' · modo '+esc(d.modo)+
+            (d.en_su_plataforma?'':' · <b>no está en la plataforma que le cobra</b>')+
+            (d.le_falta&&d.le_falta.length?'<div class="mini">Stripe le pide: '+esc(d.le_falta.join(', '))+'</div>':'')
+          : esc(d.aviso||'Guardada sin comprobar.');
+        m.innerHTML='<div class="hint" style="background:#E8F5E9;color:#1B5E20;border-radius:10px;padding:10px 12px">Guardada. '+det+'</div>';
+        toast('Cuenta guardada');
+        await load(cur.id);
+        return;
+      }
+      var msg=(d&&d.error)||('HTTP '+r.status);
+      m.innerHTML='<div class="hint" style="background:#FDECEA;color:#B3261E;border-radius:10px;padding:10px 12px">'+esc(msg)+'</div>'+
+        (d&&d.puedes_forzar
+          ? '<div class="ft" style="justify-content:flex-start;margin-top:8px">'+
+            '<button class="btn fantasma sm" id="btnAcctForzar">Guardarla igual, sin comprobar</button></div>'
+          : '');
+      var f=$('btnAcctForzar');
+      if(f)f.onclick=function(){ guardaAcct(true); };
+    }catch(x){
+      m.innerHTML='<div class="hint" style="background:#FDECEA;color:#B3261E;border-radius:10px;padding:10px 12px">No se pudo: '+esc(x.message)+'</div>';
+    }
+    b.disabled=false; b.textContent=antes;
+  }
+  var bAcct=$('btnAcctGuardar');
+  if(bAcct)bAcct.onclick=function(){ guardaAcct(false); };
 
   /* ---------- PARA OPERAR HACE FALTA ----------
      Javi, 3-oct-2026: «permite un + para que abra qué campos faltan y también

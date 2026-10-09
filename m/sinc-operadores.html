@@ -253,14 +253,23 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
             <div class="fld"><label>Estado de su cuenta</label>
               <div id="stEstado" style="padding:9px 0"><span class="tag">sin vincular</span></div>
               <div class="ay">Lo dice Stripe, no se captura aquí.</div></div>
+            <!-- PEGAR LA CUENTA. Javi, 9-oct-2026: «no deja pegar la cuenta».
+                 Estaba en solo-lectura para que nadie escribiera un acct_ a
+                 dedo y dejara una ficha diciendo «vinculado» sin estarlo. Pero
+                 hay cuentas que ya existen y hay que poder apuntarlas, así que
+                 ahora se pega y se COMPRUEBA contra Stripe antes de guardar.
+                 Deliberadamente NO lleva data-c: el botón «Guardar» de la ficha
+                 no la toca, porque guardarla sin comprobar es el bug que esto
+                 viene a cerrar. -->
             <div class="fld"><label>Cuenta conectada</label>
-              <input data-c="stripe_account_id" readonly tabindex="-1" placeholder="todavía ninguna"
-                     style="background:var(--surface-3);border-style:dashed">
-              <div class="ay">Se llena sola al vincular</div></div>
+              <input id="stAcctPega" placeholder="acct_… o vacío si todavía ninguna" autocapitalize="off" spellcheck="false">
+              <div class="ay">Se llena sola al vincular. Si ya tienes su <b>acct_</b>, pégalo y se comprueba con Stripe.</div></div>
           </div>
-          <div class="ft" style="justify-content:flex-start;margin-top:10px">
+          <div class="ft" style="justify-content:flex-start;margin-top:10px;gap:8px;flex-wrap:wrap">
             <button class="btn" id="btnStripeLiga">Acompañarle a darse de alta</button>
+            <button class="btn fantasma" id="btnAcctGuardar">Comprobar y guardar la cuenta</button>
           </div>
+          <div id="acctMsg" style="margin-top:10px"></div>
           <div class="aviso" style="margin-top:12px">Sin cuenta vinculada no se puede terminar el alta por esta vía: quien recibe fondos tiene que identificarse ante el procesador, y eso sólo se hace dentro de Stripe. Si no va a hacerlo, cambia la forma de cobro a anticipado.</div>
         </div>
 
@@ -647,7 +656,52 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       : (cur.stripe_estado==='liga_enviada'
           ? '<span class="tag warn">liga enviada, sin terminar</span>'
           : '<span class="tag">sin vincular</span>');
+    var i=$('stAcctPega'); if(i)i.value=acct||'';
+    var m=$('acctMsg'); if(m)m.innerHTML='';
   }
+
+  /* Pegar la cuenta a mano, comprobándola. La comprobación la hace la función
+     edge, no esta pantalla: aquí no hay ninguna llave de Stripe y no puede
+     haberla. Si Stripe no la ve, no se guarda y sale el botón de guardarla
+     igual, que la deja apuntada y marcada como sin comprobar. */
+  async function guardaAcct(forzar){
+    if(!cur)return;
+    var i=$('stAcctPega'), m=$('acctMsg'), b=$('btnAcctGuardar');
+    var v=(i.value||'').trim();
+    if(!v){ m.innerHTML='<div class="mini">Pega su <b>acct_…</b> para poder comprobarla.</div>'; return; }
+    b.disabled=true; var antes=b.textContent; b.textContent='Preguntando a Stripe…';
+    m.innerHTML='';
+    try{
+      var r=await fetch(SB+'/functions/v1/stripe-revision',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'pegar',tipo:'touroperador',id:cur.id,cuenta:v,forzar:!!forzar})});
+      var d=await r.json().catch(function(){return null;});
+      if(d&&d.ok){
+        var det = d.comprobada
+          ? 'Stripe la reconoce · '+(d.cobra?'cobra':'<b>todavía no cobra</b>')+
+            ' · '+(d.le_pagan?'le pagan':'sin pagos')+' · modo '+esc(d.modo)+
+            (d.en_su_plataforma?'':' · <b>no está en la plataforma que le cobra</b>')+
+            (d.le_falta&&d.le_falta.length?'<div class="mini">Stripe le pide: '+esc(d.le_falta.join(', '))+'</div>':'')
+          : esc(d.aviso||'Guardada sin comprobar.');
+        m.innerHTML='<div class="aviso" style="background:#E8F5E9;color:#1B5E20">Guardada. '+det+'</div>';
+        toast('Cuenta guardada');
+        await load(cur.id);
+        return;
+      }
+      var msg=(d&&d.error)||('HTTP '+r.status);
+      m.innerHTML='<div class="aviso" style="background:#FDECEA;color:#B3261E">'+esc(msg)+'</div>'+
+        (d&&d.puedes_forzar
+          ? '<div class="ft" style="justify-content:flex-start;margin-top:8px">'+
+            '<button class="btn fantasma sm" id="btnAcctForzar">Guardarla igual, sin comprobar</button></div>'
+          : '');
+      var f=$('btnAcctForzar');
+      if(f)f.onclick=function(){ guardaAcct(true); };
+    }catch(x){
+      m.innerHTML='<div class="aviso" style="background:#FDECEA;color:#B3261E">No se pudo: '+esc(x.message)+'</div>';
+    }
+    b.disabled=false; b.textContent=antes;
+  }
+  var bAcct=$('btnAcctGuardar');
+  if(bAcct)bAcct.onclick=function(){ guardaAcct(false); };
 
   var btnSt=$('btnStripeLiga');
   if(btnSt)btnSt.onclick=function(){

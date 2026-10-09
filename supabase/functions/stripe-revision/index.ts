@@ -76,6 +76,10 @@ Deno.serve(async (req) => {
   const q = await quienLlama(req);
   if (!q.equipo) return noAutorizado("La revisión de Stripe la ve el equipo de casa.");
 
+  let cuerpo: any = {};
+  try { cuerpo = await req.json(); } catch { /* sin cuerpo = revisar */ }
+  const accion = String(cuerpo?.accion ?? "revisar");
+
   /* ---------- 1. LAS LLAVES ----------
      /v1/account dice qué plataforma es; /v1/balance dice si está en vivo. De la
      llave no sale nada: ni el prefijo, ni los últimos cuatro, ni la longitud. */
@@ -108,6 +112,120 @@ Deno.serve(async (req) => {
   for (const v of vivas) {
     if (!v.plataforma) continue;
     (porPlataforma[v.plataforma] ||= []).push(v.env);
+  }
+
+  /* ---------- PEGAR UNA CUENTA A MANO ----------
+     En las fichas del panel el `acct_` estaba en solo-lectura, y con razón: un
+     id escrito a mano no lo ha autorizado nadie, y si está mal el cobro no
+     falla aquí sino el día de la venta, con un error que no dice nada. Pero no
+     poder pegarlo tampoco sirve, porque hay cuentas que ya existen.
+     Así que se pega y se COMPRUEBA antes de guardar: se le pregunta a Stripe,
+     con cada una de nuestras llaves, si alguna plataforma nuestra ve esa
+     cuenta. Si ninguna la ve, no se guarda y se dice por qué.
+     Y hay un caso que no se guarda ni forzando: nuestra propia cuenta de
+     plataforma en la ficha de un tercero. Es exactamente lo que le pasó a
+     FlyLike —quedó registrada la cuenta de Casa Pepe CDMX— y nadie se enteró
+     hasta hoy. Javi, 9-oct-2026. */
+  if (accion === "pegar") {
+    const tipo = String(cuerpo?.tipo ?? "");
+    const fid = String(cuerpo?.id ?? "");
+    const acct = String(cuerpo?.cuenta ?? "").trim();
+    const forzar = cuerpo?.forzar === true;
+
+    const D = DONDE.find((x) => x.quien === tipo || x.tabla === tipo);
+    if (!D) return J({ ok: false, error: "No sé de qué tipo de ficha hablamos." }, 400);
+    if (!/^[0-9a-f-]{36}$/i.test(fid)) return J({ ok: false, error: "Falta la ficha." }, 400);
+    if (!/^acct_[A-Za-z0-9]{8,}$/.test(acct)) {
+      return J({ ok: false, error: "Eso no tiene forma de cuenta de Stripe. Empieza por «acct_» y lo copias del panel de Stripe de la cuenta, no de un cobro." }, 400);
+    }
+
+    /* Nuestras propias plataformas, sacadas de las llaves que hay puestas. */
+    const nuestras = new Set(vivas.map((v) => v.plataforma).filter(Boolean));
+    if (nuestras.has(acct)) {
+      return J({
+        ok: false,
+        error: "Esa es una de NUESTRAS cuentas de plataforma, no la de un tercero. " +
+          "Pasa cuando se hace la vinculación entrando con el Stripe de la casa en vez del suyo. " +
+          "Pídele a él el acct_ de su propia cuenta.",
+      }, 409);
+    }
+
+    /* Que no esté ya puesta en otra ficha: dos fichas con la misma cuenta
+       significa que a alguien le van a caer los cobros del otro. */
+    for (const T of DONDE) {
+      const o = await rest(`${T.tabla}?select=id,${T.nombre}&stripe_account_id=eq.${encodeURIComponent(acct)}`);
+      for (const fila of (o.body ?? [])) {
+        if (T.tabla === D.tabla && String(fila.id) === fid) continue;
+        return J({ ok: false, error: `Esa cuenta ya está en la ficha de «${fila[T.nombre]}» (${T.quien}). Una cuenta no puede estar en dos fichas.` }, 409);
+      }
+    }
+
+    /* ¿La ve alguna de nuestras plataformas? */
+    const ven: string[] = [];
+    let datos: any = null;
+    let vivo: boolean | null = null;
+    for (const v of vivas) {
+      const a = await sget(v.key, `accounts/${acct}`);
+      if (!a.ok) continue;
+      ven.push(v.env);
+      if (!datos) { datos = a.j; vivo = v.vivo; }
+    }
+
+    if (!datos) {
+      if (!forzar) {
+        return J({
+          ok: false,
+          no_la_vemos: true,
+          error: "Ninguna de nuestras plataformas ve esa cuenta. O todavía no nos ha autorizado " +
+            `(eso se hace desde su portal, no desde aquí), o está en el otro modo: la llave con la que ` +
+            `se le cobra a un ${D.quien} es ${D.espera}. Guardarla igual la deja apuntada pero sin cobrar.`,
+          puedes_forzar: true,
+        }, 409);
+      }
+      /* Forzado: queda apuntada y marcada como lo que es. */
+      const campos: Record<string, unknown> = {
+        stripe_account_id: acct,
+        stripe_estado: "restringido",
+        stripe_charges_enabled: null,
+        stripe_payouts_enabled: null,
+      };
+      if (D.tabla === "tour_operadores") {
+        campos.stripe_requisitos = "sin comprobar: ninguna plataforma nuestra ve esta cuenta";
+        campos.stripe_revisado_at = new Date().toISOString();
+      }
+      const w = await rest(`${D.tabla}?id=eq.${fid}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos) });
+      if (!w.ok) return J({ ok: false, error: "No se pudo guardar en la ficha." }, 500);
+      return J({ ok: true, guardada: acct, comprobada: false, aviso: "Guardada sin comprobar: Stripe no nos deja verla, así que no va a cobrar hasta que nos autorice." });
+    }
+
+    const cobra = !!datos.charges_enabled;
+    const pagan = !!datos.payouts_enabled;
+    const pend: string[] = Array.isArray(datos?.requirements?.currently_due) ? datos.requirements.currently_due : [];
+    const campos: Record<string, unknown> = {
+      stripe_account_id: acct,
+      stripe_charges_enabled: cobra,
+      stripe_payouts_enabled: pagan,
+      stripe_estado: cobra ? "vinculado" : "restringido",
+      stripe_vinculado_at: new Date().toISOString(),
+    };
+    if (D.tabla === "tour_operadores") {
+      campos.stripe_requisitos = pend.length ? pend.join(", ") : null;
+      campos.stripe_revisado_at = new Date().toISOString();
+    }
+    const w = await rest(`${D.tabla}?id=eq.${fid}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos) });
+    if (!w.ok) return J({ ok: false, error: "Stripe la reconoció, pero no se pudo guardar en la ficha." }, 500);
+
+    return J({
+      ok: true,
+      guardada: acct,
+      comprobada: true,
+      la_ven: ven,
+      en_su_plataforma: ven.includes(D.espera),
+      modo: vivo === null ? "no se pudo leer" : (vivo ? "VIVO" : "PRUEBA"),
+      cobra, le_pagan: pagan, tipo_cuenta: datos?.type ?? null,
+      le_falta: pend.slice(0, 12),
+      motivo: datos?.requirements?.disabled_reason ?? null,
+    });
   }
 
   /* ---------- 2. LAS CUENTAS CONECTADAS ---------- */
@@ -156,9 +274,12 @@ Deno.serve(async (req) => {
           stripe_charges_enabled: cobra,
           stripe_payouts_enabled: pagan,
         };
+        /* stripe_requisitos es TEXTO, no una lista: mandarle el arreglo tal cual
+           hacía que PostgREST rechazara el PATCH entero y la revisión no
+           guardara nada, calladita. Javi, 9-oct-2026. */
         if (D.tabla === "tour_operadores" || D.tabla === "hoteles") {
           campos.stripe_revisado_at = new Date().toISOString();
-          campos.stripe_requisitos = pend.length ? pend : null;
+          campos.stripe_requisitos = pend.length ? pend.join(", ") : null;
         }
         await rest(`${D.tabla}?id=eq.${fila.id}`, {
           method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos),
