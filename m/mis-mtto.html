@@ -377,7 +377,8 @@ function paint(){
   $('cap').innerHTML=`${ro?`<div style="margin-bottom:8px">👁️ Plan de <b>${esc(VIEWNAME)}</b></div>`:''}
     <div class="prow"><span class="pk">📅 Hoy</span>${bar(diaHechasMin,capHoyMin)}<span class="pv"><b>${fmtDur(diaHechasMin)}</b>/${fmtDur(capHoyMin)}</span></div>
     <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semHechasMin,totMin)}<span class="pv"><b>${fmtDur(semHechasMin)}</b>/${fmtDur(totMin)}</span></div>
-    <div class="psub">${diaTot.length-diaHecho.length} tareas por hacer hoy · <button type="button" class="lnk" onclick="setView('semana')">ver pila por día ›</button> · <button type="button" class="lnk" onclick="sinAsignarModal()">ver sin asignar ›</button></div>`;
+    <div class="psub">${diaTot.length-diaHecho.length} tareas por hacer hoy · <button type="button" class="lnk" onclick="setView('semana')">ver pila por día ›</button> · <button type="button" class="lnk" onclick="sinAsignarModal()">ver sin asignar ›</button></div>
+    ${ro?'':'<button type="button" class="btn sm" style="width:100%;margin-top:10px" onclick="resumenDia()">📋 Cerrar mi día</button>'}`;
 
   // 🔔 La campanita (arriba) abre las solicitudes de hoy. Aquí solo el contador.
   const hoyReq=HOY;
@@ -848,6 +849,64 @@ async function resize(file){
   return await new Promise(res=>c.toBlob(res,'image/jpeg',0.85));
 }
 async function ev(ticket_id,tipo,payload){ try{ await sb.from('mtto_ticket_eventos').insert({ticket_id,tipo,actor_id:ME.id,actor_nombre:ME.email,payload:payload||{}}); }catch(_){} }
+
+// ===== Resumen del día (al cerrar la jornada): reloj vs reportado + captura del tiempo no reportado =====
+const CATS_TIEMPO=[['reactivo','🔧 Reactivo'],['correctivo','🛠️ Correctivo'],['preventivo','🧰 Preventivo'],['administrativa','🗒️ Administrativa / briefing'],['compras','🛒 Compras / proveedores'],['otra','➕ Otra']];
+const prowD=(a,b,col)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0${col?';color:'+col:''}"><span>${a}</span><b>${b}</b></div>`;
+window.resumenDia=async()=>{
+  const today=hoyMX();
+  let checadas=0;
+  try{ const {data:a}=await sb.from('asistencias').select('check_in,check_out').eq('employee_id',EMP).gte('check_in',today+'T00:00:00').order('check_in',{ascending:false}).limit(1).maybeSingle();
+    if(a&&a.check_in){ const fin=a.check_out?new Date(a.check_out):new Date(); checadas=Math.max(0,Math.round((fin-new Date(a.check_in))/60000)); } }catch(_){}
+  const hechas=TICKS.filter(t=>DONE(t)&&doneDate(t)===today);
+  const minTk=hechas.reduce((s,t)=>s+(t.minutos_reales||t.minutos_estimados||0),0);
+  let extraRows=[]; try{ const {data:ex}=await sb.from('mtto_tiempo').select('categoria,minutos').eq('employee_id',EMP).eq('fecha',today); extraRows=ex||[]; }catch(_){}
+  const minExtra=extraRows.reduce((s,x)=>s+(x.minutos||0),0);
+  const reportado=minTk+minExtra;
+  const sinAsignar=Math.max(0, checadas-reportado);
+  const nuevas=TICKS.filter(t=>(t.reportado_at||t.created_at||'').slice(0,10)===today);
+  const pct=checadas?Math.round(reportado/checadas*100):0;
+  const dia=!checadas?'Checa tu entrada para medir el día':(pct>=85?'✅ Buen día — casi todo reportado':(pct>=50?'🟡 Día a medias — falta reportar':'🔴 Falta reportar buena parte del día'));
+  window._sinAsignar=sinAsignar;
+  modal(`<h3>📋 Cierre de tu día</h3><div class="pad">
+    <div style="font-size:14.5px;font-weight:700;margin-bottom:8px">${dia}</div>
+    ${prowD('⏱️ Checado hoy',fmtDur(checadas))}
+    ${prowD('✅ Reportado en tareas',fmtDur(reportado))}
+    ${prowD('❓ Sin asignar',fmtDur(sinAsignar),sinAsignar>30?'var(--bad)':'var(--muted)')}
+    <div style="margin:12px 0 4px;font-weight:700">Hiciste ${hechas.length} tarea(s):</div>
+    ${hechas.length?hechas.map(t=>prowD(esc(t.titulo||'—'),(t.minutos_reales||t.minutos_estimados||0)+'m')).join(''):'<div class="muted" style="font-size:12.5px">—</div>'}
+    ${nuevas.length?`<div class="muted" style="font-size:12.5px;margin-top:8px">📥 Aparecieron ${nuevas.length} tarea(s) nueva(s) hoy.</div>`:''}
+    ${sinAsignar>0?`<div style="background:#F3EAD6;border-radius:10px;padding:10px;margin-top:12px">
+      <div style="font-weight:700;margin-bottom:2px">Te sobran ${fmtDur(sinAsignar)} sin asignar. ¿Qué resolviste?</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Reparte ese tiempo; se manda a Deisy para validar.</div>
+      <div id="bloques"></div>
+      <button type="button" class="btn ghost sm" style="width:100%;margin-top:4px" onclick="addBloqueTiempo()">＋ Agregar otro bloque</button>
+    </div>`:'<div class="muted" style="font-size:12.5px;margin-top:10px">Todo tu tiempo está reportado 👌</div>'}
+    ${extraRows.length?`<div class="muted" style="font-size:12px;margin-top:8px">Ya enviaste hoy: ${extraRows.map(x=>esc(x.categoria)+' '+x.minutos+'m').join(' · ')}</div>`:''}
+  </div><div class="foot">
+    <button class="btn ghost sm" onclick="closeModal()">Cerrar</button>
+    ${sinAsignar>0?'<button class="btn sm" onclick="guardarTiempoDia()">Enviar a validar</button>':''}
+  </div>`);
+  if(sinAsignar>0) addBloqueTiempo();
+};
+window.addBloqueTiempo=()=>{
+  const box=$('bloques'); if(!box)return; const primero=box.children.length===0;
+  const sug=primero?(window._sinAsignar||0):'';
+  const div=document.createElement('div'); div.style.cssText='border:1px solid var(--rule);border-radius:8px;padding:8px;margin-bottom:6px;background:#fff';
+  div.innerHTML=`<select class="blq-cat" style="width:100%;margin-bottom:5px">${CATS_TIEMPO.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join('')}</select>
+    <div style="display:flex;gap:6px"><input class="blq-min" type="number" min="1" placeholder="min" value="${sug||''}" style="width:78px"><input class="blq-desc" placeholder="¿qué hiciste?" style="flex:1"></div>`;
+  box.appendChild(div);
+};
+window.guardarTiempoDia=async()=>{
+  const cats=[...document.querySelectorAll('.blq-cat')], mins=[...document.querySelectorAll('.blq-min')], descs=[...document.querySelectorAll('.blq-desc')];
+  const rows=[]; for(let i=0;i<cats.length;i++){ const m=parseInt(mins[i].value)||0; if(m<=0)continue;
+    rows.push({employee_id:EMP,employee_nombre:EMPNAME,property_id:PROPID,fecha:hoyMX(),categoria:cats[i].value,minutos:m,descripcion:(descs[i].value||'').trim()||null,estado:'por_validar'}); }
+  if(!rows.length)return toast('Pon minutos en al menos un bloque',false);
+  const {error}=await sb.from('mtto_tiempo').insert(rows); if(error)return toast('No se pudo guardar: '+error.message,false);
+  try{ const {data:cfg}=await sb.from('mtto_config').select('compras_emp_id,compras_user_id').eq('property_id',PROPID).maybeSingle();
+    if(cfg&&cfg.compras_user_id) await sb.from('notificaciones').insert({employee_id:cfg.compras_emp_id,user_id:cfg.compras_user_id,titulo:'⏱️ Tiempo por validar',cuerpo:EMPNAME+' reportó '+rows.length+' bloque(s) de tiempo de hoy.',icono:'⏱️',accion:{url:'/m/incidencias.html',tipo:'mtto_tiempo'},leido:false}); }catch(_){}
+  closeModal(); toast('Enviado a Deisy para validar ✅');
+};
 
 boot();
 </script>
