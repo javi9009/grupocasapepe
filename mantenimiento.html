@@ -2093,6 +2093,33 @@ window.saveConfig=async id=>{
 let PROD=null;
 const DONEP=t=>["resuelto","cerrado"].includes(t.estado);
 const doneWk=t=>{const d=(t.resuelto_at||t.cerrado_at||"").slice(0,10);return d?mondayOf(d):null;};
+// Matriz de la semana: filas Reactivo/Correctivo/Preventivo/TOTAL × 7 columnas
+function matrizSemana(tks,wk,extraCat){
+  extraCat=extraCat||{};
+  const isPlan=r=>r.semana_programada&&mondayOf(r.semana_programada)===wk;
+  const openWk=r=>{const d=(r.reportado_at||r.created_at||'').slice(0,10);return d&&mondayOf(d)===wk;};
+  const isReal=r=>DONEP(r)&&doneWk(r)===wk;
+  const abierto=r=>['nuevo','validado','programado','en_proceso','pausado'].includes(r.estado);
+  const fila=(k,lbl,cls)=>{
+    const tot=k==='TOTAL'; const sub=tot?tks:tks.filter(r=>r.clasificacion===k);
+    const preasig=sub.filter(r=>isPlan(r)&&!openWk(r)).length;
+    const nuevosAsig=sub.filter(r=>openWk(r)&&r.asignado_a).length;
+    const realiz=sub.filter(isReal).length;
+    const ticketsNuevos=sub.filter(openWk).length;
+    const pend=sub.filter(abierto).length;
+    const hAsig=sub.filter(r=>isPlan(r)||openWk(r)).reduce((s,r)=>s+(r.minutos_estimados||0),0)/60;
+    const extra=tot?Object.values(extraCat).reduce((s,v)=>s+(v||0),0):(extraCat[k]||0);
+    const hReal=sub.filter(isReal).reduce((s,r)=>s+(r.minutos_reales||r.minutos_estimados||0),0)/60 + extra/60;
+    const prim=tot?'<b>TOTAL</b>':`<span class="chip ${cls}">${lbl}</span>`;
+    return `<tr style="${tot?'border-top:2px solid var(--rule2);font-weight:700':''}"><td>${prim}</td><td class="num">${preasig}</td><td class="num">${nuevosAsig}</td><td class="num"><b>${realiz}</b></td><td class="num">${ticketsNuevos}</td><td class="num" style="color:${pend?'var(--warn)':'inherit'}">${pend}</td><td class="num">${hAsig.toFixed(1)}h</td><td class="num"><b>${hReal.toFixed(1)}h</b></td></tr>`;
+  };
+  const h=(t,x)=>`<th class="num" title="${x}" style="cursor:help">${t}</th>`;
+  return `<div class="card" style="margin-top:16px"><h3 style="margin:0 0 2px">📊 Resumen de la semana</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Pasa el cursor por cada encabezado para ver su definición. "h real" incluye otras tareas (admin, compras, briefing).</div>
+    <div class="scroll"><table><thead><tr><th>Tipo</th>
+      ${h('Preasig.','Trabajos preasignados en la previsión semanal')}${h('Nuevos sem.','Trabajos nuevos asignados durante la semana')}${h('Realizados','Trabajos realizados esta semana')}${h('Tickets nuevos','Tickets levantados esta semana, asignados o no')}${h('Pendientes','Levantados y no terminados: backlog de reactivos + correctivos + preventivos de semanas anteriores sin hacer')}${h('h asig.','Horas asignadas de la semana (pre o durante)')}${h('h real','Horas realizadas, incluye otras tareas (admin, compras, briefing)')}
+    </tr></thead><tbody>${fila('reactivo','Reactivo','c-react')}${fila('correctivo','Correctivo','c-correc')}${fila('preventivo','Preventivo','c-prev')}${fila('TOTAL','TOTAL','')}</tbody></table></div></div>`;
+}
 async function renderProductividad(){
   const [tkR,puR,catR]=await Promise.all([
     sb.from("mtto_tickets").select("id,titulo,clasificacion,estado,asignado_a,asignado_nombre,minutos_estimados,minutos_reales,semana_programada,resuelto_at,cerrado_at,dia_programado,created_at,reportado_at, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id),
@@ -2101,6 +2128,10 @@ async function renderProductividad(){
   ]);
   const tks=tkR.data||[]; const PUESTOS={}; (puR.data||[]).forEach(p=>PUESTOS[p.employee_id]=p);
   const wk=PROG_WK;
+  // Otras tareas validadas (admin/compras/briefing/otra) para la columna "h real" de la matriz
+  const dom=(()=>{const d=new Date(wk+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+6);return d.toISOString().slice(0,10);})();
+  let extraCat={}; try{ const {data:tiempoR}=await sb.from('mtto_tiempo').select('categoria,minutos').eq('property_id',PROP.id).eq('estado','validado').gte('fecha',wk).lte('fecha',dom);
+    (tiempoR||[]).forEach(x=>{extraCat[x.categoria]=(extraCat[x.categoria]||0)+(x.minutos||0);}); }catch(_){}
   const activos=tks.filter(t=>!["cerrado","cancelado"].includes(t.estado)||doneWk(t)===wk);
   // KPIs globales
   const reactPend=tks.filter(t=>t.clasificacion==="reactivo"&&!DONEP(t)&&t.estado!=="cancelado");
@@ -2130,6 +2161,7 @@ async function renderProductividad(){
     </div>
     <h3 style="margin:18px 2px 8px">Cumplimiento por técnico · semana</h3>
     <div class="prodgrid">${cards||'<div class="muted">Sin técnicos en esta sede.</div>'}</div>
+    ${matrizSemana(tks,wk,extraCat)}
     ${(()=>{const term=tks.filter(t=>DONEP(t)&&doneWk(t)===wk).sort((a,b)=>(b.resuelto_at||b.cerrado_at||'').localeCompare(a.resuelto_at||a.cerrado_at||''));
       const cl={reactivo:'c-react',correctivo:'c-correc',preventivo:'c-prev'};
       return `<div class="card" style="margin-top:16px"><h3 style="margin:0">✅ Trabajos terminados esta semana · ${term.length}</h3>
