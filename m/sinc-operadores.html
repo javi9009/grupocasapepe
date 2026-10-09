@@ -115,7 +115,16 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 
 <div class="top">
   <div><h1>🧩 Touroperadores</h1><div class="sub" id="sub">Cargando…</div></div>
+  <!-- LA REVISIÓN DE STRIPE. Javi, 9-oct-2026: una ficha puede decir
+       «vinculado» y Stripe decir otra cosa — que esa cuenta todavía no cobra,
+       que no existe para la plataforma que le va a cobrar, o que está en modo
+       prueba y no mueve un peso de verdad. Esto se lo pregunta a Stripe y lo
+       dice en claro. No mueve dinero, no crea cuentas, no abre ligas. -->
+  <div style="margin-left:auto;align-self:center">
+    <button class="btn fantasma sm" id="btnRevStripe">Revisar Stripe</button>
+  </div>
 </div>
+<div class="wrap" id="revStripe" style="display:none"><div class="card" id="revStripeBox"></div></div>
 <nav class="secnav"><div class="secnav-in" id="nav" role="tablist"></div></nav>
 <div class="wrap">
   <div>
@@ -1776,6 +1785,85 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
   }
 
   cargaReclamos();
+
+  /* ---------- REVISAR STRIPE ----------
+     Lo que la base guarda de Stripe es una foto del día en que se vinculó, y
+     desde entonces puede haber pasado cualquier cosa: que Stripe le pida un
+     dato y le apague los cobros, que la cuenta se dé de baja, o —lo que nos
+     pasó— que la llave con la que se vincula esté en modo prueba y la ficha
+     diga «vinculado» igual. Esto va y se lo pregunta a Stripe. Solo lectura:
+     ni cobra, ni crea cuentas, ni abre ligas de alta.
+     Javi, 9-oct-2026. */
+  function revFila(k,v){
+    return '<tr><td style="padding:4px 10px 4px 0;white-space:nowrap"><b>'+esc(k)+'</b></td>'+
+           '<td style="padding:4px 0">'+v+'</td></tr>';
+  }
+  function revSiNo(v){
+    if(v===true) return '<span class="tag ok">sí</span>';
+    if(v===false) return '<span class="tag bad">no</span>';
+    return '<span class="tag">—</span>';
+  }
+  async function revisaStripe(){
+    var b=$('btnRevStripe'), caja=$('revStripe'), box=$('revStripeBox');
+    b.disabled=true; var antes=b.textContent; b.textContent='Preguntando a Stripe…';
+    caja.style.display='block';
+    box.innerHTML='<div class="sub">Preguntando a Stripe por cada cuenta…</div>';
+    try{
+      var r=await fetch(SB+'/functions/v1/stripe-revision',{method:'POST',headers:hdr(),body:'{}'});
+      var d=await r.json().catch(function(){return null;});
+      if(!r.ok||!d||!d.ok) throw new Error((d&&d.error)||('HTTP '+r.status));
+
+      var h='<h3 style="margin:0 0 4px">Cómo está Stripe</h3>'+
+        '<div class="sub" style="margin-bottom:12px">Leído de Stripe ahora mismo. Esta pantalla no cobra nada ni cambia ninguna cuenta.</div>';
+
+      if(d.avisos&&d.avisos.length){
+        h+='<div style="background:#FFF4E5;border-radius:10px;padding:11px 13px;margin-bottom:14px;font-size:13.5px;line-height:1.55">'+
+           '<b>Lo que hay que mirar</b><ul style="margin:6px 0 0;padding-left:18px">'+
+           d.avisos.map(function(a){return '<li>'+esc(a)+'</li>';}).join('')+'</ul></div>';
+      }else{
+        h+='<div style="background:#E8F5E9;color:#1B5E20;border-radius:10px;padding:11px 13px;margin-bottom:14px">Nada que avisar.</div>';
+      }
+
+      h+='<h4 style="margin:0 0 6px">Las llaves</h4><table style="font-size:13.5px;margin-bottom:16px">';
+      Object.keys(d.llaves||{}).forEach(function(k){
+        var L=d.llaves[k];
+        if(!L.puesta){ h+=revFila(k,'<span class="tag">no está puesta</span> <span class="sub">'+esc(L.usa||'')+'</span>'); return; }
+        h+=revFila(k,
+          '<span class="tag '+(L.modo==='VIVO'?'ok':'warn')+'">'+esc(L.modo)+'</span> '+
+          '<span class="sub">'+esc(L.plataforma||'')+(L.nombre?' · '+esc(L.nombre):'')+'</span>'+
+          '<div class="sub">'+esc(L.usa||'')+'</div>'+
+          (L.error?'<div class="sub" style="color:#B3261E">'+esc(L.error)+'</div>':''));
+      });
+      h+='</table>';
+
+      h+='<h4 style="margin:0 0 6px">Las cuentas conectadas</h4>';
+      if(!d.cuentas||!d.cuentas.length){
+        h+='<div class="sub">Todavía no hay ninguna cuenta vinculada.</div>';
+      }else{
+        h+='<table style="font-size:13.5px;width:100%"><tr>'+
+           '<th style="text-align:left">Quién</th><th style="text-align:left">Modo</th>'+
+           '<th style="text-align:left">Cobra</th><th style="text-align:left">Le pagan</th>'+
+           '<th style="text-align:left">La ficha dice</th><th style="text-align:left">Le falta</th></tr>';
+        d.cuentas.forEach(function(c){
+          h+='<tr>'+
+            '<td><b>'+esc(c.nombre||'—')+'</b><div class="sub">'+esc(c.quien)+' · '+esc(c.cuenta)+
+              (c.tipo?' · '+esc(c.tipo):'')+'</div>'+
+              (c.en_su_plataforma?'':'<div class="sub" style="color:#B3261E">no está en la plataforma que le cobra ('+esc(c.deberia_verla)+')</div>')+'</td>'+
+            '<td><span class="tag '+(c.modo==='VIVO'?'ok':'warn')+'">'+esc(c.modo)+'</span></td>'+
+            '<td>'+revSiNo(c.cobra)+'</td><td>'+revSiNo(c.le_pagan)+'</td>'+
+            '<td><span class="sub">'+esc(c.ficha_dice||'—')+'</span></td>'+
+            '<td><span class="sub">'+(c.le_falta&&c.le_falta.length?esc(c.le_falta.join(', ')):(c.motivo?esc(c.motivo):'nada'))+'</span></td>'+
+          '</tr>';
+        });
+        h+='</table>';
+      }
+      box.innerHTML=h;
+    }catch(x){
+      box.innerHTML='<div class="sub" style="color:#B3261E">No se pudo revisar: '+esc(x.message)+'</div>';
+    }
+    b.disabled=false; b.textContent=antes;
+  }
+  $('btnRevStripe').onclick=revisaStripe;
 })();
 </script>
 </body></html>
