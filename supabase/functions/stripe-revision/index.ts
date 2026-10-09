@@ -50,7 +50,12 @@ const LLAVES: Array<{ env: string; usa: string }> = [
 const DONDE: Array<{ tabla: string; nombre: string; quien: string; espera: string }> = [
   { tabla: "tour_operadores", nombre: "nombre_comercial", quien: "touroperador", espera: "STRIPE_SECRET_KEY" },
   { tabla: "productoras", nombre: "nombre_comercial", quien: "productora", espera: "STRIPE_SECRET_KEY_ATENEO" },
-  { tabla: "hoteles", nombre: "nombre", quien: "hotel", espera: "STRIPE_SECRET_KEY_ATENEO" },
+  /* hoteles NO tiene columna `nombre`, tiene `nombre_comercial`. Puesto mal,
+     PostgREST devolvía un objeto de error en vez de filas y el `for...of` de
+     abajo reventaba con «object is not iterable»: un 500 sin cabeceras CORS,
+     que en el navegador se lee «Failed to fetch» y parece un problema de red
+     cuando es una columna mal escrita. Javi, 9-oct-2026. */
+  { tabla: "hoteles", nombre: "nombre_comercial", quien: "hotel", espera: "STRIPE_SECRET_KEY_ATENEO" },
 ];
 
 async function rest(path: string, init: RequestInit = {}) {
@@ -59,7 +64,19 @@ async function rest(path: string, init: RequestInit = {}) {
     headers: { apikey: SRK, Authorization: `Bearer ${SRK}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
   const t = await r.text();
-  return { ok: r.ok, body: t ? JSON.parse(t) : null };
+  let body: any = null;
+  try { body = t ? JSON.parse(t) : null; } catch { body = null; }
+  return { ok: r.ok, body };
+}
+
+/* Filas de un select, SIEMPRE una lista. Cuando PostgREST se queja devuelve un
+   objeto con el error, no un arreglo, y recorrerlo tira la función entera. Aquí
+   se corta: o son filas, o es una excepción con el motivo escrito. */
+async function filas(path: string): Promise<any[]> {
+  const r = await rest(path);
+  if (Array.isArray(r.body)) return r.body;
+  const motivo = r.body?.message ?? r.body?.hint ?? "respuesta inesperada";
+  throw new Error(`Consultando ${path.split("?")[0]}: ${motivo}`);
 }
 
 async function sget(key: string, ruta: string) {
@@ -71,8 +88,23 @@ async function sget(key: string, ruta: string) {
   }
 }
 
+/* NINGÚN ERROR SALE SIN CABECERAS CORS.
+   Una excepción suelta la contesta el runtime con un 500 pelado, y el navegador
+   no ve un error del servidor sino una petición que no pudo hacerse: «Failed to
+   fetch». Así se perdió una tarde buscando un problema de red que era una
+   columna mal escrita. De aquí para dentro, lo que se rompa se cuenta.
+   Javi, 9-oct-2026. */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_EQUIPO });
+  try {
+    return await atiende(req);
+  } catch (e) {
+    console.error("stripe-revision", e);
+    return J({ ok: false, error: "Se rompió la revisión: " + String((e as Error)?.message ?? e).slice(0, 200) }, 500);
+  }
+});
+
+async function atiende(req: Request): Promise<Response> {
   const q = await quienLlama(req);
   if (!q.equipo) return noAutorizado("La revisión de Stripe la ve el equipo de casa.");
 
@@ -153,8 +185,7 @@ Deno.serve(async (req) => {
     /* Que no esté ya puesta en otra ficha: dos fichas con la misma cuenta
        significa que a alguien le van a caer los cobros del otro. */
     for (const T of DONDE) {
-      const o = await rest(`${T.tabla}?select=id,${T.nombre}&stripe_account_id=eq.${encodeURIComponent(acct)}`);
-      for (const fila of (o.body ?? [])) {
+      for (const fila of await filas(`${T.tabla}?select=id,${T.nombre}&stripe_account_id=eq.${encodeURIComponent(acct)}`)) {
         if (T.tabla === D.tabla && String(fila.id) === fid) continue;
         return J({ ok: false, error: `Esa cuenta ya está en la ficha de «${fila[T.nombre]}» (${T.quien}). Una cuenta no puede estar en dos fichas.` }, 409);
       }
@@ -231,8 +262,7 @@ Deno.serve(async (req) => {
   /* ---------- 2. LAS CUENTAS CONECTADAS ---------- */
   const cuentas: any[] = [];
   for (const D of DONDE) {
-    const r = await rest(`${D.tabla}?select=id,${D.nombre},stripe_account_id,stripe_estado&stripe_account_id=not.is.null`);
-    for (const fila of (r.body ?? [])) {
+    for (const fila of await filas(`${D.tabla}?select=id,${D.nombre},stripe_account_id,stripe_estado&stripe_account_id=not.is.null`)) {
       const acct = String(fila.stripe_account_id ?? "");
       if (!acct) continue;
       const ven: string[] = [];
@@ -321,4 +351,4 @@ Deno.serve(async (req) => {
   }
 
   return J({ ok: true, cuando: new Date().toISOString(), llaves, plataformas: porPlataforma, cuentas, avisos });
-});
+}
