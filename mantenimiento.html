@@ -1435,6 +1435,7 @@ async function renderProg(){
                    ...profN.filter(n=>isVenc(n.raw.semana_programada)),
                    ...catN.filter(n=>n.raw._est.k==='venc'), ...otrosN];
   const totPA=reactivos.length+correctivos.length+vencItems.length;
+  const allPA=[...reactivos.map(r=>normItem(r,'tk')),...correctivos.map(r=>normItem(r,'tk')),...vencItems];  // para el aging
   const lanzHtml = lanzRow ? `<span class="lanzchip" title="Lanzado ${esc(new Date(lanzRow.lanzado_at).toLocaleString('es-MX'))}${lanzRow.lanzado_por?' por '+esc(lanzRow.lanzado_por):''}${lanzRow.veces>1?' · '+lanzRow.veces+' veces':''}">🚀 Lanzado a mto</span>` : '';
   const lanzBtn = lanzRow ? '🚀 Re-lanzar (avisar cambios)' : '🚀 Lanzar asignación';
   $('#view').innerHTML=`
@@ -1450,6 +1451,7 @@ async function renderProg(){
       <div class="cols">${cols}</div>
       <div class="pend">
         <div class="hd">🗂️ Sin asignar (no realizados) · ${totPA}</div>
+        ${totPA?agingSummary(allPA):''}
         ${grpFlat('react','🔔 Reactivos',reactivos,'tk')}
         ${grpFlat('correc','🔧 Correctivos',correctivos,'tk')}
         ${grpArea('venc','🛠️ Preventivos vencidos',vencItems)}
@@ -1461,37 +1463,52 @@ async function renderProg(){
 window.PROG_SORT=window.PROG_SORT||{};
 window.PROG_GOPEN=window.PROG_GOPEN||new Set(['react','correc','venc','prev']);
 window.PROG_AOPEN=window.PROG_AOPEN||new Set();
+// días que lleva pendiente (vencimiento): tickets desde que se reportó; preventivos desde su semana programada
+function diasPend(r,type){
+  const base=type==='tk'?(r.reportado_at||r.created_at):(r.semana_programada?(r.semana_programada+'T12:00:00Z'):(r.created_at||null));
+  if(!base)return 0; return Math.max(0,Math.floor((Date.now()-new Date(base).getTime())/86400000));
+}
+function ageBucket(d){return d>=30?{k:'a30',c:'var(--bad)',l:'+30d'}:d>=15?{k:'a15',c:'#b5651d',l:'15–30d'}:d>=8?{k:'a8',c:'var(--warn)',l:'8–14d'}:{k:'a0',c:'var(--ok)',l:'≤7d'};}
+function agingSummary(items){
+  const b={a30:{n:0,m:0,c:'var(--bad)',l:'🔴 +30 días'},a15:{n:0,m:0,c:'#b5651d',l:'🟠 15–30 días'},a8:{n:0,m:0,c:'var(--warn)',l:'🟡 8–14 días'},a0:{n:0,m:0,c:'var(--ok)',l:'🟢 ≤7 días'}};
+  items.forEach(n=>{const k=ageBucket(n.dias||0).k;b[k].n++;b[k].m+=n.min||0;});
+  const cell=o=>`<span style="display:inline-flex;gap:5px;align-items:center;font-size:12px;font-weight:600"><b style="color:${o.c}">${o.n}</b> ${o.l}<span class="muted" style="font-weight:400"> · ${Math.round(o.m/60*10)/10}h</span></span>`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:14px;padding:8px 12px;background:var(--surface-2);border-radius:8px;margin-bottom:8px" title="Antigüedad del backlog por asignar — como un aging de cartera">${[b.a30,b.a15,b.a8,b.a0].map(cell).join('')}</div>`;
+}
 function normItem(r,type){
-  if(type==='tk')return {id:r.id,type,nombre:r.titulo||'—',area:(r.ubic&&r.ubic.nombre)||'sin área',oficio:r.oficio||guessOficio(r),min:estimMin(r).min,urg:r._u||0,cls:r.clasificacion||'otro',raw:r};
-  if(type==='prof')return {id:r.id,type,nombre:'Mto profundo · '+((r.ubic&&r.ubic.nombre)||'cuarto'),area:(r.ubic&&r.ubic.nombre)||'Cuartos',oficio:'limpieza_profunda',min:r.minutos_estimados||360,urg:wkUrg(r.semana_programada,false),cls:'preventivo',raw:r};
-  if(type==='pp')return {id:r.id,type,nombre:planNom(r),area:(r.ubic&&r.ubic.nombre)||'General',oficio:r.oficio||'general',min:r.minutos_estimados||30,urg:planUrg(r),cls:'preventivo',crit:!!(r.cat&&r.cat.critico),raw:r};
-  return {id:r.id,type:'cat',nombre:r.tarea||'—',area:(r.ubic&&r.ubic.nombre)||'General',oficio:r.oficio||guessOficio(r),min:r.minutos_estimados||60,urg:(r._est&&r._est.k==='venc')?12:(r._est&&r._est.k==='pend')?6:0,cls:'preventivo',raw:r};
+  const dias=diasPend(r,type);
+  if(type==='tk')return {id:r.id,type,nombre:r.titulo||'—',area:(r.ubic&&r.ubic.nombre)||'sin área',oficio:r.oficio||guessOficio(r),min:estimMin(r).min,urg:r._u||0,cls:r.clasificacion||'otro',dias,raw:r};
+  if(type==='prof')return {id:r.id,type,nombre:'Mto profundo · '+((r.ubic&&r.ubic.nombre)||'cuarto'),area:(r.ubic&&r.ubic.nombre)||'Cuartos',oficio:'limpieza_profunda',min:r.minutos_estimados||360,urg:wkUrg(r.semana_programada,false),cls:'preventivo',dias,raw:r};
+  if(type==='pp')return {id:r.id,type,nombre:planNom(r),area:(r.ubic&&r.ubic.nombre)||'General',oficio:r.oficio||'general',min:r.minutos_estimados||30,urg:planUrg(r),cls:'preventivo',crit:!!(r.cat&&r.cat.critico),dias,raw:r};
+  return {id:r.id,type:'cat',nombre:r.tarea||'—',area:(r.ubic&&r.ubic.nombre)||'General',oficio:r.oficio||guessOficio(r),min:r.minutos_estimados||60,urg:(r._est&&r._est.k==='venc')?12:(r._est&&r._est.k==='pend')?6:0,cls:'preventivo',dias,raw:r};
 }
 function normRowHtml(n){
   const da={tk:'data-tk',prof:'data-prof',pp:'data-prevplan',cat:'data-prev'}[n.type];
   const fn={tk:'tkMenu',prof:'profMenu',pp:'prevPlanMenu',cat:'prevMenu'}[n.type];
   return `<div class="pitem" ${da}="${n.id}" draggable="true" onclick="${fn}('${n.id}')">
     <div class="t">${clsChip(n.cls)} <span>${esc(n.nombre)}</span>${n.crit?' <span class="chip c-react">crítico</span>':''}</div>
-    <div class="m"><span class="ur ${urCls(n.urg)}" title="urgencia">⚡${n.urg}</span><span>📍 ${esc(n.area)}</span><span>${n.min} min</span><span class="chip c-info">${esc(ofNombre(n.oficio))}</span></div></div>`;
+    <div class="m"><span class="chip" style="background:${ageBucket(n.dias||0).c};color:#fff" title="pendiente desde hace ${n.dias||0} días">⏳ ${n.dias||0}d</span><span class="ur ${urCls(n.urg)}" title="urgencia">⚡${n.urg}</span><span>📍 ${esc(n.area)}</span><span>${n.min} min</span><span class="chip c-info">${esc(ofNombre(n.oficio))}</span></div></div>`;
 }
 function sortNorm(list,key){
   const c=key==='min'?(a,b)=>b.min-a.min
+    :key==='dias'?(a,b)=>(b.dias||0)-(a.dias||0)||b.urg-a.urg
     :key==='area'?(a,b)=>a.area.localeCompare(b.area,'es')||b.urg-a.urg
     :key==='of'?(a,b)=>ofNombre(a.oficio).localeCompare(ofNombre(b.oficio),'es')||b.urg-a.urg
     :(a,b)=>b.urg-a.urg;
   list.sort(c);
 }
-function sortBar(key){const cur=PROG_SORT[key]||'urg';const opt=[['urg','⚡ urgencia'],['min','⏱️ min'],['area','📍 área'],['of','🧰 oficio']];
+function sortBar(key){const cur=PROG_SORT[key]||'dias';const opt=[['dias','⏳ antigüedad'],['urg','⚡ urgencia'],['min','⏱️ min'],['area','📍 área'],['of','🧰 oficio']];
   return `<span class="lbl">ordenar</span>`+opt.map(o=>`<button class="sbtn ${cur===o[0]?'on':''}" onclick="setSort('${key}','${o[0]}')">${o[1]}</button>`).join('');}
 function grpShell(key,titulo,n,inner){const open=PROG_GOPEN.has(key);
   return `<div class="pgroup"><div class="ghd" onclick="togGrp('${key}')">${open?'▾':'▸'} ${titulo}<span class="gc">${n}</span></div>${open?inner:''}</div>`;}
 function grpFlat(key,titulo,rawList,type){
-  const items=rawList.map(r=>normItem(r,type)); const sort=PROG_SORT[key]||'urg'; sortNorm(items,sort);
+  const items=rawList.map(r=>normItem(r,type)); const sort=PROG_SORT[key]||'dias'; sortNorm(items,sort);
   const inner=`<div class="sortbar">${sortBar(key)}</div>`+(items.length?items.map(normRowHtml).join(''):'<div class="pgnada">Nada por asignar aquí</div>');
   return grpShell(key,titulo,items.length,inner);
 }
 function grpArea(key,titulo,items){
-  const sort=PROG_SORT[key]||'urg';
+  const sort=PROG_SORT[key]||'dias';
+  if(sort==='dias'){items=items.slice().sort((a,b)=>(b.dias||0)-(a.dias||0));}
   const g={}; items.forEach(n=>{(g[n.area]=g[n.area]||[]).push(n);});
   let areas=Object.keys(g).map(a=>({a,items:g[a],avg:g[a].reduce((s,n)=>s+n.urg,0)/g[a].length,
     min:g[a].reduce((s,n)=>s+n.min,0)}));
