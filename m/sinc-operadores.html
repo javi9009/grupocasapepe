@@ -43,6 +43,20 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
 .fld label{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em}
 .fld input,.fld select,.fld textarea{width:100%;padding:9px 10px;border:1px solid var(--rule);border-radius:8px;font:inherit;font-size:13.5px;background:var(--surface)}
 .fld .ay{font-size:11.5px;color:var(--faint);margin-top:3px}
+.sel-abrir{display:flex;width:100%;align-items:center;gap:10px;text-align:left;cursor:pointer;
+  background:var(--surface-2,#fff);border:1px solid var(--line,#e3e3e0);border-radius:10px;
+  padding:9px 11px;font:inherit;color:inherit}
+.sel-abrir:hover{background:var(--surface-3)}
+.sel-abrir .sel-txt{flex:1;min-width:0}
+.sel-abrir b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sel-abrir .m{display:block;font-size:11.5px;color:var(--muted);font-weight:400;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sel-abrir .sel-ir{flex:0 0 auto;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--accent);font-weight:600}
+.sel-caja{margin-top:9px}
+.sel-caja input{width:100%;padding:8px 10px;border:1px solid var(--line,#e3e3e0);
+  border-radius:9px;font:inherit;font-size:13px}
+.sel-caja .lista{max-height:46vh;overflow-y:auto}
 .lista{list-style:none;margin:0;padding:0}
 .lista li{padding:9px 11px;border-radius:9px;cursor:pointer;border:1px solid transparent;font-size:13px}
 .lista li:hover{background:var(--surface-3)}
@@ -105,9 +119,24 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 <nav class="secnav"><div class="secnav-in" id="nav" role="tablist"></div></nav>
 <div class="wrap">
   <div>
+    <!-- Con 102 operadores, la lista entera al lado de la ficha es ruido: se
+         trabaja sobre UNO y los otros 101 solo estorban. Así que se pliega a
+         una línea con el que está abierto, y se despliega para buscar.
+         Javi, 9-oct-2026. -->
     <div class="card" style="padding:12px 10px">
       <button class="btn" id="btnNuevo" style="width:100%;margin-bottom:10px">+ Nuevo operador</button>
-      <ul class="lista" id="lista"></ul>
+
+      <button type="button" id="selAbrir" class="sel-abrir" aria-expanded="false" aria-controls="selCaja">
+        <span class="sel-txt"><b id="selNom">—</b><span class="m" id="selSub"></span></span>
+        <span class="sel-ir" aria-hidden="true">Cambiar</span>
+      </button>
+
+      <div id="selCaja" class="sel-caja" hidden>
+        <input id="selBuscar" type="search" placeholder="Buscar por nombre…" autocomplete="off"
+               aria-label="Buscar touroperador">
+        <div class="mini" id="selCuenta" style="margin:6px 2px 4px"></div>
+        <ul class="lista" id="lista"></ul>
+      </div>
     </div>
   </div>
   <div id="cuerpo">
@@ -427,17 +456,72 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     if(!r.ok){$('sub').textContent='No se pudo cargar (revisa tu sesión en el panel).';return;}
     O=await r.json();
     $('sub').textContent=O.length+' operadores · '+O.filter(function(o){return o.estado==='activo';}).length+' activos';
-    $('lista').innerHTML=O.map(function(o){
-      var t=o.estado==='activo'?'ok':(o.estado==='suspendido'||o.estado==='baja'?'bad':'warn');
-      return '<li data-id="'+o.id+'" class="'+(cur&&cur.id===o.id?'on':'')+'"><b>'+esc(o.nombre_comercial)+'</b><div class="m">'+esc(o.estado)+' · '+o.experiencias+' experiencia'+(o.experiencias===1?'':'s')+'</div></li>';
-    }).join('')||'<li class="mini">Sin operadores</li>';
-    Array.prototype.forEach.call($('lista').querySelectorAll('li[data-id]'),function(li){li.onclick=function(){abrir(li.getAttribute('data-id'));};});
+    pintaLista();
     if(sel||!cur){abrir(sel||(O[0]&&O[0].id));}else{abrir(cur.id);}
   }
+  /* ---------- el selector de operador ----------
+     Buscar por trozos sueltos y sin acentos: quien teclea "viva mex" quiere
+     "VIva México Tours", y nadie escribe el acento al buscar. */
+  function sinTildes(x){
+    return String(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  }
+  function pintaLista(){
+    var q=sinTildes(($('selBuscar')&&$('selBuscar').value)||'').trim();
+    var ter=q?q.split(/\s+/):[];
+    var vis=O.filter(function(o){
+      if(!ter.length)return true;
+      var heno=sinTildes(o.nombre_comercial)+' '+sinTildes(o.estado);
+      return ter.every(function(t){return heno.indexOf(t)>=0;});
+    });
+    $('lista').innerHTML=vis.map(function(o){
+      return '<li data-id="'+o.id+'" class="'+(cur&&cur.id===o.id?'on':'')+'"><b>'+esc(o.nombre_comercial)+
+        '</b><div class="m">'+esc(o.estado)+' · '+o.experiencias+' experiencia'+(o.experiencias===1?'':'s')+'</div></li>';
+    }).join('')||'<li class="mini" style="padding:9px 11px">Ninguno se llama así.</li>';
+    Array.prototype.forEach.call($('lista').querySelectorAll('li[data-id]'),function(li){
+      li.onclick=function(){ abrir(li.getAttribute('data-id')); cierraSel(); };});
+    var c=$('selCuenta');
+    if(c) c.textContent = q ? (vis.length+' de '+O.length) : (O.length+' en total');
+  }
+  function pintaSelCabeza(){
+    if(!$('selNom'))return;
+    $('selNom').textContent = cur ? cur.nombre_comercial : 'Elige un operador';
+    $('selSub').textContent = cur
+      ? (cur.estado+' · '+cur.experiencias+' experiencia'+(cur.experiencias===1?'':'s'))
+      : (O.length+' en la lista');
+  }
+  function abreSel(){
+    var caja=$('selCaja'); if(!caja)return;
+    caja.hidden=false; $('selAbrir').setAttribute('aria-expanded','true');
+    pintaLista();
+    var b=$('selBuscar'); if(b){ b.value=''; pintaLista(); b.focus(); }
+  }
+  function cierraSel(){
+    var caja=$('selCaja'); if(!caja)return;
+    caja.hidden=true; $('selAbrir').setAttribute('aria-expanded','false');
+  }
+  (function montaSel(){
+    var b=$('selAbrir'); if(!b)return;
+    b.onclick=function(){ $('selCaja').hidden ? abreSel() : cierraSel(); };
+    var q=$('selBuscar');
+    if(q){
+      q.oninput=pintaLista;
+      q.onkeydown=function(e){
+        if(e.key==='Escape'){ cierraSel(); $('selAbrir').focus(); return; }
+        /* Enter abre el primero de la lista filtrada: buscar y elegir sin soltar
+           el teclado es la diferencia entre usarlo y no usarlo. */
+        if(e.key==='Enter'){
+          var pri=$('lista').querySelector('li[data-id]');
+          if(pri){ abrir(pri.getAttribute('data-id')); cierraSel(); $('selAbrir').focus(); }
+        }
+      };
+    }
+  })();
+
   async function abrir(id){
     if(!id){cur=null;return;}
     cur=O.filter(function(o){return o.id===id;})[0];if(!cur)return;
     Array.prototype.forEach.call($('lista').querySelectorAll('li[data-id]'),function(li){li.classList.toggle('on',li.getAttribute('data-id')===id);});
+    pintaSelCabeza();
     pintaFiscal();
     Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(el){
       var c=el.getAttribute('data-c'),v=cur[c];
