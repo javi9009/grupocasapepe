@@ -448,9 +448,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
             <div class="fgrid">
               <div class="fld"><label>Nombre comercial</label><input data-c="nombre_comercial"><div class="ay">Así te van a ver los huéspedes</div></div>
               <div class="fld"><label>Tipo de persona</label><select data-c="tipo_persona"><option value="">—</option><option value="moral">Persona moral</option><option value="fisica">Persona física con actividad empresarial</option><option value="fisica_sin">Persona física sin actividad empresarial</option></select></div>
-              <div class="fld"><label>Razón social</label><input data-c="razon_social"></div>
-              <div class="fld"><label>RFC</label><input data-c="rfc"><div class="ay">Si no tienes RFC, déjalo vacío y pon tu CURP</div></div>
-              <div class="fld"><label>CURP</label><input data-c="curp" maxlength="18" style="text-transform:uppercase"><div class="ay">Para persona física. Vale como identificación si no tienes RFC</div></div>
+              <div class="fld" id="fldRazon"><label id="labRazon">Razón social</label><input data-c="razon_social"><div class="ay" id="ayRazon">Como viene en tu constancia</div></div>
+              <div class="fld" id="fldRfc"><label>RFC</label><input data-c="rfc"><div class="ay">Como viene en tu constancia de situación fiscal</div></div>
+              <div class="fld" id="fldCurp"><label>CURP</label><input data-c="curp" maxlength="18" style="text-transform:uppercase"><div class="ay">Vale como identificación cuando no hay RFC</div></div>
               <div class="fld"><label>Ciudad base</label><select data-c="ciudad"><option value="">—</option><option>Ciudad de México</option><option>Puebla</option><option>Estado de México</option><option>Otra</option></select></div>
               <div class="fld"><label>Antigüedad operando</label><select data-c="antiguedad"><option value="">—</option><option>Menos de 1 año</option><option>1 a 3 años</option><option>3 a 10 años</option><option>Más de 10 años</option></select></div>
             </div>
@@ -1961,6 +1961,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     $('cTot').textContent=String(tot);$('cTot2').textContent=tot+'%';
     $('ctVer').value=cur.contrato_version?('Firmado · '+cur.contrato_version):'Sin firmar';
     $('ctFec').value=cur.contrato_firmado_at?fd(cur.contrato_firmado_at):'—';
+    pintaFiscal();
     pintaCobro(tot);
     pinta();
     pintaCajones();
@@ -2178,6 +2179,46 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       '<a href="#" id="irCuenta">Ir a mi cuenta →</a></div>';
     var ir=$('irCuenta'); if(ir) ir.onclick=function(e){e.preventDefault();vista('cuenta');};
   }
+
+  /* ---------- qué datos fiscales aplican, según quién es ----------
+     Una persona física no tiene razón social: tiene nombre. Y una persona
+     física SIN actividad empresarial no tiene RFC: tiene CURP. Pedir un campo
+     que esa figura no puede tener hace dos daños — el de enfrente se queda
+     mirando un hueco que no sabe llenar, y la barra de avance lo cuenta como
+     pendiente para siempre, así que deja de medir nada.
+
+     Los campos no se borran, solo se esconden: si alguien cambió de figura y
+     había escrito algo, el dato sigue ahí y vuelve a verse al volver atrás.
+     Javi, 9-oct-2026. */
+  function pintaFiscal(){
+    var sel=document.querySelector('[data-c="tipo_persona"]'); if(!sel)return;
+    /* Se engancha una sola vez: cambiar la figura repinta al instante, sin
+       esperar a guardar. Respeta cualquier manejador que ya estuviera puesto. */
+    if(!sel.__fiscal){
+      sel.__fiscal=true;
+      var antes=sel.onchange;
+      sel.onchange=function(e){ if(antes)try{antes.call(this,e);}catch(_){} pintaFiscal(); };
+    }
+    var t=sel.value||'';
+    var fisica = (t==='fisica' || t==='fisica_sin');
+    var conRfc = (t!=='fisica_sin');            /* la única figura sin RFC */
+    var conCurp= (t!=='moral');                 /* una sociedad no tiene CURP */
+
+    var lab=document.getElementById('labRazon'), ay=document.getElementById('ayRazon');
+    if(lab) lab.textContent = fisica ? 'Nombre completo' : 'Razón social';
+    if(ay)  ay.textContent  = fisica ? 'Tu nombre completo' : 'Como viene en tu constancia';
+
+    var f;
+    f=document.getElementById('fldRfc');  if(f) f.style.display = conRfc  ? '' : 'none';
+    f=document.getElementById('fldCurp'); if(f) f.style.display = conCurp ? '' : 'none';
+  }
+  /* La figura decide qué campos se piden, así que medir sin saberla es medir mal. */
+  function identOk(){
+    return (cur && cur.tipo_persona==='fisica_sin')
+      ? !!(cur.curp && String(cur.curp).trim())
+      : !!((cur && cur.rfc && String(cur.rfc).trim()) || (cur && cur.curp && String(cur.curp).trim()));
+  }
+
   function pinta(){
     /* El paso está hecho si vinculó su Stripe (A) o si eligió cobrar el resto
        en mano (B), porque en la B no hay nada que vincular. */
@@ -2192,7 +2233,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       return r!=null && r!=='' && !(Array.isArray(r)&&!r.length);
     });
     var hechos=[
-      !!(cur.nombre_comercial&&(cur.rfc||cur.curp)),   // Tu empresa
+      !!(cur.nombre_comercial&&identOk()),   // Tu empresa
       !!cur.email_notificaciones,          // Contactos
       U.length>0,                          // Tu equipo
       polOk(),                             // Lo formal
@@ -2215,7 +2256,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       var op=OPCIONALES.indexOf(i)>=0;
       return '<div class="mini" style="padding:3px 0'+(hechos[i]?';color:var(--tinta)':'')+'">'+
         (hechos[i]?'✓':'○')+' '+p+(op?' <span style="opacity:.6">· opcional</span>':'')+'</div>';}).join('');
-    $('sCheck').innerHTML=[['Tus datos fiscales y tu correo de reservas',!!((cur.rfc||cur.curp)&&cur.email_notificaciones)],['Póliza de responsabilidad civil',polOk()],[cur.cobro_comision_anticipada?'Cómo cobras (anticipo + resto al guía)':'Tu Stripe vinculado',cobroOk],['El acuerdo firmado',contOk]]
+    $('sCheck').innerHTML=[['Tus datos fiscales y tu correo de reservas',!!(identOk()&&cur.email_notificaciones)],['Póliza de responsabilidad civil',polOk()],[cur.cobro_comision_anticipada?'Cómo cobras (anticipo + resto al guía)':'Tu Stripe vinculado',cobroOk],['El acuerdo firmado',contOk]]
       .map(function(c){return '<div class="chk" style="padding:4px 0">'+(c[1]?'<span class="etq ok">listo</span>':'<span class="etq al">falta</span>')+' <span class="mini">'+c[0]+'</span></div>';}).join('');
     $('tbU').innerHTML=U.length?U.map(function(u){
       var yo=u.email&&u.email===(ses&&ses.user&&ses.user.email);
