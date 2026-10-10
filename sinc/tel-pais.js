@@ -52,9 +52,23 @@
     if (!document.getElementById('tp-css')) {
       var s = document.createElement('style'); s.id = 'tp-css';
       s.textContent =
-        '.tp-fila{display:flex;gap:7px}' +
-        '.tp-fila .tp-pais{flex:0 0 auto;max-width:44%}' +
-        '.tp-fila .tp-num{flex:1;min-width:0}';
+        /* EL DESPLEGABLE SE VESTÍA SOLO. Javi, 10-oct-2026: «configura el diseño
+           del dropdown del teléfono». Heredaba el <select> del sistema —borde
+           oscuro, otra altura, otra tipografía— al lado de un campo con la
+           cara de Sincrético. Se le pone la misma ropa que al resto: mismo
+           borde, mismo radio, misma altura, y el mismo halo al foco. */
+        '.tp-fila{display:flex;gap:8px;align-items:stretch}' +
+        '.tp-fila .tp-pais{flex:0 0 auto;max-width:46%;font:inherit;font-size:14px;' +
+          'color:var(--tinta,#1E1A16);background:var(--blanco,#fff);' +
+          'border:1.5px solid var(--linea,#E6DFD6);border-radius:9px;' +
+          'padding:11px 30px 11px 12px;line-height:1.2;' +
+          '-webkit-appearance:none;-moz-appearance:none;appearance:none;cursor:pointer;' +
+          'background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'11\' height=\'7\' viewBox=\'0 0 11 7\'%3E%3Cpath d=\'M1 1l4.5 4.5L10 1\' fill=\'none\' stroke=\'%236E665C\' stroke-width=\'1.6\' stroke-linecap=\'round\'/%3E%3C/svg%3E");' +
+          'background-repeat:no-repeat;background-position:right 11px center}' +
+        '.tp-fila .tp-pais:focus{outline:none;border-color:var(--naranja,#F2682A);' +
+          'box-shadow:0 0 0 3px var(--naranja-suave,#FDE7DC)}' +
+        '.tp-fila .tp-num{flex:1;min-width:0}' +
+        '@media(max-width:380px){.tp-fila{flex-wrap:wrap}.tp-fila .tp-pais{max-width:none;width:100%}}';
       document.head.appendChild(s);
     }
 
