@@ -1024,11 +1024,17 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   function ocupadoDe(dia){
     var l=((AG_SALA&&AG_SALA.ocupado)||[]).filter(function(o){ return o.dia===dia; });
     return l.map(function(o){
-      return {d:aMin(o.desde), h:aMin(o.hasta), firme:!!o.firme, mio:!!o.mio, que:o.que||''};
+      /* `mio` = de esta productora. `propio` = de ESTE evento, el que edito. */
+      var mio=!!o.mio;
+      var propio = mio && evCur && evCur.nombre && String(o.que||'')===String(evCur.nombre);
+      return {d:aMin(o.desde), h:aMin(o.hasta), firme:!!o.firme, mio:mio, propio:propio, que:o.que||''};
     }).filter(function(o){ return o.d!=null && o.h!=null; });
   }
+  /* La reserva de ESTE evento no choca consigo misma: si estoy corrigiendo la
+     hora de un evento que ya tiene la sala pedida, su propia franja no puede
+     ser el obstáculo. Javi, 10-oct-2026. */
   function chocaCon(dia,d,h){
-    return ocupadoDe(dia).some(function(o){ return d < o.h && h > o.d; });
+    return ocupadoDe(dia).some(function(o){ return !o.propio && d < o.h && h > o.d; });
   }
 
   /* Lo que de verdad se aparta: el evento más su montaje y su desmontaje. */
@@ -1104,6 +1110,24 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
        se junta con otra hora ya solicitada no podría avanzar y le daría
        error». Así ve de un vistazo lo que de verdad aparta, y el choque se lo
        decimos en el momento en vez de dejarle llegar hasta el final. */
+    /* UNA SOLA LEYENDA, Y SOLO DE LO QUE SE VE. Javi, 10-oct-2026: «creo que
+       los colores y la leyenda no cuadran». Y no cuadraban: se anunciaban
+       montaje, evento y desmontaje aunque no hubiera nada elegido todavía, y
+       la reserva de su propio evento salía del mismo color que la de un
+       tercero. Ahora cada estado tiene su color, la leyenda se arma con los
+       que de verdad aparecen, y lo suyo se distingue de lo ajeno. */
+    var C={
+      libre:   {bg:'#E1F0E7', fg:'#1D6B4A', t:'libre'},
+      propio:  {bg:'#DFEAF6', fg:'#1F5B7A', t:'esta reserva es de este evento'},
+      mio:     {bg:'#E4F1FA', fg:'#1F5B7A', t:'otro evento tuyo'},
+      pedido:  {bg:'#F6EBD5', fg:'#8C6212', t:'pedida por otro, sin confirmar'},
+      firme:   {bg:'#F6E1DD', fg:'#9E3B2E', t:'ya es de otro'},
+      montaje: {bg:'#FDE7DC', fg:'#C9501A', t:'tu montaje, antes', borde:'1px dashed #F2682A'},
+      evento:  {bg:'#F2682A', fg:'#fff',    t:'tu evento'},
+      desmont: {bg:'#F3E4F7', fg:'#6B2E86', t:'tu desmontaje, después', borde:'1px dashed #A855C9'},
+      pisa:    {bg:'#F6E1DD', fg:'#9E3B2E', t:'aquí pisas algo ya apartado', borde:'2px solid #9E3B2E'}
+    };
+    var vistos={};
     var mo=montajeMin(), de=desmontajeMin();
     var evIni=hi, evFin=(hf!=null?hf:(hi!=null?hi+CAL_PASO:null));
     var w1=(evIni!=null?evIni-mo:null), w2=(evFin!=null?evFin+de:null);
@@ -1111,41 +1135,36 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     for(var t=CAL_ABRE*60; t<CAL_CIERRA*60; t+=CAL_PASO){
       var fin=t+CAL_PASO;
       var tomado=oc.filter(function(o){ return t < o.h && fin > o.d; });
-      var firme=tomado.some(function(o){ return o.firme; });
-      var esEvento = (evIni!=null && t>=evIni && fin<=evFin);
-      /* MONTAJE ANTES, DESMONTAJE DESPUÉS. Javi, 10-oct-2026: «el montaje es
-         antes de empezar y el desmontaje después de terminar». Estaban los dos
-         del mismo color y con la misma etiqueta, así que no había manera de
-         saber cuál era cuál mirando la rejilla. */
-      var esAntes   = (!esEvento && evIni!=null && t>=w1 && fin<=evIni);
-      var esDespues = (!esEvento && evFin!=null && t>=evFin && fin<=w2);
-      var esMontaje = (esAntes||esDespues);
-      var fondo, tinta, borde='0';
-      if(esEvento){ fondo='var(--naranja,#F2682A)'; tinta='#fff'; }
-      else if(esAntes){ fondo='#FDE7DC'; tinta='#C9501A'; borde='1px dashed #F2682A'; }
-      else if(esDespues){ fondo='#E4F1FA'; tinta='#1F5B7A'; borde='1px dashed #8DC8EA'; }
-      else if(firme){ fondo='#F6E1DD'; tinta='#9E3B2E'; }
-      else if(tomado.length){ fondo='#F6EBD5'; tinta='#8C6212'; }
-      else { fondo='#E1F0E7'; tinta='#1D6B4A'; }
-      /* Si la franja es a la vez tuya y de otro, se marca el conflicto. */
-      var pisa=((esEvento||esMontaje) && tomado.length);
-      if(pisa){ fondo='#F6E1DD'; tinta='#9E3B2E'; borde='2px solid #9E3B2E'; }
-      h+='<button type="button" '+(firme&&!esEvento&&!esMontaje?'disabled':'data-h="'+t+'"')+
-         ' title="'+(pisa?'Aquí pisas algo ya apartado'
-                      :(esAntes?'Montaje y pruebas, antes de empezar'
-                      :(esDespues?'Desmontaje, después de terminar'
-                      :(firme?'Ya está apartado':''))))+'"'+
-         ' style="border:'+borde+';background:'+fondo+';color:'+tinta+';'+
-         'border-radius:6px;padding:6px 2px;font:inherit;font-size:11.5px;'+
-         'cursor:'+(firme&&!esEvento&&!esMontaje?'not-allowed':'pointer')+'">'+hhmm(t)+'</button>';
+      var ajeno =tomado.filter(function(o){ return !o.propio; });
+      var k;
+      if(evIni!=null && t>=evIni && fin<=evFin) k='evento';
+      else if(w1!=null && t>=w1 && fin<=evIni) k='montaje';
+      else if(w2!=null && evFin!=null && t>=evFin && fin<=w2) k='desmont';
+      else if(tomado.some(function(o){return o.propio;})) k='propio';
+      else if(ajeno.some(function(o){return o.firme;})) k='firme';
+      else if(ajeno.length) k='pedido';
+      else if(tomado.length) k='mio';
+      else k='libre';
+      /* Mi franja pisando la de otro: eso sí es un problema y se marca. */
+      if((k==='evento'||k==='montaje'||k==='desmont') && ajeno.length) k='pisa';
+      vistos[k]=1;
+      var col=C[k], off=(k==='firme'||k==='pedido'||k==='mio');
+      h+='<button type="button" '+(off?'disabled':'data-h="'+t+'"')+
+         ' title="'+esc(col.t)+'" style="border:'+(col.borde||'0')+';background:'+col.bg+';'+
+         'color:'+col.fg+';border-radius:6px;padding:6px 2px;font:inherit;font-size:11.5px;'+
+         'cursor:'+(off?'not-allowed':'pointer')+'">'+hhmm(t)+'</button>';
     }
     h+='</div>';
-    if(mo||de) h+='<div class="mini" style="margin-top:8px;color:var(--gris,#6E665C)">'+
-      '<span style="display:inline-block;width:10px;height:10px;background:#FDE7DC;border:1px dashed #F2682A;border-radius:2px;vertical-align:-1px"></span> montaje, antes &nbsp; '+
-      '<span style="display:inline-block;width:10px;height:10px;background:var(--naranja,#F2682A);border-radius:2px;vertical-align:-1px"></span> tu evento &nbsp; '+
-      '<span style="display:inline-block;width:10px;height:10px;background:#E4F1FA;border:1px dashed #8DC8EA;border-radius:2px;vertical-align:-1px"></span> desmontaje, después</div>';
+    var orden=['libre','propio','mio','pedido','firme','montaje','evento','desmont','pisa'];
+    h+='<div class="mini" style="margin-top:8px;color:var(--gris,#6E665C);line-height:2">'+
+      orden.filter(function(k){return vistos[k];}).map(function(k){
+        var c=C[k];
+        return '<span style="display:inline-block;width:11px;height:11px;background:'+c.bg+';'+
+          'border:'+(c.borde||'1px solid rgba(0,0,0,.08)')+';border-radius:3px;vertical-align:-1px;'+
+          'margin-right:4px"></span>'+esc(c.t);
+      }).join(' &nbsp;·&nbsp; ')+'</div>';
     if(choca) h+='<div class="aviso er" style="margin-top:10px">Con tu montaje y desmontaje, la sala te quedaría apartada de <b>'+
-      hhmm(w1)+' a '+hhmm(w2)+'</b>, y en esa franja ya hay algo pedido. Mueve la hora o baja los minutos de montaje: así no se puede mandar.</div>';
+      hhmm(w1)+' a '+hhmm(w2)+'</b>, y en esa franja ya hay algo de otro. Mueve la hora o baja los minutos de montaje: así no se puede mandar.</div>';
     if(oc.length) h+='<div class="mini" style="margin-top:8px">Ese día ya hay: '+
       oc.map(function(o){ return hhmm(o.d)+'–'+hhmm(o.h)+(o.mio?' (tuyo)':(o.firme?'':' · sin confirmar')); }).join(' · ')+'.</div>';
     h+='</div>';
@@ -1198,10 +1217,16 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       /* EN DÍA ENTERO, CUALQUIER COSA LO TACHA. Javi, 10-oct: «si es día entero
          los días que ya hay evento saldrán en rojo». No hay medio día libre
          cuando lo que pides es el día. */
-      var firme = (CAL_MODO==='dia') ? lista.length>0 : lista.some(function(o){return o.firme;});
-      var bloq  = pas || (CAL_MODO==='dia' && lista.length>0);
-      var fondo = pas ? '#F2EFEA' : firme ? '#F6E1DD' : lista.length ? '#F6EBD5' : '#E1F0E7';
-      var tinta = pas ? 'var(--tenue,#A9A096)' : firme ? '#9E3B2E' : lista.length ? '#8C6212' : '#1D6B4A';
+      /* Lo tuyo no se pinta como lo de otro: en el mes también. */
+      var ajena = lista.filter(function(o){return !o.mio;});
+      var firme = (CAL_MODO==='dia') ? ajena.length>0 : ajena.some(function(o){return o.firme;});
+      var bloq  = pas || (CAL_MODO==='dia' && ajena.length>0);
+      var fondo, tinta;
+      if(pas){ fondo='#F2EFEA'; tinta='var(--tenue,#A9A096)'; }
+      else if(firme){ fondo='#F6E1DD'; tinta='#9E3B2E'; }
+      else if(ajena.length){ fondo='#F6EBD5'; tinta='#8C6212'; }
+      else if(lista.length){ fondo='#E4F1FA'; tinta='#1F5B7A'; }
+      else { fondo='#E1F0E7'; tinta='#1D6B4A'; }
       pas = bloq;
       var borde = (f===sel) ? '2px solid var(--naranja,#F2682A)' : '1px solid transparent';
       h+='<button type="button" '+(pas?'disabled':'data-dia="'+f+'"')+' style="border:'+borde+';'+
@@ -1211,12 +1236,13 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     }
     h+='</div><div class="mini" style="margin-top:8px;color:var(--gris,#6E665C)">'+
       '<span style="color:#1D6B4A">■</span> libre &nbsp; '+
+      '<span style="color:#1F5B7A">■</span> algo tuyo &nbsp; '+
       (CAL_MODO==='dia'
-        ? '<span style="color:#9E3B2E">■</span> ese día ya hay algo'
-        : '<span style="color:#8C6212">■</span> alguien la pidió, todavía sin confirmar &nbsp; '+
+        ? '<span style="color:#9E3B2E">■</span> ese día ya hay algo de otro'
+        : '<span style="color:#8C6212">■</span> otro la pidió, sin confirmar &nbsp; '+
           '<span style="color:#9E3B2E">■</span> ya es de otro')+'</div>';
-    if(sel && oc[sel]) h+='<div class="mini" style="margin-top:6px">El '+esc(sel)+' está ocupada '+
-      oc[sel].map(function(o){return 'de '+esc(o.desde)+' a '+esc(o.hasta)+(o.mio?' (tuyo: '+esc(o.que||'')+')':'');}).join(', ')+'.</div>';
+    if(sel && oc[sel]) h+='<div class="mini" style="margin-top:6px">El '+esc(sel)+' ya tiene '+
+      oc[sel].map(function(o){return esc(o.desde)+'–'+esc(o.hasta)+(o.mio?' ('+esc(o.que||'tuyo')+', tuyo)':' (de otro)');}).join(' · ')+'.</div>';
     c.innerHTML=h+'</div>';
     pintaModo(); pintaHoras();
     $('calPrev').onclick=function(){ AG_MES=new Date(AG_MES.getFullYear(),AG_MES.getMonth()-1,1); cargaAgenda(); };
