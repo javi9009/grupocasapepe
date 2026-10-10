@@ -287,6 +287,23 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
         <div class="fld" style="grid-column:1/-1"><label>Cómo es</label><input id="eDesc" placeholder="Para qué sirve, qué tiene"></div>
         <div class="fld" style="grid-column:1/-1"><label>Reglas</label><input id="eReglas" placeholder="Horario de ruido, accesos"></div>
       </div>
+      <!-- LO QUE LA SALA TRAE Y LO QUE SE LE PUEDE CONTRATAR. Javi,
+           10-oct-2026: «hay que especificar qué backline cuentan las salas…
+           puedo editar en backline o servicios filas con nombre, foto,
+           descripción». Es lo mismo que el productor ve al elegir la sala, así
+           que lo que se escriba aquí es lo que lee él. -->
+      <div id="invWrap" style="margin-top:18px;display:none">
+        <h3 style="margin:0 0 2px">Qué trae la sala</h3>
+        <div class="hint">El backline, el audio, los instrumentos. Esto es lo que el productor ve al elegirla, para saber qué no tiene que traer.</div>
+        <div id="tInv"></div>
+        <div class="barra" style="margin-top:8px"><button class="btn ghost sm" id="bInvMas" type="button">＋ Añadir equipo</button></div>
+
+        <h3 style="margin:18px 0 2px">Servicios que se le pueden contratar</h3>
+        <div class="hint">Lo que no es un objeto: edición de podcast, limpieza pre y post, ingeniero de sonido.</div>
+        <div id="tSrv"></div>
+        <div class="barra" style="margin-top:8px"><button class="btn ghost sm" id="bSrvMas" type="button">＋ Añadir servicio</button></div>
+        <div class="mini" style="margin-top:8px;color:var(--tenue)">Se guarda todo junto con el botón de abajo.</div>
+      </div>
       <div class="barra" style="margin:16px 0 0"><button class="btn" id="bGuarda">Guardar</button><button class="btn ghost" id="bCancela">Cancelar</button><span class="mini" id="edPie" style="flex:1"></span></div>
     </div>
     <div class="card">
@@ -793,7 +810,12 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     $('eTarDia').value=e&&e.tarifa_dia!=null?e.tarifa_dia:'';$('eTarExtra').value=e&&e.tarifa_hora_extra!=null?e.tarifa_hora_extra:'';
     $('eActivo').value=e?(e.activo?'1':'0'):'1';$('ePC').value=e&&e.requiere_proteccion_civil?'1':'0';
     $('eDesc').value=e?e.descripcion||'':'';$('eReglas').value=e?e.reglas||'':'';
-    fzWrap();$('cardEditEsp').style.display='';$('cardEditEsp').scrollIntoView({behavior:'smooth',block:'nearest'});}
+    fzWrap();
+    /* El inventario cuelga del slug, que una sala nueva todavía no tiene: se
+       guarda primero y se vuelve a abrir para llenarlo. */
+    $('invWrap').style.display = e ? '' : 'none';
+    cargaInv(e?e.slug:null);
+    $('cardEditEsp').style.display='';$('cardEditEsp').scrollIntoView({behavior:'smooth',block:'nearest'});}
   function cierraEsp(){edit=null;$('cardEditEsp').style.display='none';}
   async function guardaEsp(){
     var nom=$('eNombre').value.trim();if(!nom){toast('Ponle un nombre.',true);return;}
@@ -807,7 +829,99 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     else{body.slug=slugify(nom);body.orden=(ESP.length?Math.max.apply(null,ESP.map(function(x){return x.orden||0;})):0)+10;r=await sb.from('ev_espacios').insert(body);}
     b.disabled=false;
     if(r.error){toast(/duplicate|unique/i.test(r.error.message)?'Ya hay un espacio con ese nombre.':r.error.message,true);return;}
-    toast(edit?'Guardado':'Espacio creado');cierraEsp();await carga();
+    if(edit){ try{ await guardaInv(edit.slug); }catch(err){ toast('La sala sí, el inventario no: '+err.message,true); } }
+    toast(edit?'Guardado':'Espacio creado · ábrelo otra vez para cargarle el inventario');cierraEsp();await carga();
+  }
+
+  /* ---------- INVENTARIO Y SERVICIOS DE LA SALA ----------
+     Javi, 10-oct-2026. Viven en `ev_backline`, que ya era el inventario por
+     sala; se le añadió `clase` (inventario o servicio) y `foto_url`. La
+     descripción es la `nota` de siempre, así que lo que ya estaba cargado
+     —el backline de Ensayo y el de La Cósmica— sigue donde estaba y solo le
+     falta la foto. Las fotos van al bucket público `ateneo-web`, carpeta
+     `salas/`, porque el productor las tiene que poder ver sin sesión. */
+  var INV=[], INV_BAJA=[];
+  function filaInv(x,i,srv){
+    var inp='width:100%;font-size:13px';
+    return '<tr data-i="'+i+'">'+
+      (srv?'':'<td><input data-k="bloque" value="'+esc(x.bloque||'')+'" placeholder="Backline" style="'+inp+'"></td>'+
+            '<td style="width:66px"><input data-k="cantidad" value="'+esc(x.cantidad||'')+'" placeholder="1" style="'+inp+';text-align:center"></td>')+
+      '<td><input data-k="equipo" value="'+esc(x.equipo||'')+'" placeholder="'+(srv?'Edición de podcast':'Cable RCA 100 · 20 m')+'" style="'+inp+'"></td>'+
+      '<td><input data-k="nota" value="'+esc(x.nota||'')+'" placeholder="Qué es, qué incluye, en qué estado está" style="'+inp+'"></td>'+
+      '<td style="width:118px">'+
+        (x.foto_url
+          ? '<span style="display:inline-flex;align-items:center;gap:6px">'+
+            '<img src="'+esc(x.foto_url)+'" alt="" style="width:42px;height:32px;object-fit:cover;border-radius:6px;border:1px solid var(--linea)">'+
+            '<button class="btn ghost sm" type="button" data-fuera="'+i+'">quitar</button></span>'
+          : '<label class="btn ghost sm" style="cursor:pointer;margin:0">foto'+
+            '<input type="file" accept="image/*" hidden data-foto="'+i+'"></label>')+
+      '</td>'+
+      '<td style="text-align:right;width:40px"><button class="btn ghost sm" type="button" data-del="'+i+'">×</button></td></tr>';
+  }
+  function pintaInv(){
+    if(!document.getElementById('tInv')) return;
+    function tabla(srv){
+      var l=INV.map(function(x,i){return {x:x,i:i};})
+              .filter(function(o){return (o.x.clase==='servicio')===srv;});
+      if(!l.length) return '<div class="mini" style="padding:8px 0;color:var(--tenue)">Nada por ahora.</div>';
+      return '<table><thead><tr>'+
+        (srv?'':'<th>Bloque</th><th class="n">Cuántos</th>')+
+        '<th>'+(srv?'Servicio':'Equipo')+'</th><th>Descripción</th><th>Foto</th><th></th>'+
+        '</tr></thead><tbody>'+l.map(function(o){return filaInv(o.x,o.i,srv);}).join('')+'</tbody></table>';
+    }
+    document.getElementById('tInv').innerHTML=tabla(false);
+    document.getElementById('tSrv').innerHTML=tabla(true);
+    ['tInv','tSrv'].forEach(function(id){
+      var c=document.getElementById(id); if(!c) return;
+      Array.prototype.forEach.call(c.querySelectorAll('input[data-k]'),function(e){
+        e.oninput=function(){ INV[Number(e.closest('tr').getAttribute('data-i'))][e.getAttribute('data-k')]=e.value; };
+      });
+      Array.prototype.forEach.call(c.querySelectorAll('[data-del]'),function(b){
+        b.onclick=function(){ var i=Number(b.getAttribute('data-del'));
+          if(INV[i].id) INV_BAJA.push(INV[i].id);
+          INV.splice(i,1); pintaInv(); };
+      });
+      Array.prototype.forEach.call(c.querySelectorAll('[data-fuera]'),function(b){
+        b.onclick=function(){ INV[Number(b.getAttribute('data-fuera'))].foto_url=null; pintaInv(); };
+      });
+      Array.prototype.forEach.call(c.querySelectorAll('input[data-foto]'),function(e){
+        e.onchange=function(){ subeFotoInv(Number(e.getAttribute('data-foto')), e.files&&e.files[0]); };
+      });
+    });
+  }
+  async function subeFotoInv(i,file){
+    if(!file || !edit){ if(!edit) toast('Guarda el espacio primero.',true); return; }
+    var ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
+    var ruta='salas/'+(edit.slug||'sala')+'/'+Date.now()+'-'+Math.random().toString(36).slice(2,7)+'.'+ext;
+    toast('Subiendo la foto…');
+    var up=await sb.storage.from('ateneo-web').upload(ruta,file,{upsert:true,contentType:file.type||'image/jpeg'});
+    if(up.error){ toast('No subió la foto: '+up.error.message,true); return; }
+    INV[i].foto_url=sb.storage.from('ateneo-web').getPublicUrl(ruta).data.publicUrl;
+    pintaInv(); toast('Foto puesta');
+  }
+  async function cargaInv(slug){
+    INV=[]; INV_BAJA=[];
+    if(slug){
+      var r=await sb.from('ev_backline').select('*').eq('espacio_slug',slug).order('clase').order('orden');
+      INV=(r.data||[]).map(function(x){ x.clase=x.clase||'inventario'; return x; });
+    }
+    pintaInv();
+  }
+  async function guardaInv(slug){
+    if(!slug) return;
+    if(INV_BAJA.length){ await sb.from('ev_backline').delete().in('id',INV_BAJA); INV_BAJA=[]; }
+    var n=0, nuevas=[], cambios=[];
+    INV.forEach(function(x){
+      if(!String(x.equipo||'').trim()) return;
+      n+=10;
+      var fila={espacio_slug:slug, clase:x.clase||'inventario',
+        bloque:(x.clase==='servicio')?'Servicios':(String(x.bloque||'').trim()||'Equipo'),
+        cantidad:String(x.cantidad||'').trim()||null, equipo:String(x.equipo).trim(),
+        nota:String(x.nota||'').trim()||null, foto_url:x.foto_url||null, orden:n, activo:true};
+      if(x.id){ fila.id=x.id; cambios.push(fila); } else nuevas.push(fila);
+    });
+    if(cambios.length){ var u=await sb.from('ev_backline').upsert(cambios); if(u.error) throw new Error(u.error.message); }
+    if(nuevas.length){ var c=await sb.from('ev_backline').insert(nuevas); if(c.error) throw new Error(c.error.message); }
   }
 
   function pinta(){pintaNav();SECS.forEach(function(s){$('sec-'+s[0]).style.display=s[0]===sec?'':'none';});
@@ -925,6 +1039,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   ['edvNom','edvDesde','edvHasta','edvHi','edvHf','edvCupo','edvPvp','edvDesc'].forEach(function(k){$(k).oninput=function(){pintaSemForm('edv');};});
   $('edvGratis').onchange=function(){pintaSemForm('edv');};$('edvEsp').onchange=function(){pintaSemForm('edv');};$('edvProd').onchange=function(){pintaSemForm('edv');};
   $('bNuevoEsp').onclick=function(){abreEsp(null);};$('bGuarda').onclick=guardaEsp;$('bCancela').onclick=cierraEsp;$('eFzTipo').onchange=fzWrap;
+  $('bInvMas').onclick=function(){ INV.push({clase:'inventario',bloque:'Equipo',cantidad:'1',equipo:'',nota:''}); pintaInv(); };
+  $('bSrvMas').onclick=function(){ INV.push({clase:'servicio',bloque:'Servicios',equipo:'',nota:''}); pintaInv(); };
   function mueve(n){
     if(modoCal==='dia'){dia.setDate(dia.getDate()+n);}
     else if(modoCal==='semana'){if(!lunes)lunes=aLunes(new Date());lunes.setDate(lunes.getDate()+n*7);}
