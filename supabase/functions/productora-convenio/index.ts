@@ -10,11 +10,13 @@
 // Una sola puerta: el equipo de casa con su sesión. La productora no se manda el
 // convenio a sí misma.
 import { quienLlama, noAutorizado } from "./equipo.ts";
+import { marco, remitente, respondeA } from "./correo.ts";
 
 const SB  = Deno.env.get("SUPABASE_URL")!;
 const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND = Deno.env.get("RESEND_API_KEY") || "";
-const FROM = Deno.env.get("ATENEO_FROM") || "Ateneo de Virreyes · Casa Pepe <javi@casapepe.mx>";
+/* Remitente y «responder a» por marca: ver correo.ts. Javi, 10-oct-2026. */
+const FROM = remitente("ateneo");
 const PORTAL = "https://casapepe.mx/productora.html";
 const H = { apikey: SRK, Authorization: "Bearer " + SRK, "Content-Type": "application/json" };
 
@@ -35,26 +37,21 @@ async function rest(p: string, init: RequestInit = {}) {
 }
 
 function correoHtml(nombre: string, liga: string, falta: string[]) {
-  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#F6EFE4;padding:26px 14px">
-  <div style="max-width:540px;margin:0 auto;background:#fff;border-radius:16px;padding:26px 24px">
-    <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#557B28;font-weight:700">Ateneo de Virreyes</div>
-    <h1 style="margin:8px 0 6px;font-size:21px;color:#1E1A16">Tu convenio, para leerlo y firmarlo</h1>
-    <p style="margin:0 0 14px;color:#5F5A54;font-size:14px;line-height:1.6">
-      ${esc(nombre)}: antes de publicar tu primer evento con nosotros —y antes de que te mandemos
-      a nadie— necesitamos que leas y firmes el convenio. Es el documento que deja claro quién
-      responde de qué: tú produces tu evento, nosotros ponemos el espacio y el canal de venta.</p>
-    <p style="margin:0 0 20px"><a href="${esc(liga)}#convenio"
-      style="display:inline-block;background:#557B28;color:#fff;text-decoration:none;font-weight:700;
-             font-size:15px;padding:13px 22px;border-radius:12px">Leer y firmar el convenio →</a></p>
-    <p style="margin:0 0 14px;color:#5F5A54;font-size:13.5px;line-height:1.6">
-      Esa misma liga es tu portal: desde ahí das de alta tus eventos, pides las salas y ves tus ventas.
-      Es personal, no la compartas.</p>
-    ${falta.length ? `<p style="margin:0 0 14px;background:#FBF0DC;border-radius:10px;padding:12px 14px;color:#8A6420;font-size:13.5px;line-height:1.55">
-      Para poder publicar nos falta además: <b>${falta.map(esc).join("</b>, <b>")}</b>.
-      Lo puedes completar en tu portal, en «Mi cuenta».</p>` : ""}
-    <p style="margin:0;color:#8C857C;font-size:12.5px;line-height:1.5">
-      Si algo no cuadra, contéstanos este correo y lo vemos.</p>
-  </div></div>`;
+  return marco({
+    marca: "ateneo",
+    avance: "Tu convenio, para leerlo y firmarlo desde tu portal. Es el paso que falta para publicar.",
+    saludo: nombre || null,
+    titulo: "Tu convenio con el Ateneo, para leerlo y firmarlo",
+    cuerpo: [
+      "El Ateneo de Virreyes es el espacio de eventos, cine y coworking de Grupo Casa Pepe, en Izazaga 8. Te escribimos porque vas a producir con nosotros y este es el paso que falta antes de abrir tu primer evento.",
+      "El convenio no tiene letra chica: deja claro quién responde de qué. <b>Tú produces tu evento; nosotros ponemos el espacio y el canal de venta.</b> Léelo entero y, si estás de acuerdo, fírmalo ahí mismo con el dedo o el ratón.",
+    ],
+    boton: { texto: "Leer y firmar el convenio", liga: liga + "#convenio" },
+    nota: falta.length
+      ? `Para poder publicar nos falta además: <b>${falta.map(esc).join("</b>, <b>")}</b>. Lo completas en tu portal, en «Mi cuenta», cuando puedas.`
+      : null,
+    despues: "Esa misma liga es tu portal y no caduca: desde ahí das de alta tus eventos, pides las salas y ves tus ventas. Guárdala.",
+  });
 }
 
 Deno.serve(async (req) => {
@@ -109,9 +106,11 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: FROM, to: [para],
-        subject: "Tu convenio con el Ateneo de Virreyes",
-        html: correoHtml(String(p.nombre_comercial || "Hola"), liga, falta),
+        from: FROM, to: [para], reply_to: respondeA("ateneo"),
+        subject: "Tu convenio con el Ateneo de Virreyes, para firmarlo",
+        /* El nombre del saludo va vacío si no lo hay: con el valor por defecto
+           de antes el correo empezaba con «Hola Hola». */
+        html: correoHtml(String(p.nombre_comercial || ""), liga, falta),
       }),
     });
     if (!r.ok) return J({ ok: false, error: `no salió el correo (${r.status})` }, 502);

@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { marco, remitente, respondeA } from "./correo.ts";
 
 // Contención 26-sep-2026: la respuesta YA NO devuelve la liga. Solo sale por
 // correo al buzón del alta. Devolver la liga permitía tomar cualquier cuenta
@@ -7,7 +8,10 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 const SB = Deno.env.get("SUPABASE_URL")!;
 const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND = Deno.env.get("RESEND_API_KEY") || "";
-const FROM = Deno.env.get("SINCRETICO_FROM") || "Sincrético · Casa Pepe <javi@casapepe.mx>";
+/* El remitente y el «responder a» los decide la marca, no esta función: así los
+   correos de Sincrético se parecen entre sí y no acaban saliendo de un correo
+   personal. Javi, 10-oct-2026. */
+const FROM = remitente("sincretico");
 const BASE = Deno.env.get("SINCRETICO_BASE_URL") || "https://grupocasapepe.netlify.app";
 
 const cors = {
@@ -30,16 +34,19 @@ async function rest(path: string, init: RequestInit = {}) {
 }
 
 function correoHtml(alias: string, liga: string) {
-  return `<!doctype html><html><body style="margin:0;background:#F4F1EA;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1F1B16">
-  <div style="max-width:520px;margin:0 auto;padding:28px 18px">
-    <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#137A56;font-weight:800">Sincrético · Casa Pepe</div>
-    <h1 style="font-size:23px;margin:8px 0 10px">Hola ${esc(alias)}, te esperamos dentro</h1>
-    <p style="font-size:15px;line-height:1.6;color:#3A3630;margin:0 0 16px">Aquí está tu liga. Con ella generas tu contraseña y entras a tu cuenta, donde completas tu alta paso a paso: tu empresa, cómo te contactamos, tu seguro, cómo te pagamos y el acuerdo.</p>
-    <p style="margin:0 0 20px"><a href="${liga}" style="display:inline-block;background:#137A56;color:#fff;text-decoration:none;font-weight:700;padding:13px 20px;border-radius:10px">Generar mi contraseña y entrar</a></p>
-    <p style="font-size:13.5px;line-height:1.6;color:#6B6459;margin:0 0 6px">Ten a la mano, si los tienes: RFC, tu póliza de responsabilidad civil y los días y horarios de tus tours. Lo que te falte se llena después: se guarda lo que lleves.</p>
-    <p style="font-size:13.5px;line-height:1.6;color:#6B6459;margin:0 0 20px">Y recuerda: por ser operador de Sincrético te vuelves Ateneísta, con condiciones especiales en el coworking del Ateneo Turístico.</p>
-    <p style="font-size:12px;color:#A49B8C;line-height:1.5;margin:0">Si no reconoces este correo, ignóralo. La liga es personal, no la compartas.</p>
-  </div></body></html>`;
+  return marco({
+    marca: "sincretico",
+    avance: "Tu liga para crear la contraseña y terminar el alta. Es personal y solo sirve una vez.",
+    saludo: alias || null,
+    titulo: "Aquí entras a Sincrético",
+    cuerpo: [
+      "Sincrético es la marca de experiencias de Grupo Casa Pepe: a través de ella vendemos tours a los huéspedes de nuestros hoteles y a quien llega por nuestra web. Te escribimos porque diste de alta tu touroperadora con nosotros y falta el último paso.",
+      "Con el botón de abajo <b>creas tu contraseña y entras a tu cuenta</b>. Dentro vas completando tu alta a tu ritmo: tu empresa, cómo te contactamos, tu seguro, cómo te pagamos y el acuerdo. <b>Se guarda lo que lleves</b>, así que puedes dejarlo a medias y volver.",
+    ],
+    boton: { texto: "Crear mi contraseña y entrar", liga },
+    nota: "Ten a la mano, si los tienes: <b>RFC</b>, tu <b>póliza de responsabilidad civil</b> y los <b>días y horarios</b> de tus tours. Lo que te falte lo llenas después — nada de esto te frena para empezar.",
+    despues: "Al terminar, tus experiencias pasan a revisión y te avisamos en cuanto queden publicadas. Y por ser operador de Sincrético te vuelves <b>Ateneísta</b>: tienes condiciones especiales en el coworking del Ateneo de Virreyes.",
+  });
 }
 
 Deno.serve(async (req: Request) => {
@@ -69,7 +76,11 @@ Deno.serve(async (req: Request) => {
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM, to: [email], subject: `${alias}, tu acceso a Sincrético`, html: correoHtml(alias, liga) }),
+    body: JSON.stringify({
+      from: FROM, to: [email], reply_to: respondeA("sincretico"),
+      subject: alias ? `${alias}, aquí entras a Sincrético` : "Aquí entras a Sincrético",
+      html: correoHtml(alias, liga),
+    }),
   });
   if (!r.ok) {
     const t = (await r.text()).slice(0, 200);
