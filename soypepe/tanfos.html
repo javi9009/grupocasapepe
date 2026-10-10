@@ -103,7 +103,14 @@ const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=createClient(SB_URL,SB_KEY,{auth:{flowType:'implicit',detectSessionInUrl:true,persistSession:true,autoRefreshToken:true}});
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const CDMX='45e69775-d877-4507-a9e1-a45bd3400dc5', PUEBLA='febfbef6-7fd1-4b45-84d9-13533e8dcb72';
+const CDMX='45e69775-d877-4507-a9e1-a45bd3400dc5', PUEBLA='febfbef6-7fd1-4b45-84d9-13533e8dcb72',
+      VIRREYES='3e10a9ea-4913-4f7c-86ef-0c829caa851d';
+const CASAS={[CDMX]:'cdmx',[PUEBLA]:'puebla',[VIRREYES]:'virreyes'};
+// Virreyes no esta en Cloudbeds -va por Residencias- y en hk_areas no tiene
+// cuartos, solo zonas comunes. Asi que alli no hay a quien buscar por cuarto y
+// fecha: se registra, se custodia y los plazos corren igual, y al huesped se le
+// apunta a mano si se sabe quien es.
+const CON_CUARTOS=[CDMX,PUEBLA];
 let TT; function toast(m){ const t=$('tst'); t.textContent=m; t.classList.add('on'); clearTimeout(TT); TT=setTimeout(()=>t.classList.remove('on'),3400); }
 const hoy=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 async function tok(){ const {data:{session}}=await sb.auth.getSession(); return session?.access_token||''; }
@@ -143,6 +150,10 @@ const DONDES=[
   {d:'publico',    n:'🏛 Un espacio público', eq:'front'},
   {d:'terraza',    n:'☀️ La terraza', eq:'terraza'},
 ];
+// En Virreyes no se ofrece "una habitación": no hay cuartos en hk_areas, son
+// zonas comunes. Ofrecer una opción que no lleva a ningún sitio es peor que no
+// ofrecerla.
+const dondes=()=>DONDES.filter(d=>d.d!=='habitacion'||CON_CUARTOS.includes(PROP));
 const ETIQ={en_custodia:'En custodia',avisado:'Avisado al huésped',reclamado:'Lo reclamó',
   entregado:'Entregado',donado:'Donado',desechado:'Desechado',sin_dueno:'Sin dueño'};
 
@@ -169,10 +180,10 @@ async function arranca(){
     const {data:e}=await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
     suya=e?.property_id||null;
   }catch(e){}
-  if(suya!==CDMX && suya!==PUEBLA){
-    $('wrap').innerHTML='<div class="ph">Los Olvidados está en marcha en <b>Casa Pepe CDMX</b> y '+
-      '<b>Casa Pepe Puebla</b>.<br>Tu sede todavía no, así que no lo abras desde aquí: '+
-      'entrégale lo que encuentres a recepción y avísale a tu jefe de área.</div>';
+  if(!CASAS[suya]){
+    $('wrap').innerHTML='<div class="ph">Los Olvidados está en marcha en <b>Casa Pepe CDMX</b>, '+
+      '<b>Casa Pepe Puebla</b> y el <b>Ateneo Virreyes</b>.<br>Tu sede todavía no, así que no lo '+
+      'abras desde aquí: entrégale lo que encuentres a recepción y avísale a tu jefe de área.</div>';
     return;
   }
   PROP=suya;
@@ -255,7 +266,7 @@ function formulario(){
     '<div id="exValor"></div></div>'+
 
     '<label class="cmp">5. ¿Dónde apareció?</label>'+
-    '<div class="chips" id="cDonde">'+DONDES.map(d=>
+    '<div class="chips" id="cDonde">'+dondes().map(d=>
       '<button data-d="'+d.d+'">'+esc(d.n)+'</button>').join('')+'</div>'+
     '<div id="zDonde"></div>'+
     '<div id="zHuesped"></div>'+
@@ -309,13 +320,15 @@ function pintaDonde(){
     z.innerHTML='<label class="cmp">6. ¿Dónde exactamente?</label>'+
       '<input class="txt" id="ubi" placeholder="'+(F.donde==='terraza'?'Bajo la mesa del fondo':'En el sofá del lobby')+'">';
     $('ubi').oninput=e=>F.ubi=e.target.value.trim();
-    // En un espacio público no hay cuarto que cruzar: o lo tiene delante su
-    // dueño, o no se sabe de quién es.
+    // Sin cuarto no hay a quién cruzar: o lo tiene delante su dueño, o alguien
+    // sabe de quién es y lo apunta, o no se sabe. Lo de apuntarlo a mano es lo
+    // que en Virreyes hace el trabajo que en CDMX y Puebla hace Cloudbeds.
     F.modo='nose'; F.area=''; F.huesped=null;
     pintaHuesped(
       '<label class="cmp">7. ¿De quién es?</label>'+
       '<div class="chips" id="cModo">'+
         '<button data-k="presente">Se lo di en mano</button>'+
+        '<button data-k="apunto">Sé de quién es</button>'+
         '<button data-k="nose" class="on">No sé de quién es</button>'+
       '</div><div id="zModo"></div>');
     chips('cModo','k',v=>{ F.modo=v; F.huesped=null; pintaModo(); });
@@ -362,6 +375,21 @@ function pintaHuesped(html){ $('zHuesped').innerHTML=html||''; }
 function pintaModo(){
   const z=$('zModo'); if(!z) return;
   if(F.modo==='auto'){ z.innerHTML=''; return; }
+  if(F.modo==='apunto'){
+    // Con el correo, el aviso al huésped funciona igual que si lo hubiera
+    // encontrado el sistema: se valida en pantalla y sale. Sin reserva no hay
+    // APePe, y la pantalla de validación lo dice sin disimular.
+    z.innerHTML='<label class="cmp">¿Cómo se llama?</label>'+
+      '<input class="txt" id="hnom" placeholder="Nombre del huésped" value="'+esc(F.huesped?.nombre||'')+'">'+
+      '<label class="cmp">Su correo, si lo tienes</label>'+
+      '<input class="txt" id="hmail" type="email" inputmode="email" placeholder="nombre@correo.com" value="'+esc(F.huesped?.email||'')+'">'+
+      '<div class="mini">Con el correo le podemos avisar. Sin correo queda guardado a su nombre '+
+      'y recepción se lo dice cuando aparezca.</div>';
+    const pon=()=>F.huesped={nombre:($('hnom').value||'').trim(),
+                             email:($('hmail').value||'').trim().toLowerCase(), reserva_id:''};
+    $('hnom').oninput=pon; $('hmail').oninput=pon;
+    return;
+  }
   if(F.modo==='presente'){
     const nom=F.huesped?.nombre||'';
     z.innerHTML='<div class="nota bien">Dáselo y ya. Lo registramos igual, cerrado como entregado en mano, '+
@@ -387,7 +415,7 @@ async function resuelve(){
   const pedida=F.area+'|'+F.fecha;
   const comoSeLlama=(a?.nombre||F.area);
   pintaHuesped('<div class="ph">Viendo quién estaba en '+esc(comoSeLlama)+'…</div>');
-  const r=await fn({accion:'buscar',prop:PROP===PUEBLA?'puebla':'cdmx',habitacion:F.area,fecha:F.fecha});
+  const r=await fn({accion:'buscar',prop:CASAS[PROP],habitacion:F.area,fecha:F.fecha});
   // Si cambió de cuarto o de día mientras tardaba, esta respuesta ya no vale.
   if(pedida!==F.area+'|'+F.fecha) return;
 
@@ -435,7 +463,7 @@ async function guardar(){
   let foto_path=null;
   if(FOTO){
     const ext=(FOTO.name.split('.').pop()||'jpg').toLowerCase().slice(0,4);
-    const ruta=(PROP===PUEBLA?'puebla':'cdmx')+'/'+hoy().slice(0,7)+'/'+crypto.randomUUID()+'.'+ext;
+    const ruta=CASAS[PROP]+'/'+hoy().slice(0,7)+'/'+crypto.randomUUID()+'.'+ext;
     const {error}=await sb.storage.from('lost-found').upload(ruta,FOTO,{upsert:false});
     if(error){ toast('No se pudo subir la foto: '+error.message); $('bOk').disabled=false; return; }
     foto_path=ruta;
@@ -455,7 +483,10 @@ async function guardar(){
     reserva_id:F.huesped?.reserva_id||null, fecha_salida:F.huesped?.salida||null,
     entregado_en_mano:enMano,
     // En mano se cierra solo: ya está con su dueño, no hay nada que custodiar.
-    estado: enMano?'entregado':(F.modo==='auto'?'en_custodia':'sin_dueno'),
+    // Si tiene dueño conocido -lo dijo Cloudbeds o lo apuntó alguien- está en
+    // custodia a su nombre. Sin dueño es 'sin_dueno' y nada más.
+    estado: enMano?'entregado':((F.modo==='auto'||F.modo==='apunto')&&(F.huesped?.nombre||F.huesped?.email)
+                                 ?'en_custodia':'sin_dueno'),
     cerrado_at: enMano?new Date().toISOString():null,
     cerrado_por: enMano?EMP:null, cerrado_por_nombre: enMano?NOMBRE:null,
     cerrado_nota: enMano?'Se lo dio en mano quien lo encontró':null,
@@ -474,7 +505,7 @@ async function guardar(){
   toast(data.folio+' guardado.'+dónde);
 
   // Nada sale hacia el huésped sin que alguien lo lea antes.
-  if(!enMano && fila.reserva_id) return validar(data.id, data.folio);
+  if(!enMano && (fila.reserva_id || fila.huesped_email)) return validar(data.id, data.folio);
   setTimeout(lista,2200);
 }
 
