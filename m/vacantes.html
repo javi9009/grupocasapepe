@@ -60,6 +60,14 @@ dialog .db{padding:14px 16px;display:grid;gap:10px}
 dialog label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
 dialog input,dialog select{width:100%;font:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--surface)}
 dialog .df{padding:12px 16px;border-top:1px solid var(--rule);display:flex;justify-content:flex-end;gap:8px}
+/* ---- funnel por candidato ---- */
+.vblock{background:var(--surface);border:1px solid var(--rule);border-radius:13px;padding:13px 14px;margin-bottom:14px;box-shadow:var(--shadow)}
+.vhead{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.dot{width:8px;height:8px;border-radius:999px;display:inline-block;flex:none}
+.fcols{display:grid;grid-template-columns:repeat(5,minmax(180px,1fr));gap:10px;margin-top:10px;overflow-x:auto;padding-bottom:4px}
+.fcol{background:var(--surface-3);border:1px solid var(--rule);border-radius:10px;padding:8px}
+.fcol h4{font-size:11.5px;margin:0 0 6px;color:var(--ink-2);display:flex;align-items:center;gap:6px}
+.ccard{background:var(--surface);border:1px solid var(--rule);border-radius:9px;padding:7px 8px;margin-bottom:6px}
 </style></head>
 <body>
 <div class="top">
@@ -82,7 +90,7 @@ dialog .df{padding:12px 16px;border-top:1px solid var(--rule);display:flex;justi
     <button class="btn ghost" id="btnNuevaVac">＋ Nueva vacante</button>
     <span class="meta" id="pipeSaving"></span>
   </div>
-  <div class="wrap"><div class="cols" id="board"><div class="loading">Cargando…</div></div></div>
+  <div class="wrap"><div id="board"><div class="loading">Cargando…</div></div></div>
 </section>
 
 <!-- ===== MANNING ===== -->
@@ -128,10 +136,18 @@ const sb=supabase.createClient(SB_URL,SB_KEY);
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const PROP={cdmx:'45e69775-d877-4507-a9e1-a45bd3400dc5',puebla:'febfbef6-7fd1-4b45-84d9-13533e8dcb72',virreyes:'3e10a9ea-4913-4f7c-86ef-0c829caa851d'};
-const PROP_NOM={'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes'};
-const STAGES=[['abierta','Abierta por previsión','#8C6212'],['validada','Validada / solicitada por área','#2f6690'],['publicada','Publicada','#2f6690'],['con_candidatos','Con candidatos','#6b4a9e'],['en_entrevistas','En entrevistas','#6b4a9e'],['seleccionada','Seleccionada','#1D6B4A'],['contratada','Posición contratada','#1D6B4A']];
-const STLBL=Object.fromEntries(STAGES.map(s=>[s[0],s[1]]));
-const CAND_ST=['nuevo','entrevista','seleccionado','contratado','descartado'];
+const PROP_NOM={'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'Virreyes','fde2f615-2c65-40fa-9df3-6336b5ab312c':'Corporativo'};
+/* una ciudad agrupa varias propiedades (CDMX = Centro + Virreyes + Corporativo) */
+const PROP_CIUDAD={'45e69775-d877-4507-a9e1-a45bd3400dc5':'cdmx','3e10a9ea-4913-4f7c-86ef-0c829caa851d':'cdmx','fde2f615-2c65-40fa-9df3-6336b5ab312c':'cdmx','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'puebla'};
+const CIUDADES=[['cdmx','Ciudad de México'],['puebla','Puebla']];
+const CIUDAD_NOM={cdmx:'Ciudad de México',puebla:'Puebla'};
+/* Nivel vacante (requisición): fase de reclutamiento. Mover esto NO mueve a los candidatos. */
+const VAC_FASES=[['abierta','Reclutamiento · abierta','#8C6212'],['publicada','Reclutamiento · publicada','#2f6690'],['en_seleccion','En selección','#6b4a9e'],['cubierta','Cubierta','#1D6B4A'],['cerrada','Cerrada','#66707A']];
+const FASE_LBL=Object.fromEntries(VAC_FASES.map(s=>[s[0],s[1]]));
+/* Funnel del candidato: se avanza persona por persona hasta selección. Incorporación vive en Contratos. */
+const CSTAGES=[['nuevo','Nuevo','#8C6212'],['entrevista_jefe','Entrevista Jefe de Área','#2f6690'],['entrevista_admin','Entrevista Administración','#2f6690'],['propuesta','Propuesta de contrato','#6b4a9e'],['seleccionado','Seleccionado','#1D6B4A']];
+const CST_ALL=['nuevo','entrevista_jefe','entrevista_admin','propuesta','seleccionado','descartado'];
+const CST_LBL={nuevo:'Nuevo',entrevista_jefe:'Entrevista Jefe de Área',entrevista_admin:'Entrevista Administración',propuesta:'Propuesta de contrato',seleccionado:'Seleccionado',descartado:'Descartado'};
 let EMAIL=null,PUEDE=false;
 let VACS=[],VC=[],CANDS=[],MAN=[],TEMPS=[],EMPS=[];
 
@@ -157,55 +173,81 @@ async function cargar(){
     sb.from('employees').select('id,nombre,nombre_display,area,puesto,sede,property_id,estatus').eq('estatus','activo')
   ]);
   VACS=rv.data||[];CANDS=rc.data||[];VC=rvc.data||[];MAN=rm.data||[];TEMPS=rt.data||[];EMPS=re.data||[];
+  /* compat: normaliza etapas viejas al esquema nuevo (solo en memoria; se persiste al mover) */
+  const NFASE={con_candidatos:'en_seleccion',en_entrevistas:'en_seleccion',validada:'publicada',seleccionada:'en_seleccion',contratada:'cubierta'};
+  const NCST={entrevista:'entrevista_jefe',contratado:'seleccionado'};
+  VACS.forEach(v=>{if(NFASE[v.estatus])v.estatus=NFASE[v.estatus];});
+  VC.forEach(x=>{if(NCST[x.estatus])x.estatus=NCST[x.estatus];});
   llenaFiltros();
   pintaPipe();pintaManning();pintaGaps();pintaTemp();
 }
 function llenaFiltros(){
-  const sedeOpts='<option value="">Todas las sedes</option>'+Object.entries(PROP).map(([k,v])=>`<option value="${v}">${PROP_NOM[v]}</option>`).join('');
-  ['fsede','mSede','gSede'].forEach(id=>{const el=$(id);if(el)el.innerHTML=sedeOpts;});
+  const propOpts='<option value="">Todas las sedes</option>'+Object.entries(PROP).map(([k,v])=>`<option value="${v}">${PROP_NOM[v]}</option>`).join('');
+  const ciudadOpts='<option value="">Todas las ciudades</option>'+CIUDADES.map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('');
+  $('fsede').innerHTML=ciudadOpts; /* vacantes se filtran por CIUDAD, no por propiedad */
+  ['mSede','gSede'].forEach(id=>{const el=$(id);if(el)el.innerHTML=propOpts;});
   const areas=[...new Set([...EMPS.map(e=>e.area),...VACS.map(v=>v.area),...MAN.map(m=>m.area)].filter(Boolean))].sort();
   $('farea').innerHTML='<option value="">Todas las áreas</option>'+areas.map(a=>`<option>${esc(a)}</option>`).join('');
 }
 
 /* ===================== PIPELINE ===================== */
+function ciudadDeVac(v){return PROP_CIUDAD[v.property_id]||'';}
 function candsDeVac(vid){return VC.filter(x=>x.vacante_id===vid).map(x=>({vc:x,c:CANDS.find(c=>c.id===x.candidato_id)})).filter(o=>o.c);}
 function pintaPipe(){
-  const fs=$('fsede').value, fa=$('farea').value;
-  const vs=VACS.filter(v=>(!fs||v.property_id===fs)&&(!fa||v.area===fa));
+  const fc=$('fsede').value, fa=$('farea').value;
+  const vs=VACS.filter(v=>(!fc||ciudadDeVac(v)===fc)&&(!fa||v.area===fa));
   const board=$('board');
-  board.innerHTML=STAGES.map(([key,lbl,col])=>{
-    const list=vs.filter(v=>v.estatus===key);
-    return `<div class="col"><h3><span class="dot" style="background:${col}"></span>${esc(lbl)} <span class="cnt">${list.length}</span></h3>${list.map(vacCard).join('')||'<div class="meta" style="padding:6px 2px">—</div>'}</div>`;
-  }).join('');
+  if(!vs.length){board.innerHTML='<div class="empty">Sin vacantes'+(fc||fa?' con ese filtro':'')+'. Crea una con “＋ Nueva vacante”.</div>';return;}
+  board.innerHTML=vs.map(vacBloque).join('');
   board.querySelectorAll('[data-mv]').forEach(sel=>sel.onchange=()=>moverVac(sel.dataset.mv,sel.value));
   board.querySelectorAll('[data-jalar]').forEach(b=>b.onclick=()=>jalarCands(b.dataset.jalar));
   board.querySelectorAll('[data-cst]').forEach(sel=>sel.onchange=()=>candEstatus(sel.dataset.cst,sel.value));
-  board.querySelectorAll('[data-exp]').forEach(b=>b.onclick=()=>{const d=$('cands-'+b.dataset.exp);if(d)d.hidden=!d.hidden;});
+  board.querySelectorAll('[data-exp]').forEach(b=>b.onclick=()=>{const d=$('fn-'+b.dataset.exp);if(d)d.hidden=!d.hidden;});
+  board.querySelectorAll('[data-addc]').forEach(b=>b.onclick=()=>dlgAddCand(VACS.find(x=>x.id===b.dataset.addc)));
 }
-function vacCard(v){
+function vacBloque(v){
   const cs=candsDeVac(v.id);
-  const pct=v.posiciones?Math.round(100*v.posiciones_cubiertas/v.posiciones):0;
-  const mv=PUEDE?`<select class="mini" data-mv="${v.id}" style="margin-top:8px;width:100%">${STAGES.map(s=>`<option value="${s[0]}"${s[0]===v.estatus?' selected':''}>${esc(s[1])}</option>`).join('')}</select>`:'';
-  return `<div class="vac">
-    <div class="nm">${esc(v.puesto)}</div>
-    <div class="meta">${esc(v.area)}${v.property_id?(' · '+PROP_NOM[v.property_id]):''} · ${v.posiciones_cubiertas}/${v.posiciones} cubiertas · ${v.origen==='solicitud_area'?'solicitud área':'previsión'}</div>
-    <div class="stseg"><i style="width:${pct}%"></i></div>
-    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn soft sm" data-exp="${v.id}">👤 Candidatos (${cs.length})</button>
-      ${PUEDE?`<button class="btn ghost sm" data-jalar="${v.id}">⇣ Jalar CVs</button>`:''}
+  const cnt=k=>cs.filter(o=>o.vc.estatus===k).length;
+  const activos=cs.filter(o=>o.vc.estatus!=='descartado');
+  const descart=cs.filter(o=>o.vc.estatus==='descartado');
+  const pct=v.posiciones?Math.round(100*(v.posiciones_cubiertas||0)/v.posiciones):0;
+  const ciudad=CIUDAD_NOM[ciudadDeVac(v)]||'';
+  const faseSel=PUEDE?`<select class="mini" data-mv="${v.id}">${VAC_FASES.map(s=>`<option value="${s[0]}"${s[0]===v.estatus?' selected':''}>${esc(s[1])}</option>`).join('')}</select>`:`<span class="chip">${esc(FASE_LBL[v.estatus]||v.estatus)}</span>`;
+  const resumen=CSTAGES.map(([k,l,c])=>`<span class="chip"><span class="dot" style="background:${c}"></span> ${esc(l)}: ${cnt(k)}</span>`).join('');
+  const funnel=CSTAGES.map(([k,l,c])=>{
+    const list=activos.filter(o=>o.vc.estatus===k);
+    const jalar=(k==='nuevo'&&PUEDE)?`<button class="btn ghost sm" data-jalar="${v.id}" style="margin-left:auto">⇣ Jalar</button>`:'';
+    return `<div class="fcol"><h4><span class="dot" style="background:${c}"></span>${esc(l)} <span class="cnt">${list.length}</span>${jalar}</h4>${list.map(ccard).join('')||'<div class="meta" style="padding:4px 2px">—</div>'}</div>`;
+  }).join('');
+  return `<div class="vblock">
+    <div class="vhead">
+      <div style="flex:1;min-width:200px">
+        <div class="nm">${esc(v.puesto)} ${faseSel}</div>
+        <div class="meta">${esc(v.area)}${ciudad?(' · '+esc(ciudad)):''}${v.property_id?(' · '+(PROP_NOM[v.property_id]||'')):''} · ${v.posiciones_cubiertas||0}/${v.posiciones} cubiertas · ${v.origen==='solicitud_area'?'solicitud área':'previsión'}</div>
+        <div class="stseg" style="max-width:280px"><i style="width:${pct}%"></i></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn soft sm" data-exp="${v.id}">Ver funnel (${activos.length})</button>
+        ${PUEDE?`<button class="btn ghost sm" data-addc="${v.id}">＋ Candidato</button>`:''}
+      </div>
     </div>
-    <div id="cands-${v.id}" hidden style="margin-top:6px">${cs.map(o=>candRow(o,v)).join('')||'<div class="meta" style="padding:6px 0">Sin candidatos ligados. Usa “Jalar CVs”.</div>'}</div>
-    ${mv}
+    <div style="margin-top:8px">${resumen}</div>
+    <div id="fn-${v.id}" hidden>
+      <div class="fcols">${funnel}</div>
+      ${descart.length?`<div class="meta" style="margin-top:8px">Descartados (${descart.length}): ${esc(descart.map(o=>o.c.nombre).join(', '))}</div>`:''}
+    </div>
   </div>`;
 }
-function candRow(o,v){
+function ccard(o){
   const c=o.c, vc=o.vc;
-  const st=PUEDE?`<select class="mini" data-cst="${vc.id}">${CAND_ST.map(s=>`<option${s===vc.estatus?' selected':''}>${s}</option>`).join('')}</select>`:`<span class="chip">${esc(vc.estatus)}</span>`;
-  return `<div class="cand"><span style="flex:1"><b style="font-size:13px">${esc(c.nombre||'—')}</b><div class="meta">${esc(c.puesto||'')}${c.ciudad?(' · '+esc(c.ciudad)):''}</div></span>${c.gmail_url?`<a class="mail" href="${esc(c.gmail_url)}" target="_blank">Ver CV ↗</a>`:''}${st}</div>`;
+  const sel=PUEDE?`<select class="mini" data-cst="${vc.id}" style="width:100%;margin-top:5px">${CST_ALL.map(s=>`<option value="${s}"${s===vc.estatus?' selected':''}>${esc(CST_LBL[s]||s)}</option>`).join('')}</select>`:`<span class="chip">${esc(CST_LBL[vc.estatus]||vc.estatus)}</span>`;
+  return `<div class="ccard"><div style="display:flex;gap:6px;align-items:baseline;justify-content:space-between"><b style="font-size:12.5px">${esc(c.nombre||'—')}</b>${c.gmail_url?`<a class="mail" href="${esc(c.gmail_url)}" target="_blank" style="font-size:12px">CV ↗</a>`:''}</div><div class="meta">${esc(c.puesto||'')}</div>${sel}</div>`;
 }
 async function moverVac(id,nuevo){
   if(!PUEDE)return; $('pipeSaving').textContent='Guardando…';
-  const {error}=await sb.from('rh_vacantes').update({estatus:nuevo,updated_at:new Date().toISOString()}).eq('id',id);
+  const upd={estatus:nuevo,updated_at:new Date().toISOString()};
+  upd.cerrada_at=(nuevo==='cubierta'||nuevo==='cerrada')?new Date().toISOString():null;
+  const {error}=await sb.from('rh_vacantes').update(upd).eq('id',id);
   $('pipeSaving').textContent=error?'Error':'Guardado'; if(!error){const v=VACS.find(x=>x.id===id);if(v)v.estatus=nuevo;pintaPipe();} setTimeout(()=>$('pipeSaving').textContent='',1500);
 }
 async function jalarCands(vid){
@@ -217,28 +259,31 @@ async function jalarCands(vid){
   const rows=match.map(c=>({vacante_id:vid,candidato_id:c.id,estatus:'nuevo'}));
   const {error}=await sb.from('rh_vacante_candidatos').insert(rows);
   if(error){$('pipeSaving').textContent='Error: '+error.message;return;}
-  // si estaba antes de "con_candidatos", avanza
-  if(['abierta','validada','publicada'].includes(v.estatus)){await sb.from('rh_vacantes').update({estatus:'con_candidatos'}).eq('id',vid);v.estatus='con_candidatos';}
-  await cargar(); setTab('pipe');
+  if(v.estatus==='abierta'){await sb.from('rh_vacantes').update({estatus:'publicada'}).eq('id',vid);v.estatus='publicada';}
+  await cargar(); setTab('pipe'); const d=$('fn-'+vid); if(d)d.hidden=false;
 }
 async function candEstatus(vcId,nuevo){
   if(!PUEDE)return;
   const vc=VC.find(x=>x.id===vcId); if(!vc)return;
-  await sb.from('rh_vacante_candidatos').update({estatus:nuevo,updated_at:new Date().toISOString()}).eq('id',vcId);
+  const prev=vc.estatus;
+  const {error}=await sb.from('rh_vacante_candidatos').update({estatus:nuevo,updated_at:new Date().toISOString()}).eq('id',vcId);
+  if(error){$('pipeSaving').textContent='Error: '+error.message;setTimeout(()=>$('pipeSaving').textContent='',2500);return;}
   vc.estatus=nuevo;
   const v=VACS.find(x=>x.id===vc.vacante_id);
   if(v){
-    if(nuevo==='contratado'){
-      const cub=Math.min((v.posiciones_cubiertas||0)+1, v.posiciones);
-      const est=cub>=v.posiciones?'contratada':'en_entrevistas'; // dos posiciones: al contratar una, vuelve a entrevistas
-      await sb.from('rh_vacantes').update({posiciones_cubiertas:cub,estatus:est,cerrada_at:est==='contratada'?new Date().toISOString():null}).eq('id',v.id);
-    } else if(nuevo==='entrevista' && ['con_candidatos','publicada','validada','abierta'].includes(v.estatus)){
-      await sb.from('rh_vacantes').update({estatus:'en_entrevistas'}).eq('id',v.id);
-    } else if(nuevo==='seleccionado' && v.estatus==='en_entrevistas'){
-      await sb.from('rh_vacantes').update({estatus:'seleccionada'}).eq('id',v.id);
-    }
+    let cub=v.posiciones_cubiertas||0;
+    const wasSel=prev==='seleccionado', isSel=nuevo==='seleccionado';
+    if(isSel&&!wasSel)cub=Math.min(cub+1,v.posiciones);
+    if(!isSel&&wasSel)cub=Math.max(cub-1,0);
+    let est=v.estatus;
+    if(v.posiciones>0&&cub>=v.posiciones)est='cubierta';
+    else if(['entrevista_jefe','entrevista_admin','propuesta','seleccionado'].includes(nuevo))est='en_seleccion';
+    else if(est==='cubierta')est='en_seleccion';
+    const upd={posiciones_cubiertas:cub,estatus:est,cerrada_at:est==='cubierta'?new Date().toISOString():null};
+    await sb.from('rh_vacantes').update(upd).eq('id',v.id);
+    v.posiciones_cubiertas=cub; v.estatus=est;
   }
-  await cargar(); setTab('pipe'); const d=$('cands-'+(v&&v.id)); if(d)d.hidden=false;
+  pintaPipe(); const d=$('fn-'+(v&&v.id)); if(d)d.hidden=false;
 }
 
 /* ===================== MANNING ===================== */
@@ -284,7 +329,7 @@ function pintaGaps(){
   const need=MAN.filter(m=>m.temporada_id===t.id&&((prop&&m.property_id===prop)||(!prop&&(!m.property_id||true))));
   if(!need.length){$('gapsWrap').innerHTML='<div class="empty">No hay manning definido para esta temporada'+(sede?' en esta sede':'')+'. Captúralo en Manning.</div>';return;}
   const countEmp=(area,puesto)=>EMPS.filter(e=>e.area===area&&(e.puesto||'').toLowerCase()===(puesto||'').toLowerCase()&&(!prop||e.property_id===prop)).length;
-  const vacAbiertas=(area,puesto)=>VACS.filter(v=>v.area===area&&(v.puesto||'').toLowerCase()===(puesto||'').toLowerCase()&&v.estatus!=='contratada'&&(!prop||v.property_id===prop)).reduce((n,v)=>n+(v.posiciones-v.posiciones_cubiertas),0);
+  const vacAbiertas=(area,puesto)=>VACS.filter(v=>v.area===area&&(v.puesto||'').toLowerCase()===(puesto||'').toLowerCase()&&!['cubierta','cerrada'].includes(v.estatus)&&(!prop||v.property_id===prop)).reduce((n,v)=>n+(v.posiciones-v.posiciones_cubiertas),0);
   const byArea={};need.forEach(m=>{(byArea[m.area]=byArea[m.area]||[]).push(m);});
   let h='';
   Object.keys(byArea).sort().forEach(area=>{
@@ -339,6 +384,21 @@ function dlgTemp(t){
      const dur=mesesDur(o); if(dur<2||dur>6){alert('La temporada debe durar entre 2 y 6 meses (va '+dur+').');return false;}
      if(t.id){await sb.from('rh_temporadas').update(o).eq('id',t.id);}else{await sb.from('rh_temporadas').insert({...o,orden:(TEMPS.length+1)});}
      await cargar();setTab('temp');
+   });
+}
+function dlgAddCand(v){
+  if(!v||!PUEDE)return;
+  openDlg('＋ Candidato manual · '+esc(v.puesto),
+   `<div><label>Nombre</label><input id="c_nom" placeholder="Nombre completo"></div>
+    <div><label>Puesto</label><input id="c_pue" value="${esc(v.puesto||'')}"></div>
+    <div><label>Teléfono</label><input id="c_tel" placeholder="(opcional)"></div>
+    <div><label>Nota</label><input id="c_nota" placeholder="(opcional)"></div>
+    <div class="meta">Se crea en la BBDD histórica de Candidatos (RH) y se liga a esta vacante en etapa “Nuevo”.</div>`,
+   async()=>{
+     const nom=$('c_nom').value.trim(); if(!nom){alert('Pon el nombre del candidato.');return false;}
+     const {error}=await sb.rpc('vac_add_candidato',{p_vacante:v.id,p_nombre:nom,p_puesto:($('c_pue').value.trim()||v.puesto),p_telefono:($('c_tel').value.trim()||null),p_nota:($('c_nota').value.trim()||null)});
+     if(error){alert('Error al crear candidato: '+error.message);return false;}
+     await cargar(); setTab('pipe'); const d=$('fn-'+v.id); if(d)d.hidden=false;
    });
 }
 function dlgNuevaVac(){
