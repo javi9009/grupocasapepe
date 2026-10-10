@@ -428,6 +428,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   }
   function precioTxt(e){
     if(e.es_gratis) return 'Gratis';
+    if(e.tipo==='reserva_horas')
+      return Number(e.precio_por_hora||0) ? mx(e.precio_por_hora)+' por hora' : '—';
     var p=precioDe(e); if(!p) return '—';
     var n=bolDe(e).filter(function(b){return Number(b.precio||0)>0;}).length;
     return (n>1?'desde ':'')+mx(p);
@@ -438,7 +440,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     {k:'sala',l:'S',t:'Sala / espacio',ok:function(e){return !!e.espacio_id;}},
     {k:'fecha',l:'F',t:'Fecha',ok:function(e){return !!e.fecha_inicio;}},
     {k:'hora',l:'H',t:'Hora',ok:function(e){return !!(e.fecha_inicio&&String(e.fecha_inicio).length>=16);}},
-    {k:'precio',l:'$',t:'Precio o gratis (vale el de sus boletos)',ok:function(e){return !!e.es_gratis||precioDe(e)>0;}},
+    {k:'precio',l:'$',t:'Precio o gratis (vale el de sus boletos o el de la hora)',
+     ok:function(e){return !!e.es_gratis||precioDe(e)>0||Number(e.precio_por_hora||0)>0;}},
     {k:'cupo',l:'C',t:'Cupo (vale el de sus boletos)',ok:function(e){return cupoDe(e)>0;}},
     {k:'texto',l:'D',t:'Descripción',ok:function(e){return !!(e.descripcion&&String(e.descripcion).trim());}},
     /* La foto estaba en el candado de la base pero no en el semaforo, asi que
@@ -719,15 +722,32 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
        ellos mandan: el campo se enseña con el más barato y en solo lectura,
        para que nadie teclee aquí un número que contradiga lo que la gente ve
        en el flyer. */
-    var bb=bolDe(e);
-    $('edvCupo').value = e.cupo!=null?e.cupo:(bb.length?cupoDe(e):'');
-    $('edvPvp').value  = e.precio!=null?e.precio:(bb.length?precioDe(e):'');
-    $('edvPvp').readOnly=$('edvCupo').readOnly=(bb.length>0);
-    var gris=bb.length?'var(--surface-3)':'';
-    $('edvPvp').style.background=$('edvCupo').style.background=gris;
+    /* NINGÚN CAMPO ABIERTO QUE NO ESCRIBA EN NINGÚN SITIO. Javi, 10-oct-2026:
+       «sigues poniendo un campo abierto que es cupo y precio que no está
+       cableado, ¿por qué lo dejas abierto? bórralo o cabléalo». Tenía razón a
+       medias y por eso confundía: el campo SÍ escribía, pero en
+       `eventos.precio`, que no es donde vive el precio de un evento con
+       boletos ni el de un servicio por horas. Ahora el campo dice qué es y
+       escribe donde corresponde:
+         · servicio por horas → precio POR HORA (`precio_por_hora`)
+         · con boletos        → solo lectura, «desde» el más barato
+         · lo demás           → precio al público de una pieza (`precio`) */
+    var bb=bolDe(e), porH=(e.tipo==='reserva_horas');
+    var sala=ESP.filter(function(x){return x.id===e.espacio_id;})[0];
+    $('edvPvp').value = porH ? (e.precio_por_hora!=null?e.precio_por_hora:'')
+                     : (e.precio!=null?e.precio:(bb.length?precioDe(e):''));
+    $('edvCupo').value = porH ? (sala&&sala.capacidad?sala.capacidad:'')
+                       : (e.cupo!=null?e.cupo:(bb.length?cupoDe(e):''));
+    $('edvPvp').readOnly = (bb.length>0);
+    $('edvCupo').readOnly = (bb.length>0 || porH);
+    $('edvPvp').style.background  = bb.length?'var(--surface-3)':'';
+    $('edvCupo').style.background = (bb.length||porH)?'var(--surface-3)':'';
     var lb=$('edvPvp').previousElementSibling;
-    if(lb) lb.textContent = bb.length>1 ? 'Precio al público · desde (sus boletos)'
+    if(lb) lb.textContent = porH ? 'Precio por hora'
+                         : bb.length>1 ? 'Precio al público · desde (sus boletos)'
                          : bb.length ? 'Precio al público (su boleto)' : 'Precio al público';
+    var lc=$('edvCupo').previousElementSibling;
+    if(lc) lc.textContent = porH ? 'Aforo de la sala' : 'Cupo';
     $('edvGratis').checked=!!e.es_gratis;
     $('edvDesc').value=e.descripcion||'';
     edvForma();pintaSemForm('edv');
@@ -848,7 +868,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       cupo:$('edvCupo').value?Number($('edvCupo').value):null,es_gratis:gratis,
       descripcion:$('edvDesc').value.trim()||null,
       fianza:edvTipo()[2].fianza,fianza_modo:edvTipo()[2].fmodo,
-      precio:(!gratis&&$('edvPvp').value!=='')?Number($('edvPvp').value):null};
+      precio:(!gratis&&c.tipo!=='reserva_horas'&&$('edvPvp').value!=='')?Number($('edvPvp').value):null,
+      /* Un servicio por horas cobra por hora: su número va a su columna. */
+      precio_por_hora:(c.tipo==='reserva_horas'&&$('edvPvp').value!=='')?Number($('edvPvp').value):null};
     if(extra)for(var k in extra)body[k]=extra[k];
     // re-chequear sala solo si el evento sigue vivo y hay sala
     if(c.espId&&(body.estado||evEdit.estado)!=='cancelado'){
