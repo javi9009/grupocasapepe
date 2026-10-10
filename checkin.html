@@ -421,7 +421,7 @@ input[type=range]{width:100%;accent-color:var(--naranja)}
     <p class="lead" id="leadP4"></p>
     <div id="cobroCajas"></div>
 
-    <div class="card">
+    <div class="card oculto" id="cardFactura">
       <h2>La factura la emites t&uacute;</h2>
       <p class="ay">No hay nada que elegir aqu&iacute;: el servicio es tuyo, as&iacute; que la factura al
         cliente la emites t&uacute;. Si el cliente la pide, nosotros te pasamos sus datos fiscales.
@@ -1009,7 +1009,7 @@ function bandaCasa(){
        navegador no se había vuelto a bajar. Si esto no coincide con lo último
        que se subió, es que hay que recargar. Javi, 10-oct. */
     '<span style="margin-left:auto;color:#8f8878;font-size:11px;'+
-    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:30 UTC</span>';
+    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:36 UTC</span>';
   document.body.insertBefore(d, document.body.firstChild);
 }
 
@@ -1044,6 +1044,13 @@ async function vePaso(i){
   }
   if(i===2) cargaForm();     /* todo sale de la ficha que ya tenemos: sin espera */
   if(i===3 && !COBRO_CARGADO) cargaCobro();
+  /* Volvió de Stripe: se comprueba contra Stripe y, si ya cobra, se le
+     felicita en vez de dejarle la misma tarjeta de antes. */
+  if(i===3 && new URLSearchParams(location.search).get('stripe')==='ok'){
+    capaOn('Comprobando tu Stripe…');
+    try{ await compruebaStripe(); }catch(_){}
+    await esperaMin(900); capaOff();
+  }
   if(i===4) cargaFirma();
   for(var k=0;k<5;k++){ var d=$('p'+(k+1)); if(d) d.classList.toggle('oculto',k!==i); }
   window.scrollTo({top:0,behavior:'smooth'});
@@ -1767,6 +1774,13 @@ function pintaCobro(){
           'checkout, con las dos cifras: lo que paga ahora y lo que paga después.</div>':'')+
       '</div>';
   }
+  /* Javi, 10-oct: «es confusa esta info si no está vinculado». Lo es: explicar
+     quién factura la comisión, cuándo y con qué desglose, mientras todavía no
+     se sabe ni por dónde va a entrar el dinero, es contestar una pregunta que
+     nadie se ha hecho todavía. Aparece cuando el cobro ya está resuelto: con
+     Stripe vinculado, o con la modalidad de anticipo elegida. */
+  var resuelto = vinc || (TIPO==='operador' && f.forma_pago==='dos_cobros');
+  $('cardFactura').classList.toggle('oculto', !resuelto);
   enlazaCobro();
 }
 function enlazaCobro(){
@@ -1808,9 +1822,12 @@ async function abreStripe(){
       }
     }else{
       r=await fetch(SB+'/functions/v1/productora-stripe-alta',{method:'POST',headers:hdr(),
-        body:JSON.stringify({accion:'alta', token:(FICHA&&FICHA.portal_token), origen:location.origin})});
+        body:JSON.stringify({accion:'alta', token:(FICHA&&FICHA.portal_token),
+                             origen:location.origin, volver:'checkin'})});
       j=await r.json();
       if(!r.ok||!j.url) throw new Error((j&&(j.detalle||j.error))||('HTTP '+r.status));
+      try{ localStorage.setItem('checkin_stripe_vuelve',
+        JSON.stringify({id:ID,tipo:'productora',t:Date.now()})); }catch(_){}
       aOtraPestana(j.url); return;
     }
   }catch(x){ toast('No se pudo abrir Stripe: '+(x.message||x),1); }
@@ -1818,9 +1835,16 @@ async function abreStripe(){
 }
 function releeFicha(){ return leeFicha(TIPO==='operador'?'tour_operadores':'productoras', ID); }
 function aOtraPestana(url){
+  var vj=document.getElementById('avisoStripe');
+  if(vj&&vj.parentNode) vj.parentNode.removeChild(vj);   /* uno solo, no una pila */
   var v=window.open(url,'_blank','noopener');
+  /* Si el navegador bloqueó la ventana, el botón se quedaba en «Abriendo
+     Stripe…» para siempre, deshabilitado, y parecía colgado. */
+  var b=$('btnStripe');
+  if(b){ b.disabled=false; b.textContent=v?'Volver a abrir Stripe':'Vincular mi Stripe'; }
   var c=$('cobroCajas');
   var aviso=document.createElement('div');
+  aviso.id='avisoStripe';
   aviso.className='aviso';
   aviso.innerHTML = v
     ? '<b>Stripe se abrió en otra pestaña.</b> Termina ahí tu alta —te va a pedir razón social, '+
@@ -1834,11 +1858,60 @@ function aOtraPestana(url){
   c.insertBefore(aviso, c.firstChild);
   $('btnYaStripe').onclick=async function(){
     var bb=this; bb.disabled=true; bb.textContent='Comprobando…';
-    FICHA=await releeFicha()||FICHA;
-    if(stripeOk()){ toast('Listo: tu Stripe está vinculado.'); pintaCobro(); }
-    else{ toast('Todavía no lo vemos vinculado. Dale unos segundos y vuelve a probar.',1);
-          bb.disabled=false; bb.textContent='Ya lo vinculé · comprobar'; }
+    await compruebaStripe();
+    if(!stripeOk()){ toast('Todavía no lo vemos vinculado. Dale unos segundos y vuelve a probar.',1);
+      bb.disabled=false; bb.textContent='Ya lo vinculé · comprobar'; }
   };
+}
+
+/* Preguntarle a Stripe, no solo a nuestra ficha: el estado y, si ya la puso,
+   a qué cuenta le van a caer sus transferencias. */
+async function compruebaStripe(){
+  var banco=null;
+  if(TIPO!=='operador'){
+    try{
+      var r=await fetch(SB+'/functions/v1/productora-stripe-alta',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'estado', token:(FICHA&&FICHA.portal_token)})});
+      var j=await r.json();
+      if(r.ok&&j&&j.ok) banco=j.banco||null;
+    }catch(_){}
+  }
+  FICHA=await releeFicha()||FICHA;
+  if(stripeOk()){ felicidades(banco); return true; }
+  pintaCobro(); return false;
+}
+
+/* Javi, 10-oct: «cuando termines de integrar con Stripe haz una pantalla
+   intermedia diciendo felicidades». Y tiene razón: el alta de Stripe es lo más
+   pesado de todo el check-in, y hasta ahora terminaba sin que pasara nada
+   visible.
+
+   Un aviso honesto sobre la CLABE: Stripe NO la devuelve entera, nunca —ni a
+   nosotros—. Solo el banco, el titular y los últimos cuatro dígitos. Con eso
+   reconoce su cuenta, que es para lo que sirve. Prometer la CLABE completa
+   sería prometer algo que no podemos enseñar. */
+function felicidades(banco){
+  var c=$('cobroCajas');
+  var cuenta = banco
+    ? '<table class="cuenta">'+
+        (banco.nombre?'<tr><td>Banco</td><td>'+esc(banco.nombre)+'</td></tr>':'')+
+        (banco.titular?'<tr><td>A nombre de</td><td>'+esc(banco.titular)+'</td></tr>':'')+
+        (banco.ultimos4?'<tr class="tot"><td>Cuenta</td><td>•••• '+esc(banco.ultimos4)+'</td></tr>':'')+
+      '</table>'+
+      '<div class="pista">Stripe solo nos enseña los últimos cuatro dígitos de tu cuenta, '+
+      'nunca la CLABE entera. Si estos cuatro son los tuyos, está bien puesta.</div>'
+    : '<div class="pista">La cuenta de destino la ves y la cambias dentro de tu panel de Stripe.</div>';
+
+  c.innerHTML=
+    '<div class="card" style="text-align:center">'+
+      '<div style="font-size:40px;line-height:1">🎉</div>'+
+      '<h2 style="margin:8px 0 6px">Felicidades, ya puedes cobrar</h2>'+
+      '<p class="ay" style="margin:0 auto 14px;max-width:44ch">A partir de ahora, cada venta te '+
+      'llega directo a tu cuenta. Nosotros no tocamos tu dinero: Stripe lo reparte en el mismo '+
+      'movimiento del cobro.</p>'+
+      '<div style="max-width:420px;margin:0 auto;text-align:left">'+cuenta+'</div>'+
+    '</div>';
+  toast('Stripe vinculado');
 }
 
 /* La vuelta de Stripe trae ?code y ?state. Se cierra el trato, se limpia la
