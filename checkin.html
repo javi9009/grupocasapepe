@@ -1009,7 +1009,7 @@ function bandaCasa(){
        navegador no se había vuelto a bajar. Si esto no coincide con lo último
        que se subió, es que hay que recargar. Javi, 10-oct. */
     '<span style="margin-left:auto;color:#8f8878;font-size:11px;'+
-    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:43 UTC</span>';
+    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:45 UTC</span>';
   document.body.insertBefore(d, document.body.firstChild);
 }
 
@@ -2253,49 +2253,76 @@ function pintaFirma(){
   c.innerHTML=
     (puede?'':'<div class="aviso">Primero las tres tomas de arriba.</div>')+
     '<button class="btn" id="btnFirmar" type="button"'+(puede?'':' disabled')+'>'+
-      (TIPO==='operador'?'Ver y firmar mi contrato':'Que me manden el convenio')+'</button>'+
-    (TIPO==='operador'
-      ? '<div class="pista" style="margin-top:9px">Se abre en otra pestaña. Si ya lo tienes firmado, te abrimos tu copia.</div>'
-      : '<div class="pista" style="margin-top:9px">Te llega a tu correo para leerlo y firmarlo.</div>');
+      'Leer y firmar mi contrato</button>'+
+    ' <button class="btn fantasma" id="btnYaFirme" type="button">Ya lo firmé · comprobar</button>'+
+    '<div class="pista" style="margin-top:9px">Se abre en otra pestaña y se firma ahí mismo. '+
+    'Además te lo mandamos por correo para que lo ratifiques y te quede la copia.</div>';
   var b=$('btnFirmar'); if(b&&puede) b.onclick=pideContrato;
+  $('btnYaFirme').onclick=async function(){
+    var bb=this; bb.disabled=true; bb.textContent='Comprobando…';
+    FICHA=await releeFicha()||FICHA;
+    if(FICHA.contrato_firmado_at){ toast('Firmado. Ya estás dentro.'); pintaFirma(); }
+    else{ toast('Todavía no nos llega la firma. Dale unos segundos.',1);
+          bb.disabled=false; bb.textContent='Ya lo firmé · comprobar'; }
+  };
 }
 
+/* EL CONTRATO SE FIRMA AQUÍ, NO «QUE ME LO MANDEN».
+   Javi, 10-oct: «el contrato se firma ahí, no "que me manden el convenio": se
+   firma en ese momento y también se envía por mail para ratificarlo».
+
+   Las dos piezas ya existían y no hacía falta inventar ninguna:
+   · touroperadora → `operador-contrato` arma el contrato y devuelve su liga.
+     Acepta `operador_id`, así que desde la vista de Casa Pepe también se puede
+     probar; antes yo lo bloqueaba de más.
+   · productora   → `/ateneo/contrato.html?t=<portal_token>` ES la página de
+     firma, con `prod_portal_contrato` detrás. Y `productora-convenio` manda el
+     correo. Se hacen las dos cosas: se abre para firmar, y se manda para
+     ratificar. */
 async function pideContrato(){
   var b=$('btnFirmar'), av=$('avisoFirma');
   b.disabled=true; var antes=b.textContent; b.textContent='Preparándolo…';
   av.className=''; av.innerHTML='';
   try{
-    if(ADMIN){
-      throw new Error('el contrato se arma con la sesión del tercero, no con la de Casa Pepe. '+
-        'Desde aquí se puede probar todo lo demás, pero esta parte la tiene que dar él.');
-    }
-    var r,j;
     if(TIPO==='operador'){
-      r=await fetch(SB+'/functions/v1/operador-contrato',{method:'POST',headers:hdr(),
-        body:JSON.stringify({accion:'generar'})});
-      j=await r.json().catch(function(){return {};});
+      var r=await fetch(SB+'/functions/v1/operador-contrato',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'generar', operador_id:ID})});
+      var j=await r.json().catch(function(){return {};});
       if(!r.ok||j.error) throw new Error(j.error||('HTTP '+r.status));
-      window.open(j.url,'_blank','noopener');
+      if(j.url) window.open(j.url,'_blank','noopener');
       av.className='aviso ok';
-      av.innerHTML=j.estado==='firmado'
+      av.innerHTML = j.estado==='firmado'
         ? '<b>Ya estaba firmado.</b> Te abrimos tu copia en otra pestaña.'
-        : '<b>Tu contrato está listo.</b> Léelo y fírmalo en la pestaña que se abrió.';
+        : '<b>Tu contrato está listo.</b> Se abrió en otra pestaña: léelo y fírmalo ahí. '+
+          (j.avisado_a&&j.avisado_a.length
+            ? 'También te lo mandamos a '+esc(j.avisado_a.join(', '))+' para que lo ratifiques.'
+            : 'También te llega por correo para que lo ratifiques.');
     }else{
-      r=await fetch(SB+'/functions/v1/productora-convenio',{method:'POST',headers:hdr(),
-        body:JSON.stringify({productora_id:ID})});
-      j=await r.json().catch(function(){return {};});
-      if(!j||!j.ok) throw new Error((j&&j.error)||('HTTP '+r.status));
+      var tok=(FICHA&&FICHA.portal_token)||'';
+      if(!tok) throw new Error('a esta productora le falta su liga de portal. Avísanos y la generamos.');
+      window.open('/ateneo/contrato.html?t='+encodeURIComponent(tok),'_blank','noopener');
+      /* El correo de ratificación va en paralelo. Que falle no impide firmar:
+         la firma está en la otra pestaña, no en el correo. */
+      var correo='';
+      try{
+        var rc=await fetch(SB+'/functions/v1/productora-convenio',{method:'POST',headers:hdr(),
+          body:JSON.stringify({productora_id:ID})});
+        var jc=await rc.json().catch(function(){return {};});
+        if(jc&&jc.ok) correo=jc.a||'';
+      }catch(_){}
       av.className='aviso ok';
-      av.innerHTML='<b>Mandado.</b> '+esc(j.mensaje||('Te llegó a '+(j.a||'tu correo')+'.'))+
-        ' Fírmalo desde ahí y quedamos cerrados.';
+      av.innerHTML='<b>Tu convenio se abrió en otra pestaña.</b> Léelo, escribe tu nombre al '+
+        'final y fírmalo ahí mismo.'+
+        (correo?' También te lo mandamos a <b>'+esc(correo)+'</b> para que lo ratifiques.'
+               :' El correo de ratificación te llegará en cuanto lo firmes.');
     }
-    FICHA=await leeFicha(TIPO==='operador'?'tour_operadores':'productoras',ID)||FICHA;
+    FICHA=await releeFicha()||FICHA;
     pintaFirma();
   }catch(x){
     av.className='aviso er';
     av.innerHTML='<b>No se pudo.</b> '+esc(String((x&&x.message)||x));
   }
-  b.disabled=false; b.textContent=antes;
+  var bb=$('btnFirmar'); if(bb){ bb.disabled=false; bb.textContent=antes; }
 }
 
 /* Cualquier otro tropiezo de la pantalla, a la vista. En un telefono nadie
