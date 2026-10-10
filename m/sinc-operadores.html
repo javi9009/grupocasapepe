@@ -359,6 +359,21 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         </div>
         <div class="fld" style="margin-top:12px"><label>Notas internas</label><textarea data-c="notas" rows="2"></textarea></div>
       </div>
+      <!-- BORRAR DE VERDAD. Javi, 10-oct-2026: quiere poder limpiar las fichas
+           de prueba y volver a crearlas. Dar de baja (el selector de arriba) y
+           borrar son cosas distintas: la baja deja la historia, el borrado no
+           se deshace. Por eso va aparte, en rojo y al final.
+           Y no es cosmética: la base NO protege este borrado —`experiencias`
+           se queda viva y publicada con el operador en nulo—, así que todo el
+           cuidado lo pone la función operador-borrar. -->
+      <div class="card" style="border-color:#E6B8B2">
+        <h3 style="color:#B3261E">Borrar la ficha</h3>
+        <div class="hint">Esto no es dar de baja. Borrar se lleva su ficha y todo lo que cuelga de ella, y <b>no se deshace</b>. Es para limpiar pruebas. Primero te enseño qué arrastraría.</div>
+        <div class="ft" style="justify-content:flex-start;margin-top:10px">
+          <button class="btn fantasma" id="btnVerBorrar">Ver qué arrastraría</button>
+        </div>
+        <div id="borrarCaja" style="margin-top:10px"></div>
+      </div>
     </section>
 
     <section class="panel" data-s="7">
@@ -1918,6 +1933,95 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     b.disabled=false; b.textContent=antes;
   }
   $('btnRevStripe').onclick=revisaStripe;
+
+  /* ---------- BORRAR LA FICHA ----------
+     Dos pasos a propósito. El primero no toca nada: le pregunta a la función
+     qué cuelga del operador y lo enseña, con las reservas por folio, porque
+     «tiene 3 reservas» no deja decidir nada y «SINC-0012, sin pagar» sí.
+     El segundo pide escribir el nombre: nadie borra al de al lado por tener el
+     dedo rápido. Sin ventanas del navegador —aquí no se usan—, el candado es
+     el nombre escrito. Javi, 10-oct-2026. */
+  async function fnBorrar(cuerpo){
+    var r=await fetch(SB+'/functions/v1/operador-borrar',{method:'POST',headers:hdr(),
+      body:JSON.stringify(Object.assign({operador_id:cur.id},cuerpo))});
+    var d=null; try{ d=await r.json(); }catch(_){ d=null; }
+    return {ok:r.ok,d:d||{}};
+  }
+  function pintaBorrar(d, modo){
+    var c=$('borrarCaja'), cu=d.cuelga||{};
+    var filas=[
+      ['Fichas de producto',cu.fichas_de_producto],['Experiencias',cu.experiencias],
+      ['De ellas, publicadas',cu.publicadas],['Salidas programadas',cu.salidas],
+      ['Reservas',cu.reservas],['Reservas con dinero de verdad',cu.reservas_con_dinero],
+      ['Gente con acceso',cu.usuarios],['Papeles subidos',cu.papeles],
+      ['Contratos firmados',cu.contratos_firmados],['Repartos de dinero',cu.repartos],
+      ['Guías',cu.guias],['Lugares',cu.lugares]
+    ].filter(function(f){ return Number(f[1])>0; });
+
+    var h='<div class="aviso" style="background:'+(d.se_puede?'#E8F5E9':'#FFF4E5')+'">'+
+      (filas.length
+        ? '<b>Esto se ir&iacute;a con la ficha:</b><ul style="margin:6px 0 0;padding-left:18px">'+
+          filas.map(function(f){ return '<li>'+esc(f[0])+': <b>'+f[1]+'</b></li>'; }).join('')+'</ul>'
+        : '<b>No cuelga nada.</b> Es una ficha vac&iacute;a.')+'</div>';
+
+    if(d.reservas&&d.reservas.length){
+      h+='<div class="mini" style="margin-top:10px"><b>Las reservas:</b></div>'+
+        '<table style="font-size:13px;margin-top:4px"><tr><th style="text-align:left">Folio</th>'+
+        '<th style="text-align:left">Estado</th><th style="text-align:left">Pago</th>'+
+        '<th style="text-align:left">Total</th></tr>'+
+        d.reservas.map(function(r){
+          return '<tr><td>'+esc(r.folio||'—')+'</td><td>'+esc(r.estado||'—')+'</td>'+
+            '<td>'+esc(r.pago||'—')+(r.dinero_real?' <span class="tag bad">dinero real</span>':'')+'</td>'+
+            '<td>'+(r.total!=null?esc(String(r.total)):'—')+'</td></tr>';
+        }).join('')+'</table>';
+    }
+
+    h+='<div class="fld" style="margin-top:14px">'+
+      '<label>Para borrar, escribe <b>'+esc(d.nombre||'')+'</b></label>'+
+      '<input id="borrarNombre" autocapitalize="off" spellcheck="false" placeholder="'+esc(d.nombre||'')+'"></div>'+
+      '<div class="ft" style="justify-content:flex-start;margin-top:8px;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn" id="btnBorrarYa" disabled>'+
+      (modo==='arrastrar'?'Borrar arrastrando todo':'Borrar la ficha')+'</button>'+
+      '<button class="btn fantasma" id="btnBorrarNo">Dejarlo</button></div>'+
+      '<div id="borrarMsg" style="margin-top:8px"></div>';
+    c.innerHTML=h;
+
+    var inp=$('borrarNombre'), go=$('btnBorrarYa');
+    inp.oninput=function(){ go.disabled = inp.value.trim()!==String(d.nombre||'').trim(); };
+    $('btnBorrarNo').onclick=function(){ c.innerHTML=''; };
+    go.onclick=async function(){
+      go.disabled=true; var antes=go.textContent; go.textContent='Borrando…';
+      var cuerpo={accion:'borrar'};
+      if(modo==='arrastrar'){
+        cuerpo.arrastrar=true;
+        if(Number(cu.reservas_con_dinero)>0) cuerpo.arrastrar_pagadas=true;
+      }
+      var x=await fnBorrar(cuerpo);
+      if(x.ok&&x.d.ok){
+        toast('Borrado');
+        c.innerHTML='<div class="aviso" style="background:#E8F5E9">'+esc(x.d.mensaje||'Borrado.')+
+          (x.d.aviso?'<div class="mini" style="margin-top:6px">'+esc(x.d.aviso)+'</div>':'')+'</div>';
+        cur=null; await load();
+        return;
+      }
+      $('borrarMsg').innerHTML='<div class="aviso" style="background:#FDECEA;color:#B3261E">'+
+        esc((x.d&&x.d.error)||'No se pudo borrar')+'</div>';
+      go.disabled=false; go.textContent=antes;
+    };
+  }
+  var bVer=$('btnVerBorrar');
+  if(bVer)bVer.onclick=async function(){
+    if(!cur)return;
+    bVer.disabled=true; var antes=bVer.textContent; bVer.textContent='Mirando…';
+    var x=await fnBorrar({accion:'mirar'});
+    bVer.disabled=false; bVer.textContent=antes;
+    if(!x.ok||!x.d.ok){
+      $('borrarCaja').innerHTML='<div class="aviso" style="background:#FDECEA;color:#B3261E">'+
+        esc((x.d&&x.d.error)||'No se pudo mirar')+'</div>';
+      return;
+    }
+    pintaBorrar(x.d, x.d.se_puede?'limpio':'arrastrar');
+  };
 })();
 </script>
 </body></html>
