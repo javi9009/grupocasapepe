@@ -30,8 +30,20 @@ CAND = "/tmp/ov-candidatas.json"   # lo deja fotos2.py, el buscador
 # esta limitada-, tanto la API de Commons como upload.wikimedia.org. Las
 # candidatas que viven alli se descartan en la busqueda; estas vienen de Flickr,
 # StockSnap y Rawpixel a traves de Openverse.
+#
+# LOS RETRATOS son fotos de archivo CC0 de StockSnap: gente de modelo, sin
+# nombre y cedida para uso comercial. A proposito NO se usan retratos de
+# personas identificables con nombre (los que salen en Flickr suelen serlo):
+# ponerle un nombre inventado a alguien reconocible es otra cosa muy distinta.
+# La pagina lo dice al pie: quienes aparecen no tienen que ver con los nombres.
 ELEGIDAS = {
-    "portada":   ("patioF",    4, (2000, 820),  "El patio, en panorámica"),
+    "portada":   ("heroD",     0, (2000, 820),  "Un concierto lleno"),
+    "cara-1":    ("wB",        2, (520, 520),   "Renata Caso"),
+    "cara-2":    ("sB",        2, (520, 520),   "Mauro Torri"),
+    "cara-3":    ("wD",        2, (520, 520),   "Citlali Herrán"),
+    "cara-4":    ("mA",        0, (520, 520),   "Bruno Cravioto"),
+    "cara-5":    ("wA",        5, (520, 520),   "Paulina Urueta"),
+    "patio":     ("patioF",    4, (1100, 825),  "El patio, en panorámica"),
     "rock":      ("rock",      0, (1200, 900),  "Escenario de concierto"),
     "ensayo":    ("ensayo",    6, (1200, 900),  "Mesa de trabajo"),
     "alebrijes": ("alebrijeF", 3, (1200, 900),  "Desfile de alebrijes"),
@@ -59,10 +71,13 @@ def baja(url, destino):
     return r.stdout.strip().startswith("2") and os.path.getsize(destino) > 20000
 
 
-def recorta(src, w, h, destino, calidad=84):
+def recorta(src, w, h, destino, calidad=84, alto=False):
     im = Image.open(src)
     im = ImageOps.exif_transpose(im).convert("RGB")
-    im = ImageOps.fit(im, (w, h), Image.LANCZOS, centering=(0.5, 0.42))
+    # En un retrato la cara esta arriba: si se recorta por el centro salen
+    # barbillas. Por eso los cuadrados tiran hacia arriba.
+    centro = (0.5, 0.26) if alto else (0.5, 0.42)
+    im = ImageOps.fit(im, (w, h), Image.LANCZOS, centering=centro)
     im.save(destino, "JPEG", quality=calidad, optimize=True, progressive=True)
     return os.path.getsize(destino)
 
@@ -76,7 +91,8 @@ def main():
         src = os.path.join(CACHE, bolsa + "-" + str(i) + ".img")
         if not baja(x["url"], src):
             print("NO BAJA", nombre, x["url"]); continue
-        peso = recorta(src, w, h, os.path.join(AQUI, nombre + ".jpg"))
+        peso = recorta(src, w, h, os.path.join(AQUI, nombre + ".jpg"),
+                       alto=nombre.startswith("cara-"))
         if nombre in ANCHAS:
             recorta(src, 1600, 900, os.path.join(AQUI, nombre + "-ancha.jpg"))
         creditos[nombre] = {

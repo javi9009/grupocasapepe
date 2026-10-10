@@ -32,17 +32,17 @@ window.EJEMPLO = (function () {
   };
 
   var PROTAS = [
-    { n: 'Renata Caso', rol: 'Dirección escénica',
+    { n: 'Renata Caso', cara: 'cara-1', rol: 'Dirección escénica',
       de: 'Dirige las lecturas escenificadas. Doce años montando teatro de texto en patios y azoteas del Centro.' },
-    { n: 'Mauro Torri', rol: 'Guitarra y dirección musical',
+    { n: 'Mauro Torri', cara: 'cara-2', rol: 'Guitarra y dirección musical',
       de: 'Arma las noches de rock de la Sala Mayor y toca en todas. Antes, quince años de bares de la Roma.' },
-    { n: 'Citlali Herrán', rol: 'Cartonería',
+    { n: 'Citlali Herrán', cara: 'cara-3', rol: 'Cartonería',
       de: 'Cartonera de oficio y de familia de cartoneros. Da el taller de alebrijes en el patio, con engrudo y papel de estraza.' }
   ];
 
   var MONTA = [
-    { n: 'Bruno Cravioto', rol: 'Producción', de: 'Montaje, audio y el minuto a minuto de cada función.' },
-    { n: 'Paulina Urueta', rol: 'Programación', de: 'Arma el calendario y pide las salas al Ateneo.' }
+    { n: 'Bruno Cravioto', cara: 'cara-4', rol: 'Producción', de: 'Montaje, audio y el minuto a minuto de cada función.' },
+    { n: 'Paulina Urueta', cara: 'cara-5', rol: 'Programación', de: 'Arma el calendario y pide las salas al Ateneo.' }
   ];
 
   /* Las fechas se guardan en hora de la Ciudad de México, como en la base. */
@@ -97,6 +97,7 @@ window.EJEMPLO = (function () {
     { img: 'gal-3', pie: 'Nuestro alebrije, en el desfile de Reforma.' },
     { img: 'gal-4', pie: 'El patio lleno un jueves cualquiera.' },
     { img: 'gal-5', pie: 'El claustro, antes de montar.' },
+    { img: 'patio', pie: 'El patio del Ateneo, vacío a las ocho.' },
     { img: 'gal-6', pie: 'La última noche de la temporada.' }
   ];
 
@@ -122,7 +123,13 @@ window.EJEMPLO = (function () {
   /* El credito de cada foto. Las CC-BY lo EXIGEN, y las CC0 no lo exigen pero
      tampoco cuesta nada. Sale al pie de las dos páginas. */
   var FOTOS = {
-    'portada':  ['ikarusmedia', 'CC BY 2.0', 'https://www.flickr.com/photos/32650580@N06/27320432007'],
+    'portada':  ['Anthony Delanoix', 'CC0', 'https://stocksnap.io/photo/crowd-people-1BYTYOHULR'],
+    'cara-1':   ['Kristin Hardwick', 'CC0', 'https://stocksnap.io/'],
+    'cara-2':   ['Forrest Cavale', 'CC0', 'https://stocksnap.io/'],
+    'cara-3':   ['Candace McDaniel', 'CC0', 'https://stocksnap.io/'],
+    'cara-4':   ['Matt Moloney', 'CC0', 'https://stocksnap.io/'],
+    'cara-5':   ['Candace McDaniel', 'CC0', 'https://stocksnap.io/'],
+    'patio':    ['ikarusmedia', 'CC BY 2.0', 'https://www.flickr.com/photos/32650580@N06/27320432007'],
     'rock':     ['Marc-Antoine Dépelteau', 'CC0', 'https://stocksnap.io/photo/concert-stage-P7JJ4LKNK8'],
     'ensayo':   ['Ylanite Koppens', 'CC0', 'https://stocksnap.io/photo/write-desk-JMVRBGMXZY'],
     'alebrijes':['Secretaría de Cultura CDMX', 'CC BY 2.0', 'https://www.flickr.com/photos/113756879@N03/43637306950'],
@@ -147,7 +154,9 @@ window.EJEMPLO = (function () {
       filas.push('<a href="' + esc(f[2]) + '" target="_blank" rel="noopener nofollow">' +
         esc(f[0]) + '</a> (' + esc(f[1]) + ')');
     }
-    return 'Fotos de ' + filas.join(' · ') + '.';
+    return 'Fotos de ' + filas.join(' · ') + '.<br>' +
+      'Los retratos son fotos de archivo: quienes aparecen no tienen relación con esta página ' +
+      'ni con los nombres inventados que la acompañan.';
   }
 
   return { PRODUCTORA: PRODUCTORA, PROTAS: PROTAS, MONTA: MONTA, EVENTOS: EVENTOS,
