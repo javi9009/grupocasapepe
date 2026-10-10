@@ -496,13 +496,41 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   /* Con huso explicito: sin el, Postgres lee la hora como UTC y el evento
      queda seis horas adelantado. Mexico ya no mueve el reloj: -06:00 fijo. */
   function combina(f,h){return f?(f+'T'+(h||'00:00')+':00-06:00'):null;}
+  /* LA FICHA ESCRIBE EN HORA DE MÉXICO, ASÍ QUE TIENE QUE LEER EN HORA DE MÉXICO.
+     combina() pega el -06:00 a lo que se teclea, pero al abrir un evento se
+     partía el texto que llega de la base, que viene en UTC. O sea que abrir un
+     evento y pulsar «Guardar cambios» sin tocar nada le corría las horas seis
+     horas. Y cuando el final caía ya en el día siguiente en UTC —cualquier
+     evento de noche—, la fecha de fin se recogía mal y la base contestaba
+     «range lower bound must be less than or equal to range upper bound», que no
+     le dice nada a nadie. Javi, 10-oct-2026, con la MUERTEADA del 31. */
+  function enMexico(ts){
+    if(!ts) return {f:'',h:''};
+    var d=new Date(ts); if(isNaN(d.getTime())) return {f:'',h:''};
+    var x=new Date(d.getTime()-6*3600000);   // CDMX es UTC-6 todo el año desde 2022
+    var p=function(n){return String(n).padStart(2,'0');};
+    return {f:x.getUTCFullYear()+'-'+p(x.getUTCMonth()+1)+'-'+p(x.getUTCDate()),
+            h:p(x.getUTCHours())+':'+p(x.getUTCMinutes())};
+  }
+  function diaSiguiente(f){
+    var d=new Date(f+'T12:00:00Z'); if(isNaN(d.getTime())) return f;
+    d.setUTCDate(d.getUTCDate()+1); return d.toISOString().slice(0,10);
+  }
+  /* Una noche que cruza las doce no es un error: una muerteada de 19:00 a 02:00
+     acaba al día siguiente. Si el final sale antes del principio, se corre un
+     día en vez de mandarle a la base un rango del revés. */
+  function cierra(ini,fin,hasta,hf){
+    if(!ini||!fin) return fin;
+    if(new Date(fin)>=new Date(ini)) return fin;
+    return combina(diaSiguiente(hasta),hf);
+  }
   async function crear(){
     var b=$('bCrear'),o=tipoAhora(),tk=o[0],oo=o[2];
     var nom=$('nvNom').value.trim();
     if(!nom){toast('Ponle nombre.',true);return;}
     if(!$('nvDesde').value){toast('Falta la fecha.',true);return;}
     var desde=$('nvDesde').value, hasta=oo.rango?($('nvHasta').value||desde):desde;
-    var ini=combina(desde,$('nvHi').value), fin=combina(hasta,$('nvHf').value);
+    var ini=combina(desde,$('nvHi').value), fin=cierra(ini,combina(hasta,$('nvHf').value),hasta,$('nvHf').value);
     var mont=Number($('nvMont').value||0), desm=Number($('nvDesm').value||0);
     var espId=$('nvEsp').value||null;
     b.disabled=true;b.textContent='Revisando la sala…';
@@ -633,9 +661,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     var est=ESTN[e.estado]||[e.estado,''];
     $('edvEstado').innerHTML='Estado: <span class="tag '+est[1]+'">'+esc(est[0])+'</span>'+(e.es_gratis?' · gratis'+(e.validado_at?' · validado':' · falta validar'):'')+' · <span id="edvFianzaN"></span>';
     $('edvProd').value=e.productora_id||'';$('edvTipo').value=e.tipo||'otro';$('edvNom').value=e.nombre||'';$('edvEsp').value=e.espacio_id||'';
-    var fi=e.fecha_inicio?String(e.fecha_inicio):'',ff=e.fecha_fin?String(e.fecha_fin):'';
-    $('edvDesde').value=fi?fi.slice(0,10):'';$('edvHasta').value=ff?ff.slice(0,10):'';
-    $('edvHi').value=fi.length>=16?fi.slice(11,16):'';$('edvHf').value=ff.length>=16?ff.slice(11,16):'';
+    var LI=enMexico(e.fecha_inicio), LF=enMexico(e.fecha_fin);
+    $('edvDesde').value=LI.f;$('edvHasta').value=LF.f;
+    $('edvHi').value=LI.h;$('edvHf').value=LF.h;
     $('edvMont').value=e.montaje_min!=null?e.montaje_min:0;$('edvDesm').value=e.desmontaje_min!=null?e.desmontaje_min:0;
     $('edvCupo').value=e.cupo!=null?e.cupo:'';$('edvPvp').value=e.precio!=null?e.precio:'';$('edvGratis').checked=!!e.es_gratis;
     $('edvDesc').value=e.descripcion||'';
@@ -668,8 +696,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   }
   function edvCampos(){
     var o=edvTipo()[2],desde=$('edvDesde').value,hasta=o.rango?($('edvHasta').value||desde):desde;
+    var ini=combina(desde,$('edvHi').value);
     return {tipo:$('edvTipo').value,rango:o.rango,
-      ini:combina(desde,$('edvHi').value),fin:combina(hasta,$('edvHf').value),
+      ini:ini,fin:cierra(ini,combina(hasta,$('edvHf').value),hasta,$('edvHf').value),
       mont:Number($('edvMont').value||0),desm:Number($('edvDesm').value||0),espId:$('edvEsp').value||null};
   }
   async function edvSave(extra,okMsg){
