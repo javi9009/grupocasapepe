@@ -244,7 +244,19 @@ var BUCKET='tercero-docs';          /* privado y propio: ver la migración
                                        Cada empresa solo alcanza su carpeta;
                                        el equipo de casa lee todo para revisar. */
 
-var SES=null, TIPO=null, ID=null, FICHA=null;
+var SES=null, TIPO=null, ID=null, FICHA=null, ADMIN=false;
+
+/* MIRARLO DESDE CASA. Javi, 10-oct-2026: «permíteme a mí hacerlo con un test».
+   Quien es de Casa Pepe no tiene operadora detrás, así que sin esto la pantalla
+   le dice «esta cuenta no tiene empresa» y no hay manera de probarla.
+   Con  ?op=<id>  o  ?prod=<id>  se abre el check-in de ese tercero tal como lo
+   ve él. Mismo trato que `operador.html?op=`: lo decide la base, no la URL —si
+   quien entra no es de casa, la RLS no le deja leer ni escribir esa ficha y la
+   pantalla se queda donde estaba. Y va con banda negra, porque mirar la cuenta
+   de otro no puede parecerse a ser otro. */
+var Q=new URLSearchParams(location.search);
+var VER_OP=(Q.get('op')||'').match(/^[0-9a-f-]{36}$/i)?Q.get('op'):null;
+var VER_PR=(Q.get('prod')||'').match(/^[0-9a-f-]{36}$/i)?Q.get('prod'):null;
 
 function $(i){return document.getElementById(i);}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
@@ -547,6 +559,22 @@ async function guardaDocs(){
   }
 }
 
+/* Fea a propósito y no se cierra: si no se ve la diferencia, uno acaba
+   escribiendo cosas en nombre de alguien sin darse cuenta. */
+function bandaCasa(){
+  if(document.getElementById('bandaCasa'))return;
+  var d=document.createElement('div');
+  d.id='bandaCasa';
+  d.style.cssText='position:sticky;top:0;z-index:40;background:#1E1A16;color:#fff;'+
+    'padding:9px 16px;font-size:12.5px;line-height:1.45;display:flex;gap:10px;'+
+    'align-items:center;flex-wrap:wrap';
+  d.innerHTML='<b style="letter-spacing:.06em;text-transform:uppercase;font-size:11px;'+
+    'font-family:Oswald,Inter,sans-serif">Vista de Casa Pepe</b>'+
+    '<span>Estás viendo el check-in de <b>'+esc((FICHA&&FICHA.nombre_comercial)||'')+'</b> '+
+    'tal como lo ve ella. Lo que guardes queda a su nombre.</span>';
+  document.body.insertBefore(d, document.body.firstChild);
+}
+
 /* ---------- los pasos ---------- */
 var PASOS=[['Quién eres',1],['Tu equipo',0],['Qué tan formales',0],['Cómo te pagamos',0],['El acuerdo',0]];
 function pintaPasos(){
@@ -562,20 +590,35 @@ async function arranca(){
   SES=sesionGuardada();
   if(!SES){ location.replace('/entrar.html'); return; }
 
-  var op=null, pr=null;
-  try{ op=await rpc('mi_operador'); }catch(_){}
-  try{ pr=await rpc('mi_productora'); }catch(_){}
+  /* Si viene ?op= o ?prod=, se intenta ESO primero. Si la base no deja leer esa
+     ficha, no era de casa: se sigue por el camino normal. */
+  if(VER_OP||VER_PR){
+    var t = VER_OP?'tour_operadores':'productoras';
+    var f = await leeFicha(t, VER_OP||VER_PR);
+    if(f){ ADMIN=true; TIPO=VER_OP?'operador':'productora'; ID=f.id; FICHA=f; }
+  }
 
-  if(op){ TIPO='operador'; ID=op; FICHA=await leeFicha('tour_operadores',op); }
+  var op=null, pr=null;
+  if(!FICHA){
+    try{ op=await rpc('mi_operador'); }catch(_){}
+    try{ pr=await rpc('mi_productora'); }catch(_){}
+  }
+
+  if(FICHA){ /* ya resuelto arriba */ }
+  else if(op){ TIPO='operador'; ID=op; FICHA=await leeFicha('tour_operadores',op); }
   else if(pr){ TIPO='productora'; ID=pr; FICHA=await leeFicha('productoras',pr); }
   else{
     $('cargando').innerHTML='<div class="aviso">Esta cuenta todavía no tiene una empresa detrás. '+
       'Si acabas de darte de alta, abre el enlace del correo otra vez. Si no, '+
-      '<a href="/entrar.html">empieza tu alta aquí</a>.</div>';
+      '<a href="/entrar.html">empieza tu alta aquí</a>.'+
+      '<div class="pista" style="margin-top:10px">¿Eres de Casa Pepe y querías probarlo? '+
+      'Añádele <code>?op=&lt;id de la touroperadora&gt;</code> o <code>?prod=&lt;id de la productora&gt;</code> '+
+      'a esta dirección. Los ids salen del padrón.</div></div>';
     return;
   }
 
   $('quien').textContent=(FICHA&&FICHA.nombre_comercial)||'';
+  if(ADMIN) bandaCasa();
   pintaPasos();
 
   /* Lo que ya estuviera capturado se trae, para que nadie reescriba su CURP. */
