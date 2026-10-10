@@ -1065,7 +1065,7 @@ function bandaCasa(){
        navegador no se había vuelto a bajar. Si esto no coincide con lo último
        que se subió, es que hay que recargar. Javi, 10-oct. */
     '<span style="margin-left:auto;color:#8f8878;font-size:11px;'+
-    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 21:03 UTC</span>';
+    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 21:07 UTC</span>';
   document.body.insertBefore(d, document.body.firstChild);
 }
 
@@ -1201,7 +1201,14 @@ async function cargaEquipo(){
   pintaConta();
 
   LIDER_FOTO={ruta:(LIDER&&LIDER.foto_ruta)||'',previa:''};
+  if(LIDER_FOTO.ruta) LIDER_FOTO.previa=await urlFirmada(LIDER_FOTO.ruta);
   pintaFotoLider();
+
+  /* Las fotos del equipo, a la vista. Un «ya hay una guardada» sin la foto
+     obliga a subirla otra vez para saber cuál era. */
+  for(var fi=0; fi<PERS.length; fi++){
+    if(PERS[fi].foto_ruta) PERS[fi].previa=await urlFirmada(PERS[fi].foto_ruta);
+  }
   /* Javi, 10-oct: «tus guías, coordinadores, mixólogos, cocineras, o cualquier
      persona que pueda formar parte de la coordinación de tu proyecto». */
   $('ayEquipo').textContent = TIPO==='operador'
@@ -1280,6 +1287,27 @@ function ponOpcion(sel,val){
     var o=document.createElement('option'); o.textContent=val; sel.appendChild(o);
   }
   sel.value=val;
+}
+
+/* VER LO QUE YA ESTÁ GUARDADO.
+   Javi, 10-oct: «cuando regreso al check-in, aunque guarda los datos no guarda
+   el archivo» y «pon la foto para ver cuál es». Los archivos sí estaban
+   guardados; lo que no había era manera de verlos. El bucket es privado, así
+   que la ruta sola no enseña nada: hace falta pedirle a Storage una liga
+   firmada, que caduca en una hora. */
+var FIRMADAS={};
+async function urlFirmada(ruta){
+  if(!ruta) return '';
+  if(FIRMADAS[ruta]) return FIRMADAS[ruta];
+  try{
+    var r=await fetch(SB+'/storage/v1/object/sign/'+BUCKET+'/'+ruta,
+      {method:'POST',headers:hdr(),body:JSON.stringify({expiresIn:3600})});
+    if(!r.ok) return '';
+    var j=await r.json();
+    var u=j&&j.signedURL ? (SB+'/storage/v1'+j.signedURL) : '';
+    if(u) FIRMADAS[ruta]=u;
+    return u;
+  }catch(_){ return ''; }
 }
 
 /* ---------- la foto, al expediente privado ----------
@@ -2700,6 +2728,7 @@ async function arranca(){
     var c=$('listaEq').lastElementChild; if(c)c.scrollIntoView({block:'center',behavior:'smooth'});
   };
 
+  await recuperaDocs();
   pintaDocs();
   pintaCsf();
   abrePasosHechos();
@@ -2708,6 +2737,37 @@ async function arranca(){
 
   /* Si vuelve de Stripe, se le devuelve al paso donde estaba, no al principio. */
   if(volvioDeStripe) await vePaso(3);
+}
+
+/* LOS PAPELES QUE YA SUBIÓ, DE VUELTA EN PANTALLA.
+   Sin esto, quien regresaba veía las cajas vacías y volvía a subir su INE
+   pensando que no había quedado. Estaba guardado; solo no se leía. */
+async function recuperaDocs(){
+  var tabla = TIPO==='operador' ? 'tour_operador_docs' : 'productora_docs';
+  var llave = TIPO==='operador' ? 'operador_id' : 'productora_id';
+  var vuelta={identificacion:null, forma_migratoria:'forma_migratoria',
+              constancia_fiscal:'constancia', poliza_rc:'poliza_rc', rnt:'rnt'};
+  try{
+    var r=await fetch(SB+'/rest/v1/'+tabla+'?select=tipo,url&'+llave+'=eq.'+ID+'&order=created_at.desc',
+      {headers:hdr()});
+    if(!r.ok) return;
+    var l=await r.json();
+    for(var i=0;i<l.length;i++){
+      var ruta=String(l[i].url||'');
+      if(ruta.indexOf(BUCKET+'/')===0) ruta=ruta.slice(BUCKET.length+1);
+      /* La identificación se guarda con un solo tipo, así que de cuál es se
+         entera por el nombre del archivo. */
+      var doc=vuelta[l[i].tipo];
+      if(l[i].tipo==='identificacion'){
+        doc = /pasaporte/.test(ruta) ? 'pasaporte' : (/forma_migratoria/.test(ruta)?'forma_migratoria':'ine');
+      }
+      if(!doc || SUBIDO[doc]) continue;
+      SUBIDO[doc]={ok:true, ruta:ruta, archivado:true,
+                   previa:await urlFirmada(ruta),
+                   leida:(doc==='constancia'),
+                   msg:'Ya la tenemos guardada.'};
+    }
+  }catch(_){}
 }
 
 /* Quien vuelve a entrar no empieza de cero: los pasos que ya dejó hechos se
