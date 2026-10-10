@@ -117,6 +117,13 @@ input[readonly]{background:var(--hueso);color:var(--gris)}
 .cargando{text-align:center;padding:60px 20px;color:var(--gris)}
 .capa{position:fixed;inset:0;z-index:100;background:var(--papel);display:flex;
   align-items:center;justify-content:center;padding:20px}
+.firmero{position:relative;background:var(--blanco);border:1.5px solid var(--linea);
+  border-radius:10px;height:150px;overflow:hidden;touch-action:none}
+.firmero canvas{display:block;width:100%;height:100%;cursor:crosshair}
+.firmero .raya{position:absolute;left:22px;right:22px;bottom:34px;border-bottom:1px dashed var(--tenue);
+  pointer-events:none}
+.firmero .borrar{position:absolute;right:8px;top:8px;border:0;background:var(--hueso);
+  color:var(--gris);font-size:11.5px;border-radius:999px;padding:4px 11px;cursor:pointer}
 .cuenta{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 2px}
 .cuenta td{padding:7px 0;border-bottom:1px solid var(--linea);vertical-align:top}
 .cuenta td:last-child{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -484,9 +491,17 @@ input[type=range]{width:100%;accent-color:var(--naranja)}
     <div id="ctFirma">
       <label class="chk"><input type="checkbox" id="ctAcepta">
         <span>He le&iacute;do el contrato y lo acepto.</span></label>
-      <div class="fila" style="margin:9px 0 0">
+      <div style="margin:11px 0 0">
+        <label class="cam">Firma aqu&iacute; con el dedo o con el rat&oacute;n</label>
+        <div class="firmero">
+          <canvas id="ctLienzo"></canvas>
+          <span class="raya"></span>
+          <button type="button" class="borrar" id="ctBorrar">Borrar</button>
+        </div>
+      </div>
+      <div class="fila" style="margin:11px 0 0">
         <div>
-          <label class="cam" for="ctNombre">Firma con tu nombre completo</label>
+          <label class="cam" for="ctNombre">Y escribe tu nombre completo</label>
           <input type="text" id="ctNombre" placeholder="Nombre y apellidos">
         </div>
         <div style="display:flex;align-items:flex-end;gap:8px">
@@ -1050,7 +1065,7 @@ function bandaCasa(){
        navegador no se había vuelto a bajar. Si esto no coincide con lo último
        que se subió, es que hay que recargar. Javi, 10-oct. */
     '<span style="margin-left:auto;color:#8f8878;font-size:11px;'+
-    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:59 UTC</span>';
+    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 21:03 UTC</span>';
   document.body.insertBefore(d, document.body.firstChild);
 }
 
@@ -2428,6 +2443,9 @@ async function abreContrato(){
     }
     $('ctCuerpo').scrollTop=0;
     $('popContrato').classList.remove('oculto');
+    /* El lienzo se mide cuando ya está visible: con el pop oculto mide 0 y el
+       trazo saldría desplazado. */
+    if(!CT.firmado){ montaLienzo(); enlazaLienzo(); }
   }catch(x){
     var av=$('avisoFirma');
     av.className='aviso er';
@@ -2436,11 +2454,65 @@ async function abreContrato(){
   if(b){ b.disabled=false; b.textContent=antes; }
 }
 
+/* ---------- el trazo ----------
+   Javi, 10-oct. Un contrato se firma firmando. El nombre escrito dice quién es;
+   el trazo es el gesto, y es lo que la gente espera ver cuando le dicen que
+   firme. Se guardan los dos: el nombre en la ficha y el trazo como PNG en su
+   expediente. */
+var FIRMA={ctx:null, pinta:false, hay:false, x:0, y:0};
+function montaLienzo(){
+  var c=$('ctLienzo');
+  var r=c.getBoundingClientRect();
+  var dpr=window.devicePixelRatio||1;
+  c.width=Math.max(1,Math.round(r.width*dpr));
+  c.height=Math.max(1,Math.round(r.height*dpr));
+  var g=c.getContext('2d');
+  g.scale(dpr,dpr);
+  g.lineWidth=2.2; g.lineCap='round'; g.lineJoin='round'; g.strokeStyle='#1E1A16';
+  FIRMA.ctx=g; FIRMA.hay=false;
+}
+function donde(e,c){
+  var r=c.getBoundingClientRect();
+  var t=(e.touches&&e.touches[0])||e;
+  return [t.clientX-r.left, t.clientY-r.top];
+}
+function enlazaLienzo(){
+  var c=$('ctLienzo');
+  function baja(e){
+    if(!FIRMA.ctx)return;
+    FIRMA.pinta=true; var p=donde(e,c); FIRMA.x=p[0]; FIRMA.y=p[1];
+    FIRMA.ctx.beginPath(); FIRMA.ctx.moveTo(FIRMA.x,FIRMA.y);
+    if(e.cancelable)e.preventDefault();
+  }
+  function mueve(e){
+    if(!FIRMA.pinta||!FIRMA.ctx)return;
+    var p=donde(e,c);
+    FIRMA.ctx.lineTo(p[0],p[1]); FIRMA.ctx.stroke();
+    FIRMA.x=p[0]; FIRMA.y=p[1]; FIRMA.hay=true;
+    if(e.cancelable)e.preventDefault();
+  }
+  function sube(){ FIRMA.pinta=false; }
+  c.addEventListener('pointerdown',baja);
+  c.addEventListener('pointermove',mueve);
+  window.addEventListener('pointerup',sube);
+  c.addEventListener('touchstart',baja,{passive:false});
+  c.addEventListener('touchmove',mueve,{passive:false});
+  c.addEventListener('touchend',sube);
+  $('ctBorrar').onclick=function(){ montaLienzo(); };
+}
+function firmaBlob(){
+  return new Promise(function(res){ $('ctLienzo').toBlob(res,'image/png'); });
+}
+
 async function firmaContrato(){
   var av=$('ctAviso'), b=$('ctFirmar');
   var nombre=$('ctNombre').value.trim();
   if(!$('ctAcepta').checked){
     av.className='aviso er'; av.innerHTML='Marca la casilla para poder firmar.'; return;
+  }
+  if(!FIRMA.hay){
+    av.className='aviso er'; av.innerHTML='Falta tu firma: tr&aacute;zala en el recuadro de arriba.';
+    $('ctLienzo').scrollIntoView({block:'center',behavior:'smooth'}); return;
   }
   if(nombre.length<5){
     av.className='aviso er'; av.innerHTML='Escribe tu nombre completo, tal como firmas.'; return;
@@ -2448,6 +2520,18 @@ async function firmaContrato(){
   av.className=''; av.innerHTML='';
   b.disabled=true; var antes=b.textContent; b.textContent='Firmando…';
   try{
+    /* El trazo primero: si se guarda después de firmar y algo falla, el
+       contrato queda firmado sin su firma. */
+    try{
+      var bl=await firmaBlob();
+      if(bl){
+        var ruta=await subeFoto(bl,'firma-autografa','png');
+        var tb = TIPO==='operador' ? 'tour_operadores' : 'productoras';
+        await fetch(SB+'/rest/v1/'+tb+'?id=eq.'+ID,{method:'PATCH',headers:hdr(),
+          body:JSON.stringify({firma_autografa:ruta})});
+      }
+    }catch(_){ /* el trazo es prueba adicional; que falle no bloquea la firma */ }
+
     if(TIPO==='operador'){
       var r=await fetch(SB+'/functions/v1/operador-contrato',{method:'POST',headers:hdr(),
         body:JSON.stringify({accion:'firmar', token:CT.token, firmante:nombre, acepta:true,
