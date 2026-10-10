@@ -1009,7 +1009,7 @@ function bandaCasa(){
        navegador no se había vuelto a bajar. Si esto no coincide con lo último
        que se subió, es que hay que recargar. Javi, 10-oct. */
     '<span style="margin-left:auto;color:#8f8878;font-size:11px;'+
-    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:15 UTC</span>';
+    'font-family:Oswald,Inter,sans-serif;letter-spacing:.06em">BUILD 10-Oct 20:25 UTC</span>';
   document.body.insertBefore(d, document.body.firstChild);
 }
 
@@ -1780,6 +1780,14 @@ function enlazaCobro(){
   if(b) b.onclick=abreStripe;
 }
 
+/* Javi, 10-oct: «me acaba de sacar de las dos altas al dar de alta mi Stripe».
+   Y era literal: esto hacía `location.href=url`, o sea se iba de la página. El
+   alta de Stripe pide razón social, INE, domicilio y CLABE —diez minutos largos—
+   y al volver, el navegador caía en otra dirección sin el ?op= ni el ?prod=,
+   así que el check-in no sabía de quién era y lo mandaba al principio.
+
+   Ahora Stripe se abre en OTRA PESTAÑA. El check-in se queda donde estaba, con
+   todo lo tecleado, y cuando termina vuelve y da a «Ya lo vinculé». */
 async function abreStripe(){
   var b=$('btnStripe'); b.disabled=true; var antes=b.textContent; b.textContent='Abriendo Stripe…';
   try{
@@ -1788,18 +1796,42 @@ async function abreStripe(){
       r=await fetch(SB+'/functions/v1/sinc-stripe-connect',{method:'POST',headers:hdr(),
         body:JSON.stringify({accion:'iniciar', operador_id:ID})});
       j=await r.json();
-      if(j&&j.ya){ toast('Tu Stripe ya está vinculado.'); }
+      if(j&&j.ya){ toast('Tu Stripe ya está vinculado.'); FICHA=await releeFicha()||FICHA; pintaCobro(); }
       else if(!r.ok||!j.url) throw new Error((j&&(j.detalle||j.error))||('HTTP '+r.status));
-      else { location.href=j.url; return; }
+      else { aOtraPestana(j.url); return; }
     }else{
       r=await fetch(SB+'/functions/v1/productora-stripe-alta',{method:'POST',headers:hdr(),
         body:JSON.stringify({accion:'alta', token:(FICHA&&FICHA.portal_token), origen:location.origin})});
       j=await r.json();
       if(!r.ok||!j.url) throw new Error((j&&(j.detalle||j.error))||('HTTP '+r.status));
-      location.href=j.url; return;
+      aOtraPestana(j.url); return;
     }
   }catch(x){ toast('No se pudo abrir Stripe: '+(x.message||x),1); }
   b.disabled=false; b.textContent=antes;
+}
+function releeFicha(){ return leeFicha(TIPO==='operador'?'tour_operadores':'productoras', ID); }
+function aOtraPestana(url){
+  var v=window.open(url,'_blank','noopener');
+  var c=$('cobroCajas');
+  var aviso=document.createElement('div');
+  aviso.className='aviso';
+  aviso.innerHTML = v
+    ? '<b>Stripe se abrió en otra pestaña.</b> Termina ahí tu alta —te va a pedir razón social, '+
+      'identificación, domicilio y CLABE— y cuando acabes vuelve a esta pestaña. '+
+      'Esta página se queda como está, no pierdes nada de lo que ya pusiste.'
+    : '<b>Tu navegador bloqueó la ventana.</b> Abre esta dirección a mano, mejor en otra pestaña '+
+      'para no perder lo que llevas:<br><a href="'+esc(url)+'" target="_blank" rel="noopener">'+
+      'Abrir el alta de Stripe</a>';
+  aviso.innerHTML += '<div style="margin-top:11px">'+
+    '<button class="btn" id="btnYaStripe" type="button">Ya lo vinculé · comprobar</button></div>';
+  c.insertBefore(aviso, c.firstChild);
+  $('btnYaStripe').onclick=async function(){
+    var bb=this; bb.disabled=true; bb.textContent='Comprobando…';
+    FICHA=await releeFicha()||FICHA;
+    if(stripeOk()){ toast('Listo: tu Stripe está vinculado.'); pintaCobro(); }
+    else{ toast('Todavía no lo vemos vinculado. Dale unos segundos y vuelve a probar.',1);
+          bb.disabled=false; bb.textContent='Ya lo vinculé · comprobar'; }
+  };
 }
 
 /* La vuelta de Stripe trae ?code y ?state. Se cierra el trato, se limpia la
@@ -1817,7 +1849,12 @@ async function stripeDeVuelta(){
     toast(j.cobra?'Listo: tu Stripe quedó vinculado.'
                  :'Vinculado, pero Stripe todavía te pide unos datos para poder cobrar.',!j.cobra);
   }catch(x){ toast('No se pudo terminar la vinculación: '+(x.message||x),1); }
-  history.replaceState({},'',location.pathname+location.hash);
+  /* Al limpiar el código de Stripe de la barra, se conserva el ?op= o ?prod=:
+     sin ellos la pantalla deja de saber de quién es el alta. */
+  var q2=new URLSearchParams();
+  if(VER_OP) q2.set('op',VER_OP);
+  if(VER_PR) q2.set('prod',VER_PR);
+  history.replaceState({},'',location.pathname+(q2.toString()?('?'+q2.toString()):'')+location.hash);
   FICHA=await leeFicha('tour_operadores',ID)||FICHA;
   return true;
 }
