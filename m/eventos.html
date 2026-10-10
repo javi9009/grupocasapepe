@@ -221,6 +221,24 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
           <input type="file" id="edvFotoFile" accept="image/*,video/*" multiple style="display:none">
         </div>
       </div>
+      <!-- LO QUE MANDÓ LA PRODUCTORA, A LA VISTA. Javi, 10-oct-2026: «veo que
+           hay campos en la ficha de dashboard que no se cargaron, como el
+           precio o cupo, o boletos». No es que no se cargaran: los boletos no
+           viven en `eventos` sino en `evento_precios`, y esta ficha no los
+           miraba. Un evento con boletos tiene el precio ahí, no en el campo
+           «precio al público», que es para lo que se vende de una sola pieza. -->
+      <div style="margin-top:14px;border-top:1px solid var(--linea);padding-top:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <b style="font-size:13px">Boletos que puso la productora</b>
+          <span class="mini" id="edvBolAforo" style="color:var(--tenue)"></span>
+        </div>
+        <div id="edvBoletos" class="mini" style="margin-top:6px">Cargando…</div>
+      </div>
+      <div style="margin-top:14px;border-top:1px solid var(--linea);padding-top:12px">
+        <b style="font-size:13px">La sala ese día</b>
+        <div class="mini" style="margin:2px 0 6px">Dónde queda encajado, y qué hay pegado antes y después.</div>
+        <div id="edvDia" class="mini">Cargando…</div>
+      </div>
       <div style="margin-top:12px"><div class="mini" style="margin-bottom:5px">Cómo va quedando</div><div class="semaf" id="edvSem"></div></div>
       <div class="barra" style="margin:14px 0 0;flex-wrap:wrap;gap:8px">
         <button class="btn" id="edvGuarda">Guardar cambios</button>
@@ -228,6 +246,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
         <button class="btn" id="edvPublicar" style="display:none">Publicar</button>
         <button class="btn ghost" id="edvCancelEvt" style="display:none;color:var(--bad)">Cancelar evento</button>
         <button class="btn ghost" id="edvBorrar" style="color:var(--bad)">Borrar</button>
+        <button class="btn ghost" id="edvPrev2" type="button">Previsualizar</button>
         <button class="btn ghost" id="edvCerrar">Cerrar</button>
         <span class="mini" id="edvPie" style="flex:1"></span>
       </div>
@@ -390,13 +409,37 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   function colOf(id){return ESPCOL[id]||'#6D4AA0';}
   var dueno='', fEstado='', vistaEvt=(function(){try{return localStorage.getItem('evVista')||'lista';}catch(_){return 'lista';}})();
   // colorcitos: qué le falta a un evento para estar listo
+  /* Lo que de verdad cuesta y cuánta gente cabe, mirando también sus boletos. */
+  var BOL={};
+  function bolDe(e){ return BOL[e&&e.id]||[]; }
+  function precioDe(e){
+    if(Number(e.precio||0)>0) return Number(e.precio);
+    var l=bolDe(e).map(function(b){return Number(b.precio||0);}).filter(function(n){return n>0;});
+    return l.length?Math.min.apply(null,l):0;
+  }
+  function cupoDe(e){
+    var l=bolDe(e).reduce(function(a,b){return a+(Number(b.cupo)||0);},0);
+    return l || Number(e.cupo||e.aforo||0);
+  }
+  function portadaDe(e){
+    var f=(e&&e.fotos)||[];
+    for(var i=0;i<f.length;i++){ var u=f[i]&&(f[i].url||f[i]); if(u&&f[i].tipo!=='video') return String(u); }
+    return null;
+  }
+  function precioTxt(e){
+    if(e.es_gratis) return 'Gratis';
+    var p=precioDe(e); if(!p) return '—';
+    var n=bolDe(e).filter(function(b){return Number(b.precio||0)>0;}).length;
+    return (n>1?'desde ':'')+mx(p);
+  }
+
   var CHK=[
     {k:'nombre',l:'N',t:'Nombre',ok:function(e){return !!(e.nombre&&String(e.nombre).trim());}},
     {k:'sala',l:'S',t:'Sala / espacio',ok:function(e){return !!e.espacio_id;}},
     {k:'fecha',l:'F',t:'Fecha',ok:function(e){return !!e.fecha_inicio;}},
     {k:'hora',l:'H',t:'Hora',ok:function(e){return !!(e.fecha_inicio&&String(e.fecha_inicio).length>=16);}},
-    {k:'precio',l:'$',t:'Precio o gratis',ok:function(e){return !!e.es_gratis||Number(e.precio||0)>0;}},
-    {k:'cupo',l:'C',t:'Cupo',ok:function(e){return Number(e.cupo||e.aforo||0)>0;}},
+    {k:'precio',l:'$',t:'Precio o gratis (vale el de sus boletos)',ok:function(e){return !!e.es_gratis||precioDe(e)>0;}},
+    {k:'cupo',l:'C',t:'Cupo (vale el de sus boletos)',ok:function(e){return cupoDe(e)>0;}},
     {k:'texto',l:'D',t:'Descripción',ok:function(e){return !!(e.descripcion&&String(e.descripcion).trim());}},
     /* La foto estaba en el candado de la base pero no en el semaforo, asi que
        la ficha salia toda en verde y al pulsar Publicar rebotaba sin aviso.
@@ -580,19 +623,25 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
             '<td class="mini"><span class="etq '+(e.productora_id?'prod':'casa')+'">'+esc(e.productora_id?(pn[e.productora_id]||'productora'):'Casa Pepe')+'</span></td>'+
             '<td class="mini">'+esc(TIPON[e.tipo]||e.tipo||'—')+'</td>'+
             '<td class="mini">'+esc(esn[e.espacio_id]||'—')+'</td>'+
-            '<td>'+cuando+'</td><td class="n">'+(Number(e.precio||0)>0?mx(e.precio):(e.es_gratis?'<span class="tag warn">Gratis</span>':'—'))+'</td>'+
+            '<td>'+cuando+'</td><td class="n">'+(e.es_gratis?'<span class="tag warn">Gratis</span>':esc(precioTxt(e)))+'</td>'+
             '<td><span class="tag '+es[1]+'">'+esc(es[0])+'</span></td>'+
             '<td><div class="semaf">'+semaf(e)+'</div></td></tr>';}).join('')+'</tbody></table>';
     } else {
       $('rEvt').innerHTML=L.map(function(e){var es=ESTN[e.estado]||[e.estado,''];var p=faltaEv(e);
-        var ini='<div class="sinf">'+esc(String(e.nombre||'E').trim().charAt(0).toUpperCase())+'</div>';
+        /* LA PORTADA ESTABA GUARDADA Y NO SE ENSEÑABA. Javi, 10-oct-2026: «no
+           aparece la foto en la ficha». La tarjeta pintaba siempre la inicial,
+           sin mirar `fotos`. */
+        var por=portadaDe(e);
+        var ini= por
+          ? '<img src="'+esc(por)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block">'
+          : '<div class="sinf">'+esc(String(e.nombre||'E').trim().charAt(0).toUpperCase())+'</div>';
         var meta=[TIPON[e.tipo]||e.tipo,esn[e.espacio_id]||'sin sala',e.fecha_inicio?fecha(e.fecha_inicio):''].filter(Boolean).join(' · ');
         return '<article class="tarj" data-ev="'+e.id+'">'+
           '<div class="foto">'+ini+'<div class="arr"><span class="etq '+(e.productora_id?'prod':'casa')+'">'+esc(e.productora_id?(pn[e.productora_id]||'productora'):'Casa Pepe')+'</span>'+
             '<span class="tag '+es[1]+'">'+esc(es[0])+'</span></div></div>'+
           '<div class="cuerpo"><div class="nom2">'+esc(e.nombre||'(sin nombre)')+'</div>'+
             '<div class="meta">'+esc(meta)+'</div>'+
-            '<div class="pie2"><div class="semaf">'+semaf(e)+'</div><span class="pre2">'+(Number(e.precio||0)>0?mx(e.precio):(e.es_gratis?'Gratis':'—'))+'</span></div>'+
+            '<div class="pie2"><div class="semaf">'+semaf(e)+'</div><span class="pre2">'+esc(precioTxt(e))+'</span></div>'+
             (p.length?'<div class="falta">falta '+esc(p.slice(0,4).join(', '))+(p.length>4?' y '+(p.length-4)+' más':'')+'</div>':'')+
           '</div></article>';}).join('');
     }
@@ -683,8 +732,82 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     $('edvPublicar').style.display=(!fin&&e.estado!=='publicado'&&!faltaVal)?'':'none';
     $('edvCancelEvt').style.display=fin?'none':'';
     $('edvPie').textContent='';
+    edvBoletosPinta(e); edvDiaPinta(e);
     $('cardEditEvt').style.display='';$('cardEditEvt').scrollIntoView({behavior:'smooth',block:'nearest'});
   }
+  /* ---------- LO QUE MANDÓ LA PRODUCTORA ----------
+     Javi, 10-oct-2026. Dos cosas que esta ficha no enseñaba y hacían falta para
+     poder decir que sí: sus boletos (que viven en `evento_precios`, no en el
+     campo «precio al público») y cómo queda el evento encajado en la sala ese
+     día, con lo que tenga pegado antes y después. */
+  async function edvBoletosPinta(e){
+    var c=document.getElementById('edvBoletos'); if(!c) return;
+    c.textContent='Cargando…';
+    var r=await sb.from('evento_precios').select('*').eq('evento_id',e.id).order('orden');
+    var l=r.data||[];
+    var sala=ESP.filter(function(x){return x.id===e.espacio_id;})[0];
+    var av=document.getElementById('edvBolAforo');
+    var suma=l.reduce(function(a,b){return a+(Number(b.cupo)||0);},0);
+    if(av) av.textContent = sala&&sala.capacidad
+      ? ('aforo de '+sala.nombre+': '+sala.capacidad+(suma?(' · boletos: '+suma+(suma>sala.capacidad?' ⚠ se pasa':'')):''))
+      : '';
+    if(!l.length){
+      c.innerHTML='<span style="color:var(--tenue)">No puso boletos. Si el evento se vende de una sola pieza, el precio va en «Precio al público» de arriba.</span>';
+      return;
+    }
+    c.innerHTML='<table><thead><tr><th>Boleto</th><th class="n">Precio</th><th class="n">Cupo</th><th>Qué incluye</th></tr></thead><tbody>'+
+      l.map(function(b){
+        return '<tr><td><b>'+esc(b.nombre||'—')+'</b></td>'+
+          '<td class="n">'+(b.precio!=null?mx(b.precio):'—')+'</td>'+
+          '<td class="n">'+(b.cupo!=null?b.cupo:'—')+'</td>'+
+          '<td class="mini">'+esc(b.incluye||'')+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }
+
+  async function edvDiaPinta(e){
+    var c=document.getElementById('edvDia'); if(!c) return;
+    if(!e.espacio_id || !e.fecha_inicio){ c.innerHTML='<span style="color:var(--tenue)">Sin sala o sin fecha: no hay nada que encajar.</span>'; return; }
+    c.textContent='Cargando…';
+    var d0=new Date(e.fecha_inicio); var dia=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate());
+    var d1=new Date(dia.getTime()+24*3600000);
+    var r=await sb.from('ev_ocupaciones')
+      .select('inicia,termina,evento_inicia,evento_termina,estado,solicitud_id')
+      .eq('espacio_id',e.espacio_id)
+      .gte('inicia',dia.toISOString()).lt('inicia',d1.toISOString())
+      .order('inicia');
+    var l=r.data||[];
+    /* La franja de ESTE evento, calculada con lo que hay en pantalla, para que
+       se vea el efecto de lo que el administrador acaba de cambiar. */
+    var mo=Number(document.getElementById('edvMont').value||0)||0;
+    var de=Number(document.getElementById('edvDesm').value||0)||0;
+    var ini=new Date(e.fecha_inicio), fin=new Date(e.fecha_fin||new Date(ini.getTime()+2*3600000));
+    var mia={d:new Date(ini.getTime()-mo*60000), h:new Date(fin.getTime()+de*60000)};
+    var otras=l.filter(function(o){
+      return Math.abs(new Date(o.evento_inicia||o.inicia)-ini)>60000; });
+    function hh(x){ var d=new Date(x); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+    var antes=otras.filter(function(o){ return new Date(o.termina)<=mia.d; }).pop();
+    var despues=otras.filter(function(o){ return new Date(o.inicia)>=mia.h; })[0];
+    var pisa=otras.filter(function(o){ return new Date(o.inicia)<mia.h && new Date(o.termina)>mia.d; });
+    var h='<div style="display:grid;gap:5px">';
+    h+='<div><b>'+esc(nombreSala(e.espacio_id))+'</b> · '+fecha(e.fecha_inicio)+'</div>';
+    if(antes) h+='<div>Antes: '+hh(antes.inicia)+'–'+hh(antes.termina)+' <span class="tag '+(antes.estado==='aprobada'?'ok':'warn')+'">'+esc(antes.estado)+'</span>'+
+      ' · quedan <b>'+Math.round((mia.d-new Date(antes.termina))/60000)+' min</b> de holgura</div>';
+    else h+='<div style="color:var(--tenue)">Antes: nada.</div>';
+    h+='<div style="background:#EDE9FE;border-radius:7px;padding:7px 9px">'+
+       '<b>Este evento</b>: sala de '+hh(mia.d)+' a '+hh(mia.h)+
+       ' · se vende de '+hh(ini)+' a '+hh(fin)+
+       (mo||de?' <span class="mini">('+mo+' min de montaje, '+de+' de desmontaje)</span>':'')+'</div>';
+    if(despues) h+='<div>Después: '+hh(despues.inicia)+'–'+hh(despues.termina)+' <span class="tag '+(despues.estado==='aprobada'?'ok':'warn')+'">'+esc(despues.estado)+'</span>'+
+      ' · quedan <b>'+Math.round((new Date(despues.inicia)-mia.h)/60000)+' min</b> de holgura</div>';
+    else h+='<div style="color:var(--tenue)">Después: nada.</div>';
+    if(pisa.length) h+='<div style="background:#F6E1DD;color:#9E3B2E;border-radius:7px;padding:7px 9px">'+
+      '<b>Se pisa</b> con '+pisa.map(function(o){return hh(o.inicia)+'–'+hh(o.termina);}).join(', ')+
+      '. Si lo publicas así, dos cosas quieren la misma sala.</div>';
+    h+='</div>';
+    c.innerHTML=h;
+  }
+  function nombreSala(id){ var e=ESP.filter(function(x){return x.id===id;})[0]; return e?e.nombre:'la sala'; }
+
   function cierraEvt(){evEdit=null;$('cardEditEvt').style.display='none';}
   async function libreSala(espId,ini,fin,mont,desm,excluir){
     if(!espId)return true;
@@ -961,6 +1084,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       sb.from('ev_espacios').select('*').order('orden'),
       sb.from('v_productoras').select('id,nombre_comercial,tipo_nombre,estado').order('nombre_comercial'),
       sb.from('eventos').select('*').order('fecha_inicio',{ascending:false}),
+      sb.from('evento_precios').select('evento_id,nombre,precio,cupo,incluye,orden').order('orden'),
       sb.from('productora_usuarios').select('productora_id,nombre,rol').eq('rol','productor_asociado'),
       sb.from('ateneo_lugares').select('numero,categoria,tipo,capacidad,activo'),
       sb.from('inscripciones_coworking').select('plan_id,plan_nombre,fecha_inicio,pax,estado'),
@@ -968,8 +1092,14 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     ]);
     if(r[0].error){$('tEsp').innerHTML='<div class="vacio">No se pudo leer: '+esc(r[0].error.message)+'</div>';}
     ESP=r[0].data||[];PROD=(r[1].data||[]).filter(function(p){return p.estado!=='baja';});EVT=r[2].data||[];
-    ASOC={};(r[3]&&r[3].data||[]).forEach(function(u){if(!ASOC[u.productora_id])ASOC[u.productora_id]=u.nombre;});
-    LUGA=(r[4]&&r[4].data)||[]; INSCA=(r[5]&&r[5].data)||[]; RESA=(r[6]&&r[6].data)||[];
+    /* LOS BOLETOS, EN UN MAPA POR EVENTO. Javi, 10-oct-2026: «hay campos que no
+       se cargaron, como el precio o cupo, o boletos». Un evento con boletos
+       tiene el precio en `evento_precios`, no en `eventos.precio`, así que la
+       ficha lo daba por vacío y el semáforo cantaba «falta precio» sobre un
+       evento que sí lo tenía. */
+    BOL={};(r[3]&&r[3].data||[]).forEach(function(b){ (BOL[b.evento_id]=BOL[b.evento_id]||[]).push(b); });
+    ASOC={};(r[4]&&r[4].data||[]).forEach(function(u){if(!ASOC[u.productora_id])ASOC[u.productora_id]=u.nombre;});
+    LUGA=(r[5]&&r[5].data)||[]; INSCA=(r[6]&&r[6].data)||[]; RESA=(r[7]&&r[7].data)||[];
     colorEsp();montaGen();pinta();
   }
 
@@ -1188,6 +1318,10 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   $('prevCerrar').onclick=cierraPrev;$('prevCerrar2').onclick=cierraPrev;
   $('prevPop').onclick=function(ev){if(ev.target===this)cierraPrev();};
   $('popPrev').onclick=function(){ if(popId) abrePrev(popId); };
+  /* Previsualizar desde la ficha de edición, no solo desde el pop. Javi,
+     10-oct-2026: «ni me permite previsualizar o ir al link donde se
+     previsualiza». */
+  if($('edvPrev2')) $('edvPrev2').onclick=function(){ if(evEdit) abrePrev(evEdit.id); };
 
   /* ---------- VALIDAR Y PUBLICAR ----------
      Solo para quien puede EDITAR esta pantalla: el motor de permisos es el
