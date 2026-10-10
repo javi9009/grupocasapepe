@@ -297,8 +297,16 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div><span>El colaborador que vende</span><input type="number" min="0" step="0.5" data-c="com_vendedor_pct"></div>
           <div><span>El productor asociado <small style="color:var(--muted)">· si aplica</small></span><input type="number" min="0" step="0.5" data-c="com_hotel_pct"></div>
           <div><span>El Ateneo Turístico</span><input type="number" min="0" step="0.5" data-c="com_plataforma_pct"></div>
-          <div><span>Total que retenemos</span><input type="number" readonly data-c="comision_pct" style="background:var(--surface-3);border-style:dashed"></div>
+          <!-- EL TOTAL SE PUEDE TOCAR. Javi, 10-oct-2026: «deja el 35 como
+               partida y permítenos editar si es distinta». Mientras nadie lo
+               escriba se recalcula solo con los tres de arriba; en cuanto se
+               escribe a mano manda lo escrito, que es lo pactado con esa
+               productora. El total es lo que se cobra; el desglose es cómo lo
+               repartimos por dentro. -->
+          <div><span>Total que retenemos</span><input type="number" min="0" max="100" step="0.01" data-c="comision_pct"></div>
         </div>
+        <div class="mini" id="comAviso" style="margin:8px 0 0"></div>
+        <div class="mini" style="margin:4px 0 0">De partida retenemos el 35%. Si con esta productora se pactó otra cosa, se escribe aquí.</div>
         <div class="card" style="background:var(--surface-3);padding:14px;margin-top:12px">
           <b style="font-size:13px">Calcular el reparto desde un precio</b>
           <div class="fgrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:8px">
@@ -490,6 +498,10 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
       if(v===true)v='true';else if(v===false)v='false';
       el.value=v==null?'':v;
     });
+    /* Si la comisión guardada no es la suma del desglose, es que se pactó así:
+       se abre en «a mano» para que suma() no la pise al pintar la ficha. */
+    TOT_A_MANO = cur.comision_pct!=null &&
+      Math.abs(Number(cur.comision_pct) - ((Number(cur.com_vendedor_pct)||0)+(Number(cur.com_hotel_pct)||0)+(Number(cur.com_plataforma_pct)||0))) > 0.005;
     suma();pintaTipo();pintaCobro();pintaLiga(id);pintaFichaPub();pintaDocs();
     var r1=await fetch(SB+'/rest/v1/productora_usuarios?select=*&productora_id=eq.'+id+'&order=created_at',{headers:hdr()});
     U=r1.ok?await r1.json():[];pintaEquipo();
@@ -497,8 +509,36 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   }
 
   function n(c){var el=document.querySelector('[data-c="'+c+'"]');return el&&el.value!==''?Number(el.value):0;}
-  function suma(){var t=n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct');var tot=document.querySelector('[data-c="comision_pct"]');if(tot)tot.value=t;$('cTot').textContent=String(Math.round(t*100)/100);}
+  /* El total se escribe solo mientras nadie lo haya tocado; en cuanto se escribe
+     a mano manda lo escrito, que es lo pactado. Javi, 10-oct-2026. */
+  var TOT_A_MANO=false;
+  function r2(x){return Math.round(x*100)/100;}
+  function suma(){
+    var t=r2(n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct'));
+    var tot=document.querySelector('[data-c="comision_pct"]');
+    if(tot && !TOT_A_MANO) tot.value=t;
+    pintaTot(t);
+  }
+  function pintaTot(t){
+    var tot=document.querySelector('[data-c="comision_pct"]');
+    var v=(tot && tot.value!=='')?r2(Number(tot.value)):t;
+    $('cTot').textContent=String(v);
+    var a=$('comAviso'); if(!a) return;
+    if(Math.abs(v-t)<0.005){ a.innerHTML=''; return; }
+    a.innerHTML='<span style="color:#9E3B2E">El total ('+v+'%) no es la suma del desglose ('+t+'%).</span> '+
+      'Se cobra el total; el desglose es cómo lo repartimos. '+
+      '<a href="#" id="comVolver" style="color:inherit">Volver a la suma</a>';
+    $('comVolver').onclick=function(ev){
+      ev.preventDefault(); TOT_A_MANO=false;
+      var el=document.querySelector('[data-c="comision_pct"]'); if(el) el.value=t;
+      suma();
+    };
+  }
   Array.prototype.forEach.call(document.querySelectorAll('[data-c^="com_"]'),function(el){el.oninput=suma;});
+  (function(){
+    var tot=document.querySelector('[data-c="comision_pct"]');
+    if(tot) tot.oninput=function(){ TOT_A_MANO=true; pintaTot(r2(n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct'))); };
+  })();
 
   /* ---------- SUS PAPELES ---------- */
   var DOCT={csf:'Constancia fiscal',ine:'INE',pasaporte:'Pasaporte',poliza:'Póliza de RC'};
@@ -938,7 +978,9 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     var vend=r3(Math.min(10,Math.max(0,pct-asoc)));        // el colaborador que vende, hasta 10
     var plat=r3(Math.max(0,pct-vend-asoc));                // el Ateneo Turístico, el resto
     var set=function(c,v){var el=document.querySelector('[data-c="'+c+'"]');if(el)el.value=v;};
-    set('com_vendedor_pct',vend);set('com_plataforma_pct',plat);suma();
+    set('com_vendedor_pct',vend);set('com_plataforma_pct',plat);
+    TOT_A_MANO=false;   // la calculadora rehace el desglose: el total vuelve a salir de él
+    suma();
     out.innerHTML='Sobre '+money(pvp)+': la productora se queda '+money(op)+' y el Ateneo retiene '+money(com)+' ('+r3(pct)+'%). Reparto → colaborador '+vend+'% · productor asociado '+asoc+'% · Ateneo '+plat+'%. <span style="color:var(--accent)">Llenado ↑, dale Guardar.</span>';
   };
 

@@ -318,12 +318,20 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div><span>Quien vende en la recepción del hotel</span><input type="number" min="0" max="100" step="0.5" data-c="com_vendedor_pct" style="width:70px;text-align:right"></div>
           <div><span>El hotel, por empujar la venta</span><input type="number" min="0" max="100" step="0.5" data-c="com_hotel_pct" style="width:70px;text-align:right"></div>
           <div><span>La plataforma</span><input type="number" min="0" max="100" step="0.5" data-c="com_plataforma_pct" style="width:70px;text-align:right"></div>
-          <!-- El total es la suma de los tres, no un dato aparte: se recalcula
-               solo. Antes era un input editable que suma() pisaba en cada tecla,
-               así que parecía que no dejaba escribir. -->
-          <div><span>Total que retenemos</span><input type="number" data-c="comision_pct" readonly tabindex="-1" style="width:70px;text-align:right;background:var(--surface-3);border-style:dashed"></div>
+          <!-- EL TOTAL SE PUEDE TOCAR. Javi, 10-oct-2026: «deja el 25 como
+               partida y permítenos editar si es distinta». El 25 sigue siendo
+               de dónde se arranca, pero si con ese operador se pactó otra cosa
+               se escribe aquí y se acabó.
+               Mientras nadie lo toque se sigue recalculando solo con los tres
+               de arriba —era readonly justo por eso, porque suma() lo pisaba en
+               cada tecla—; en cuanto se escribe a mano se respeta, y se avisa de
+               que ya no cuadra con el desglose. El total es lo que se cobra de
+               verdad (es el que lee el cobro); el desglose es cómo lo repartimos
+               por dentro. -->
+          <div><span>Total que retenemos</span><input type="number" min="0" max="100" step="0.01" data-c="comision_pct" style="width:70px;text-align:right"></div>
         </div>
-        <div class="mini" style="margin:8px 0 14px">Si se acuerda algo distinto para sus tours, se le propone por escrito y queda anotado aquí antes de publicar.</div>
+        <div class="mini" id="comAviso" style="margin:8px 0 0"></div>
+        <div class="mini" style="margin:4px 0 14px">De partida retenemos el 25%. Si se acuerda algo distinto para sus tours, se escribe aquí y se le propone por escrito antes de publicar.</div>
 
         <!-- Reparto automático: de un precio de ejemplo y lo que se queda el operador,
              saca el 5% hotel / 10% colaborador / resto Casa Pepe. Si Casa Pepe no da
@@ -571,6 +579,10 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       if(v===true)v='true';else if(v===false)v='false';
       el.value=v==null?'':v;
     });
+    /* Si la comisión guardada no es la suma del desglose, es que se pactó así:
+       se abre en «a mano» para que suma() no la pise al pintar la ficha. */
+    TOT_A_MANO = cur.comision_pct!=null &&
+      Math.abs(Number(cur.comision_pct) - ((Number(cur.com_vendedor_pct)||0)+(Number(cur.com_hotel_pct)||0)+(Number(cur.com_plataforma_pct)||0))) > 0.005;
     suma();
     pintaCobro();
     pintaCobroDiv();
@@ -596,13 +608,38 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     pinta();
   }
   function n(c){var el=document.querySelector('[data-c="'+c+'"]');return el&&el.value!==''?Number(el.value):0;}
+  /* El total se escribe solo mientras nadie lo haya tocado. En cuanto alguien
+     lo escribe a mano, manda lo escrito: es lo pactado con ese operador, y es lo
+     que se cobra. El desglose se queda como está y se avisa si no cuadra.
+     Javi, 10-oct-2026. */
+  var TOT_A_MANO=false;
+  function r2(x){return Math.round(x*100)/100;}
   function suma(){
-    var t=n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct');
+    var t=r2(n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct'));
     var tot=document.querySelector('[data-c="comision_pct"]');
-    if(tot)tot.value=t;
-    $('cTot').textContent=String(Math.round(t*100)/100);
+    if(tot && !TOT_A_MANO) tot.value=t;
+    pintaTot(t);
+  }
+  function pintaTot(t){
+    var tot=document.querySelector('[data-c="comision_pct"]');
+    var v=(tot && tot.value!=='')?r2(Number(tot.value)):t;
+    $('cTot').textContent=String(v);
+    var a=$('comAviso'); if(!a) return;
+    if(Math.abs(v-t)<0.005){ a.innerHTML=''; return; }
+    a.innerHTML='<span style="color:#9E3B2E">El total ('+v+'%) no es la suma del desglose ('+t+'%).</span> '+
+      'Se cobra el total; el desglose es cómo lo repartimos. '+
+      '<a href="#" id="comVolver" style="color:inherit">Volver a la suma</a>';
+    $('comVolver').onclick=function(ev){
+      ev.preventDefault(); TOT_A_MANO=false;
+      var el=document.querySelector('[data-c="comision_pct"]'); if(el) el.value=t;
+      suma();
+    };
   }
   Array.prototype.forEach.call(document.querySelectorAll('[data-c^="com_"]'),function(el){el.oninput=suma;});
+  (function(){
+    var tot=document.querySelector('[data-c="comision_pct"]');
+    if(tot) tot.oninput=function(){ TOT_A_MANO=true; pintaTot(r2(n('com_vendedor_pct')+n('com_hotel_pct')+n('com_plataforma_pct'))); };
+  })();
 
   /* ---------- reparto automático 5/10/10 ----------
      De un PVP de ejemplo y lo que se queda el operador, saca cuánto retiene Casa
@@ -637,6 +674,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       if(!r){ out.innerHTML='<span style="color:var(--bad)">Revisa los números.</span>'; return; }
       var setv=function(c,v){ var el=document.querySelector('[data-c="'+c+'"]'); if(el){ el.value=v; } };
       setv('com_hotel_pct', r.hotel); setv('com_vendedor_pct', r.vend); setv('com_plataforma_pct', r.plat);
+      TOT_A_MANO=false;   // la calculadora rehace el desglose: el total vuelve a salir de él
       suma();
       out.innerHTML='Sobre $'+pvp.toLocaleString('es-MX')+': operador <b>$'+r.opMxn.toLocaleString('es-MX')+
         '</b> · Casa Pepe <b>$'+r.comMxn.toLocaleString('es-MX')+'</b> ('+r.comPct+'%). '+
