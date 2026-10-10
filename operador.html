@@ -2771,18 +2771,57 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   /* La vuelta de Stripe: ?code y ?state en la URL. Se cierra, se limpia la
      barra de direcciones y se repinta, para que no quede el codigo a la vista
      ni se reintente si recarga. */
+  /* LA VUELTA DE STRIPE, DESDE DONDE SEA.
+     Javi, 10-oct-2026: llenó el alta de Stripe DOS VECES y las dos acabó en el
+     listado de touroperadores, sin vincular nada. La causa estaba en la línea
+     de abajo: `if(!code||!st||!cur) return`. El redirect_uri que Stripe tiene
+     registrado es SIEMPRE /operador.html, así que la vuelta cae aquí venga de
+     donde venga —del portal, o del check-in nuevo—; y si quien vuelve es de
+     Casa Pepe mirando el padrón, `cur` está vacío y la función se iba sin
+     canjear el código. El trabajo del alta se perdía entero.
+
+     Dos arreglos: el touroperador se deduce del propio `state`, que está
+     guardado en su ficha; y si la vinculación la empezó el check-in, al
+     terminar se le devuelve allí en vez de dejarlo en el listado. */
   async function stripeDeVuelta(){
     var q=new URLSearchParams(location.search);
     var code=q.get('code'), st=q.get('state');
-    if(!code||!st||!cur)return;
+    if(!code||!st)return;
+
+    var opId = cur && cur.id;
+    if(!opId){
+      try{
+        var rq=await fetch(SB+'/rest/v1/tour_operadores?select=id&stripe_oauth_state=eq.'+
+          encodeURIComponent(st)+'&limit=1',{headers:hdr()});
+        if(rq.ok){ var l=await rq.json(); opId=(l[0]||{}).id||null; }
+      }catch(_){}
+    }
+    if(!opId){
+      toast('No encontramos de quién era esa vinculación de Stripe. Vuelve a empezarla.',true);
+      history.replaceState({},'',location.pathname);
+      return;
+    }
+
+    var bien=false;
     try{
       var r=await fetch(SB+'/functions/v1/sinc-stripe-connect',{method:'POST',headers:hdr(),
-        body:JSON.stringify({accion:'terminar', operador_id:cur.id, code:code, state:st})});
+        body:JSON.stringify({accion:'terminar', operador_id:opId, code:code, state:st})});
       var j=await r.json();
       if(!r.ok||!j.ok)throw new Error((j&&(j.detalle||j.error))||'no se pudo');
+      bien=true;
       toast(j.cobra?'Listo: tu Stripe quedó vinculado.'
                    :'Vinculado, pero Stripe todavía te pide unos datos para poder cobrar.',!j.cobra);
     }catch(x){ toast('No se pudo terminar la vinculación: '+x.message,true); }
+
+    /* ¿Venía del check-in? Se le devuelve a su alta, no al padrón. */
+    var v=null;
+    try{ v=JSON.parse(localStorage.getItem('checkin_stripe_vuelve')||'null'); }catch(_){}
+    if(bien && v && v.id===opId && (Date.now()-(v.t||0)) < 7*24*3600*1000){
+      try{ localStorage.removeItem('checkin_stripe_vuelve'); }catch(_){}
+      location.replace('/checkin.html?op='+encodeURIComponent(opId));
+      return;
+    }
+
     history.replaceState({},'',location.pathname);
     await refresca();
   }
