@@ -79,10 +79,20 @@ Deno.serve(async (req: Request) => {
   if (accion === "iniciar") {
     if (op.stripe_account_id) return json({ ok: true, ya: true, cuenta: op.stripe_account_id });
 
+    /* EL ESTADO NO SE TOCA AL SALIR, SOLO AL VOLVER.
+       Javi, 10-oct-2026: «no deberías habilitar el Stripe si no te regresa OK».
+       Hasta hoy, en cuanto se generaba la liga la ficha pasaba a «liga_enviada»
+       y el portal decía «Te mandamos la liga»: progreso de algo que no había
+       pasado. Andrés se quedó atascado en la pantalla de sesión de Stripe, no
+       volvió nunca —los registros no tienen ni una llamada de vuelta— y aun así
+       su ficha decía que la cosa iba en marcha, y encima firmó el contrato
+       después.
+       Ahora salir solo deja constancia del INTENTO (el papelito y su hora). El
+       estado lo escribe únicamente «terminar», y con lo que conteste Stripe. */
     const state = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
     const pa = await rest(`tour_operadores?id=eq.${opId}`, {
       method: "PATCH",
-      body: JSON.stringify({ stripe_oauth_state: state, stripe_oauth_state_at: new Date().toISOString(), stripe_estado: "liga_enviada" }),
+      body: JSON.stringify({ stripe_oauth_state: state, stripe_oauth_state_at: new Date().toISOString() }),
     });
     if (!pa.ok) return json({ error: "no se pudo preparar la vinculacion" }, 500);
 
