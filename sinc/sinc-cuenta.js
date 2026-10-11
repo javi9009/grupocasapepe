@@ -160,7 +160,21 @@ window.sincCuenta = (function () {
        panel que tenga abierta al lado. */
     PRESTADA = null;
     try { localStorage.removeItem('sinc_resv_sesion'); } catch (_) {}
+    /* Los pax de la reserva se van con la sesión: son de ESE huésped. Si se
+       quedaran, el siguiente que entrara en el mismo teléfono -el de recepción,
+       el de una compañera- heredaría su tope. */
+    try { localStorage.removeItem('sinc_resv_pax'); } catch (_) {}
     try { await cli().auth.signOut(); } catch (_) {}
+  }
+
+  /* Cuántas personas duermen en la reserva de quien está entrado, si entró por
+     la liga de su hotel. Null cuando no lo sabemos -entró con su correo, o con
+     Google-, y entonces no hay tope que aplicar: mejor sin tope que con uno
+     inventado. */
+  function paxReserva() {
+    var v = null;
+    try { v = Number(localStorage.getItem('sinc_resv_pax') || '') || null; } catch (_) {}
+    return v && v > 0 ? v : null;
   }
 
   async function fn(nombre, cuerpo, conSesion) {
@@ -409,6 +423,15 @@ window.sincCuenta = (function () {
       /* De qué liga salió esta sesión. Es lo que luego permite saber si la que
          hay abierta es la del huésped que trae la liga o la de otro. */
       try { localStorage.setItem('sinc_resv_sesion', t); } catch (_) {}
+      /* Y cuántos duermen en esa reserva. Lo usa el checkout de los tours de
+         entrada libre para no dejar apartar más lugares de los que son.
+         Se guarda aquí porque la liga trae el token y las pantallas de después
+         ya no: pago.html no recibe ?resv, pero sí sigue en el mismo navegador.
+         Javi, 11-oct-2026. */
+      try {
+        if (j && Number(j.pax) > 0) localStorage.setItem('sinc_resv_pax', String(Number(j.pax)));
+        else localStorage.removeItem('sinc_resv_pax');
+      } catch (_) {}
       return ficha;
     } catch (x) {
       /* Que no lo vuelva a intentar en cada pantalla de la sesión. */
@@ -520,7 +543,7 @@ window.sincCuenta = (function () {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
     miPerfil: miPerfil, comoHuesped: comoHuesped, yoDeEstaLiga: yoDeEstaLiga, recoge: recoge,
-    conSesionAbierta: conSesionAbierta,
+    conSesionAbierta: conSesionAbierta, paxReserva: paxReserva,
   };
 })();
 

@@ -195,6 +195,27 @@ Deno.serve(async (req: Request) => {
     const nombre = [main.guestFirstName, main.guestLastName].filter(Boolean).join(" ") || d.guestName || null;
     const tel = String(main.guestPhone ?? d.guestPhone ?? "").trim() || null;
 
+    /* CUÁNTOS DUERMEN EN ESA RESERVA. Javi, 11-oct-2026: en los tours de entrada
+       libre «puede apartar por el número de personas en su reserva». Quien viene
+       solo no aparta cuatro lugares gratis de un grupo que no existe.
+       Se cuenta de lo que haya, porque Cloudbeds no pone los mismos campos en
+       todas las reservas y en las viejas los cuartos vienen en `unassigned` y no
+       en `assigned`: primero adultos y niños de los cuartos, si no la lista de
+       huéspedes, si no los de la reserva. Y nunca menos de 1: devolver cero
+       cerraría la puerta a quien sí tiene derecho a pasar. */
+    const cuartos: any[] = [];
+    for (const k of ["assigned", "unassigned", "rooms"]) {
+      const v = (d as any)[k];
+      if (Array.isArray(v)) cuartos.push(...v);
+      else if (v && typeof v === "object") cuartos.push(...Object.values(v));
+    }
+    const suma = cuartos.reduce(
+      (s: number, r: any) => s + (Number(r?.adults) || 0) + (Number(r?.children) || 0), 0);
+    const pax = Math.max(
+      1,
+      suma || gl.length || ((Number(d.adults) || 0) + (Number(d.children) || 0)) || 1,
+    );
+
     const pase = await abreSesion(correo, "hotel");
     if (!pase.ok) return json({ error: pase.error }, 500);
 
@@ -203,7 +224,8 @@ Deno.serve(async (req: Request) => {
     const h = await rest(`hoteles?select=id&slug=eq.${cfg.slug}&limit=1`);
     const hotel = h.ok ? (await h.json())[0]?.id ?? null : null;
 
-    return json({ ok: true, token_hash: pase.token_hash, nombre, telefono: tel, hotel_id: hotel, hotel: prop });
+    return json({ ok: true, token_hash: pase.token_hash, nombre, telefono: tel,
+                  hotel_id: hotel, hotel: prop, pax });
   }
 
   const email  = String(b.email ?? "").trim().toLowerCase();

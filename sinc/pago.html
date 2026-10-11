@@ -80,6 +80,15 @@
 .recuerda li:first-child{border-top:0}
 .recuerda b{display:block;font-family:Oswald,sans-serif;font-weight:600;font-size:11px;
   letter-spacing:.09em;text-transform:uppercase;color:var(--gris);margin-bottom:2px}
+/* A nombre de quién queda la reserva. Va pegado al botón, no en la letra chica:
+   es el dato que hay que mirar antes de darle. Javi, 11-oct-2026. */
+.anombre{margin-top:16px;background:var(--hueso);border:1px solid var(--linea);
+  border-radius:12px;padding:12px 14px}
+.anombre .q{font:600 10.5px/1 Oswald,sans-serif;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--gris);display:block}
+.anombre b{display:block;font-size:15.5px;margin-top:4px;color:var(--tinta)}
+.anombre .m{display:block;font-size:12.5px;line-height:1.5;color:var(--gris);margin-top:3px}
+.anombre .m a{color:var(--naranja-oscuro);font-weight:600}
 .oferta,.acepto{display:flex;gap:11px;align-items:flex-start;font-size:13.5px;line-height:1.5;
   padding:13px 14px;border:1px solid var(--linea);border-radius:11px;margin-top:14px;cursor:pointer}
 .oferta input,.acepto input{margin:2px 0 0;width:18px;height:18px;flex:0 0 auto;accent-color:var(--naranja)}
@@ -160,6 +169,16 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Pre
             con su QR al correo, igual que si lo hubieras comprado: es lo que te deja entrar, y es
             como sabemos cuánta gente viene.</p>
         </div>
+        <!-- A NOMBRE DE QUIÉN, Y LAS CONDICIONES. Javi, 11-oct-2026: «pon lo de
+             aceptar términos arriba y pon el nombre de la persona que reserva,
+             que debe ser la del usuario».
+             Las condiciones vivían al final de la columna de la derecha, dentro
+             de «Antes de pagar»: en un teléfono eso es tres pantallazos por
+             debajo del botón. Quien tiene que marcarlas no las veía, y el botón
+             se quedaba sin hacer nada sin decir por qué. Ahora están donde se
+             decide, pegadas al botón. -->
+        <div id="aNombre"></div>
+        <div id="acepta"></div>
         <button class="btn ancho" id="bPagar" style="margin-top:18px" data-i18n>Pagar</button>
         <div class="pie" id="pieSeguro">🔒 <span data-i18n>Transacción segura con</span> <b>Stripe</b></div>
       </div>
@@ -181,7 +200,6 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Pre
       <div class="caja">
         <h2 data-i18n>Antes de pagar</h2>
         <ul class="recuerda" id="recuerda"></ul>
-        <div id="extras"></div>
       </div>
     </div>
   </div>
@@ -216,6 +234,9 @@ var QC=CODIGO?'&c='+encodeURIComponent(CODIGO):'';
 
 var E=null, CFG={}, TYC=null, QUIEN=null, YO=null;
 var SEGURO=false, PROPINA=0, ACEPTA=false;
+/* Cuántos caben por su reserva de hotel (sólo en los gratuitos), y cuántos
+   pidió si hubo que recortarle. Ver el tope más abajo, en arranca(). */
+var TOPE=null, RECORTADO=0;
 var stripe=null, elements=null, CUENTA=null, PK=null;
 
 function $(i){return document.getElementById(i);}
@@ -350,6 +371,23 @@ async function arranca(){
     }catch(_){}
   }
 
+  /* EL TOPE DE LOS GRATUITOS. Javi, 11-oct-2026: en los tours de entrada libre
+     «puede apartar por el número de personas en su reserva».
+     Un lugar gratis que nadie ocupa es un lugar que se le quitó a otro, así que
+     en los gratuitos no se aparta para más gente de la que duerme en la casa.
+     El número sale de la reserva, por la liga del hotel (sinc-identidad lo
+     devuelve y sinc-cuenta lo guarda). Si entró con su correo o con Google no
+     sabemos cuál es su reserva y NO se inventa un tope: antes dejarle de más que
+     cerrarle la puerta por una cuenta que no supimos leer. */
+  TOPE=null;
+  try{ if(Number(E.pvp_adulto||0)<=0||E.apepe_gratuito) TOPE=sincCuenta.paxReserva(); }catch(_){}
+  if(TOPE&&(ADU+MEN)>TOPE){
+    RECORTADO=ADU+MEN;
+    MEN=Math.min(MEN,TOPE);
+    ADU=Math.max(1,TOPE-MEN);
+    if(ADU+MEN>TOPE){ ADU=TOPE; MEN=0; }
+  }
+
   $('quienSoy').innerHTML='<b>'+esc(String(YO.nombre||YO.email||'').split(' ')[0])+'</b>';
   $('bAtras').onclick=function(){ location.href='exp.html?id='+encodeURIComponent(ID)+QS+QC; };
 
@@ -373,6 +411,7 @@ function pinta(){
       (E.cer_inicio_lugar?'<br>📍 '+esc(E.cer_inicio_lugar):'')+'</div></div>';
   pintaPrecio();
   pintaRecuerda();
+  pintaANombre();
   pintaExtras();
   pintaQuien();
   try{ sincI18n.barre(); }catch(_){}
@@ -436,9 +475,34 @@ function pintaRecuerda(){
     return '<li><b>'+esc(r[0])+'</b>'+esc(r[1])+'</li>';}).join('');
 }
 
+/* A NOMBRE DE QUIÉN QUEDA. Javi, 11-oct-2026: «pon el nombre de la persona que
+   reserva, que debe ser la del usuario». No es un campo que se teclee: es el
+   nombre de la cuenta con la que entró, que es la misma a la que va a llegar el
+   boleto. Enseñarlo aquí es lo que permite darse cuenta a tiempo de que se está
+   reservando desde la cuenta de otro -el teléfono de recepción, el de una
+   compañera-, que es justo el error que luego deja a alguien en la puerta. */
+function pintaANombre(){
+  var c=$('aNombre'); if(!c)return;
+  var nom=String((YO&&YO.nombre)||'').trim();
+  var mail=String((YO&&YO.email)||'').trim();
+  c.innerHTML=
+    '<div class="anombre">'+
+      '<span class="q">'+esc(T('A nombre de'))+'</span>'+
+      '<b>'+esc(nom||mail||T('tu cuenta'))+'</b>'+
+      (nom&&mail?'<span class="m">'+esc(mail)+'</span>':'')+
+      '<span class="m">'+esc(T('El boleto llega a este correo. ¿No eres tú?'))+
+        ' <a href="#" id="noSoyYo">'+esc(T('Entra con tu cuenta'))+'</a>.</span>'+
+    '</div>';
+  var a=$('noSoyYo'); if(a) a.onclick=async function(ev){
+    ev.preventDefault();
+    try{ await sincCuenta.salir(); }catch(_){}
+    location.reload();
+  };
+}
+
 function pintaExtras(){
   var seg=cfgn('sinc_seguro_mxn',0);
-  $('extras').innerHTML=
+  $('acepta').innerHTML=
     (seg>0
       ? '<label class="oferta"><input type="checkbox" id="cSeguro"'+(SEGURO?' checked':'')+'>'+
         '<span><b>'+esc(T(cfg('sinc_seguro_titulo','Cobertura de cancelación')))+' · +'+money(seg)+'</b>'+
@@ -507,6 +571,21 @@ async function montaTarjeta(){
     $('libre').classList.remove('oculto');
     $('dicePago').textContent=T('Sin costo. Apartas tu lugar y te mandamos el pase.');
     var pie=$('pieSeguro'); if(pie)pie.textContent=T('Tu lugar queda apartado a tu nombre');
+    /* Si se le recortó, se le dice: un botón que de pronto dice «2» cuando pidió
+       «4» y no explica nada parece un error nuestro. */
+    if(TOPE){
+      var av=document.createElement('p');
+      av.className='dice';
+      av.style.marginTop='10px';
+      av.innerHTML = RECORTADO>TOPE
+        ? '<b>'+esc(T('Apartamos para '))+TOPE+' '+esc(T(TOPE===1?'persona':'personas'))+'.</b> '+
+          esc(T('En los tours de cortesía el lugar es para quien duerme en la casa, y tu reserva es de '))+
+          TOPE+' '+esc(T(TOPE===1?'persona':'personas'))+'. '+
+          esc(T('Si viene alguien más, escríbenos y lo vemos.'))
+        : esc(T('Es de cortesía para quien duerme en la casa: hasta '))+TOPE+' '+
+          esc(T(TOPE===1?'persona':'personas'))+', las de tu reserva.';
+      $('libre').appendChild(av);
+    }
     MODO_BOTON=function(){
       var n=ADU+MEN;
       return T('Apartar para ')+n+' '+T(n===1?'persona':'personas');
