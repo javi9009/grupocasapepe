@@ -1245,33 +1245,67 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
   function min2h(m){ if(!m) return ''; var h=Math.floor(m/60), r=m%60;
     return (h?h+' h':'')+(h&&r?' ':'')+(r?r+' min':''); }
 
-  /* ---------- mis eventos: en sus propios espacios ---------- */
-  var MEV=[];
+  /* ---------- mis eventos ----------
+     Mismos chequeos que el modulo del Ateneo (/m/eventos.html), sobre la misma
+     tabla. Lo unico distinto es de donde salen los espacios: los suyos, no los
+     de Virreyes. */
+  var CHEQ_EV=[
+    {k:'nombre',l:'N',t:'Nombre',ok:function(e){return !!(e.nombre&&String(e.nombre).trim());}},
+    {k:'espacio',l:'S',t:'Dónde se hace',ok:function(e){return !!e.espacio_id;}},
+    {k:'fecha',l:'F',t:'Fecha',ok:function(e){return !!e.fecha_inicio;}},
+    {k:'hora',l:'H',t:'Hora',ok:function(e){return !!(e.fecha_inicio&&String(e.fecha_inicio).length>=16);}},
+    {k:'precio',l:'$',t:'Precio, o entrada libre',ok:function(e){return !!e.es_gratis||Number(e.precio||0)>0;}},
+    {k:'cupo',l:'C',t:'Cuánta gente cabe',ok:function(e){return Number(e.aforo||e.cupo||0)>0;}},
+    {k:'texto',l:'D',t:'De qué va',ok:function(e){return !!(e.descripcion&&String(e.descripcion).trim());}},
+    {k:'foto',l:'P',t:'Al menos una foto',ok:function(e){return !!(e.fotos&&e.fotos.length);}},
+    {k:'publicado',l:'✦',t:'Publicado',ok:function(e){return e.estado==='publicado'||e.estado==='realizado';}}
+  ];
+  function faltanEv(e){ return CHEQ_EV.filter(function(c){return (!c.aplica||c.aplica(e))&&!c.ok(e);}).map(function(c){return c.k;}); }
+  function semEv(e){
+    return CHEQ_EV.map(function(c){
+      if(c.aplica&&!c.aplica(e)) return '<span class="pt na">·</span>';
+      var ok=c.ok(e);
+      return '<span class="pt '+(ok?'ok':'no')+'" title="'+esc(c.t)+(ok?'':' · falta')+'">'+(ok?'✓':c.l)+'</span>';
+    }).join('');
+  }
+
+  var MEV=[], MESP=[];
   async function vEventos(w){
     var d=destino();
-    var esp = await get('ev_espacios?select=id,nombre&hotel_id=eq.'+d.id+'&order=nombre') || [];
+    MESP = await get('ev_espacios?select=id,nombre&hotel_id=eq.'+d.id+'&order=nombre') || [];
     w.innerHTML='<div class="card"><h3>Mis eventos</h3>'
-      +'<div class="hint">Los que montas en tus propios espacios. Te quedas el <b>65%</b>, y <b>70%</b> si lo vendes a tus huéspedes. '
-      + (esp.length? 'Tienes '+esp.length+' espacio'+(esp.length===1?'':'s')+' donde montarlos.'
-                   : '<b>Primero crea un espacio</b> en «Mis espacios»: un evento necesita dónde pasar.')+'</div>'
-      +'<div class="hgrid" id="vg"><div class="mini">Cargando…</div></div></div><div id="vfi"></div>';
+      +'<div class="hint">Los que montas en tus propios espacios, con los mismos pasos que un evento del Ateneo. Te quedas el <b>65%</b>, y <b>70%</b> si lo vendes a tus huéspedes. '
+      + (MESP.length? 'Tienes '+MESP.length+' espacio'+(MESP.length===1?'':'s')+' donde montarlos.'
+                    : '<b>Primero crea un espacio</b> en «Mis espacios»: un evento necesita dónde pasar.')+'</div>'
+      +'<div class="mini" id="evCarga"></div>'
+      +'<div class="hgrid" id="vg" style="margin-top:12px"></div></div><div id="vfi"></div>';
     MEV = await get('eventos?select=*&hotel_id=eq.'+d.id+'&order=fecha_inicio.desc') || [];
-    var h=MEV.map(function(x){
-      var e=esp.filter(function(y){return y.id===x.espacio_id;})[0];
-      return '<button class="hc" data-v="'+x.id+'"><div class="hn">'+esc(x.nombre||'(sin nombre)')+'</div>'
-        +'<div class="hm">'+[(x.fecha_inicio?String(x.fecha_inicio).slice(0,10):'sin fecha'), e?e.nombre:'sin espacio',
-            (x.precio?dinero(x.precio):(x.es_gratis?'entrada libre':'sin precio'))].map(esc).join(' · ')+'<br>'
-        + esc(x.estado||'borrador') + ' · ' + (x.solo_huespedes?'solo tus huéspedes':'abierto a público')+'</div></button>';
-    }).join('');
-    h+='<button class="hc nuevo" id="nuevoV"'+(esp.length?'':' disabled style="opacity:.45;cursor:default"')+'>+ Nuevo evento</button>';
-    $('vg').innerHTML=h;
-    $('vg').querySelectorAll('.hc[data-v]').forEach(function(b){b.onclick=function(){fichaEvento(b.getAttribute('data-v'),esp);};});
-    if(esp.length) $('nuevoV').onclick=async function(){
+    var listos=MEV.filter(function(e){return !faltanEv(e).length;}).length;
+    $('evCarga').innerHTML = MEV.length
+      ? '<b>'+MEV.length+'</b> evento'+(MEV.length===1?'':'s')+' · <b>'+listos+'</b> listo'+(listos===1?'':'s')+' para vender'
+      : 'Todavía no has montado ninguno.';
+    $('vg').innerHTML = MEV.map(function(x){
+      var e=MESP.filter(function(y){return y.id===x.espacio_id;})[0], f=faltanEv(x);
+      var foto=(x.fotos&&x.fotos.length)?(typeof x.fotos[0]==='string'?x.fotos[0]:(x.fotos[0]&&x.fotos[0].url)||''):'';
+      return '<div class="ex" data-v="'+x.id+'">'
+        +'<span class="foto"'+(foto?' style="background-image:url(&quot;'+esc(foto)+'&quot;)"':'')+'>'
+        +'<span class="op">'+esc(e?e.nombre:'sin espacio')+'</span>'
+        +'<span class="est '+(x.estado==='publicado'?'pub':'bor')+'">'+esc(x.estado||'borrador')+'</span></span>'
+        +'<span class="cu"><span class="nm">'+esc(x.nombre||'(sin nombre)')+'</span>'
+        +'<span class="sub">'+[(x.fecha_inicio?String(x.fecha_inicio).slice(0,16).replace('T',' '):'sin fecha'),
+            (x.es_gratis?'entrada libre':(x.precio?dinero(x.precio):'sin precio')),
+            (x.solo_huespedes?'solo huéspedes':'abierto')].map(esc).join(' · ')+'</span>'
+        +'<span class="sem">'+semEv(x)+'</span>'
+        +'<span class="falta">'+(f.length?'falta '+f.slice(0,4).join(', ')+(f.length>4?' y '+(f.length-4)+' más':''):'Listo para vender')+'</span>'
+        +'</span></div>';
+    }).join('') + '<button class="hc nuevo" id="nuevoV"'+(MESP.length?'':' disabled style="opacity:.45;cursor:default"')+'>+ Nuevo evento</button>';
+    $('vg').querySelectorAll('.ex').forEach(function(b){b.onclick=function(){fichaEvento(b.getAttribute('data-v'),MESP);};});
+    if(MESP.length) $('nuevoV').onclick=async function(){
       var n=prompt('¿Cómo se llama el evento?'); if(!n) return;
       var r=await fetch(SB+'/rest/v1/eventos',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-        body:JSON.stringify({nombre:n,hotel_id:d.id,espacio_id:esp[0].id,estado:'borrador',solo_huespedes:true})});
+        body:JSON.stringify({nombre:n,hotel_id:d.id,espacio_id:MESP[0].id,estado:'borrador',solo_huespedes:true})});
       if(!r.ok){toast('No se pudo crear: '+(await r.text()).slice(0,130),true);return;}
-      var j=await r.json(); toast('Evento en borrador'); await vEventos(w); fichaEvento(j[0].id,esp);
+      var j=await r.json(); toast('Evento en borrador'); await vEventos(w); fichaEvento(j[0].id,MESP);
     };
   }
 
