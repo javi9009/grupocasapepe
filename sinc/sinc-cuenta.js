@@ -427,15 +427,32 @@ window.sincCuenta = (function () {
      Con liga delante manda la liga: si la sesión abierta no nació de esta misma
      liga, se cierra y se entra como el huésped que la trae. Sin liga (el público
      del Pepe GO!) todo sigue igual que siempre. */
+  /* UNA LIGA QUE NO IDENTIFICA A NADIE NO ECHA A NADIE.
+     Javi, 10-oct-2026: «no me lee el usuario», con la pantalla de Lo Tuyo al
+     lado diciendo «no pudimos traer tu reserva ahora mismo». Ahi estaba todo:
+     APePe guarda el ?resv= del QR del hotel en el telefono y se lo cuelga a
+     cada enlace, para siempre. Cuando esa reserva ya caduco, el token sigue
+     viajando pero no identifica a nadie — y este codigo cerraba la sesion
+     ANTES de comprobarlo. Resultado: a quien si estaba identificado lo echaba,
+     y despues no podia entrar a nadie, asi que le pedia las seis cifras otra
+     vez.
+     Ahora se prueba primero la liga y solo se cede el sitio si de verdad trae
+     a alguien. Si la liga esta muerta, se queda quien ya estaba. El candado
+     del telefono de recepcion sigue igual: con una liga VIVA, manda la liga. */
+  var LIGA_VIVA = null;
   async function yoDeEstaLiga() {
     var t = '';
     try { t = (new URLSearchParams(location.search).get('resv') || '').trim(); } catch (_) {}
     if (!/^[0-9a-f-]{36}$/i.test(t)) return await yaEntrado();
     var deQuien = ''; try { deQuien = localStorage.getItem('sinc_resv_sesion') || ''; } catch (_) {}
     var yo = await yaEntrado();
-    if (yo && deQuien === t) return yo;
-    if (yo) await salir();
-    return await comoHuesped();
+    if (yo && deQuien === t) { LIGA_VIVA = true; return yo; }
+    /* comoHuesped() solo cambia la sesion si el canje sale bien; si falla, la
+       que habia se queda intacta. Por eso se puede probar antes de cerrar. */
+    var delaLiga = await comoHuesped();
+    LIGA_VIVA = !!delaLiga;
+    if (delaLiga) return delaLiga;
+    return yo;
   }
 
   /* UNA SESION QUE YA HAY ABIERTA EN ESTE NAVEGADOR.
@@ -466,9 +483,10 @@ window.sincCuenta = (function () {
   }
 
   async function conSesionAbierta() {
-    /* Con liga de reserva delante manda la liga, siempre: en el telefono de
-       recepcion no se compra a nombre de quien dejo su sesion abierta. */
-    try { if (/[?&]resv=/.test(location.search)) return null; } catch (_) {}
+    /* Con una liga de reserva VIVA delante manda la liga: en el telefono de
+       recepcion no se compra a nombre de quien dejo su sesion abierta. Una
+       liga muerta —la de APePe con la reserva ya pasada— no cuenta. */
+    if (LIGA_VIVA === true) return null;
     var p = tokenPrestado();
     if (!p) return null;
     try {

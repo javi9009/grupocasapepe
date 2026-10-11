@@ -180,12 +180,34 @@
     fetch(SB_FN, { method:'POST',
       headers:{ apikey:KEY, Authorization:'Bearer '+KEY, 'Content-Type':'application/json' },
       body: JSON.stringify({ resv: tok }) })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(j){
+      .then(function(r){
+        return r.json().then(function(j){ return { status:r.status, j:j }; })
+                       .catch(function(){ return { status:r.status, j:null }; });
+      })
+      .then(function(x){
+        var j = x.j;
         var h = j && j.ok && j.reserva ? j.reserva.hasta : '';
-        if (!h) return;
-        try{ localStorage.setItem('apepe_resv_hasta', h); }catch(_){}
-        if (cambio && pasado(h)) { olvidaTodo(); }
+        if (h) {
+          try{ localStorage.setItem('apepe_resv_hasta', h); }catch(_){}
+          if (cambio && pasado(h)) olvidaTodo();
+          return;
+        }
+        /* UNA LIGA QUE EL SERVIDOR YA NO RECONOCE SE SUELTA. Javi, 10-oct-2026:
+           el telefono seguia diciendo «Pepe huesped» y «no pudimos traer tu
+           reserva ahora mismo» a la vez. El token del QR del hotel se queda
+           guardado para siempre, y antes solo se olvidaba cuando el servidor
+           devolvia una fecha de salida ya pasada; si devolvia que esa liga no
+           es de nadie, no se devolvia fecha y no se olvidaba nunca. Encima ese
+           token muerto viajaba pegado a cada enlace y echaba de su cuenta a
+           quien si estaba identificado.
+           Sin red no se olvida nada: solo cuando el servidor contesta claro. */
+        var muerta = (x.status === 401 || x.status === 404 ||
+                      (x.status === 200 && j && j.ok === false));
+        if (muerta && cambio) {
+          olvidaTodo();
+          try{ var u=new URL(location.href); u.searchParams.delete('resv');
+               history.replaceState(null,'',u.pathname+(u.search||'')+u.hash); }catch(_){}
+        }
       })
       .catch(function(){});
   }
