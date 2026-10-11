@@ -107,3 +107,89 @@ as $function$
     || jsonb_build_object('galeria', coalesce(p.galeria,'[]'::jsonb))
     from productoras p where p.portal_token=p_token), 'null'::jsonb);
 $function$;
+
+-- VER CÓMO QUEDA SU PÁGINA ANTES DE QUE EXISTA.
+--
+-- Javi, 11-oct-2026: «que se pueda visualizar la página con la info que subió;
+-- ahora no hay link».
+--
+-- Su página sólo se abre cuando el Ateneo la valida, y hasta entonces la liga no
+-- funciona. Pedirle que llene cuatro bloques a ciegas y que espere a que alguien
+-- la apruebe para ver el resultado es justo lo que hace que nadie la llene.
+--
+-- Esto devuelve lo mismo que lee la página pública -ficha, eventos a la venta,
+-- eventos pasados y la gente que ella marcó- pero para SU ficha y sin exigir que
+-- esté publicada. La pinta el mismo /sinc/productora.html con ?prev=<su token>,
+-- no una página aparte: una imitación se desincroniza y acaba enseñándole algo
+-- que no es lo que va a salir.
+create or replace function public.prod_preview(p_token uuid)
+returns jsonb
+language sql
+stable security definer
+set search_path to 'public'
+as $fn$
+  select jsonb_build_object(
+    'ficha', (
+      select jsonb_build_object(
+        'slug', p.slug, 'nombre', p.nombre_comercial, 'logo_url', p.logo_url,
+        'bio', p.bio, 'ciudad', p.ciudad, 'instagram', p.instagram, 'web', p.web,
+        'giro',    public.productora_giros(p.tipos, p.tipo, p.tipo_otro),
+        'espacio', public.productora_espacios(p.tipos, p.tipo),
+        'portada_url', coalesce(p.portada_url,
+          (select nullif(e.fotos->0->>'url','') from eventos e
+            where e.productora_id = p.id and jsonb_typeof(e.fotos)='array'
+              and jsonb_array_length(e.fotos) > 0
+            order by e.fecha_inicio desc nulls last limit 1)),
+        'historia', p.historia, 'email_publico', p.email_publico,
+        'whatsapp_publico', p.whatsapp_publico, 'facebook', p.facebook,
+        'tiktok', p.tiktok, 'youtube', p.youtube, 'spotify', p.spotify,
+        'galeria', coalesce(p.galeria,'[]'::jsonb),
+        'publica', coalesce(p.publica,false))
+      from productoras p where p.portal_token = p_token
+    ),
+    'eventos', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', v.id, 'nombre', v.nombre, 'descripcion', v.descripcion,
+        'espacio', v.espacio, 'fecha_inicio', v.fecha_inicio, 'fecha_fin', v.fecha_fin,
+        'es_gratis', v.es_gratis, 'precio', v.precio_desde, 'cupo', v.cupo_total,
+        'foto_url', v.foto_url, 'categoria', cg.nombre, 'tipo', tp.nombre)
+        order by v.fecha_inicio)
+      from v_concierge_eventos v
+      join eventos e on e.id = v.id
+      join productoras p on p.id = e.productora_id
+      left join exp_categorias cg on cg.slug = e.categoria_slug
+      left join exp_tipos      tp on tp.slug = e.tipo_slug
+      where p.portal_token = p_token), '[]'::jsonb),
+    'pasados', coalesce((
+      select jsonb_agg(x order by x->>'fecha_inicio' desc) from (
+        select jsonb_build_object(
+          'id', e.id, 'nombre', e.nombre, 'descripcion', e.descripcion,
+          'espacio', es.nombre, 'fecha_inicio', e.fecha_inicio,
+          'foto_url', nullif(e.fotos->0->>'url',''), 'tipo', tp.nombre) x
+        from eventos e
+        join productoras p on p.id = e.productora_id
+        left join ev_espacios es on es.id = e.espacio_id
+        left join exp_tipos   tp on tp.slug = e.tipo_slug
+        where p.portal_token = p_token
+          and e.fecha_inicio < now()
+          and lower(coalesce(e.estado,'')) in ('publicado','confirmado','realizado')
+        order by e.fecha_inicio desc limit 12) z), '[]'::jsonb),
+    'gente', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'nombre', u.nombre, 'rol', coalesce(r.nombre, u.rol), 'foto_url', u.foto_url,
+        'instagram', u.instagram,
+        'whatsapp', case when coalesce(u.muestra_wa,false)   then u.whatsapp end,
+        'email',    case when coalesce(u.muestra_mail,false) then u.email    end,
+        'descripcion', u.descripcion, 'es_talento', coalesce(r.es_talento,false))
+        order by coalesce(r.es_talento,false) desc, coalesce(u.orden, 999), u.created_at)
+      from productora_usuarios u
+      join productoras p on p.id = u.productora_id
+      left join productora_roles r on r.clave = u.rol
+      where p.portal_token = p_token
+        and coalesce(u.activo,true) and coalesce(u.publico,false)), '[]'::jsonb)
+  )
+  where exists (select 1 from productoras p
+                 where p.portal_token = p_token and coalesce(p.estado,'') <> 'baja');
+$fn$;
+
+grant execute on function public.prod_preview(uuid) to anon, authenticated;
