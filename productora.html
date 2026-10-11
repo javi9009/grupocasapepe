@@ -231,6 +231,12 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
         '<div class="marca"><span class="n">'+esc(FICHA.nombre_comercial||'Mi productora')+'</span><span class="g">'+esc(FICHA.tipo_nombre||'')+(FICHA.espacio?' · '+esc(FICHA.espacio):'')+'</span></div>'+
         '<div class="tabs" id="tabs">'+
           '<button data-p="eventos" aria-selected="true">🎫 Mis eventos</button>'+
+          /* MIS RESERVAS. Javi, 11-oct-2026: «debe haber una pestaña de mis
+             reservas de los que le reservaron y que las pueda gestionar», «con
+             la info completa, contacto, posibilidad de cancelar la reserva y
+             que se haga la devolución completa al cliente». Va la segunda: lo
+             que más se mira a diario es quién viene, no la ficha. */
+          '<button data-p="reservas" aria-selected="false">🧾 Mis reservas</button>'+
           '<button data-p="pagina" aria-selected="false">🌐 Mi página</button>'+
           /* ROOM SERVICE. Javi, 3-oct-2026: solo Cumbre. No se decide por el
              nombre: se decide por el interruptor room_service de su ficha, asi
@@ -241,11 +247,12 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
         '</div>'+
       '</div></div>'+
       '<div class="wrap"><div id="guia"></div><div class="pane on" id="pane-eventos"></div>'+
+        '<div class="pane" id="pane-reservas"></div>'+
         '<div class="pane" id="pane-pagina"></div>'+
         ((FICHA&&FICHA.room_service)?'<div class="pane" id="pane-rs"></div>':'')+
         '<div class="pane" id="pane-cuenta"></div></div>';
     Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){ve(b.getAttribute('data-p'));};});
-    pintaEventos(); pintaPagina(); pintaCuenta(); guia();
+    pintaEventos(); pintaReservas(); pintaPagina(); pintaCuenta(); guia();
     if(FICHA&&FICHA.room_service) pintaRS();
     /* Vuelta del alta de Stripe: cae en Mi cuenta para ver el estado. */
     try{ if(new URLSearchParams(location.search).get('stripe')) ve('cuenta'); }catch(_){}
@@ -255,7 +262,10 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
        proceso anterior y su botón manda a la pantalla que acabamos de retirar.
        Dentro de Mi cuenta manda el check-in, que ya lleva sus propios pasos.
        Javi, 10-oct. */
-    var g=$('guia'); if(g) g.style.display = (p==='cuenta') ? 'none' : '';
+    /* Y tampoco en Mis reservas: esa guía es del alta —«ya estás dentro, ahora
+       tu evento y después tu página»— y quien viene a mirar quién reservó ya
+       hizo todo eso. Javi, 11-oct. */
+    var g=$('guia'); if(g) g.style.display = (p==='cuenta'||p==='reservas') ? 'none' : '';
     window.scrollTo({top:0,behavior:'smooth'});}
 
 
@@ -363,6 +373,172 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
         ve(a);
       };
     });
+  }
+
+  /* ---------- MIS RESERVAS ----------
+     Javi, 11-oct-2026: «debe haber una pestaña de mis reservas de los que le
+     reservaron y que las pueda gestionar», «con la info completa, contacto,
+     posibilidad de cancelar la reserva y que se haga la devolución completa al
+     cliente».
+
+     Lo que tiene que resolver esta pantalla es el día a día: quién viene a lo
+     mío, cuánta gente, si ya pagó y cómo le escribo. Por eso el contacto no
+     está escondido detrás de un clic: el correo y el WhatsApp son ligas, que es
+     lo que se usa cuando hay que avisar de que algo cambió.
+
+     Cancelar devuelve el dinero ENTERO y manda el correo. Eso no lo hace esta
+     pantalla: lo hace prod-reserva-cancelar, en el servidor, porque el dinero
+     no se mueve desde un navegador. */
+  var RES=[], RESF='todas';
+  function dinero(n){ return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0}); }
+  function cuandoRes(iso){
+    if(!iso) return '';
+    var d=new Date(iso); if(isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('es-MX',{timeZone:'America/Mexico_City',
+      day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}).format(d);
+  }
+  function telLlano(t){ return String(t||'').replace(/[^0-9]/g,''); }
+
+  function pintaReservas(){
+    $('pane-reservas').innerHTML=
+      '<div class="card"><h3>Mis reservas</h3>'+
+        '<div class="hint">Quién reservó en tus eventos. Puedes escribirles desde aquí y, si hace falta, '+
+          'cancelar una reserva: al cancelarla le devolvemos <b>todo</b> lo que pagó y le avisamos por correo.</div>'+
+        '<div class="ft" style="justify-content:flex-start;gap:6px;margin:10px 0 0;flex-wrap:wrap" id="resFiltros"></div>'+
+        '<div id="resResumen" class="mini" style="margin-top:10px"></div>'+
+        '<div id="resLista" style="margin-top:10px">Cargando…</div>'+
+      '</div>';
+    cargaReservas();
+  }
+  async function cargaReservas(){
+    try{ RES=await rpc('prod_portal_reservas',{p_token:TOK})||[]; }
+    catch(e){ RES=[]; var l=$('resLista'); if(l) l.innerHTML='<div class="hint">No pudimos traer tus reservas. Recarga la página.</div>'; return; }
+    renReservas();
+  }
+  function renReservas(){
+    var l=$('resLista'); if(!l) return;
+    var vivas=RES.filter(function(r){return r.estado!=='cancelada';});
+    var pagadas=vivas.filter(function(r){return r.pago_estado==='pagado';});
+    var pax=vivas.reduce(function(s,r){return s+(Number(r.pax)||0);},0);
+    var cobrado=pagadas.reduce(function(s,r){return s+(Number(r.pago_total)||Number(r.total)||0);},0);
+
+    var F=[['todas','Todas'],['pagadas','Pagadas'],['pendientes','Sin pagar'],['canceladas','Canceladas']];
+    $('resFiltros').innerHTML=F.map(function(f){
+      var n = f[0]==='todas'?RES.length
+            : f[0]==='pagadas'?pagadas.length
+            : f[0]==='pendientes'?vivas.filter(function(r){return r.pago_estado!=='pagado';}).length
+            : RES.filter(function(r){return r.estado==='cancelada';}).length;
+      return '<button class="btn ghost sm" data-rf="'+f[0]+'"'+(RESF===f[0]?' style="border-color:var(--verde);font-weight:700"':'')+'>'+
+             esc(f[1])+' · '+n+'</button>';
+    }).join('');
+    Array.prototype.forEach.call($('resFiltros').children,function(b){
+      b.onclick=function(){ RESF=b.getAttribute('data-rf'); renReservas(); };});
+
+    $('resResumen').innerHTML = RES.length
+      ? '<b>'+pax+'</b> persona'+(pax===1?'':'s')+' esperada'+(pax===1?'':'s')+' en '+vivas.length+
+        ' reserva'+(vivas.length===1?'':'s')+' · cobrado <b>'+dinero(cobrado)+'</b>'
+      : '';
+
+    var lista=RES.filter(function(r){
+      if(RESF==='pagadas')     return r.estado!=='cancelada' && r.pago_estado==='pagado';
+      if(RESF==='pendientes')  return r.estado!=='cancelada' && r.pago_estado!=='pagado';
+      if(RESF==='canceladas')  return r.estado==='cancelada';
+      return true;
+    });
+
+    if(!lista.length){
+      l.innerHTML='<div class="hint">'+(RES.length
+        ? 'Nada en este filtro.'
+        : 'Todavía no te ha reservado nadie. En cuanto el Ateneo publique un evento tuyo, las reservas caen aquí solas.')+'</div>';
+      return;
+    }
+
+    l.innerHTML=lista.map(function(r){
+      var cancelada = r.estado==='cancelada';
+      var pagada    = r.pago_estado==='pagado';
+      var tag = cancelada ? '<span class="tag bad">cancelada</span>'
+              : pagada    ? '<span class="tag ok">pagada</span>'
+                          : '<span class="tag warn">sin pagar</span>';
+      var ctos=[];
+      if(r.email)    ctos.push('<a href="mailto:'+esc(r.email)+'">✉️ '+esc(r.email)+'</a>');
+      if(r.telefono) ctos.push('<a href="https://wa.me/'+esc(telLlano(r.telefono))+'" target="_blank" rel="noopener">💬 '+esc(r.telefono)+'</a>');
+      var importe = Number(r.pago_total)||Number(r.total)||0;
+      return '<div class="card" style="margin-top:10px'+(cancelada?';opacity:.6':'')+'">'+
+        '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">'+
+          '<b style="font-size:15.5px">'+esc(r.nombre||'(sin nombre)')+'</b>'+
+          '<span class="tag">'+esc(r.pax||1)+' '+(Number(r.pax)===1?'boleto':'boletos')+'</span>'+
+          tag+
+          '<span class="mini" style="margin-left:auto">'+esc(r.folio||'')+'</span>'+
+        '</div>'+
+        '<div class="mini" style="margin-top:4px">'+
+          esc(r.evento||'(evento borrado)')+
+          (r.evento_fecha?' · '+esc(cuandoRes(r.evento_fecha)):'')+
+          (r.evento_espacio?' · '+esc(r.evento_espacio):'')+
+        '</div>'+
+        (ctos.length?'<div class="mini" style="margin-top:6px;display:flex;gap:12px;flex-wrap:wrap">'+ctos.join('')+'</div>':
+                     '<div class="mini" style="margin-top:6px">Sin datos de contacto.</div>')+
+        '<div class="mini" style="margin-top:6px">'+
+          (r.tier?esc(r.tier)+' · ':'')+
+          dinero(importe)+
+          (Number(r.descuento)>0?' · descuento '+dinero(r.descuento):'')+
+          (r.codigo?' · código '+esc(r.codigo):'')+
+          ' · reservó '+esc(cuandoRes(r.created_at))+
+          (r.canal?' · '+esc(r.canal):'')+
+        '</div>'+
+        (r.notas?'<div class="mini" style="margin-top:6px;white-space:pre-line;color:var(--tenue)">'+esc(r.notas)+'</div>':'')+
+        (cancelada?'':
+          '<div class="ft" style="justify-content:flex-start;margin-top:10px">'+
+            '<button class="btn ghost sm" data-cancel="'+esc(r.id)+'" style="color:#B3261E;border-color:#E6B8B2">'+
+              'Cancelar'+(pagada?' y devolver '+dinero(importe):'')+'</button>'+
+          '</div>')+
+      '</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(l.querySelectorAll('[data-cancel]'),function(b){
+      b.onclick=function(){ pideCancelar(b.getAttribute('data-cancel'), b); };});
+  }
+
+  /* Cancelar es irreversible y mueve dinero, así que no se hace de un clic ni
+     con un confirm del navegador —que Javi no quiere— sino escribiendo el
+     motivo, que además es lo que lee el cliente en su correo. */
+  function pideCancelar(id, boton){
+    var r=RES.filter(function(x){return x.id===id;})[0]; if(!r) return;
+    var caja=boton.closest('.card');
+    if(caja.querySelector('[data-cbox]')) return;
+    var importe=Number(r.pago_total)||Number(r.total)||0;
+    var pagada=r.pago_estado==='pagado';
+    var d=document.createElement('div');
+    d.setAttribute('data-cbox','1');
+    d.style.cssText='margin-top:10px;background:#FBEFEE;border:1px solid #E6B8B2;border-radius:10px;padding:12px 14px';
+    d.innerHTML=
+      '<div class="mini" style="color:#B3261E"><b>Vas a cancelar la reserva de '+esc(r.nombre||'este cliente')+'.</b> '+
+        (pagada?('Le devolvemos <b>'+dinero(importe)+'</b>, el importe completo, al mismo medio con el que pagó.')
+               :('No había pagado nada, así que no hay cargo que devolver.'))+
+        ' Le llega un correo avisándole. Esto no se deshace.</div>'+
+      '<div class="fld" style="margin-top:10px"><label>¿Por qué? Lo lee el cliente</label>'+
+        '<input data-motivo placeholder="Se canceló la función por falta de aforo"></div>'+
+      '<div class="ft" style="justify-content:flex-start;margin-top:10px;gap:8px">'+
+        '<button class="btn sm" data-ok style="background:#B3261E;border-color:#B3261E">Sí, cancelar y devolver</button>'+
+        '<button class="btn ghost sm" data-no>Dejarlo como está</button>'+
+      '</div>';
+    caja.appendChild(d);
+    d.querySelector('[data-no]').onclick=function(){ d.remove(); };
+    d.querySelector('[data-ok]').onclick=async function(){
+      var bt=this; bt.disabled=true; bt.textContent='Cancelando…';
+      try{
+        var res=await fetch(SB+'/functions/v1/prod-reserva-cancelar',{
+          method:'POST', headers:Object.assign({'Content-Type':'application/json'},hdrs()),
+          body:JSON.stringify({token:TOK, reserva_id:id,
+                               motivo:(d.querySelector('[data-motivo]').value||'').trim()})});
+        var j=null; try{ j=await res.json(); }catch(_){}
+        if(!res.ok||!j||j.error) throw new Error((j&&j.error)||('no se pudo ('+res.status+')'));
+        toast(j.mensaje||'Cancelada');
+        await cargaReservas();
+      }catch(e){
+        bt.disabled=false; bt.textContent='Sí, cancelar y devolver';
+        toast(e.message||'No se pudo cancelar',true);
+      }
+    };
   }
 
   /* ---------- MIS EVENTOS ---------- */
