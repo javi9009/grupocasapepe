@@ -132,14 +132,16 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
       {k:'exps',     t:'Mis experiencias',g:'map'},
       {k:'eventos',  t:'Mis eventos',     g:'ticket'},
       {k:'ventas',   t:'Mis ventas',      g:'cash'},
-      {k:'anfitrion',t:'Mi anfitrión',    g:'chat'}
+      {k:'anfitrion',t:'Mi anfitrión',    g:'chat'},
+      {k:'enlaces',  t:'Sus enlaces',     g:'key'}
     ],
     hotel:[
       {k:'general',  t:'Información general', g:'doc'},
       {k:'rest',     t:'Restaurante y menú',  g:'cutlery'},
       {k:'intang',   t:'Sus intangibles',     g:'bag'},
       {k:'mapa',     t:'Su mapa',             g:'pin'},
-      {k:'ventas',   t:'Sus ventas',          g:'cash'}
+      {k:'ventas',   t:'Sus ventas',          g:'cash'},
+      {k:'enlaces',  t:'Sus enlaces',         g:'key'}
     ]};
   var TIPOS=[{k:'experiencia',t:'Experiencias',g:'map'},{k:'evento',t:'Eventos',g:'ticket'},{k:'tienda',t:'Tienda',g:'bag'}];
 
@@ -155,7 +157,13 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
     GRUPOS=hs;
     $('selGrupo').innerHTML=hs.map(function(h){return '<option value="'+h.id+'">'+esc(h.nombre_comercial||'(sin nombre)')+(h.es_grupo?' · grupo':'')+'</option>';}).join('');
     $('selGrupo').onchange=function(){ abre(this.value); };
-    await abre(hs[0] && hs[0].id);
+    /* Se entra desde "Su portal" en la ficha: ?h=<id> fija el hotel y
+       esconde el selector, porque el portal es privado de esa casa. */
+    var q=new URLSearchParams(location.search).get('h');
+    if(q && hs.some(function(x){return x.id===q;})){
+      $('selGrupo').style.display='none';
+      await abre(q);
+    } else await abre(hs[0] && hs[0].id);
   }
 
   async function abre(id){
@@ -220,6 +228,8 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
       'Los lugares que recomiendas. No se venden: por eso van aparte de los intangibles. '+(nivel==='grupo'?'Pon aquí los del grupo; luego cada hotel deja solo los suyos — el Oxxo de la Roma no le sirve a quien duerme en el Centro.':'Quita los que no le sirvan a un huésped de esta casa.'));
     if(sec==='general')   return w.innerHTML=vGeneral();
     if(sec==='anfitrion') return w.innerHTML=vAnfitrion();
+    if(sec==='enlaces')   return vEnlaces(w);
+    if(sec==='espacios')  return vEspacios(w);
     w.innerHTML=vPronto();
     if(sec==='general'||sec==='anfitrion') ataGuarda();
   }
@@ -385,6 +395,126 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
       +'<div class="fld"><textarea data-c="anfitrion_nunca" rows="4" placeholder="No da precios de cuartos&#10;No promete upgrades&#10;Si no sabe, pasa con recepción">'+esc(d.anfitrion_nunca||'')+'</textarea></div>'
       +'<div class="ft"><button class="btn" id="gGen">Guardar</button></div></div>'
       +'<div class="card"><h3>Todavía no habla</h3><div class="pronto">Esto guarda su cabeza. Conectarlo al chat del huésped es el paso siguiente, y no está hecho.</div></div>';
+  }
+
+  /* ---------- mis espacios ---------- */
+  var ESP=[];
+  async function vEspacios(w){
+    var d=destino();
+    w.innerHTML='<div class="card"><h3>Mis espacios</h3>'
+      +'<div class="hint">Los sitios de tu casa que se pueden ocupar: salas, terraza, patio, azotea. De cada uno decides cómo le cobras a alguien de fuera que monte algo ahí: precio fijo con fianza, o un porcentaje de lo que venda el evento.</div>'
+      +'<div class="hgrid" id="eg"><div class="mini">Cargando…</div></div></div><div id="efi"></div>';
+    ESP = await get('ev_espacios?select=*&hotel_id=eq.'+d.id+'&order=nombre') || [];
+    var h=ESP.map(function(x){
+      var cobro = x.cobro_tercero_modo==='porcentaje' ? (x.cobro_tercero_pct||0)+'% de la venta'
+                : x.cobro_tercero_modo==='fijo' ? ('$'+(x.precio_hora||0)+'/h'+(x.fianza_monto?' · fianza $'+x.fianza_monto:''))
+                : 'sin forma de cobro';
+      return '<button class="hc" data-e="'+x.id+'"><div class="hn">'+esc(x.nombre||'(sin nombre)')+'</div>'
+        +'<div class="hm">'+(x.capacidad?x.capacidad+' personas · ':'')+esc(cobro)+'<br>'+(x.activo?'A la venta':'Apagado')+'</div></button>';
+    }).join('');
+    h+='<button class="hc nuevo" id="nuevoE">+ Nuevo espacio</button>';
+    $('eg').innerHTML=h;
+    $('eg').querySelectorAll('.hc[data-e]').forEach(function(b){b.onclick=function(){fichaEspacio(b.getAttribute('data-e'));};});
+    $('nuevoE').onclick=async function(){
+      var n=prompt('¿Cómo se llama el espacio?'); if(!n) return;
+      var sl=n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,30);
+      var r=await fetch(SB+'/rest/v1/ev_espacios',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+        body:JSON.stringify({nombre:n,slug:sl+'-'+Math.random().toString(36).slice(2,5),hotel_id:d.id,sede:(d.slug||null),activo:false})});
+      if(!r.ok){toast('No se pudo crear: '+(await r.text()).slice(0,110),true);return;}
+      var j=await r.json(); toast('Espacio creado'); await vEspacios(w); fichaEspacio(j[0].id);
+    };
+  }
+
+  function fichaEspacio(id){
+    var x=ESP.filter(function(e){return e.id===id;})[0]; if(!x) return;
+    $('efi').innerHTML='<div class="card"><h3>'+esc(x.nombre)+'</h3>'
+      +'<div class="hint">Lo que ve quien quiera montar algo aquí.</div>'
+      +'<div class="fgrid">'
+      +'<div class="fld"><label>Nombre</label><input data-e="nombre" value="'+esc(x.nombre||'')+'"></div>'
+      +'<div class="fld"><label>Capacidad</label><input data-e="capacidad" type="number" value="'+esc(x.capacidad==null?'':x.capacidad)+'"></div>'
+      +'<div class="fld"><label>¿A la venta?</label><select data-e="activo"><option value="false">Todavía no</option><option value="true">Sí</option></select></div>'
+      +'</div></div>'
+      +'<div class="card"><h3>Cómo le cobras a un tercero</h3>'
+      +'<div class="hint">Una productora quiere montar un concierto en tu azotea. O le cobras la renta del espacio, o te llevas un porcentaje de lo que venda. No las dos.</div>'
+      +'<div class="fgrid">'
+      +'<div class="fld"><label>Forma de cobro</label><select data-e="cobro_tercero_modo" id="modoE"><option value="">— sin definir —</option><option value="fijo">Precio fijo más fianza</option><option value="porcentaje">Un porcentaje de su venta</option></select></div>'
+      +'</div>'
+      +'<div class="fgrid" id="boxFijo" style="margin-top:12px">'
+      +'<div class="fld"><label>Por hora</label><input data-e="precio_hora" type="number" value="'+esc(x.precio_hora==null?'':x.precio_hora)+'"></div>'
+      +'<div class="fld"><label>Por día</label><input data-e="precio_dia" type="number" value="'+esc(x.precio_dia==null?'':x.precio_dia)+'"></div>'
+      +'<div class="fld"><label>Fianza</label><input data-e="fianza_monto" type="number" value="'+esc(x.fianza_monto==null?'':x.fianza_monto)+'"><div class="ay">Se devuelve si el espacio queda como estaba</div></div>'
+      +'</div>'
+      +'<div class="fgrid" id="boxPct" style="margin-top:12px">'
+      +'<div class="fld"><label>Tu porcentaje</label><input data-e="cobro_tercero_pct" type="number" step="0.5" value="'+esc(x.cobro_tercero_pct==null?'':x.cobro_tercero_pct)+'"><div class="ay">De lo que venda el evento, antes de comisiones</div></div>'
+      +'</div>'
+      +'<div class="ft"><button class="btn" id="gEsp">Guardar</button></div></div>';
+    var sel=$('modoE'); sel.value=x.cobro_tercero_modo||'';
+    function cajas(){ $('boxFijo').style.display = sel.value==='fijo'?'grid':'none';
+                      $('boxPct').style.display  = sel.value==='porcentaje'?'grid':'none'; }
+    sel.onchange=cajas; cajas();
+    var ac=document.querySelector('[data-e="activo"]'); if(ac) ac.value = x.activo?'true':'false';
+    $('gEsp').onclick=async function(){
+      var b={};
+      document.querySelectorAll('[data-e]').forEach(function(el){
+        if(el.tagName!=='INPUT'&&el.tagName!=='SELECT') return;
+        var c=el.getAttribute('data-e'), v=el.value;
+        if(c==='activo') b[c]= v==='true';
+        else if(['capacidad','precio_hora','precio_dia','fianza_monto','cobro_tercero_pct'].indexOf(c)>=0) b[c]= v===''?null:Number(v);
+        else b[c]= v===''?null:v;
+      });
+      var h=hdr(); h['Prefer']='return=representation';
+      var r=await fetch(SB+'/rest/v1/ev_espacios?id=eq.'+id,{method:'PATCH',headers:h,body:JSON.stringify(b)});
+      if(!r.ok){toast('No se pudo guardar: '+(await r.text()).slice(0,110),true);return;}
+      var j=await r.json();
+      if(!j||!j.length){toast('No se guardó: tu usuario no puede editar este espacio.',true);return;}
+      toast('Guardado'); await vEspacios($('wrap')); fichaEspacio(id);
+    };
+  }
+
+  /* ---------- las tres puertas de la casa ---------- */
+  function vEnlaces(w){
+    var d=destino(), base=location.origin, sl=encodeURIComponent(d.slug||'');
+    var L=[
+      {g:'users', t:'Para tu equipo', u:base+'/soypepe.html?h='+sl,
+       d:'Donde ficha, ve su horario, sus tareas del día y sus procedimientos. Cada persona entra con su propia liga; no se comparte en un grupo de WhatsApp.',
+       q:'Pégalo en el alta de cada colaborador'},
+      {g:'bed', t:'Para tus huéspedes', u:base+'/h/'+sl,
+       d:'El check-in, el mapa, las experiencias y todo lo que le puedes vender. Es también tu portal público: quien no está hospedado entra igual y puede comprar.',
+       q:'Va en el QR de recepción, en el correo de reserva y en tu bio'},
+      {g:'shield', t:'Para ti y tu dirección', u:base+'/m/hotel-portal.html?h='+d.id,
+       d:'Este portal. Tus módulos, tus hoteles, tus intangibles, tus ventas. Solo para quien lleva el negocio.',
+       q:'No lo repartas: aquí se ven números'}
+    ];
+    w.innerHTML='<div class="card"><h3>Sus enlaces</h3>'
+      +'<div class="hint">Tres puertas, una por cada clase de persona. Las tres llevan tu marca, no la nuestra: quien las abre ve tu logo y tus colores.</div>'
+      + L.map(function(x){return '<div class="cn" style="grid-template-columns:34px 1fr;align-items:start;padding:14px 15px">'
+          +'<span class="ci">'+ic(x.g)+'</span>'
+          +'<span><span class="cn1">'+esc(x.t)+'</span>'
+          +'<span class="cn2">'+esc(x.d)+'</span>'
+          +'<span style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;align-items:center">'
+          +'<input readonly value="'+esc(x.u)+'" style="flex:1;min-width:210px;font:inherit;font-size:12.5px;padding:7px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--surface-3)">'
+          +'<button class="btn ghost sm" data-u="'+esc(x.u)+'">Copiar</button>'
+          +'<a class="btn ghost sm" href="'+esc(x.u)+'" target="_blank" rel="noopener" style="text-decoration:none">Abrir</a></span>'
+          +'<span class="mini" style="display:block;margin-top:6px">'+esc(x.q)+'</span></span></div>';}).join('')
+      +'</div>'
+      +'<div class="card"><h3>Tu marca en esas tres puertas</h3>'
+      +'<div class="hint">El huésped y tu equipo no tienen por qué saber qué hay detrás. Pon tu logo y tus dos colores y las tres pantallas se visten con ellos.</div>'
+      +'<div class="fgrid">'
+      +'<div class="fld" style="grid-column:1/-1"><label>Logo (URL de la imagen)</label><input data-c="marca_logo_url" value="'+esc(d.marca_logo_url||'')+'" placeholder="https://…/logo.png"></div>'
+      +'<div class="fld"><label>Color principal</label><input data-c="marca_color" value="'+esc(d.marca_color||'')+'" placeholder="#1F3A5F"></div>'
+      +'<div class="fld"><label>Color de acento</label><input data-c="marca_color2" value="'+esc(d.marca_color2||'')+'" placeholder="#D08A3E"></div>'
+      +'</div>'
+      +'<div style="margin-top:14px;border:1px solid var(--rule);border-radius:11px;overflow:hidden">'
+      +'<div style="background:'+esc(d.marca_color||'#1F1B16')+';color:#fff;padding:13px 16px;display:flex;align-items:center;gap:11px">'
+      + (d.marca_logo_url?'<img src="'+esc(d.marca_logo_url)+'" alt="" style="height:26px">':'<b style="font-size:15px">'+esc(d.nombre_comercial||'')+'</b>')
+      +'<span style="margin-left:auto;font-size:12px;opacity:.85">así se ve tu cabecera</span></div>'
+      +'<div style="padding:14px 16px;background:var(--surface-3)"><button class="btn" style="background:'+esc(d.marca_color2||'#137A56')+';border-color:'+esc(d.marca_color2||'#137A56')+'">Hacer check-in</button></div>'
+      +'</div>'
+      +'<div class="ft"><button class="btn" id="gGen">Guardar</button></div></div>'
+      +'<div class="card"><h3>Lo que falta</h3><div class="pronto">Las tres ligas ya se arman con el slug de la casa. Las pantallas del equipo y del huésped todavía no leen estos colores: eso es lo siguiente.</div></div>';
+    w.querySelectorAll('button[data-u]').forEach(function(b){b.onclick=function(){
+      navigator.clipboard.writeText(b.getAttribute('data-u')).then(function(){toast('Copiado');},function(){toast('No pude copiar',true);});
+    };});
   }
 
   function vPronto(){
