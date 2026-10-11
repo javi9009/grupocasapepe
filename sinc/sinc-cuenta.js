@@ -24,7 +24,7 @@ window.sincCuenta = (function () {
   var SB  = 'https://rehophywchakfapivsbh.supabase.co';
   var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 
-  var _sb = null, YO = null;
+  var _sb = null, YO = null, PRESTADA = null;
   function cli() {
     if (!_sb) {
       _sb = supabase.createClient(SB, KEY, {
@@ -130,7 +130,7 @@ window.sincCuenta = (function () {
     var s = await sesion();
     return {
       'apikey': KEY,
-      'Authorization': 'Bearer ' + ((s && s.access_token) || KEY),
+      'Authorization': 'Bearer ' + ((s && s.access_token) || PRESTADA || KEY),
       'Content-Type': 'application/json',
     };
   }
@@ -156,6 +156,9 @@ window.sincCuenta = (function () {
 
   async function salir() {
     YO = null;
+    /* Quien sale, sale: tampoco se le vuelve a reconocer por la sesion del
+       panel que tenga abierta al lado. */
+    PRESTADA = null;
     try { localStorage.removeItem('sinc_resv_sesion'); } catch (_) {}
     try { await cli().auth.signOut(); } catch (_) {}
   }
@@ -187,7 +190,10 @@ window.sincCuenta = (function () {
       function err(t) { var e = $('cuErr'); if (!e) return; e.textContent = t; e.style.display = t ? 'block' : 'none'; }
 
       var correo = '';
-      paso1();
+      /* A quien ya entro por una puerta de la casa no se le mandan seis cifras:
+         su correo ya esta verificado por esa sesion. Solo se le pregunta el
+         nombre si no lo tenemos. Javi, 10-oct-2026. */
+      if (opts.soloNombre) paso3(); else paso1();
 
       /* ---- quién eres ---- */
       function paso1() {
@@ -432,9 +438,63 @@ window.sincCuenta = (function () {
     return await comoHuesped();
   }
 
+  /* UNA SESION QUE YA HAY ABIERTA EN ESTE NAVEGADOR.
+     Javi, 10-oct-2026: «haz un filtro de que si el usuario es huesped o
+     ateneista etc y ya tiene nombre y mail no necesita validar con codigo;
+     solo aplica eso para quienes entran por puertas abiertas al publico sin
+     login». Y tenia razon: el probo la compra estando dentro del panel con su
+     correo, y le mandamos seis cifras igual. La sesion del huesped se guarda
+     con llave propia (sinc-huesped-auth) para no pisar la del trabajo, asi que
+     la del panel estaba ahi al lado sin que nadie la mirara.
+     Aqui se mira: cualquier sesion de Supabase viva en este navegador con
+     correo ya verificado sirve para abrir su ficha de cliente sin codigo. Si
+     esa ficha no tiene nombre, se le pregunta solo el nombre. */
+  function tokenPrestado() {
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k || !/^sb-.*-auth-token$/.test(k)) continue;
+        var raw = localStorage.getItem(k) || '';
+        if (raw.indexOf('base64-') === 0) raw = atob(raw.slice(7));
+        var v = JSON.parse(raw), ses = v.currentSession || v.session || v;
+        if (!ses || !ses.access_token || !ses.user || !ses.user.email) continue;
+        if (ses.expires_at && Number(ses.expires_at) * 1000 < Date.now() + 30000) continue;
+        return { token: ses.access_token, email: ses.user.email };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  async function conSesionAbierta() {
+    /* Con liga de reserva delante manda la liga, siempre: en el telefono de
+       recepcion no se compra a nombre de quien dejo su sesion abierta. */
+    try { if (/[?&]resv=/.test(location.search)) return null; } catch (_) {}
+    var p = tokenPrestado();
+    if (!p) return null;
+    try {
+      var r = await fetch(SB + '/rest/v1/rpc/sinc_soy_cliente', {
+        method: 'POST',
+        headers: { apikey: KEY, Authorization: 'Bearer ' + p.token, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!r.ok) return null;
+      var j = await r.json();
+      if (!j || !j.email) return null;
+      PRESTADA = p.token;
+      YO = j;
+      return j;
+    } catch (_) { return null; }
+  }
+
   async function exige(opts) {
     var yo = await yoDeEstaLiga();
     if (yo) return yo;
+    yo = await conSesionAbierta();
+    if (yo) {
+      if (String(yo.nombre || '').trim()) return yo;
+      /* Correo verificado pero sin nombre: solo falta como se llama. */
+      return await entra(Object.assign({}, opts || {}, { soloNombre: true }));
+    }
     return await entra(opts);
   }
 
@@ -442,6 +502,7 @@ window.sincCuenta = (function () {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
     miPerfil: miPerfil, comoHuesped: comoHuesped, yoDeEstaLiga: yoDeEstaLiga, recoge: recoge,
+    conSesionAbierta: conSesionAbierta,
   };
 })();
 
