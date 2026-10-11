@@ -22,7 +22,13 @@
 //    columna ya esta creada; esto queda escrito para que no se vuelva a quitar.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+/* CUATRO NOMBRES, Y SE PRUEBAN TODOS. Javi, 11-oct-2026: al ir a guardar el
+   secreto del endpoint nuevo, los tres nombres de abajo ya estaban ocupados por
+   otros webhooks del proyecto, y pisarlos habria dejado sordo al de tours sin
+   que nadie se enterara hasta el primer cobro perdido. EVENTOS va primero y es
+   de esta funcion y de nadie mas. */
 const SECRETOS = [
+  Deno.env.get("STRIPE_WEBHOOK_SECRET_EVENTOS"),
   Deno.env.get("STRIPE_WEBHOOK_SECRET_ATENEO"),
   Deno.env.get("STRIPE_WEBHOOK_SECRET_CONNECT"),
   Deno.env.get("STRIPE_WEBHOOK_SECRET"),
@@ -170,7 +176,11 @@ Deno.serve(async (req) => {
       }
       const ya = res.pago_estado === "pagado";
       const hecho = await confirma(res.id, pi, res.stripe_destino ?? null);
+      /* `vivo` dice si ese cobro movio dinero de verdad o fue de prueba. Se
+         pregunta en vez de deducirlo: deducirlo del nombre de la llave ya nos
+         costo decirle a Javi que no le habian cobrado cuando si. */
       return json({ ok: hecho, folio: res.folio, estado: "succeeded", pagado: true, ya,
+        vivo: !!pi.livemode,
         importe: Number(pi.amount ?? 0) / 100,
         mensaje: ya ? "Ya estaba marcada como pagada."
           : hecho ? "Ese cobro SÍ entró. Marcada como pagada y boleto enviado."
