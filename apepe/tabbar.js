@@ -95,17 +95,34 @@
       /* El columnario de los Vnums va apagado hasta que es la pestaña activa. */
       '.tabbar a .ti .tiMon{width:21px;height:21px;display:block;filter:grayscale(1) contrast(1.15)}',
       '.tabbar a.on .ti .tiMon,.tabbar a:hover .ti .tiMon{filter:none}',
-      '.tabbar a.on{color:var(--naranja,#F2682A)}'
+      '.tabbar a.on{color:var(--naranja,#F2682A)}',
+      /* LA APP ESTÁ EN BETA, Y SE DICE. Javi, 12-oct-2026. Va pegada encima de
+         la barra de abajo: se ve en todas las pantallas y no estorba en
+         ninguna. Quien la usa estos días tiene que saber que está probándola,
+         no estrenándola. */
+      '.betafranja{position:fixed;left:0;right:0;z-index:59;',
+      '  bottom:calc(66px + env(safe-area-inset-bottom, 0px));',
+      '  background:var(--tinta,#1E1A16);color:#F6F1E9;text-align:center;',
+      '  font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;',
+      '  padding:4px 10px;opacity:.92}'
     ].join('');
     document.head.appendChild(css);
+
+    /* El aviso de beta, una sola vez por pantalla. */
+    if(!document.querySelector('.betafranja')){
+      var bf=document.createElement('div');
+      bf.className='betafranja';
+      bf.textContent=t('Versión beta · la estamos afinando');
+      document.body.appendChild(bf);
+    }
 
     /* Hueco abajo para que la barra no tape la última línea. Se mira lo que la
        pantalla ya reservaba y sólo se amplía si se queda corto: Inicio guarda
        160px por el sombrero de Hola Pepe y no hay que quitárselos. */
     try {
       var hay = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
-      if (hay < 72) document.body.style.paddingBottom =
-        'calc(72px + env(safe-area-inset-bottom, 0px))';
+      if (hay < 92) document.body.style.paddingBottom =
+        'calc(92px + env(safe-area-inset-bottom, 0px))';
     } catch (_) {}
 
     var q = qs();
