@@ -85,8 +85,8 @@ a:hover{border-bottom-color:var(--accent,#C9501A)}
 </div>
 <nav class="secnav"><div class="secnav-in" role="tablist">
   <button role="tab" aria-selected="true" data-p="pCal">Calendario</button>
+  <button role="tab" aria-selected="false" data-p="pRes">Reservas</button>
   <button role="tab" aria-selected="false" data-p="pPat">Patrones de salida</button>
-  <button role="tab" aria-selected="false" data-p="pGui">Guías</button>
   <button role="tab" aria-selected="false" data-p="pTer">Tours de tercero</button>
 </div></nav>
 <div class="wrap">
@@ -115,16 +115,27 @@ a:hover{border-bottom-color:var(--accent,#C9501A)}
     </tr></thead><tbody id="tbPat"></tbody></table></div>
   </section>
 
-  <section class="panel" id="pGui">
+  <!-- LAS RESERVAS QUE NOS HAN HECHO. Javi, 11-oct-2026: «en esta pantalla de
+       salidas necesito una lista de reservas y salidas… en salidas solo quiero
+       ver la información de reservas que nos han hecho».
+       El calendario dice cuántos lugares van tomados; esto dice QUIÉN los tomó,
+       que es lo que el guía necesita el día de la salida y lo que faltaba para
+       no tener que abrir la base. Aquí vivía el padrón de guías, que ya estaba
+       entero en /m/sinc-guias.html: dos listas del mismo padrón solo sirven
+       para que una de las dos se quede vieja. -->
+  <section class="panel" id="pRes">
     <div class="bar">
-      <input id="gNombre" placeholder="Nombre del guía">
-      <input id="gIdiomas" placeholder="Idiomas">
-      <select id="gProp"></select>
-      <button class="btn" id="gAdd">Dar de alta</button>
-      <a class="btn ghost" href="/m/sinc-guias.html" style="text-decoration:none">Padrón de guías &rarr;</a>
-      <span class="mini">Solo guías internos. Los freelance llevan módulo propio.</span>
+      <input id="rQ" placeholder="Huésped o folio">
+      <select id="rExp"><option value="">Todas las experiencias</option></select>
+      <select id="rCuando"><option value="prox">De hoy en adelante</option><option value="todas">Todas</option><option value="pasadas">Ya pasadas</option></select>
+      <select id="rPago"><option value="">Todos los pagos</option><option value="pagado">Pagadas</option><option value="pendiente">Sin cobrar</option><option value="sin_cobro">Sin cobro (gratis)</option></select>
+      <label class="mini"><input type="checkbox" id="rCanc"> Ver también las canceladas</label>
+      <span class="mini" id="rCuenta" style="margin-left:auto"></span>
     </div>
-    <div class="card tablewrap"><table><thead><tr><th>Guía</th><th>Tipo</th><th>Idiomas</th><th>Sede</th><th class="n">Salidas asignadas</th><th>Activo</th></tr></thead><tbody id="tbGui"></tbody></table></div>
+    <div class="card tablewrap"><table><thead><tr>
+      <th>Salida</th><th>Experiencia</th><th>Huésped</th><th class="n">Pax</th><th>Canal</th><th>Quién vendió</th><th>Pago</th><th class="n">Total</th><th>Folio</th>
+    </tr></thead><tbody id="tbRes"></tbody></table></div>
+    <div class="card" style="margin-top:12px"><div class="note">Una reserva <b>sin cobrar</b> no es una reserva perdida: es la que entró por la pantalla de pago y todavía no confirma Stripe. Las de <b>sin cobro</b> son los tours de entrada libre, que apartan lugar igual. El padrón de guías vive en <a href="/m/sinc-guias.html" target="_top">Guías</a>.</div></div>
   </section>
 
   <section class="panel" id="pTer">
@@ -167,7 +178,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
   var SB='https://rehophywchakfapivsbh.supabase.co';
   var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   var PROPS={'45e69775-d877-4507-a9e1-a45bd3400dc5':'CDMX','febfbef6-7fd1-4b45-84d9-13533e8dcb72':'Puebla'};
-  var S=[],H=[],E=[],GU=[],cur=null,wk=null;
+  var S=[],H=[],E=[],GU=[],R=[],cur=null,wk=null;
   function tok(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&/sb-.*-auth-token/.test(k)){var v=JSON.parse(localStorage.getItem(k)||'null');var s=v&&(v.currentSession||v);if(s&&s.access_token)return s.access_token;}}}catch(_){}return KEY;}
   function hdr(){return {'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':'application/json'};}
   function $(id){return document.getElementById(id);}
@@ -202,19 +213,21 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     var r2=await fetch(SB+'/rest/v1/sinc_horarios?select=*&order=created_at&limit=500',{headers:h});
     var r3=await fetch(SB+'/rest/v1/experiencias?select=id,sku,nombre,pvp,operacion,touroperador,dias_horario,hora_salida,lugar_salida,estatus,op_experiencia_id&order=nombre&limit=500',{headers:h});
     var r4=await fetch(SB+'/rest/v1/guias?select=*&order=nombre&limit=500',{headers:h});
+    /* Las reservas vienen de v_sinc_ventas, que es la que ya cruza la reserva
+       con su salida y su experiencia; no se arma el cruce otra vez aquí. */
+    var r5=await fetch(SB+'/rest/v1/v_sinc_ventas?select=*&order=fecha_salida.desc,hora_salida&limit=1000',{headers:h});
     if(!r1.ok||!r3.ok){$('sub').textContent='No se pudo cargar (revisa tu sesión en el panel).';$('week').innerHTML='<div class="card empty">Sin datos: la consulta no devolvió permiso. No quiere decir que no haya salidas.</div>';return;}
-    S=await r1.json();H=r2.ok?await r2.json():[];E=await r3.json();GU=r4.ok?await r4.json():[];
+    S=await r1.json();H=r2.ok?await r2.json():[];E=await r3.json();GU=r4.ok?await r4.json():[];R=r5.ok?await r5.json():[];
     var props={};S.forEach(function(s){if(s.property_id)props[s.property_id]=1;});
     var fp=$('fProp');while(fp.options.length>1)fp.remove(1);
     Object.keys(props).forEach(function(p){var o=document.createElement('option');o.value=p;o.textContent=propName(p);fp.appendChild(o);});
     var fe=$('fExp');while(fe.options.length>1)fe.remove(1);
     E.filter(function(e){return e.estatus==='activo';}).forEach(function(e){var o=document.createElement('option');o.value=e.id;o.textContent=e.nombre;fe.appendChild(o);});
-    ['mExp','gProp','mGuia'].forEach(function(id){$(id).innerHTML='';});
+    ['mExp','mGuia'].forEach(function(id){$(id).innerHTML='';});
     E.filter(function(e){return e.estatus==='activo';}).forEach(function(e){var o=document.createElement('option');o.value=e.id;o.textContent=e.nombre;$('mExp').appendChild(o);});
     $('mGuia').innerHTML='<option value="">Sin guía</option>'+GU.map(function(g){return '<option value="'+g.id+'">'+esc(g.nombre)+'</option>';}).join('');
-    $('gProp').innerHTML=Object.keys(PROPS).map(function(p){return '<option value="'+p+'">'+PROPS[p]+'</option>';}).join('');
     $('sub').textContent=S.length+' salidas cargadas · los horarios vienen de Akia · '+H.filter(function(x){return !x.hora;}).length+' patrones sin hora';
-    render();renderPat();renderGui();renderTer();
+    render();renderPat();renderRes();renderTer();
   }
 
   function visibles(){
@@ -287,12 +300,62 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       };
     });
   }
-  function renderGui(){
-    var n={};S.forEach(function(s){if(s.guia_id)n[s.guia_id]=(n[s.guia_id]||0)+1;});
-    $('tbGui').innerHTML=GU.length?GU.map(function(g){
-      return '<tr><td><b><a href="/m/sinc-guias.html" target="_top" title="Abrir el padrón de guías">'+
-        esc(g.nombre)+'</a></b></td><td class="mini">'+esc(g.tipo||'interno')+'</td><td class="mini">'+esc(g.idiomas||'—')+'</td><td class="mini">'+propName(g.property_id)+'</td><td class="n">'+(n[g.id]||0)+'</td><td>'+(g.activo?'sí':'no')+'</td></tr>';
-    }).join(''):'<tr><td colspan="6" class="empty">Todavía no hay guías dados de alta, así que no hay a quién asignar las salidas.</td></tr>';
+  /* LA LISTA DE RESERVAS. El filtro de experiencias se llena con lo que de
+     verdad hay reservado, no con el catálogo entero: una lista de 30 nombres
+     para elegir entre 4 es ruido. */
+  var PAGO={pagado:'Pagado',pendiente:'Sin cobrar',sin_cobro:'Sin cobro',fallido:'Falló la tarjeta',
+            caducado:'Caducó',reembolsado:'Reembolsada',en_disputa:'En disputa'};
+  function renderRes(){
+    var fe=$('rExp');
+    if(fe.options.length<=1){
+      var vistas={};
+      R.forEach(function(x){ if(x.experiencia) vistas[x.experiencia]=1; });
+      Object.keys(vistas).sort().forEach(function(n){
+        var o=document.createElement('option'); o.value=n; o.textContent=n; fe.appendChild(o);
+      });
+    }
+    var q=($('rQ').value||'').trim().toLowerCase();
+    var ex=$('rExp').value, cu=$('rCuando').value, pg=$('rPago').value, verC=$('rCanc').checked;
+    var h=hoy();
+    var l=R.filter(function(x){
+      if(!verC && x.estado==='cancelada') return false;
+      if(ex && x.experiencia!==ex) return false;
+      if(pg && String(x.pago_estado||'')!==pg) return false;
+      if(cu==='prox'    && !(x.fecha_salida && x.fecha_salida>=h)) return false;
+      if(cu==='pasadas' && !(x.fecha_salida && x.fecha_salida< h)) return false;
+      if(q){
+        var paja=((x.huesped||'')+' '+(x.folio||'')+' '+(x.vendedor_nombre||'')).toLowerCase();
+        if(paja.indexOf(q)<0) return false;
+      }
+      return true;
+    });
+    /* De hoy en adelante se lee hacia delante: lo primero que sale, arriba. */
+    l.sort(function(a,b){
+      var fa=(a.fecha_salida||'')+(a.hora_salida||''), fb=(b.fecha_salida||'')+(b.hora_salida||'');
+      return cu==='pasadas' ? (fa<fb?1:(fa>fb?-1:0)) : (fa<fb?-1:(fa>fb?1:0));
+    });
+    var pax=0, sinCobrar=0;
+    l.forEach(function(x){ pax+=Number(x.pax||0); if(x.pago_estado==='pendiente') sinCobrar++; });
+    $('rCuenta').textContent = l.length+' reservas · '+pax+' personas'+(sinCobrar?' · '+sinCobrar+' sin cobrar':'');
+
+    $('tbRes').innerHTML = l.length ? l.map(function(x){
+      var cuando = x.fecha_salida
+        ? '<b>'+fd(x.fecha_salida,{weekday:'short',day:'numeric',month:'short'})+'</b>'+(x.hora_salida?' <span class="mini">'+hm(x.hora_salida)+'</span>':'')
+        : '<span class="mini">sin salida</span>';
+      var pago = PAGO[x.pago_estado] || (x.pago_estado||'—');
+      var tot = (x.pago_total!=null && Number(x.pago_total)>0)
+        ? '$'+Number(x.pago_total).toLocaleString('es-MX',{maximumFractionDigits:0}) : '—';
+      return '<tr'+(x.estado==='cancelada'?' style="opacity:.5"':'')+'>'+
+        '<td>'+cuando+'</td>'+
+        '<td>'+esc(x.experiencia||'—')+(x.clase==='de tercero'?' <span class="mini">· '+esc(x.operador||'')+'</span>':'')+'</td>'+
+        '<td><b>'+esc(x.huesped||'—')+'</b>'+(x.estado==='cancelada'?' <span class="mini">cancelada</span>':'')+'</td>'+
+        '<td class="n">'+(x.pax||0)+'</td>'+
+        '<td class="mini">'+esc(x.canal||'—')+'</td>'+
+        '<td class="mini">'+esc(x.vendedor_nombre||'—')+'</td>'+
+        '<td class="mini">'+esc(pago)+'</td>'+
+        '<td class="n">'+tot+'</td>'+
+        '<td class="mini">'+esc(x.folio||'—')+'</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="empty">Ninguna reserva con esos filtros. Si acabas de vender, dale a «Hoy» arriba para recargar.</td></tr>';
   }
   function renderTer(){
     var t=E.filter(function(e){return e.operacion==='tercero'&&e.estatus==='activo';});
@@ -387,26 +450,10 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     if(!r.ok){toast('No se pudieron generar',true);return;}
     toast((await r.json())+' salidas nuevas');await load();
   };
-  $('gAdd').onclick=async function(){
-    var n=$('gNombre').value.trim();if(!n){toast('Escribe el nombre',true);return;}
-    var body={nombre:n,slug:n.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,''),idiomas:$('gIdiomas').value.trim()||null,property_id:$('gProp').value,tipo:'interno',activo:true};
-    var r=await fetch(SB+'/rest/v1/guias',{method:'POST',headers:hdr(),body:JSON.stringify(body)});
-    if(!r.ok){
-      var t='';try{t=await r.text();}catch(_){}
-      var j=null;try{j=t?JSON.parse(t):null;}catch(_){}
-      var m=(j&&(j.message||j.hint||j.details))||t||'';
-      var dilo;
-      if(/duplicate|unique/i.test(m))
-        dilo='Ya hay un guía con ese nombre en el padrón';
-      else if(r.status===401||r.status===403||/row-level security|permission denied/i.test(m))
-        dilo='Tu sesión no alcanza para dar de alta guías. Sal y vuelve a entrar al panel; si sigue igual, avisa a Javi con esta frase: '+String(m).slice(0,90);
-      else if(/guias_tipo_chk/i.test(m))
-        dilo='Ese tipo de guía no existe';
-      else dilo='No se pudo dar de alta ('+r.status+'): '+String(m).slice(0,140);
-      toast(dilo,true);return;
-    }
-    $('gNombre').value='';$('gIdiomas').value='';toast('Guía dado de alta');await load();
-  };
+  ['rQ','rExp','rCuando','rPago','rCanc'].forEach(function(id){
+    var el=$(id); if(!el) return;
+    el.addEventListener(el.tagName==='INPUT'&&el.type!=='checkbox'?'input':'change',renderRes);
+  });
   $('wPrev').onclick=function(){wk=addD(wk,-7);load();};
   $('wNext').onclick=function(){wk=addD(wk,7);load();};
   $('wHoy').onclick=function(){wk=lunes(hoy());load();};
