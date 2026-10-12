@@ -484,22 +484,59 @@ async function pintaSociales(){
   });
 }
 
-/* ---- vuelta de Google: la cuenta ya existe, falta el alta del portal ---- */
+/* ---- la vuelta: del correo de confirmación o de Google ----------------
+   Javi, 12-oct: "del mail de confirmar me debe mandar directo a mi cuenta".
+   Y tenía razón: la liga del correo devuelve aquí, y aquí se volvía a pintar
+   el formulario de alta -nombre, empresa- que la persona ya había rellenado
+   diez segundos antes. El alta ya estaba hecha en la base; lo único que
+   faltaba era preguntarlo.
+
+   Así que ahora, con sesión, lo primero es mirar si ese correo ya tiene el
+   portal activo (mis_portales). Si lo tiene, no hay nada que preguntar: se
+   va derecho a su panel. El formulario sólo vuelve a salir cuando de verdad
+   falta el alta, que es el caso de quien entra con Google. */
+async function esperaSesion(){
+  let s=null;
+  try{ s=(await sb.auth.getSession()).data.session; }catch(e){}
+  if(s) return s;
+  // La liga del correo trae los tokens en el hash y el SDK tarda un instante
+  // en guardarlos. Sin esta espera, getSession decía que no había nadie.
+  if(!/access_token=|refresh_token=|[?&]code=/.test(location.hash+location.search)) return null;
+  return await new Promise(function(res){
+    let hecho=false, sub=null;
+    function cierra(x){ if(hecho) return; hecho=true;
+      try{ sub.subscription.unsubscribe(); }catch(e){} res(x); }
+    sub = sb.auth.onAuthStateChange(function(_e,sesion){ if(sesion) cierra(sesion); });
+    setTimeout(async function(){
+      let s2=null; try{ s2=(await sb.auth.getSession()).data.session; }catch(e){}
+      cierra(s2);
+    }, 2500);
+  });
+}
+
 (async function vuelta(){
   const q=new URLSearchParams(location.search);
   const p=q.get('p');
   // Elegir marca se hace en la puerta del Grupo; esta pagina es solo el alta.
   if(!p){ location.replace('/'); return; }
   if(p==='socios'){ PORTAL='socios'; $('s-msg').className='msg'; ver('p-socios'); return; }
-  if(!p || !TEXTOS[p]) return;
-  let ses=null;
-  try{ ses=(await sb.auth.getSession()).data.session; }catch(e){}
+  if(!TEXTOS[p]) return;
+  const ses = await esperaSesion();
   if(!ses){
     // viene de la puerta de su propiedad: derecho a sus clases de alta
     const tarjeta=document.querySelector('.card[data-portal="'+p+'"]');
     if(tarjeta) tarjeta.click();
     return;
   }
+
+  // ¿El alta ya estaba hecha? Entonces esto es sólo la confirmación del correo.
+  let yaTiene=false;
+  try{
+    const r=await sb.rpc('mis_portales');
+    yaTiene=(r.data||[]).some(x=>(x && (x.portal||x))===p);
+  }catch(e){}
+  if(yaTiene){ location.replace(DESTINO[p]||'/'); return; }
+
   PORTAL=p;
   const cid=q.get('c');
   const L=CLASES[p]||[];
@@ -508,10 +545,13 @@ async function pintaSociales(){
   eligeClase(clase);
   const u=ses.user||{}; const md=u.user_metadata||{};
   const nombre=(md.full_name||md.name||md.nombre||'').trim();
-  $('f-cred').style.display='none';         // ya entró con Google
+  $('f-cred').style.display='none';         // la cuenta ya existe
   $('f-nombre').value=nombre;
   $('f-enviar').textContent = clase.pendiente ? 'Dejar mis datos' : 'Terminar mi alta';
   $('f-social').innerHTML='';
+  if(u.email_confirmed_at || u.confirmed_at){
+    aviso('Correo confirmado. Sólo falta esto y entras.','ok');
+  }
   if(nombre && !clase.empresa && !clase.espacios){ $('f-enviar').click(); }
 })();
 
