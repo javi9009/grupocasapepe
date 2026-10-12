@@ -2364,6 +2364,20 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var bl=(c.bloquea||[]).map(function(x){return x.que;});
     var av=(c.avisa||[]).map(function(x){return x.que;});
     if(!bl.length && !av.length){ a.innerHTML=''; return; }
+    /* SE ARREGLA AQUI MISMO. Javi, 12-oct-2026: Culturizate subio su INE y su
+       CURP -las fotos de la firma estan guardadas- y el aviso le seguia
+       diciendo que faltaba su RFC o CURP. Y era verdad: lo que falta es el
+       NUMERO, que vive en otro paso que el ya habia pasado, y el aviso solo
+       sabia decir «Ir a mi cuenta». Tres de los cuatro operadores que han
+       firmado estaban atascados asi, cada uno por un dato distinto.
+       Ahora el dato que bloquea se escribe en la propia banda. */
+    var CAMPO={
+      identidad:{campo:'curp', etq:'Tu RFC o CURP', ph:'RFC o CURP de quien responde',
+                 ay:'Ya tenemos tu identificación; nos falta el número. Si tienes RFC, pon el RFC.'},
+      correo:   {campo:'email', etq:'Tu correo', ph:'correo@ejemplo.com', ay:'Ahí te avisamos de cada reserva.'},
+      telefono: {campo:'whatsapp', etq:'Tu WhatsApp', ph:'+52 55 ...', ay:'Para lo de último momento: un huésped que no llega, un cambio de hora.'}
+    };
+    var pri=(c.bloquea||[]).filter(function(x){ return CAMPO[x.clave]; })[0];
     a.innerHTML='<div class="aviso" style="margin-bottom:16px">'+
       (bl.length
         ? 'Puedes subir todas las experiencias que quieras, pero para publicarlas falta: <b>'+bl.map(esc).join('</b>, <b>')+'</b>. '
@@ -2371,8 +2385,40 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       (av.length
         ? '<span style="opacity:.8">Para después, sin prisa: '+av.map(esc).join(', ')+'.</span> '
         : '')+
-      '<a href="#" id="irCuenta">Ir a mi cuenta →</a></div>';
+      '<a href="#" id="irCuenta">Ir a mi cuenta →</a>'+
+      (pri
+        ? '<div style="margin-top:12px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'+
+            '<div class="fld" style="flex:1;min-width:220px;margin:0">'+
+              '<label>'+esc(CAMPO[pri.clave].etq)+'</label>'+
+              '<input id="frenoDato" placeholder="'+esc(CAMPO[pri.clave].ph)+'">'+
+              '<div class="ay">'+esc(CAMPO[pri.clave].ay)+'</div>'+
+            '</div>'+
+            '<button class="btn" id="frenoGuarda">Guardar</button>'+
+          '</div>'
+        : '')+
+      '</div>';
     var ir=$('irCuenta'); if(ir) ir.onclick=function(e){e.preventDefault();vista('cuenta');};
+    var gd=$('frenoGuarda');
+    if(gd) gd.onclick=async function(){
+      var v=($('frenoDato').value||'').trim();
+      if(!v){ toast('Escríbelo antes de guardar',true); return; }
+      var campo=CAMPO[pri.clave].campo;
+      /* El RFC y la CURP se distinguen por el largo: 18 es CURP, 12 o 13 es
+         RFC. Se guarda en el suyo para que la constancia fiscal cuadre. */
+      if(pri.clave==='identidad'){
+        var limpio=v.toUpperCase().replace(/[^A-Z0-9]/g,'');
+        campo = limpio.length>=18 ? 'curp' : 'rfc';
+        v = limpio;
+      }
+      this.disabled=true; var antes=this.textContent; this.textContent='Guardando…';
+      var cuerpo={}; cuerpo[campo]=v;
+      try{
+        var rr=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+cur.id,{method:'PATCH',headers:hdr(),body:JSON.stringify(cuerpo)});
+        if(!rr.ok) throw new Error(await rr.text());
+        toast('Guardado'); await refresca(); pintaFreno();
+      }catch(x){ toast('No se pudo guardar: '+String(x.message||x).slice(0,120),true); }
+      this.disabled=false; this.textContent=antes;
+    };
   }
 
   /* ---------- qué datos fiscales aplican, según quién es ----------
@@ -3055,6 +3101,22 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        en la función (un botón se rodea recargando), pero si solo estuviera allí,
        el operador pulsaría, se abriría una pestaña y recibiría un rechazo sin
        entender por qué. Así se entera antes de moverse. */
+    /* NO SE FIRMA SIN LO QUE DESPUES BLOQUEA. Javi, 12-oct-2026: tres de los
+       cuatro operadores que firmaron se quedaron sin poder publicar, cada uno
+       por un dato distinto -uno sin RFC, dos sin teléfono-. Firmaban, se iban
+       contentos, y el freno les salía después, cuando ya nadie estaba mirando.
+       Ahora se pide antes, que es cuando están delante. */
+    var faltan=[];
+    if(cur){
+      if(!String(cur.rfc||'').trim() && !String(cur.curp||'').trim()) faltan.push('tu RFC o CURP');
+      if(!String(cur.email_notificaciones||'').trim() && !String(cur.email||'').trim()) faltan.push('un correo');
+      if(!String(cur.whatsapp||'').trim()) faltan.push('un teléfono o WhatsApp');
+    }
+    if(faltan.length){
+      toast('Antes de firmar nos falta '+faltan.join(', ')+'. Sin eso el contrato se firma pero no puedes publicar.',true);
+      vista('cuenta');
+      return;
+    }
     if(cur && cur.forma_pago==='stripe_connect' && !cur.stripe_account_id){
       toast('Elegiste que el huésped pague el total a tu Stripe, y todavía no está vinculado. '+
             'Ve a «Cómo te pagamos»: vincúlalo, o cambia a anticipo y resto al guía.',true);
