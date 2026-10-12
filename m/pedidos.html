@@ -144,6 +144,7 @@ let MISAREAS=[], CATPROV=[], MODO="", ABIERTAS={}, ERRCARGA=[];
 let PASILLOS={};   // id -> {nombre, ruta, nivel, raiz} del arbol de pasillos
 let ULTPROV={};    // producto_id -> con quién se recibió la última vez en esta sede
 let SEL={};   // producto_id -> piezas seleccionadas en la pestaña Sugeridos
+let ENVIANDO=false; // candado anti doble-envío (evita pedidos duplicados por doble toque)
 
 /* ───────────────── arranque ───────────────── */
 async function boot(){
@@ -433,26 +434,29 @@ async function armarDesdeSugeridos(){
   const claves=Object.keys(grupos);
   if(!claves.length) return toast("Los seleccionados no tienen presentación con precio");
   if(!confirm(`Se crearán ${claves.length} pedido(s) en borrador, uno por proveedor. ¿Continuar?`)) return;
-
-  let creados=0;
-  for(const k of claves){
-    const g=grupos[k];
-    const prim=g.lineas[0].s;
-    const {data:ped,error}=await sb.from("cmp_pedidos").insert({
-      property_id:SEDE, area:prim.area, proveedor_id:g.proveedor_id||null,
-      bodega_destino_id:prim.bodega_id||null, cuenta_id:prim.cuenta_id||null,
-      origen:"stock_minimo", estado:"borrador",
-      solicitado_por:USER.id, solicitado_por_nombre:EMAIL
-    }).select().single();
-    if(error){ toast("Error: "+error.message); continue; }
-    const items=g.lineas.map(l=>({
-      pedido_id:ped.id, producto_id:l.s.producto_id, presentacion_id:l.s.presentacion_id,
-      cantidad_solicitada:l.cant, precio_unitario:l.s.precio
-    }));
-    const r2=await sb.from("cmp_pedido_items").insert(items);
-    if(r2.error) toast("Error en líneas: "+r2.error.message); else creados++;
-  }
-  SEL={}; toast(`${creados} pedido(s) creados en borrador`); TAB="pedidos"; pintaTabs(); await recargar();
+  if(ENVIANDO) return;  // evita que un doble toque cree pedidos duplicados
+  ENVIANDO=true;
+  try{
+    let creados=0;
+    for(const k of claves){
+      const g=grupos[k];
+      const prim=g.lineas[0].s;
+      const {data:ped,error}=await sb.from("cmp_pedidos").insert({
+        property_id:SEDE, area:prim.area, proveedor_id:g.proveedor_id||null,
+        bodega_destino_id:prim.bodega_id||null, cuenta_id:prim.cuenta_id||null,
+        origen:"stock_minimo", estado:"borrador",
+        solicitado_por:USER.id, solicitado_por_nombre:EMAIL
+      }).select().single();
+      if(error){ toast("Error: "+error.message); continue; }
+      const items=g.lineas.map(l=>({
+        pedido_id:ped.id, producto_id:l.s.producto_id, presentacion_id:l.s.presentacion_id,
+        cantidad_solicitada:l.cant, precio_unitario:l.s.precio
+      }));
+      const r2=await sb.from("cmp_pedido_items").insert(items);
+      if(r2.error) toast("Error en líneas: "+r2.error.message); else creados++;
+    }
+    SEL={}; toast(`${creados} pedido(s) creados en borrador`); TAB="pedidos"; pintaTabs(); await recargar();
+  } finally { ENVIANDO=false; }
 }
 
 /* ── Pedidos ── */
@@ -922,7 +926,7 @@ async function cpCheckout(){
     <h3 style="margin:14px 0 0;font-size:.95rem">Notas / indicaciones <span class="small muted">(opcional)</span></h3>
     <textarea id="cpNota" class="bfin" rows="2" placeholder="Describe el pedido: marca, maduración, presentación, para qué es, urgencia…" style="width:100%;margin-top:6px;resize:vertical"></textarea>
     <div class="foot"><button class="btn ghost" onclick="cpVolver()">Volver al carrito</button>
-      <button class="btn" onclick="cpCrear()">Confirmar y crear ${Object.keys(grupos).length} pedido(s)</button></div>`);
+      <button class="btn" id="btnCpConfirmar" onclick="cpCrear()">Confirmar y crear ${Object.keys(grupos).length} pedido(s)</button></div>`);
 }
 function cpVolver(){
   if(MODO==="pedir"){ closeModal(); render(); }
@@ -932,27 +936,32 @@ function cpVolver(){
       <button class="btn" id="cpCrear" onclick="cpCheckout()" disabled>Revisar y pedir</button></div>`); cpInit(); }
 }
 async function cpCrear(){
-  const nota=(document.getElementById("cpNota")?.value||"").trim()||null;
-  const grupos={};
-  CART.forEach(x=>{ (grupos[x.proveedor_id]=grupos[x.proveedor_id]||[]).push(x); });
-  let hechos=0, ultimo=null;
-  for(const k of Object.keys(grupos)){
-    const items=grupos[k];
-    const prod=PRODS.find(p=>p.id===items[0].producto_id)||{};
-    const {data:ped,error}=await sb.from("cmp_pedidos").insert({
-      property_id:SEDE, area:items[0].area, origen:"manual", estado:"borrador",
-      proveedor_id:k&&k!=="null"?k:null, cuenta_id:prod.cuenta_id||null, bodega_destino_id:prod.bodega_id||null,
-      solicitado_por:USER.id, solicitado_por_nombre:EMAIL, notas:nota
-    }).select().single();
-    if(error){ toast(error.message); continue; }
-    const r=await sb.from("cmp_pedido_items").insert(items.map(x=>({
-      pedido_id:ped.id, producto_id:x.producto_id, presentacion_id:x.presentacion_id,
-      cantidad_solicitada:x.cant, precio_unitario:x.precio, tasa_iva:x.tasa })));
-    if(r.error) toast(r.error.message); else { hechos++; ultimo=ped.id; }
-  }
-  CART=[]; closeModal(); toast(`${hechos} pedido(s) creados`);
-  await recargar(); TAB="pedidos"; pintaTabs(); render();
-  if(hechos===1&&ultimo&&MODO!=="pedir") verPedido(ultimo);
+  if(ENVIANDO) return;  // evita que un doble toque cree pedidos duplicados
+  ENVIANDO=true;
+  const btn=document.getElementById("btnCpConfirmar"); if(btn) btn.disabled=true;
+  try{
+    const nota=(document.getElementById("cpNota")?.value||"").trim()||null;
+    const grupos={};
+    CART.forEach(x=>{ (grupos[x.proveedor_id]=grupos[x.proveedor_id]||[]).push(x); });
+    let hechos=0, ultimo=null;
+    for(const k of Object.keys(grupos)){
+      const items=grupos[k];
+      const prod=PRODS.find(p=>p.id===items[0].producto_id)||{};
+      const {data:ped,error}=await sb.from("cmp_pedidos").insert({
+        property_id:SEDE, area:items[0].area, origen:"manual", estado:"borrador",
+        proveedor_id:k&&k!=="null"?k:null, cuenta_id:prod.cuenta_id||null, bodega_destino_id:prod.bodega_id||null,
+        solicitado_por:USER.id, solicitado_por_nombre:EMAIL, notas:nota
+      }).select().single();
+      if(error){ toast(error.message); continue; }
+      const r=await sb.from("cmp_pedido_items").insert(items.map(x=>({
+        pedido_id:ped.id, producto_id:x.producto_id, presentacion_id:x.presentacion_id,
+        cantidad_solicitada:x.cant, precio_unitario:x.precio, tasa_iva:x.tasa })));
+      if(r.error) toast(r.error.message); else { hechos++; ultimo=ped.id; }
+    }
+    CART=[]; closeModal(); toast(`${hechos} pedido(s) creados`);
+    await recargar(); TAB="pedidos"; pintaTabs(); render();
+    if(hechos===1&&ultimo&&MODO!=="pedir") verPedido(ultimo);
+  } finally { ENVIANDO=false; }
 }
 function agregarLinea(pedidoId){
   const p=PEDIDOS.find(x=>x.id===pedidoId);
