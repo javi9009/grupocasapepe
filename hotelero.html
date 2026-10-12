@@ -1632,6 +1632,12 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
       +'tiene_incluye,tiene_cancelacion,cer_inicio_lugar,storytelling,ods,lineas_costeo,guias_del_guia,'
       +'operador_id,resumen,duracion_min';
     var todas = await get('v_ficha_experiencia?select='+cols+'&operador_id=eq.'+MITO.id+'&order=nombre') || [];
+    /* solo_huespedes no está en la vista (la comparte el editor de tours):
+       se trae aparte y se pega, en vez de tocar una vista de la que cuelga
+       media pantalla de Sincrético. */
+    var priv={}; (await get('op_experiencias?select=id,solo_huespedes&operador_id=eq.'+MITO.id)||[])
+      .forEach(function(x){ priv[x.id]=!!x.solo_huespedes; });
+    todas.forEach(function(x){ x.solo_huespedes=!!priv[x.id]; });
     /* La portada vive en su propia vista, igual que en el editor de tours. */
     var ports={}; (await get('v_ficha_portada?select=id,portada')||[]).forEach(function(x){ports[x.id]=x.portada;});
     todas.forEach(function(e){ e.portada=ports[e.id]||''; });
@@ -1652,10 +1658,24 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
         + (e.resumen?'<span class="de2">'+esc(String(e.resumen).slice(0,110))+'…</span>':'')
         +'<span class="sem">'+semaforo(e)+'</span>'
         +'<span class="falta">'+(f.length?'falta '+f.slice(0,4).join(', ')+(f.length>4?' y '+(f.length-4)+' más':''):'Lista para vender')+'</span>'
+        +'<span class="resp" data-xp="'+e.id+'" style="margin-top:8px">'
+          +'<button data-v="1" class="'+(e.solo_huespedes?'on':'')+'">Solo mis huéspedes</button>'
+          +'<button data-v="0" class="'+(e.solo_huespedes?'':'on')+'">Abierta</button></span>'
         +'</span></div>';
     }).join('') + '<button class="hc nuevo" id="nuevaX">+ Nueva experiencia</button>';
-    $('eg').querySelectorAll('.ex').forEach(function(b){b.onclick=function(){
+    $('eg').querySelectorAll('.ex').forEach(function(b){b.onclick=function(ev){
+      if(ev.target.closest('[data-xp]')) return;
       window.open('/ficha.html?id='+b.getAttribute('data-x')+'&de=hotel','_blank','noopener');
+    };});
+    /* Privada = no sale al público de Sincrético; la aprueba el hotel. */
+    $('eg').querySelectorAll('[data-xp] button').forEach(function(b){b.onclick=async function(ev){
+      ev.stopPropagation();
+      var id=b.parentNode.getAttribute('data-xp'), v=b.getAttribute('data-v')==='1';
+      var h=hdr(); h['Prefer']='return=representation';
+      var r=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+id,{method:'PATCH',headers:h,
+        body:JSON.stringify({solo_huespedes:v})});
+      if(!r.ok){ toast('No se pudo cambiar',true); return; }
+      toast(v?'Solo para tus huéspedes':'Abierta al público'); vExps(w);
     };});
     $('nuevaX').onclick=async function(){
       var n=prompt('¿Cómo se llama la experiencia?'); if(!n) return;
@@ -1679,6 +1699,61 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
   }
   function min2h(m){ if(!m) return ''; var h=Math.floor(m/60), r=m%60;
     return (h?h+' h':'')+(h&&r?' ':'')+(r?r+' min':''); }
+
+  /* ---------- EL SOMBRERO DE PRODUCTORA ----------
+     Javi, 11-oct-2026: «debe ser el sistema de creación de la touroperadora
+     […] lo mismo con los eventos». Así que el hotel NO tiene un formulario de
+     eventos propio: se le da su ficha de productora —como ya se le da la de
+     touroperador para las experiencias— y monta sus eventos en el MISMO
+     asistente del Ateneo, con sus tres clases, su calendario de sala, sus
+     boletos y sus fotos. Una sola pantalla: lo que se arregle allí le llega
+     aquí sin tocar nada.
+
+     Sus espacios se enlazan como «opera»: son suyos, no prestados. */
+  async function sombreroPROD(d){
+    var yo=await get('productoras?select=id,nombre_comercial,portal_token&nombre_comercial=eq.'
+      +encodeURIComponent(d.nombre_comercial||''));
+    var pr=(yo&&yo[0])||null;
+    if(!pr){
+      var r=await fetch(SB+'/rest/v1/productoras',{method:'POST',
+        headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+        body:JSON.stringify({nombre_comercial:d.nombre_comercial,ciudad:ciudadCat(d.ciudad),
+          email:d.email,whatsapp:d.whatsapp,razon_social:d.razon_social,rfc:d.rfc,
+          tipo_persona:d.tipo_persona,estado:'activo',rol_ateneo:'productora',puede_gratis:true,
+          com_hotel_pct:d.com_hotel_pct,com_vendedor_pct:d.com_colaborador_pct,
+          com_plataforma_pct:d.com_plataforma_pct})});
+      if(!r.ok){ toast('No se pudo crear tu ficha de productora: '+(await r.text()).slice(0,110),true); return null; }
+      pr=(await r.json())[0];
+      var pap=await get('entidad_papeles?select=entidad_id&papel=eq.hotel&ref_id=eq.'+d.id);
+      var ent=(pap&&pap[0]&&pap[0].entidad_id)||null;
+      if(ent) await fetch(SB+'/rest/v1/entidad_papeles',{method:'POST',headers:hdr(),
+        body:JSON.stringify([{entidad_id:ent,papel:'productora',ref_tabla:'productoras',
+          ref_id:pr.id,principal:false,nota:pr.nombre_comercial}])});
+    }
+    /* Sus salas, cada vez: si creó una terraza nueva en «Mis espacios» tiene
+       que poder montar en ella sin que nadie la enlace a mano. */
+    var casas=[G].concat(HOT||[]).filter(Boolean).map(function(x){return x.id;});
+    var mias=await get('ev_espacios?select=id&hotel_id=in.('+casas.join(',')+')')||[];
+    var ya=await get('ev_productora_espacios?select=espacio_id&productora_id=eq.'+pr.id)||[];
+    var hay={}; ya.forEach(function(x){ hay[x.espacio_id]=1; });
+    var faltan=mias.filter(function(e){ return !hay[e.id]; });
+    if(faltan.length) await fetch(SB+'/rest/v1/ev_productora_espacios',{method:'POST',headers:hdr(),
+      body:JSON.stringify(faltan.map(function(e){
+        return {productora_id:pr.id,espacio_id:e.id,estado:'aprobado',relacion:'opera',
+                nota:'espacio propio del hotel'};}))}).catch(function(){});
+    return pr;
+  }
+  async function abreProductora(d){
+    var pr=await sombreroPROD(d); if(!pr) return;
+    if(!pr.portal_token){
+      var r=await fetch(SB+'/rest/v1/productoras?id=eq.'+pr.id,
+        {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+         body:JSON.stringify({portal_token:crypto.randomUUID()})});
+      if(r.ok){ var j=await r.json(); pr.portal_token=(j&&j[0]&&j[0].portal_token)||null; }
+    }
+    if(!pr.portal_token){ toast('No se pudo abrir tu asistente de eventos',true); return; }
+    window.open('/productora.html?t='+encodeURIComponent(pr.portal_token),'_blank','noopener');
+  }
 
   /* ---------- mis eventos ----------
      Mismos chequeos que el modulo del Ateneo (/m/eventos.html), sobre la misma
@@ -1707,93 +1782,86 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
   var MEV=[], MESP=[];
   async function vEventos(w){
     var d=destino();
-    MESP = await get('ev_espacios?select=id,nombre&hotel_id=eq.'+d.id+'&order=nombre') || [];
+    var casas=[G].concat(HOT||[]).filter(Boolean).map(function(x){return x.id;});
+    MESP = await get('ev_espacios?select=id,nombre,hotel_id&hotel_id=in.('+casas.join(',')+')&order=nombre') || [];
     w.innerHTML='<div class="card"><h3>Mis eventos</h3>'
-      +'<div class="hint">Los que montas en tus propios espacios, con los mismos pasos que un evento del Ateneo. Te quedas el <b>65%</b>, y <b>70%</b> si lo vendes a tus huéspedes. '
+      +'<div class="hint">Se montan con el <b>mismo asistente que usan las productoras del Ateneo</b>: las tres clases '
+      +'(con público, espacio creativo, uso privado), el calendario de tu sala, los boletos y las fotos. '
+      +'Te quedas el <b>65%</b>, y <b>70%</b> si es solo para tus huéspedes. '
       + (MESP.length? 'Tienes '+MESP.length+' espacio'+(MESP.length===1?'':'s')+' donde montarlos.'
                     : '<b>Primero crea un espacio</b> en «Mis espacios»: un evento necesita dónde pasar.')+'</div>'
       +'<div class="mini" id="evCarga"></div>'
-      +'<div class="hgrid" id="vg" style="margin-top:12px"></div></div><div id="vfi"></div>';
-    MEV = await get('eventos?select=*&hotel_id=eq.'+d.id+'&order=fecha_inicio.desc') || [];
+      +'<div class="hgrid" id="vg" style="margin-top:12px"></div>'
+      +'<div class="ft" style="justify-content:flex-start;margin-top:14px">'
+      +'<button class="btn" id="nuevoV"'+(MESP.length?'':' disabled style="opacity:.45;cursor:default"')+'>+ Nuevo evento</button>'
+      +'<span class="mini" style="align-self:center">Se abre el asistente completo en otra pestaña.</span></div></div>'
+      +'<div id="vfi"></div>';
+    MEV = await get('eventos?select=*&hotel_id=in.('+casas.join(',')+')&order=fecha_inicio.desc') || [];
     var listos=MEV.filter(function(e){return !faltanEv(e).length;}).length;
     $('evCarga').innerHTML = MEV.length
       ? '<b>'+MEV.length+'</b> evento'+(MEV.length===1?'':'s')+' · <b>'+listos+'</b> listo'+(listos===1?'':'s')+' para vender'
       : 'Todavía no has montado ninguno.';
+    var casaDe={}; [G].concat(HOT||[]).filter(Boolean).forEach(function(h){casaDe[h.id]=h.nombre_comercial;});
     $('vg').innerHTML = MEV.map(function(x){
       var e=MESP.filter(function(y){return y.id===x.espacio_id;})[0], f=faltanEv(x);
       var foto=(x.fotos&&x.fotos.length)?(typeof x.fotos[0]==='string'?x.fotos[0]:(x.fotos[0]&&x.fotos[0].url)||''):'';
+      var fam = x.clase==='espacio' ? 'Espacio creativo' : x.clase==='privado' ? 'Uso privado' : 'Evento con público';
       return '<div class="ex" data-v="'+x.id+'">'
         +'<span class="foto"'+(foto?' style="background-image:url(&quot;'+esc(foto)+'&quot;)"':'')+'>'
         +'<span class="op">'+esc(e?e.nombre:'sin espacio')+'</span>'
         +'<span class="est '+(x.estado==='publicado'?'pub':'bor')+'">'+esc(x.estado||'borrador')+'</span></span>'
         +'<span class="cu"><span class="nm">'+esc(x.nombre||'(sin nombre)')+'</span>'
-        +'<span class="sub">'+[(x.fecha_inicio?String(x.fecha_inicio).slice(0,16).replace('T',' '):'sin fecha'),
-            (x.es_gratis?'entrada libre':(x.precio?dinero(x.precio):'sin precio')),
-            (x.solo_huespedes?'solo huéspedes':'abierto')].map(esc).join(' · ')+'</span>'
+        +'<span class="sub">'+[fam, casaDe[x.hotel_id]||'',
+            (x.fecha_inicio?String(x.fecha_inicio).slice(0,16).replace('T',' '):'sin fecha'),
+            (x.es_gratis?'entrada libre':(x.precio?dinero(x.precio):'sin precio'))].filter(Boolean).map(esc).join(' · ')+'</span>'
         +'<span class="sem">'+semEv(x)+'</span>'
         +'<span class="falta">'+(f.length?'falta '+f.slice(0,4).join(', ')+(f.length>4?' y '+(f.length-4)+' más':''):'Listo para vender')+'</span>'
         +'</span></div>';
-    }).join('') + '<button class="hc nuevo" id="nuevoV"'+(MESP.length?'':' disabled style="opacity:.45;cursor:default"')+'>+ Nuevo evento</button>';
+    }).join('') || '<div class="mini">—</div>';
     $('vg').querySelectorAll('.ex').forEach(function(b){b.onclick=function(){fichaEvento(b.getAttribute('data-v'),MESP);};});
-    if(MESP.length) $('nuevoV').onclick=async function(){
-      var n=prompt('¿Cómo se llama el evento?'); if(!n) return;
-      var r=await fetch(SB+'/rest/v1/eventos',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-        body:JSON.stringify({nombre:n,hotel_id:d.id,espacio_id:MESP[0].id,estado:'borrador',solo_huespedes:true})});
-      if(!r.ok){toast('No se pudo crear: '+(await r.text()).slice(0,130),true);return;}
-      var j=await r.json(); toast('Evento en borrador'); await vEventos(w); fichaEvento(j[0].id,MESP);
-    };
+    if(MESP.length) $('nuevoV').onclick=function(){ abreProductora(destino()); };
   }
 
+  /* La ficha de aquí NO edita el evento: eso se hace en el asistente. Lo único
+     que se decide desde el hotel es si es solo para sus huéspedes, porque de
+     eso depende quién lo aprueba y cuánto se lleva. */
   function fichaEvento(id,esp){
     var x=MEV.filter(function(e){return e.id===id;})[0]; if(!x) return;
-    function f(lab,c,t,ay){ var v=x[c];
-      if(t==='datetime-local'&&v) v=String(v).slice(0,16);
-      return '<div class="fld"><label>'+lab+'</label><input data-v="'+c+'" type="'+(t||'text')+'"'
-        +(t==='number'?' step="any"':'')+' value="'+esc(v==null?'':v)+'">'+(ay?'<div class="ay">'+ay+'</div>':'')+'</div>'; }
-    var p=Number(x.precio)||0;
+    var p=Number(x.precio)||0, f=faltanEv(x);
+    var e=(esp||[]).filter(function(y){return y.id===x.espacio_id;})[0];
     $('vfi').innerHTML=
-      '<div class="card"><h3>'+esc(x.nombre)+'</h3><div class="fgrid">'
-      + f('Nombre','nombre')
-      +'<div class="fld"><label>Dónde</label><select data-v="espacio_id">'
-        + esp.map(function(e){return '<option value="'+e.id+'">'+esc(e.nombre)+'</option>';}).join('')+'</select></div>'
-      + f('Empieza','fecha_inicio','datetime-local') + f('Termina','fecha_fin','datetime-local')
-      + f('Aforo','aforo','number') + f('Precio por persona','precio','number')
-      +'<div class="fld"><label>¿Para quién?</label><select data-v="solo_huespedes">'
-        +'<option value="true">Solo mis huéspedes</option><option value="false">Abierto a cualquiera</option></select></div>'
-      +'<div class="fld"><label>Estado</label><select data-v="estado">'
-        +'<option value="borrador">Borrador</option><option value="publicado">Publicado</option>'
-        +'<option value="cancelado">Cancelado</option></select></div>'
-      +'<div class="fld"><label>¿Entrada libre?</label><select data-v="es_gratis">'
-        +'<option value="false">No, se cobra</option><option value="true">Sí, gratis</option></select></div>'
-      + f('Montaje (min)','montaje_min','number') + f('Desmontaje (min)','desmontaje_min','number')
-      +'<div class="fld" style="grid-column:1/-1"><label>De qué va</label>'
-        +'<textarea data-v="descripcion" rows="3">'+esc(x.descripcion||'')+'</textarea></div>'
-      +'</div></div>'
-      +'<div class="card"><h3>Lo que te deja</h3><div class="tabla3">'
-      +'<div><span>Precio de la entrada</span><b>'+(p?dinero(p):'—')+'</b></div>'
-      +'<div><span>Para ti</span><b>'+(p?dinero(p*(x.solo_huespedes?0.70:0.65)):'—')+'</b><i>'+(x.solo_huespedes?'70%':'65%')+'</i></div>'
-      +'<div><span>A la plataforma</span><b>'+(p?dinero(p*(x.solo_huespedes?0.30:0.35)):'—')+'</b><i>'+(x.solo_huespedes?'30%':'35%')+'</i></div>'
-      +'</div><div class="mini" style="margin-top:9px">Vendérselo a tus propios huéspedes vale 5 puntos más.</div>'
-      +'<div class="ft"><button class="btn" id="gEv">Guardar</button></div></div>';
-    ['solo_huespedes','es_gratis'].forEach(function(c){
-      var el=document.querySelector('[data-v="'+c+'"]'); if(el) el.value = x[c]===true?'true':'false'; });
-    var se=document.querySelector('[data-v="espacio_id"]'); if(se&&x.espacio_id) se.value=x.espacio_id;
-    var st=document.querySelector('[data-v="estado"]'); if(st) st.value=x.estado||'borrador';
+      '<div class="card"><h3>'+esc(x.nombre||'(sin nombre)')+'</h3>'
+      +'<div class="hint">'+esc([e?e.nombre:'sin espacio',
+          (x.fecha_inicio?String(x.fecha_inicio).slice(0,16).replace('T',' '):'sin fecha'),
+          (x.es_gratis?'entrada libre':(p?dinero(p):'sin precio'))].join(' · '))+'</div>'
+      + (f.length? '<div class="cn" style="border-color:#E6D2A8"><span class="ci" style="background:var(--warn-bg);color:var(--warn)">'+ic('search')+'</span>'
+          +'<span><span class="cn1">Le falta algo para venderse</span><span class="cn2">'+esc(f.join(', '))+'</span></span>'
+          +'<span class="est falta">Falta</span></div>'
+        : '<div class="cn"><span class="ci" style="background:var(--ok-bg);color:var(--ok)">'+ic('ok')+'</span>'
+          +'<span><span class="cn1">Listo para vender</span><span class="cn2">No le falta nada.</span></span>'
+          +'<span class="est si">Listo</span></div>')
+      +'<div class="fgrid" style="margin-top:12px">'
+      +'<div class="fld"><label>¿Para quién?</label><select id="evPriv">'
+        +'<option value="true"'+(x.solo_huespedes?' selected':'')+'>Solo mis huéspedes (privado)</option>'
+        +'<option value="false"'+(x.solo_huespedes?'':' selected')+'>Abierto a cualquiera, por Sincrético</option>'
+      +'</select><div class="ay">Privado no sale al público: lo apruebas tú y se publica solo. Abierto pasa por Casa Pepe.</div></div>'
+      +'</div>'
+      +'<div class="ft"><button class="btn ghost" id="evAsist">Abrir el asistente</button>'
+      +'<button class="btn" id="gEv">Guardar</button></div></div>'
+      +'<div class="card"><h3>Lo que te deja</h3><div class="eco3">'
+      +'<span><i>Entrada</i><b>'+(p?dinero(p):'—')+'</b></span>'
+      +'<span class="mio"><i>Para ti</i><b>'+(p?dinero(p*(x.solo_huespedes?0.70:0.65)):'—')+'</b></span>'
+      +'<span><i>Plataforma</i><b>'+(p?dinero(p*(x.solo_huespedes?0.30:0.35)):'—')+'</b></span>'
+      +'</div><div class="mini" style="margin-top:9px">Vendérselo a tus propios huéspedes vale 5 puntos más.</div></div>';
+    $('evAsist').onclick=function(){ abreProductora(destino()); };
     $('gEv').onclick=async function(){
-      var b={};
-      document.querySelectorAll('[data-v]').forEach(function(el){
-        if(['INPUT','SELECT','TEXTAREA'].indexOf(el.tagName)<0) return;
-        var c=el.getAttribute('data-v'), v=el.value;
-        if(c==='solo_huespedes'||c==='es_gratis') b[c]= v==='true';
-        else if(['aforo','precio','montaje_min','desmontaje_min'].indexOf(c)>=0) b[c]= v===''?null:Number(v);
-        else b[c]= v===''?null:v;
-      });
       var h=hdr(); h['Prefer']='return=representation';
-      var r=await fetch(SB+'/rest/v1/eventos?id=eq.'+id,{method:'PATCH',headers:h,body:JSON.stringify(b)});
+      var r=await fetch(SB+'/rest/v1/eventos?id=eq.'+id,{method:'PATCH',headers:h,
+        body:JSON.stringify({solo_huespedes: $('evPriv').value==='true'})});
       if(!r.ok){toast('No se pudo guardar: '+(await r.text()).slice(0,130),true);return;}
       var j=await r.json();
       if(!j||!j.length){toast('No se guardó: tu usuario no puede editarlo.',true);return;}
-      toast('Guardado'); await vEventos($('wrap')); fichaEvento(id,esp);
+      toast('Guardado'); await vEventos($('wrap')); fichaEvento(id,MESP);
     };
   }
 
