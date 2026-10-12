@@ -886,10 +886,12 @@ async function regExterno(id,nom){
 let TK_F={estado:"",clas:"",tec:"",oficio:"",q:"",desde:"",abiertos:true};
 async function renderTickets(){
   const wkMon=mondayOf(hoyMX());
-  const [{data,error},{data:planAtras}]=await Promise.all([
+  const [{data,error},{data:planAtras},{data:ubisTk}]=await Promise.all([
     sb.from("mtto_tickets").select("*, ubic:ubicacion_id(nombre)").eq("property_id",PROP.id).order("reportado_at",{ascending:false}),
-    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea), sub:subtarea_id(descripcion)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada")
+    sb.from("mtto_preventivo_plan").select("*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea), sub:subtarea_id(descripcion)").eq("property_id",PROP.id).eq("estado","pendiente").lt("semana_programada",wkMon).order("semana_programada"),
+    sb.from("mtto_ubicaciones").select("id,nombre").eq("property_id",PROP.id).order("orden")
   ]);
+  window.UBIS_TK=ubisTk||[];
   if(error)throw error; let rows=data||[];
   // Preventivos como ticket que ya debían estar hechos
   const tkAtras=rows.filter(r=>r.clasificacion==="preventivo"&&!["resuelto","cerrado","cancelado"].includes(r.estado)&&r.semana_programada&&mondayOf(r.semana_programada)<wkMon).length;
@@ -979,9 +981,21 @@ function ticketRow(t){
   const stCls=t.estado==="pausado"?"c-correc":(["resuelto","cerrado"].includes(t.estado)?"c-prev":(t.estado==="cancelado"?"c-info":""));
   return `<tr>
     <td><b>${esc(t.titulo||"(sin título)")}</b>${foto}${t.folio?` <span class="chip c-prev" style="font-family:ui-monospace,monospace">${esc(t.folio)}</span>`:''}${t.requiere_compra?' <span class="chip c-info">🛒 compra</span>':''}${t.oficio?` <span class="chip c-info">${esc(ofNombre(t.oficio))}</span>`:''}<div class="muted" style="font-size:12px">${esc((t.descripcion||"").slice(0,70))}${quien?` · <i>${esc(quien)}</i>`:''}</div></td>
-    <td>${esc(areaTk(t,"—"))}${!(t.ubic&&t.ubic.nombre)&&areaTk(t,'')?' <span class="muted" title="del texto">~</span>':''}</td><td>${clsChip(t.clasificacion)}</td>
+    <td>${ubicSelectTk(t)}</td><td>${clsChip(t.clasificacion)}</td>
     <td>${stCls?`<span class="chip ${stCls}">${esc(t.estado)}</span>`:`<span class="st">${esc(t.estado)}</span>`}</td><td class="num">${t.minutos_estimados??"—"}</td>
     <td><div class="row-actions">${ticketActions(t)}</div></td></tr>`;
+}
+function ubicSelectTk(t){
+  const cur=t.ubicacion_id||'';
+  const inf=!cur?areaTk(t,''):'';
+  const opts=['<option value="">📍 —</option>'].concat((window.UBIS_TK||[]).map(u=>`<option value="${u.id}" ${cur===u.id?'selected':''}>${esc(u.nombre)}</option>`)).join('');
+  return `<select onchange="setUbicTicket('${t.id}',this.value)" style="font-size:12px;max-width:160px;padding:4px 6px;${cur?'':'border-color:var(--warn)'}">${opts}</select>${inf?`<div class="muted" style="font-size:11px" title="Sugerido del texto del reporte — elígelo del catálogo para fijarlo">~ ${esc(inf)}</div>`:''}`;
+}
+async function setUbicTicket(id,val){
+  const {error}=await sb.from("mtto_tickets").update({ubicacion_id:val||null}).eq("id",id);
+  if(error)return toast(error.message);
+  toast(val?"Ubicación asignada ✅":"Ubicación quitada");
+  renderTickets();
 }
 function ticketActions(t){
   // Solo REVISIÓN/gestión. La asignación (técnico + semana) se hace en Reparto de
