@@ -100,6 +100,11 @@ h1{font-size:19px;margin:0;font-weight:700}
 .perfil .flag{font-size:30px;line-height:1}
 .perfil .flag img{width:34px;height:25px;object-fit:cover;border-radius:3px;display:block;
   box-shadow:0 0 0 1px rgba(30,26,22,.12)}
+.sedes{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.sedes .sd{font:inherit;font-size:12.5px;font-weight:600;border:1.5px solid var(--rule,#E2DCCF);background:var(--surface,#fff);color:var(--muted,#6B6459);border-radius:999px;padding:6px 13px;cursor:pointer}
+.sedes .sd span{color:var(--faint,#A49B8C);font-weight:700;margin-left:3px}
+.sedes .sd[aria-selected="true"]{border-color:var(--ink,#1F1B16);background:var(--ink,#1F1B16);color:#fff}
+.sedes .sd[aria-selected="true"] span{color:rgba(255,255,255,.7)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:11.5px;font-weight:600;background:var(--surface-2);color:var(--ink);border-radius:999px;padding:4px 10px}
 .chip.lvl{background:var(--accent-soft);color:var(--accent)}
@@ -128,6 +133,7 @@ h1{font-size:19px;margin:0;font-weight:700}
   </div>
   <div id="avisoTop" style="display:none;background:#F6E1DD;border:1px solid #E7C6BF;color:#9E3B2E;
     border-radius:11px;padding:11px 13px;font-size:13.5px;margin-bottom:12px;line-height:1.5"></div>
+  <div class="sedes" id="sedes" style="display:none"></div>
   <div class="daycards" id="daycards">
     <button class="dc" data-f="hoy" aria-selected="true"><div class="dl">Hoy</div><div class="dn" id="dHoy">—</div><div class="ds" id="sHoy">&nbsp;</div></button>
     <button class="dc" data-f="manana" aria-selected="false"><div class="dl">Mañana</div><div class="dn" id="dMan">—</div><div class="ds" id="sMan">&nbsp;</div></button>
@@ -154,6 +160,35 @@ h1{font-size:19px;margin:0;font-weight:700}
   var SB='https://rehophywchakfapivsbh.supabase.co', KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   var $=function(i){return document.getElementById(i);};
   var DATA=[], FILTRO='hoy', WB=[], MOV=[], WBSET={}, UP=[], UPSET={}, LC=[], SAL=[], EXT=[];
+  /* SEPARAR SEDES. Quien lleva una sola casa ya veía solo la suya —de eso
+     se encarga cpAcceso—, pero dirección ve todas y las veía MEZCLADAS, sin
+     manera de mirar solo Puebla. El filtro de arriba separa; «Todas» sigue
+     siendo lo de antes. Fail-open: una fila sin sede nunca se esconde. */
+  var RAW={}, SEDE='todas', PROP='all';
+  var SEDELBL={cdmx:'CDMX',puebla:'Puebla',virreyes:'Virreyes',ateneo:'Ateneo'};
+  function sedeDe(x){ return String((x&&(x.sede||x.prop||x.propiedad))||'').toLowerCase().trim(); }
+  function enSede(x){ var sd=sedeDe(x); return SEDE==='todas' || !sd || sd===SEDE; }
+  function aplicaSede(){
+    DATA=(RAW.DATA||[]).filter(enSede);
+    WB=(RAW.WB||[]).filter(enSede);   MOV=(RAW.MOV||[]).filter(enSede);
+    UP=(RAW.UP||[]).filter(enSede);   LC=(RAW.LC||[]).filter(enSede);
+    SAL=(RAW.SAL||[]).filter(enSede); EXT=(RAW.EXT||[]).filter(enSede);
+    WBSET={}; WB.forEach(function(w){ if(w.reservation_id) WBSET[String(w.reservation_id)]=w; });
+    UPSET={}; UP.forEach(function(u){ if(/^(por_cobrar|error|aplicado_sin_cargo)$/.test(u.estado)&&u.reservation_id) UPSET[String(u.reservation_id)]=u; });
+  }
+  function pintaSedes(){
+    var c=$('sedes'); if(!c) return;
+    var hay={}; (RAW.DATA||[]).forEach(function(r){ var sd=sedeDe(r); if(sd) hay[sd]=(hay[sd]||0)+1; });
+    var ks=Object.keys(hay).sort();
+    if(ks.length<2){ c.style.display='none'; return; }   /* una sola casa: no estorbes */
+    c.style.display='flex';
+    c.innerHTML='<button class="sd" data-s="todas">Todas <span>'+(RAW.DATA||[]).length+'</span></button>'
+      + ks.map(function(k){ return '<button class="sd" data-s="'+k+'">'+(SEDELBL[k]||k.toUpperCase())+' <span>'+hay[k]+'</span></button>'; }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('.sd'),function(b){
+      b.setAttribute('aria-selected', b.getAttribute('data-s')===SEDE?'true':'false');
+      b.onclick=function(){ SEDE=b.getAttribute('data-s'); aplicaSede(); pintaSedes(); render(); };
+    });
+  }
   function ymd(off){ var d=new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()+off);
     return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
   /* HOY es hoy, con un día de gracia para el que llegó de madrugada o entró
@@ -197,6 +232,7 @@ h1{font-size:19px;margin:0;font-weight:700}
         prop=(cd&&pu)?'all':pu?'puebla':'cdmx';
       }
     }catch(e){}
+    PROP=prop;
     try{
       var rf=await fetch(SB+'/functions/v1/apepe-recepcion',{method:'POST',
         headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY),'Content-Type':'application/json'},body:JSON.stringify({dias:10,prop:prop})});
@@ -235,10 +271,14 @@ h1{font-size:19px;margin:0;font-weight:700}
     try{
       var rl=await fetch(SB+'/functions/v1/apepe-salida-tarde',{method:'POST',
         headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY),'Content-Type':'application/json'},
-        body:JSON.stringify({op:'dia',prop:'cdmx'})});
+        /* Iba con 'cdmx' a fuego: las salidas tarde y las extensiones de
+           Puebla no aparecian nunca. Va la misma propiedad que el resto. */
+        body:JSON.stringify({op:'dia',prop:PROP||'cdmx'})});
       var lj=await rl.json(); LC=(lj&&Array.isArray(lj.marcas))?lj.marcas:[];
       SAL=(lj&&Array.isArray(lj.salidas))?lj.salidas:[]; EXT=(lj&&Array.isArray(lj.extensiones))?lj.extensiones:[];
     }catch(e){ LC=[]; SAL=[]; EXT=[]; }
+    RAW={DATA:DATA,WB:WB,MOV:MOV,UP:UP,LC:LC,SAL:SAL,EXT:EXT};
+    aplicaSede(); pintaSedes();
     render();
   }
   function render(){
