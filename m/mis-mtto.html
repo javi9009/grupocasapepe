@@ -378,7 +378,7 @@ function paint(){
     <div class="prow"><span class="pk">📅 Hoy</span>${bar(diaHechasMin,capHoyMin)}<span class="pv"><b>${fmtDur(diaHechasMin)}</b>/${fmtDur(capHoyMin)}</span></div>
     <div class="prow"><span class="pk">🗓️ Semana</span>${bar(semHechasMin,totMin)}<span class="pv"><b>${fmtDur(semHechasMin)}</b>/${fmtDur(totMin)}</span></div>
     <div class="psub">${diaTot.length-diaHecho.length} tareas por hacer hoy · <button type="button" class="lnk" onclick="setView('semana')">ver pila por día ›</button> · <button type="button" class="lnk" onclick="sinAsignarModal()">ver sin asignar ›</button></div>
-    ${ro?'':'<button type="button" class="btn sm" style="width:100%;margin-top:10px" onclick="resumenDia()">📋 Cerrar mi día</button>'}`;
+    ${ro?'':'<button type="button" class="btn sm" style="width:100%;margin-top:10px" onclick="resumenDia()">🏁 Cerrar mi día (al checar salida)</button>'}`;
 
   // 🔔 La campanita (arriba) abre las solicitudes de hoy. Aquí solo el contador.
   const hoyReq=HOY;
@@ -420,6 +420,13 @@ function paint(){
   }
   if(!TICKS.length && !hoyReq.length && !activas.length && !espera.length) html='<div class="empty">No tienes trabajos asignados esta semana.<br>Revisa 🔔 arriba o «ver sin asignar».</div>';
   $('list').innerHTML=html;
+  // Al volver tras checar salida (o con ?resumen=1) se abre solo el cierre del día
+  if(!ro && who===EMP && !window._resumenShown){
+    window._resumenShown=true;
+    const qs=new URLSearchParams(location.search);
+    if(qs.get('resumen')==='1') setTimeout(()=>resumenDia(false),300);
+    else setTimeout(()=>resumenDia(true),700);
+  }
 }
 
 function workedMin(t){ let m=t.minutos_acumulados||0; if(t.estado==='en_proceso'&&t.iniciado_at){ m+=(Date.now()-new Date(t.iniciado_at).getTime())/60000; } return m; }
@@ -853,48 +860,62 @@ async function ev(ticket_id,tipo,payload){ try{ await sb.from('mtto_ticket_event
 // ===== Resumen del día (al cerrar la jornada): reloj vs reportado + captura del tiempo no reportado =====
 const CATS_TIEMPO=[['reactivo','🔧 Reactivo'],['correctivo','🛠️ Correctivo'],['preventivo','🧰 Preventivo'],['administrativa','🗒️ Administrativa / briefing'],['compras','🛒 Compras / proveedores'],['otra','➕ Otra']];
 const prowD=(a,b,col)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0${col?';color:'+col:''}"><span>${a}</span><b>${b}</b></div>`;
-window.resumenDia=async()=>{
+const _hhmm=x=>x?new Date(x).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):null;
+window.resumenDia=async(auto)=>{
   const today=hoyMX();
-  let checadas=0;
+  let checadas=0, ci=null, co=null;
   try{ const {data:a}=await sb.from('asistencias').select('check_in,check_out').eq('employee_id',EMP).gte('check_in',today+'T00:00:00').order('check_in',{ascending:false}).limit(1).maybeSingle();
-    if(a&&a.check_in){ const fin=a.check_out?new Date(a.check_out):new Date(); checadas=Math.max(0,Math.round((fin-new Date(a.check_in))/60000)); } }catch(_){}
+    if(a&&a.check_in){ ci=a.check_in; co=a.check_out; const fin=co?new Date(co):new Date(); checadas=Math.max(0,Math.round((fin-new Date(ci))/60000)); } }catch(_){}
   const hechas=TICKS.filter(t=>DONE(t)&&doneDate(t)===today);
   const minTk=hechas.reduce((s,t)=>s+(t.minutos_reales||t.minutos_estimados||0),0);
   let extraRows=[]; try{ const {data:ex}=await sb.from('mtto_tiempo').select('categoria,minutos').eq('employee_id',EMP).eq('fecha',today); extraRows=ex||[]; }catch(_){}
   const minExtra=extraRows.reduce((s,x)=>s+(x.minutos||0),0);
   const reportado=minTk+minExtra;
   const sinAsignar=Math.max(0, checadas-reportado);
+  // Auto (al checar salida): solo molesta si ya salió y le quedan >30m en el limbo sin reportar
+  if(auto){ if(!co || sinAsignar<30 || minExtra>0) return; }
   const nuevas=TICKS.filter(t=>(t.reportado_at||t.created_at||'').slice(0,10)===today);
   const pct=checadas?Math.round(reportado/checadas*100):0;
   const dia=!checadas?'Checa tu entrada para medir el día':(pct>=85?'✅ Buen día — casi todo reportado':(pct>=50?'🟡 Día a medias — falta reportar':'🔴 Falta reportar buena parte del día'));
   window._sinAsignar=sinAsignar;
-  modal(`<h3>📋 Cierre de tu día</h3><div class="pad">
+  modal(`<h3>🏁 Cierre de tu día</h3><div class="pad">
     <div style="font-size:14.5px;font-weight:700;margin-bottom:8px">${dia}</div>
-    ${prowD('⏱️ Checado hoy',fmtDur(checadas))}
+    <div style="background:var(--surface-2,#EFE9DD);border-radius:10px;padding:10px;margin-bottom:8px;font-size:13.5px">
+      ${ci?`Entraste a las <b>${_hhmm(ci)}</b>${co?` y saliste a las <b>${_hhmm(co)}</b>`:' <span class="muted">(aún sin checar salida)</span>'}`:'Aún no checas entrada hoy.'}
+    </div>
+    ${prowD('⏱️ Tiempo en el hotel',fmtDur(checadas))}
     ${prowD('✅ Reportado en tareas',fmtDur(reportado))}
-    ${prowD('❓ Sin asignar',fmtDur(sinAsignar),sinAsignar>30?'var(--bad)':'var(--muted)')}
+    ${prowD('🌫️ En el limbo de tu cuenta',fmtDur(sinAsignar),sinAsignar>30?'var(--bad)':'var(--muted)')}
     <div style="margin:12px 0 4px;font-weight:700">Hiciste ${hechas.length} tarea(s):</div>
     ${hechas.length?hechas.map(t=>prowD(esc(t.titulo||'—'),(t.minutos_reales||t.minutos_estimados||0)+'m')).join(''):'<div class="muted" style="font-size:12.5px">—</div>'}
     ${nuevas.length?`<div class="muted" style="font-size:12.5px;margin-top:8px">📥 Aparecieron ${nuevas.length} tarea(s) nueva(s) hoy.</div>`:''}
     ${sinAsignar>0?`<div style="background:#F3EAD6;border-radius:10px;padding:10px;margin-top:12px">
-      <div style="font-weight:700;margin-bottom:2px">Te sobran ${fmtDur(sinAsignar)} sin asignar. ¿Qué resolviste?</div>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">Reparte ese tiempo; se manda a Deisy para validar.</div>
+      <div style="font-weight:700;margin-bottom:2px">Quedaron ${fmtDur(sinAsignar)} en el limbo. ¿Qué te tocó hacer hoy?</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Reparte ese tiempo en conceptos (compras, briefing, etc.) hasta llenarlo. Se manda a Deisy para validar.</div>
+      <div id="restante" style="font-weight:700;font-size:13px;margin-bottom:8px"></div>
       <div id="bloques"></div>
-      <button type="button" class="btn ghost sm" style="width:100%;margin-top:4px" onclick="addBloqueTiempo()">＋ Agregar otro bloque</button>
+      <button type="button" class="btn ghost sm" style="width:100%;margin-top:4px" onclick="addBloqueTiempo()">＋ Agregar otro concepto</button>
     </div>`:'<div class="muted" style="font-size:12.5px;margin-top:10px">Todo tu tiempo está reportado 👌</div>'}
     ${extraRows.length?`<div class="muted" style="font-size:12px;margin-top:8px">Ya enviaste hoy: ${extraRows.map(x=>esc(x.categoria)+' '+x.minutos+'m').join(' · ')}</div>`:''}
   </div><div class="foot">
     <button class="btn ghost sm" onclick="closeModal()">Cerrar</button>
-    ${sinAsignar>0?'<button class="btn sm" onclick="guardarTiempoDia()">Enviar a validar</button>':''}
+    ${sinAsignar>0?'<button class="btn sm" onclick="guardarTiempoDia()">Aceptar y enviar a Deisy</button>':''}
   </div>`);
-  if(sinAsignar>0) addBloqueTiempo();
+  if(sinAsignar>0){ addBloqueTiempo(); recalcRestante(); }
+};
+window.recalcRestante=()=>{
+  const el=$('restante'); if(!el)return;
+  const mins=[...document.querySelectorAll('.blq-min')].reduce((s,i)=>s+(parseInt(i.value)||0),0);
+  const falta=(window._sinAsignar||0)-mins;
+  el.innerHTML = falta>0 ? `Faltan por asignar: <span style="color:var(--bad)">${fmtDur(falta)}</span>`
+    : (falta===0 ? `<span style="color:var(--ok,#1D6B4A)">✅ Todo el limbo asignado</span>`
+    : `<span style="color:var(--warn,#8C6212)">Asignaste ${fmtDur(-falta)} de más</span>`);
 };
 window.addBloqueTiempo=()=>{
-  const box=$('bloques'); if(!box)return; const primero=box.children.length===0;
-  const sug=primero?(window._sinAsignar||0):'';
+  const box=$('bloques'); if(!box)return;
   const div=document.createElement('div'); div.style.cssText='border:1px solid var(--rule);border-radius:8px;padding:8px;margin-bottom:6px;background:#fff';
   div.innerHTML=`<select class="blq-cat" style="width:100%;margin-bottom:5px">${CATS_TIEMPO.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join('')}</select>
-    <div style="display:flex;gap:6px"><input class="blq-min" type="number" min="1" placeholder="min" value="${sug||''}" style="width:78px"><input class="blq-desc" placeholder="¿qué hiciste?" style="flex:1"></div>`;
+    <div style="display:flex;gap:6px"><input class="blq-min" type="number" min="1" placeholder="min" oninput="recalcRestante()" style="width:78px"><input class="blq-desc" placeholder="¿qué hiciste?" style="flex:1"></div>`;
   box.appendChild(div);
 };
 window.guardarTiempoDia=async()=>{
