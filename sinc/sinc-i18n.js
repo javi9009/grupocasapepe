@@ -431,6 +431,10 @@
       'Ahora no':'Not now',
       'Con Google no hay que confirmar nada: tu correo ya viene verificado.':
         'With Google there\u2019s nothing to confirm: your email arrives already verified.',
+      'Tu boleto lleva un QR y va a tu correo: sin correo confirmado no hay a dónde mandarlo. Con Google no hay que confirmar nada.':
+        'Your ticket carries a QR and goes to your email: without a confirmed email there is nowhere to send it. With Google there is nothing to confirm.',
+      'Para terminar esta reserva hay que entrar con tu correo. Vuelve a abrir la liga que te dieron.':
+        'To finish this booking you need to sign in with your email. Open the link you were given again.',
       'Entrar con Google todavía no está encendido. Usa tu correo, que funciona igual.':
         'Signing in with Google isn\u2019t switched on yet. Use your email, it works just the same.',
       'Ese correo no se ve bien escrito.':'That email doesn\u2019t look right.',

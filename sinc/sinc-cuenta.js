@@ -121,8 +121,45 @@ window.sincCuenta = (function () {
     '<path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2 1.4-4.8 2.4-8.3 2.4-6.4 0-11.7-3.7-13.6-8.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 
   /* ---------- lo que sabemos de la sesión ---------- */
+  /* LA VUELTA DE GOOGLE TARDA. Javi, 12-oct-2026: «al loguearse con Google, el
+     cliente que reservó con concierge lo sacó y no lo autologeó para seguir con
+     la reserva».
+     Google devuelve con un ?code= en la liga y supabase-js lo canjea por la
+     sesión SOLO, pero tarda: es una llamada a la red. La pantalla de pago
+     preguntaba «¿hay sesión?» en cuanto cargaba —antes de que el canje
+     terminara—, le salía que no, y se lo llevaba de vuelta a la ficha del tour.
+     El huésped acababa de entrar con Google y lo echábamos igual, perdiendo de
+     paso el código de la pre-reserva que traía en la liga.
+     Se mira UNA vez al cargar si venimos de Google -antes de que recoge() le
+     limpie el ?code= a la URL- y, si venimos, se espera al canje. */
+  var VUELVE_DE_GOOGLE = (function () {
+    try { return /[?&]code=/.test(location.search) || /access_token=/.test(location.hash); }
+    catch (_) { return false; }
+  })();
+  var CANJE = null;
+  function esperaCanje() {
+    if (CANJE) return CANJE;
+    if (!VUELVE_DE_GOOGLE) { CANJE = Promise.resolve(null); return CANJE; }
+    CANJE = new Promise(function (listo) {
+      var t0 = Date.now(), c;
+      try { c = cli(); } catch (_) { return listo(null); }
+      (function mira() {
+        c.auth.getSession().then(function (r) {
+          var ses = r && r.data && r.data.session;
+          if (ses) return listo(ses);
+          if (Date.now() - t0 > 6000) return listo(null);   // no la espera eterna
+          setTimeout(mira, 200);
+        }).catch(function () { listo(null); });
+      })();
+    });
+    return CANJE;
+  }
+
   async function sesion() {
-    try { return (await cli().auth.getSession()).data.session || null; } catch (_) { return null; }
+    try {
+      await esperaCanje();
+      return (await cli().auth.getSession()).data.session || null;
+    } catch (_) { return null; }
   }
   /* Las cabeceras para hablar con la base. Si hay sesión manda su token; si no,
      la llave pública, que es lo que ve cualquiera que llega de la calle. */
@@ -198,7 +235,13 @@ window.sincCuenta = (function () {
       capa.className = 'cuCapa';
       capa.innerHTML = '<div class="cuHoja" id="cuHoja"></div>';
       document.body.appendChild(capa);
-      capa.onclick = function (e) { if (e.target === capa) { cierra(); listo(null); } };
+      /* PUERTA OBLIGATORIA. Javi, 12-oct-2026: «cuando entras a reservar y te
+         pide loguearte puedes poner "not now" y te saca». Era verdad, y encima
+         tocar fuera hacía lo mismo: el huésped se quedaba sin reserva sin
+         haberlo decidido. Cuando la pantalla EXIGE cuenta -reservar y pagar- ya
+         no hay puerta de atrás: ni el botón ni el fondo. El de atrás del
+         navegador sigue ahí, que es la salida honesta. */
+      capa.onclick = function (e) { if (e.target === capa && !opts.obligatorio) { cierra(); listo(null); } };
       function cierra() { if (capa.parentNode) document.body.removeChild(capa); }
       function $(i) { return document.getElementById(i); }
       function err(t) { var e = $('cuErr'); if (!e) return; e.textContent = t; e.style.display = t ? 'block' : 'none'; }
@@ -221,10 +264,13 @@ window.sincCuenta = (function () {
           '<input id="cuMail" type="email" inputmode="email" autocomplete="email" ' +
             'placeholder="tu@correo.com" value="' + esc(correo) + '">' +
           '<button class="cuBtn" id="cuManda">' + esc(T('Mandarme un código')) + '</button>' +
-          '<button class="cuBtn plano" id="cuNo">' + esc(T('Ahora no')) + '</button>' +
-          '<p class="cuPie">' + esc(T('Con Google no hay que confirmar nada: tu correo ya viene verificado.')) + '</p>';
+          (opts.obligatorio ? ''
+            : '<button class="cuBtn plano" id="cuNo">' + esc(T('Ahora no')) + '</button>') +
+          '<p class="cuPie">' + esc(opts.obligatorio
+            ? T('Tu boleto lleva un QR y va a tu correo: sin correo confirmado no hay a dónde mandarlo. Con Google no hay que confirmar nada.')
+            : T('Con Google no hay que confirmar nada: tu correo ya viene verificado.')) + '</p>';
 
-        $('cuNo').onclick = function () { cierra(); listo(null); };
+        if ($('cuNo')) $('cuNo').onclick = function () { cierra(); listo(null); };
         $('cuMail').focus();
         $('cuMail').onkeydown = function (e) { if (e.key === 'Enter') $('cuManda').click(); };
 
@@ -534,9 +580,11 @@ window.sincCuenta = (function () {
     if (yo) {
       if (String(yo.nombre || '').trim()) return yo;
       /* Correo verificado pero sin nombre: solo falta como se llama. */
-      return await entra(Object.assign({}, opts || {}, { soloNombre: true }));
+      return await entra(Object.assign({ obligatorio: true }, opts || {}, { soloNombre: true }));
     }
-    return await entra(opts);
+    /* Lo que llega hasta aqui es una pantalla que NO puede seguir sin cuenta:
+       reservar y pagar. Asi que su puerta no lleva «Ahora no». */
+    return await entra(Object.assign({ obligatorio: true }, opts || {}));
   }
 
   return {
