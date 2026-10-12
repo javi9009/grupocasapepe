@@ -3,22 +3,29 @@
 // Javi, 12-oct-2026: «esta que me mandaste tiene un error que es buscar su
 // nombre y mail para que al cliente le aparezca, como en los aviones su
 // reserva». La liga de check-in abierta sin token enseñaba la ficha «Tu
-// reserva» con todos los campos en «—», porque hasta ahora la única manera de
-// identificar al huésped era el token que mintea recepción.
+// reserva» con todos los campos en «—», porque hasta entonces la única manera
+// de identificar al huésped era el token que mintea recepción.
 //
-// Aquí la identificación la trae él. DOS datos, los dos obligatorios:
-//   · el APELLIDO, y
-//   · el CORREO con el que reservó — o el NÚMERO DE RESERVA, porque quien
-//     viene de Booking no conoce el alias que la OTA nos manda, pero sí tiene
-//     su número delante.
-// Uno solo no abre nada: un apellido se adivina y un correo también; los dos
-// juntos, no. Y se cuentan los intentos por IP (apepe_busca_intentos), que es
-// lo que frena a quien quiera probar correos en serie.
+// Y media hora después, viéndolo en el mostrador: «hazlo más flexible para que
+// con el id o el correo nada más o el nombre o el apellido le salgan las
+// reservas a hacer checkin». Así que es UN solo campo y vale cualquiera de los
+// tres:
+//   · el número de reserva (el nuestro o el de la OTA),
+//   · el correo con el que reservó,
+//   · su nombre o su apellido.
+// Pedir dos datos era correcto de libro y un estorbo en la práctica: quien
+// viene de Booking no conoce el alias de correo que nos llega, y al mostrador
+// llega gente que sólo sabe cómo se llama.
+//
+// Lo que queda en pie: se busca sólo entre las llegadas de los próximos días de
+// SUS casas, se devuelve lo justo para reconocerse (nombre, casa y fechas), y
+// se cuentan los intentos por IP (apepe_busca_intentos) para que nadie recorra
+// la lista a base de nombres comunes.
 //
 // Lo que devuelve es el MISMO token opaco que usa recepción, así que a partir
 // de ahí el check-in es exactamente el de siempre.
 //
-// body: { apellido, dato, ciudad? }  ->  { ok, reservas:[{token,nombre,…}] }
+// body: { q, ciudad? }  ->  { ok, reservas:[{token,nombre,…}] }
 
 const CB = "https://hotels.cloudbeds.com/api/v1.2";
 const SB = Deno.env.get("SUPABASE_URL")!;
@@ -91,18 +98,29 @@ async function reservas(pk: string, desde: string, hasta: string) {
   return out;
 }
 
-/* ¿Es suya? El apellido tiene que estar entre los nombres de la reserva Y el
-   segundo dato tiene que cuadrar: el correo de alguno de los huéspedes, o el
-   número de reserva (el nuestro o el de la OTA). */
-function esSuya(x: any, apellido: string, dato: string, esCorreo: boolean): boolean {
+/* ¿Es suya? Basta con que UNO de los tres cuadre, pero cuadrar de verdad:
+   el correo entero, el número entero, o todas las palabras que escribió dentro
+   del nombre de la reserva. Un «jose» suelto no abre la lista de la casa
+   porque igual hay que teclear el nombre como viene, y lo que se devuelve es
+   sólo lo que ya sabe quien es el huésped. */
+function esSuya(x: any, q: string): boolean {
   const gl = x.guestList && typeof x.guestList === "object" ? Object.values(x.guestList) as any[] : [];
+
+  if (q.includes("@")) {
+    return gl.some((g: any) => plano(g.guestEmail) === q);
+  }
+
+  const d = soloAlnum(q);
+  if (/^[0-9]{4,}$/.test(d)) {
+    return soloAlnum(x.reservationID) === d || soloAlnum(x.thirdPartyIdentifier) === d;
+  }
+  if (d.length >= 5 && (soloAlnum(x.reservationID) === d || soloAlnum(x.thirdPartyIdentifier) === d)) return true;
+
   const nombres = plano([x.guestName, ...gl.map((g: any) => `${g.guestFirstName || ""} ${g.guestLastName || ""}`)].join(" "));
-  const trozos = apellido.split(" ").filter(Boolean);
-  const nombreOk = trozos.every((t) => t.length > 1 && nombres.split(" ").some((w) => w === t || (t.length > 3 && w.startsWith(t))));
-  if (!nombreOk) return false;
-  if (esCorreo) return gl.some((g: any) => plano(g.guestEmail) === dato);
-  const d = soloAlnum(dato);
-  return soloAlnum(x.reservationID) === d || soloAlnum(x.thirdPartyIdentifier) === d;
+  const palabras = nombres.split(" ").filter(Boolean);
+  const trozos = q.split(" ").filter((t) => t.length > 1);
+  if (!trozos.length) return false;
+  return trozos.every((t) => palabras.some((w) => w === t || (t.length > 3 && w.startsWith(t))));
 }
 
 async function token(rid: string, prop: string): Promise<string> {
@@ -120,13 +138,13 @@ Deno.serve(async (req) => {
 
   const ip = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "sin-ip";
   let b: any = {}; try { b = await req.json(); } catch {}
-  const apellido = plano(b.apellido).slice(0, 60);
-  const bruto = String(b.dato ?? "").trim().slice(0, 120);
-  const esCorreo = bruto.includes("@");
-  const dato = esCorreo ? plano(bruto) : bruto;
+  /* Un solo campo. Se admite la forma vieja (apellido + dato) por si queda
+     alguna pantalla sin actualizar. */
+  const bruto = String(b.q ?? b.dato ?? b.apellido ?? "").trim().slice(0, 120);
+  const q = plano(bruto);
 
-  if (apellido.length < 2 || !bruto) {
-    return J({ ok: false, error: "Necesitamos tu apellido y tu correo (o el número de reserva)." }, 400);
+  if (q.length < 3) {
+    return J({ ok: false, error: "Escribe tu número de reserva, tu correo o tu nombre." }, 400);
   }
 
   try {
@@ -150,7 +168,7 @@ Deno.serve(async (req) => {
       for (const casa of casas) {
         const lista = await reservas(casa, desde, hasta);
         for (const x of lista) {
-          if (!esSuya(x, apellido, dato, esCorreo)) continue;
+          if (!esSuya(x, q)) continue;
           if (halladas.some((h) => h.reserva === String(x.reservationID))) continue;
           halladas.push({
             reserva: String(x.reservationID), prop: casa, casa: PROP[casa].etiqueta,

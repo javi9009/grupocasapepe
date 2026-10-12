@@ -19,7 +19,10 @@
  *   sincVitrina.monta('idDelDiv', {
  *     hotel:'barrio-hostel',   // o null para la salida de público general
  *     ciudad:'CDMX', dias:90, prueba:false,
+ *     solo:['shows','ateneo'], // opcional: sólo esas filas
+ *     calladoSiVacio:true,     // opcional: sin fila, sin hueco
  *     qs:'&app=1&resv=...',    // lo que haya que arrastrar en cada liga
+ *     base:'/sinc/',           // opcional: delante de cada liga (fuera de /sinc/)
  *     verTodas:'todas.html'    // a dónde va el «Ver todas →» de cada fila
  *   })  ->  Promise<{filas, items}>
  */
@@ -193,8 +196,11 @@ window.sincVitrina = (function () {
     }).join('') + '</span>';
   }
 
-  function ficha(x, qs) {
-    var liga = x.liga + (qs || '');
+  /* `base` existe porque las ligas vienen RELATIVAS de la base ('exp.html?id=…'):
+     sirven tal cual dentro del escaparate, pero desde la portada de la APePe
+     -que vive en /apepe/- habria que resolverlas contra otra carpeta. */
+  function ficha(x, qs, base) {
+    var liga = (base || '') + x.liga + (qs || '');
     var badge = x.fuente === 'pase'
       ? (x.precio_lista ? '<span class="eti">Lanzamiento</span>' : '')
       : (x.proxima_fecha ? '<span class="hora">' + esc(cuando(x.proxima_fecha, x.proxima_hora)) + '</span>' : '');
@@ -225,7 +231,7 @@ window.sincVitrina = (function () {
     return '<div class="sv-fila" data-cat="' + esc(cat.slug) + '">'
       + '<div class="sv-lab"><b>' + (cat.icono ? esc(cat.icono) + ' ' : '') + esc(cat.nombre) + '</b>' + ver + '</div>'
       + (cat.dice ? '<p class="sv-dice">' + esc(cat.dice) + '</p>' : '')
-      + '<div class="sv-carr">' + items.map(function (x) { return ficha(x, o.qs); }).join('') + '</div>'
+      + '<div class="sv-carr">' + items.map(function (x) { return ficha(x, o.qs, o.base); }).join('') + '</div>'
       + '</div>';
   }
 
@@ -253,7 +259,17 @@ window.sincVitrina = (function () {
       caja.innerHTML = '<div class="sv-vacio">No pudimos cargar el catálogo. ' + esc(x.message) + '</div>';
       return { filas: 0, items: 0, error: x.message };
     }
+    /* Con `solo` se pide un trozo del escaparate: la portada de la APePe
+       enseña los shows y el Ateneo donde antes no salía ninguno de los dos, y
+       la fuente sigue siendo la misma consulta. */
+    if (o.solo && o.solo.length) {
+      items = items.filter(function (x) {
+        return o.solo.indexOf(x.categoria_slug || 'otras') >= 0 ||
+               (o.solo.indexOf('ateneo') >= 0 && !!x.es_ateneo);
+      });
+    }
     if (!items.length) {
+      if (o.calladoSiVacio) { caja.innerHTML = ''; return { filas: 0, items: 0 }; }
       caja.innerHTML = '<div class="sv-vacio">Todavía no hay nada publicado por aquí.</div>';
       return { filas: 0, items: 0 };
     }
