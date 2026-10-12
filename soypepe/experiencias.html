@@ -1288,7 +1288,7 @@ function openRest(r){
    El concierge sólo fija el DESCUENTO para ESTE grupo (sale de su comisión, puede variar
    de un grupo a otro) y comparte el QR/link con su código. El código y el descuento viajan
    dentro del link (ref=, dto=); el QR es ese mismo link — no hay un código aparte que teclear. */
-let CP={t:null, desc:0};
+let CP={t:null, desc:0, fecha:'', hora:'', ad:1, me:0, disp:null, pre:null, msg:''};
 
 // Comisión por persona de quien vende (servicios por %, experiencias por bono fijo).
 function bonoPPde(t){ const pvp=Number(t.pvp)||0; return t.cat ? bonoDe(t.cat,pvp) : (Number(t.bono_mxn)||0); }
@@ -1299,68 +1299,172 @@ function totalCP(){
   const bonoPP=bonoPPde(CP.t);
   // El descuento sale de la comisión del colaborador: no puede dar más de lo que gana.
   const descPP=Math.max(0, Math.min(CP.desc||0, bonoPP, pvp));
-  return {pvp, descPP, pagaPP:pvp-descPP, bonoPP, bonoNetoPP:bonoPP-descPP};
+  const pax=Math.max(0,(CP.ad||0))+Math.max(0,(CP.me||0));
+  return {pvp, descPP, pagaPP:pvp-descPP, bonoPP, bonoNetoPP:bonoPP-descPP, pax, total:(pvp-descPP)*pax};
 }
-/* El QR del concierge apuntaba a casapepe.mx/x/<slug>?ref=..., una ruta que NO
-   existe: devolvía 404 y el huésped se quedaba sin poder reservar. En cualquier
-   tour, no sólo en los de touroperador. Además el `slug` sale de la lista vieja
-   por nombre, así que en los de operador venía vacío.
 
-   La ficha pública de verdad es /sincretico/exp.html y se le pasa el id de la
-   experiencia y el código del vendedor en `c` — que es el nombre que lee ella
-   (`?c=`), no `ref`. Javi, 1-oct. */
-function linkCompra(){
+/* EL QR DEL CONCIERGE, RECABLEADO. Javi, 12-oct-2026: «me sigue mandando a la
+   página de inicio del tour y no registra el descuento ni el código ni la
+   pre-reserva».
+   Era verdad: el QR apuntaba a la FICHA del tour con el código del vendedor
+   colgado del link, así que el huésped llegaba a mirar, y el día, la hora, las
+   personas y el descuento que acababan de acordar se quedaban en el teléfono
+   del Pepe. Y el descuento no viajaba de ninguna forma.
+   Ahora el Pepe cierra el trato aquí —día, hora, cuántos y cuánto le baja—, eso
+   se guarda como PRE-RESERVA en la base (sinc_prereservas, a su nombre), y el
+   QR lleva su código al CHECKOUT. El descuento lo aplica la base al calcular el
+   cobro, con el tope de su propia comisión; nunca viaja en la URL, donde
+   cualquiera podría subirlo. */
+function linkPre(){
+  return 'https://casapepe.mx/sincretico/pago.html?pr='+encodeURIComponent(CP.pre.codigo);
+}
+/* La ficha sigue sirviendo para enseñarla: es la que tiene las fotos y el
+   relato. Lo que ya no hace es cobrar. */
+function linkFicha(){
   const t=CP.t;
   return 'https://casapepe.mx/sincretico/exp.html?id='+encodeURIComponent(t.id)
     + (REF && REF!=='PEPE' ? '&c='+encodeURIComponent(REF) : '');
 }
 
 function abreCompra(t){
-  CP={t:t, desc:0};
+  CP={t:t, desc:0, fecha:'', hora:'', ad:1, me:0, disp:null, pre:null, msg:''};
   document.getElementById('buySheet').classList.add('show');
   pintaCompra();
+  cargaDisp();
 }
 function cierraCompra(){ document.getElementById('buySheet').classList.remove('show'); }
+
+/* El calendario de verdad: las salidas abiertas con lugares. Si una experiencia
+   no tiene ninguna, no se puede pre-reservar y se dice, en vez de dejar al Pepe
+   generando un QR que no lleva a ninguna parte. */
+async function cargaDisp(){
+  const t=CP.t, dd=d=>d.toISOString().slice(0,10);
+  try{
+    const hoy=new Date(), fin=new Date(Date.now()+60*86400000);
+    const r=await fetch(SB_URL+'/rest/v1/rpc/sinc_disponibilidad',{method:'POST',
+      headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({p_op_exp:t.id,p_desde:dd(hoy),p_hasta:dd(fin)})});
+    const d=r.ok?await r.json():[];
+    CP.disp=(Array.isArray(d)?d:[]).filter(x=>['programada','confirmada','abierta'].indexOf(String(x.estado))>=0 ? true : (String(x.estado)!=='cerrada'&&String(x.estado)!=='cancelada'))
+      .filter(x=>Number(x.libres)>0);
+  }catch(e){ CP.disp=[]; }
+  if(CP.t===t) pintaCompra();
+}
+function diaBonito(f){
+  try{ return new Date(f+'T12:00:00').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'}); }
+  catch(e){ return f; }
+}
+function horasDe(f){ return (CP.disp||[]).filter(x=>String(x.fecha)===f); }
 
 function pintaCompra(){
   const t=CP.t, c=document.getElementById('buyCard'), q=totalCP();
   const cab='<div class="hero'+(t.foto_url?' foto" style="background-image:url(\''+esc(t.foto_url)+'\')':'')+'">'
     +'<button class="x" id="bx">×</button><h2>'+esc(t.nombre)+'</h2></div>';
+
+  /* Ya generado: lo único que importa es el QR y su código. */
+  if(CP.pre){
+    const p=CP.pre;
+    c.innerHTML=cab+'<div class="body">'
+      +'<div class="sell" style="text-align:center">'
+        +'<div class="lbl">Que lo escanee el huésped</div>'
+        +'<div class="who">Va directo a pagar: '+esc(diaBonito(p.fecha))+' · '+esc(String(p.hora||'').slice(0,5))
+          +' · '+(Number(p.adultos)+Number(p.menores))+' personas'
+          +(Number(p.desc_pp)>0?' · con tu descuento de $'+Number(p.desc_pp).toLocaleString('es-MX')+'/persona':'')+'.</div>'
+        +'<div class="qr" id="qb2"></div>'
+        +'<div style="font-family:Oswald,sans-serif;font-size:26px;letter-spacing:.12em;margin-top:10px">'+esc(p.codigo)+'</div>'
+        +'<div class="link">'+esc(linkPre())+'</div>'
+        +'<button class="copy" id="cp2">📋 Copiar el link</button>'
+      +'</div>'
+      +'<div class="beta">Si no puede escanear, mándale el link: lleva el mismo código. Vale 7 días y se usa una sola vez; la venta queda a tu nombre.</div>'
+      +'<button class="bsec" id="otra">Generar otro</button>'
+      +'<button class="bsec" id="cerrar">Cerrar</button>'
+      +'</div>';
+    const qb=document.getElementById('qb2');
+    try{ new QRCode(qb,{text:linkPre(),width:170,height:170,colorDark:'#1F1B16',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
+    catch(e){ qb.textContent='QR no disponible'; }
+    const $c=id=>document.getElementById(id);
+    if($c('bx')) $c('bx').onclick=cierraCompra;
+    if($c('cerrar')) $c('cerrar').onclick=()=>{ cierraCompra(); closeFicha(); };
+    if($c('otra')) $c('otra').onclick=()=>{ CP.pre=null; CP.msg=''; pintaCompra(); };
+    if($c('cp2')) $c('cp2').onclick=async()=>{ try{ await navigator.clipboard.writeText(linkPre());
+      $c('cp2').textContent='✓ Copiado'; setTimeout(()=>{ const x=$c('cp2'); if(x) x.textContent='📋 Copiar el link'; },1600); }catch(e){} };
+    return;
+  }
+
   const dstep=descStep(q.bonoPP);
+  const dias=[]; (CP.disp||[]).forEach(x=>{ if(dias.indexOf(String(x.fecha))<0) dias.push(String(x.fecha)); });
+  if(!CP.fecha && dias.length) CP.fecha=dias[0];
+  const hs=horasDe(CP.fecha);
+  if(hs.length && !hs.some(x=>String(x.hora)===CP.hora)) CP.hora=String(hs[0].hora);
+
+  let cuando;
+  if(CP.disp===null){ cuando='<div class="beta">Mirando el calendario…</div>'; }
+  else if(!dias.length){ cuando='<div class="beta">Esta experiencia no tiene salidas abiertas con lugares en los próximos dos meses. Habla con Sincrético antes de prometerla.</div>'; }
+  else {
+    cuando='<div class="step"><span class="lb">Día<span>Las salidas con lugar</span></span>'
+      +'<span class="ct"><select id="pFecha" style="font:inherit;padding:6px 8px;border:1px solid #E6DFD6;border-radius:9px">'
+      + dias.map(f=>'<option value="'+esc(f)+'"'+(f===CP.fecha?' selected':'')+'>'+esc(diaBonito(f))+'</option>').join('')
+      +'</select></span></div>'
+      +'<div class="step"><span class="lb">Hora</span>'
+      +'<span class="ct"><select id="pHora" style="font:inherit;padding:6px 8px;border:1px solid #E6DFD6;border-radius:9px">'
+      + hs.map(x=>'<option value="'+esc(x.hora)+'"'+(String(x.hora)===CP.hora?' selected':'')+'>'+esc(String(x.hora).slice(0,5))+' · '+x.libres+' libres</option>').join('')
+      +'</select></span></div>';
+  }
+
+  const tope=(hs.find(x=>String(x.hora)===CP.hora)||{}).libres;
+  const pasoPax=(campo,etq,ayuda,val,min)=>'<div class="step"><span class="lb">'+etq+(ayuda?'<span>'+ayuda+'</span>':'')+'</span>'
+    +'<span class="ct"><button class="bt" id="'+campo+'menos"'+(val<=min?' disabled':'')+'>−</button>'
+    +'<span class="n">'+val+'</span>'
+    +'<button class="bt" id="'+campo+'mas"'+((tope!=null && (CP.ad+CP.me)>=tope)?' disabled':'')+'>+</button></span></div>';
+
   c.innerHTML=cab+'<div class="body">'
-    +'<div class="beta">El huésped elige fecha y personas en la app. Tú le compartes el link con tu código; él termina y paga la reserva.</div>'
+    +'<div class="beta">Cierra aquí el trato con el huésped. El QR lo lleva directo a pagar, con tu descuento ya aplicado y la venta a tu nombre.</div>'
+    +cuando
+    +pasoPax('a','Adultos','',CP.ad,1)
+    +pasoPax('m','Menores','Si el tour los admite',CP.me,0)
     +(q.bonoPP>0 ? ('<div class="step"><span class="lb">Descuento al huésped<span>Sale de tu comisión ($'+q.bonoPP.toLocaleString('es-MX')+'/persona) · puede variar por grupo</span></span>'
       +'<span class="ct"><button class="bt" id="dmenos"'+(q.descPP<=0?' disabled':'')+'>−</button>'
       +'<span class="n">$'+q.descPP.toLocaleString('es-MX')+'</span>'
-      +'<button class="bt" id="dmas"'+(q.descPP>=q.bonoPP?' disabled':'')+'>+</button></span></div>'
-      +resumenHTML(q)) : '')
-    +'<div class="sell" style="text-align:center">'
-      +'<div class="lbl">Que lo escanee el huésped</div>'
-      /* El descuento NO viaja en el link: la ficha pública calcula el precio desde
-         el código del vendedor y no lee ningún parámetro de descuento. Decirle al
-         Pepe que sí iba era prometerle al huésped algo que no llegaba. */
-      +'<div class="who">Entra con <b>tu código</b> ya puesto. Él elige fecha y personas, termina y paga.'
-        +(q.descPP?'<br><b>Ojo:</b> el descuento que pusiste no viaja en el link todavía.':'')+'</div>'
-      +'<div class="qr" id="qb2"></div>'
-      +'<div class="link">'+esc(linkCompra())+'</div>'
-      +'<button class="copy" id="cp2">📋 Copiar mi link</button>'
-    +'</div>'
-    +'<button class="bsec" id="chat">💬 Mandar por Pepe Chat</button>'
-    +'<div class="beta" id="hecho" style="display:none">✓ Link enviado. El huésped lo abre y termina la reserva con tu código.</div>'
+      +'<button class="bt" id="dmas"'+(q.descPP>=q.bonoPP?' disabled':'')+'>+</button></span></div>') : '')
+    +resumenHTML(q)
+    +(q.pax?('<div class="res"><div class="r tot"><span>Total del grupo</span><span>$'+q.total.toLocaleString('es-MX')+'</span></div></div>'):'')
+    +(CP.msg?('<div class="beta" style="color:#9E3B2E">'+esc(CP.msg)+'</div>'):'')
+    +'<button class="bsec" id="gen"'+((CP.disp===null||!dias.length)?' disabled':'')+' style="background:#F2682A;color:#fff;border-color:#F2682A">Generar el QR del huésped</button>'
+    +'<a class="bsec" id="verficha" href="'+esc(linkFicha())+'" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Ver la ficha para enseñársela</a>'
     +'<button class="bsec" id="cerrar">Cerrar</button>'
     +'</div>';
-  const qb=document.getElementById('qb2');
-  try{ new QRCode(qb,{text:linkCompra(),width:170,height:170,colorDark:'#1F1B16',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
-  catch(e){ qb.textContent='QR no disponible'; }
 
   const $b=id=>document.getElementById(id);
   if($b('bx')) $b('bx').onclick=cierraCompra;
   if($b('cerrar')) $b('cerrar').onclick=()=>{ cierraCompra(); closeFicha(); };
+  if($b('pFecha')) $b('pFecha').onchange=e=>{ CP.fecha=e.target.value; CP.hora=''; pintaCompra(); };
+  if($b('pHora')) $b('pHora').onchange=e=>{ CP.hora=e.target.value; };
+  if($b('amenos')) $b('amenos').onclick=()=>{ CP.ad=Math.max(1,CP.ad-1); pintaCompra(); };
+  if($b('amas'))   $b('amas').onclick=()=>{ CP.ad=CP.ad+1; pintaCompra(); };
+  if($b('mmenos')) $b('mmenos').onclick=()=>{ CP.me=Math.max(0,CP.me-1); pintaCompra(); };
+  if($b('mmas'))   $b('mmas').onclick=()=>{ CP.me=CP.me+1; pintaCompra(); };
   if($b('dmenos')) $b('dmenos').onclick=()=>{ CP.desc=Math.max(0,(CP.desc||0)-dstep); pintaCompra(); };
-  if($b('dmas')) $b('dmas').onclick=()=>{ CP.desc=Math.min(q.bonoPP,(CP.desc||0)+dstep); pintaCompra(); };
-  if($b('cp2')) $b('cp2').onclick=async()=>{ try{ await navigator.clipboard.writeText(linkCompra());
-    $b('cp2').textContent='✓ Copiado'; setTimeout(()=>{ const x=$b('cp2'); if(x) x.textContent='📋 Copiar mi link'; },1600); }catch(e){} };
-  if($b('chat')) $b('chat').onclick=()=>{ $b('hecho').style.display='block'; };
+  if($b('dmas'))   $b('dmas').onclick=()=>{ CP.desc=Math.min(q.bonoPP,(CP.desc||0)+dstep); pintaCompra(); };
+  if($b('gen'))    $b('gen').onclick=generaPre;
+}
+
+/* La pre-reserva la escribe la BASE con la sesión del Pepe: quién vende sale de
+   su cuenta, no de un parámetro, y el tope del descuento lo pone ella. */
+async function generaPre(){
+  const b=document.getElementById('gen');
+  if(!CP.fecha || !CP.hora){ CP.msg='Elige el día y la hora de la salida.'; pintaCompra(); return; }
+  if(b){ b.disabled=true; b.textContent='Generando…'; }
+  CP.msg='';
+  try{
+    const r=await fetch(SB_URL+'/rest/v1/rpc/sinc_prereserva_crea',{method:'POST',headers:lavHdr(),
+      body:JSON.stringify({p_op_exp:CP.t.id,p_fecha:CP.fecha,p_hora:CP.hora,
+        p_adultos:CP.ad,p_menores:CP.me,p_desc_pp:CP.desc||0})});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok){ CP.msg=(j&&(j.message||j.hint))||'No pudimos generar el QR.'; pintaCompra(); return; }
+    CP.pre=Array.isArray(j)?j[0]:j;
+    if(!CP.pre||!CP.pre.codigo){ CP.msg='No pudimos generar el QR.'; pintaCompra(); return; }
+    pintaCompra();
+  }catch(e){ CP.msg='No pudimos generar el QR. Revisa tu conexión.'; pintaCompra(); }
 }
 
 /* Resumen por persona (pantalla del colaborador; aquí sí ve su comisión). */

@@ -231,6 +231,14 @@ var CODIGO=(function(){
   return q;
 })();
 var QC=CODIGO?'&c='+encodeURIComponent(CODIGO):'';
+/* EL CÓDIGO DE LA PRE-RESERVA. Javi, 12-oct-2026: el QR del concierge «me sigue
+   mandando a la página de inicio del tour y no registra el descuento ni el
+   código ni la pre-reserva». Ahora el QR trae ?pr=<código>: el día, la hora,
+   cuántos van, el descuento y quién lo vendió están guardados en la base, y
+   esta pantalla los lee en vez de recibirlos sueltos por la URL —donde
+   cualquiera podría subirse el descuento—. */
+var PR=(P.get('pr')||'').trim().toUpperCase();
+var PRE=null, LISTA=null;
 
 var E=null, CFG={}, TYC=null, QUIEN=null, YO=null;
 var SEGURO=false, PROPINA=0, ACEPTA=false;
@@ -282,6 +290,12 @@ var CANCEL={'24h':'Cancelas gratis hasta 24 horas antes.',
 
 /* ---------- las cuentas ---------- */
 function subtotal(){ return ADU*Number(E.pvp_adulto||0)+MEN*Number(E.pvp_menor||E.pvp_adulto||0); }
+/* Lo que se le baja al grupo, para enseñarlo. El precio de arriba ya viene
+   descontado; esto es la diferencia con el de lista. */
+function descMxn(){
+  if(!PRE||!LISTA||!(Number(PRE.desc_pct)>0))return 0;
+  return ADU*(LISTA.ad-Number(E.pvp_adulto||0))+MEN*(LISTA.me-Number(E.pvp_menor||E.pvp_adulto||0));
+}
 function seguroMxn(){ return SEGURO?cfgn('sinc_seguro_mxn',0):0; }
 function total(){ return subtotal()+seguroMxn()+(PROPINA||0); }
 /* Cobro dividido: con la tarjeta entra sólo nuestra comisión —más la cobertura
@@ -321,6 +335,18 @@ async function arranca(){
   CARGA=window.CARGA||sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Preparando tu compra…'):'Preparando tu compra…')});
   /* Si vuelve de pagar, esta pantalla ya no vende: informa. */
   if(P.get('res')){ await muestraGracias(P.get('res')); return; }
+
+  if(PR){
+    var _pre=null;
+    try{ _pre=(await rpc('sinc_prereserva_lee',{p_codigo:PR})||[])[0]||null; }catch(_){}
+    if(!_pre){ CARGA.para(); $('cargando').textContent=T('Ese código no existe. Pídele otro a quien te lo dio.'); return; }
+    if(_pre.usada){ CARGA.para(); $('cargando').textContent=T('Ese código ya se usó. Si no fuiste tú, pídele otro a quien te lo dio.'); return; }
+    if(_pre.caducada){ CARGA.para(); $('cargando').textContent=T('Ese código ya caducó. Pídele otro a quien te lo dio.'); return; }
+    PRE=_pre;
+    ID=PRE.op_exp; FECHA=String(PRE.fecha||'').slice(0,10); HORA=String(PRE.hora||'').slice(0,5);
+    ADU=Math.max(1,Number(PRE.adultos||1)); MEN=Math.max(0,Number(PRE.menores||0));
+    if(PRE.codigo_venta){ CODIGO=PRE.codigo_venta; QC='&c='+encodeURIComponent(CODIGO); }
+  }
 
   if(!ID||!FECHA||!HORA){ location.replace('index.html'); return; }
 
@@ -369,6 +395,23 @@ async function arranca(){
       }
       QUIEN=(await rpc('sinc_quien_te_atiende',{p_codigo:CODIGO})||[])[0]||null;
     }catch(_){}
+  }
+
+  /* El descuento que cerró el concierge. Quien lo aplica de verdad es la base
+     al crear la reserva (con el tope de la comisión de quien vende); aquí se
+     refleja para que el huésped vea el precio que acordaron, no uno distinto. */
+  if(PRE&&Number(PRE.desc_pct)>0){
+    var _f=1-Number(PRE.desc_pct)/100;
+    LISTA={ad:Number(E.pvp_adulto||0), me:Number(E.pvp_menor||E.pvp_adulto||0)};
+    E.pvp_adulto=Math.round(LISTA.ad*_f);
+    E.pvp_menor =Math.round(LISTA.me*_f);
+    /* En cobro dividido el descuento lo absorbe el anticipo: lo que el guía
+       cobra en mano es el neto del operador y ése no se mueve. */
+    if(E.cobro_dividido&&ANT0&&ANT0.antAd>0){
+      var _nAd=ANT0.pvpAd-ANT0.antAd, _nMe=ANT0.pvpMe-ANT0.antMe;
+      E.anticipo_adulto=Math.max(0,Number(E.pvp_adulto)-_nAd);
+      E.anticipo_menor =Math.max(0,Number(E.pvp_menor||E.pvp_adulto)-_nMe);
+    }
   }
 
   /* EL TOPE DE LOS GRATUITOS. Javi, 11-oct-2026: en los tours de entrada libre
@@ -428,6 +471,7 @@ function pintaPrecio(){
     return '<div class="li"><span>'+x[0]+'</span><b>'+x[1]+'</b></div>';}).join('');
 
   $('precio').innerHTML=
+    (descMxn()>0?'<div class="li"><span>'+esc(T('Descuento de'))+' '+esc((PRE&&PRE.vendedor)||T('recepción'))+'</span><b>−'+money(descMxn())+'</b></div>':'')+
     '<div class="li"><span>'+esc(T('Subtotal'))+'</span><b>'+money(subtotal())+'</b></div>'+
     (seguroMxn()>0?'<div class="li"><span>'+esc(T('Cobertura'))+'</span><b>'+money(seguroMxn())+'</b></div>':'')+
     (PROPINA>0?'<div class="li"><span>'+esc(T('Propina'))+'</span><b>'+money(PROPINA)+'</b></div>':'')+
@@ -644,13 +688,21 @@ async function paga(dentro){
       if(v.error)throw new Error(v.error.message);
     }
 
-    var res=await rpc('sinc_reservar_web',{
+    /* Con pre-reserva manda ella: la base vuelve a leer el día, la hora, el
+       descuento y a quién se acredita la venta. Lo que viaje en la pantalla no
+       puede cambiar el precio. */
+    var res = PRE ? await rpc('sinc_reservar_pre',{
+      p_prereserva:PRE.codigo, p_nombre:YO.nombre||null, p_telefono:YO.telefono||null,
+      p_idioma:YO.idioma||null, p_pais:YO.pais||null, p_notas:null, p_seguro:!!SEGURO,
+      p_terminos:(TYC&&TYC.version)||1, p_propina:PROPINA||0, p_adultos:ADU, p_menores:MEN
+    },true) : await rpc('sinc_reservar_web',{
       p_op_exp:ID, p_fecha:FECHA, p_hora:HORA, p_nombre:YO.nombre||null,
       p_adultos:ADU, p_menores:MEN, p_email:null,
       p_telefono:YO.telefono||null, p_idioma:YO.idioma||null, p_pais:YO.pais||null,
       p_notas:null, p_canal:'web', p_seguro:!!SEGURO,
       p_terminos:(TYC&&TYC.version)||1, p_codigo:CODIGO||null, p_propina:PROPINA||0
     },true);
+
 
     if(dentro==='libre'){
       /* La reserva YA existe a estas alturas. Si el aviso de "sin cobro" falla
