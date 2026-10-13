@@ -17,7 +17,16 @@ const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND = Deno.env.get("RESEND_API_KEY") || "";
 /* Remitente y «responder a» por marca: ver correo.ts. Javi, 10-oct-2026. */
 const FROM = remitente("ateneo");
-const PORTAL = "https://casapepe.mx/productora.html";
+/* DÓNDE VIVE EL PORTAL. Esto apuntaba a casapepe.mx/productora.html y ahí no
+   hay nada: casapepe.mx publica el repo de la web, y el portal de la productora
+   vive en el de la plataforma. Resultado: el botón del correo del convenio
+   llevaba a una página de Netlify que dice «Page not found», y así salieron
+   los convenios del 13-oct-2026. Se apunta al sitio donde el portal existe de
+   verdad, y se deja la variable por si algún día se sirve desde casapepe.mx
+   (entonces basta con ponerla, sin tocar la función). Javi lo vio con una
+   productora que lo recibió. */
+const PORTAL = Deno.env.get("PRODUCTORA_PORTAL_URL")
+  || "https://grupocasapepe.netlify.app/productora.html";
 const H = { apikey: SRK, Authorization: "Bearer " + SRK, "Content-Type": "application/json" };
 
 const cors = {
