@@ -611,7 +611,88 @@
       'Esto no sale de tu dinero: sale de cómo trabaja quien opera esta experiencia. Al reservar con ellos, lo sostienes.':
         'This doesn\u2019t come out of your money: it comes from how whoever runs this experience works. By booking with them, you keep it going.',
       'Lo declara la empresa que opera el tour, por escrito y bajo protesta de decir verdad, al darse de alta con nosotros. Es una declaración suya, no una auditoría nuestra.':
-        'The company that runs the tour declares this in writing and under oath when it signs up with us. It is their declaration, not our audit.'
+        'The company that runs the tour declares this in writing and under oath when it signs up with us. It is their declaration, not our audit.',
+
+      /* ---- Fase 1 i18n: llaves que faltaban (pasaban por T sin traducción) ---- */
+      /* ficha de experiencia (exp.html) */
+      'Al llegar, al operador':'On arrival, to the operator',
+      'Ampliar':'Expand',
+      'Ver menos':'Show less',
+      'Aplican nuestras condiciones generales.':'Our general terms apply.',
+      'Cancelar y reservar':'Cancel and book',
+      'La letra chica':'The fine print',
+      'Nada en especial: ven como estés.':'Nothing special: come as you are.',
+      'Nos vemos en':'We meet at',
+      'Termina en':'Ends at',
+      'Pagas ahora':'You pay now',
+      'Propina sugerida':'Suggested tip',
+      'propina sugerida':'Suggested tip',
+      'Quién puede ir':'Who can come',
+      'Reservas tu lugar pagando una parte; el resto lo liquidas el día del tour, directo con ':
+        'You book your spot by paying a part; you settle the rest on the day of the tour, directly with ',
+      'Salimos con ':'We run with ',
+      'Sin requisitos: cualquiera puede venir.':'No requirements: anyone can come.',
+      'Tour gratuito: reservas sin pagar y, si te gusta, le dejas al guía la propina que quieras.':
+        'Free tour: book without paying and, if you like it, leave your guide whatever tip you want.',
+      'su página':'their page',
+
+      /* pago (pago.html) */
+      'A nombre de':'In the name of',
+      'Pagas ahora con tarjeta':'You pay now by card',
+      'Pagar ahora ':'Pay now ',
+      'Descuento de':'Discount from',
+      'Apartamos para ':'We hold for ',
+      'Apartar para ':'Hold for ',
+      'El anticipo de ':'The deposit of ',
+      ' no se devuelve: es lo que aparta tu lugar.':' is non-refundable: it’s what holds your spot.',
+      'Hoy sólo se te cobra esa parte. Los ':'Today you’re only charged that part. The ',
+      ' restantes los pagas el día del tour, en mano, directo con ':
+        ' remaining you pay on the day of the tour, in cash, directly with ',
+      'Entra con tu cuenta':'Sign in with your account',
+      'tu cuenta':'your account',
+      'El boleto llega a este correo. ¿No eres tú?':'The ticket goes to this email. Not you?',
+      'En los tours de cortesía el lugar es para quien duerme en la casa, y tu reserva es de ':
+        'On courtesy tours the spot is for whoever stays at the house, and your booking is for ',
+      'Es de cortesía para quien duerme en la casa: hasta ':'It’s complimentary for house guests: up to ',
+      'Si viene alguien más, escríbenos y lo vemos.':'If anyone else comes, write to us and we’ll sort it out.',
+      'Sin costo. Apartas tu lugar y te mandamos el pase.':'Free. You reserve your spot and we send you the pass.',
+      'Tu lugar queda apartado a tu nombre':'Your spot is held in your name',
+      'Ese código no existe. Pídele otro a quien te lo dio.':'That code doesn’t exist. Ask whoever gave it to you for another.',
+      'Ese código ya se usó. Si no fuiste tú, pídele otro a quien te lo dio.':
+        'That code has already been used. If it wasn’t you, ask whoever gave it to you for another.',
+      'Ese código ya caducó. Pídele otro a quien te lo dio.':'That code has expired. Ask whoever gave it to you for another.',
+      '¿Quieres dejarle algo? Le llega completo.':'Want to leave them something? They get all of it.',
+
+      /* mapa (mapa.html) */
+      'Foto':'Photo',
+      'Llamar':'Call',
+      'Éstos son los':'These are the',
+      'más cercanos, para que decidas si vale el viaje.':'closest, so you can decide if the trip is worth it.',
+      'Nada de eso queda a paseo desde':'None of that is within a walk from',
+      'Ábrelo en Pepe GO!':'Open it in Pepe GO!',
+      'Reto Pepe GO!':'Pepe GO! Challenge',
+      'reseñas':'reviews',
+      'En la Guía MICHELIN':'In the MICHELIN Guide',
+
+      /* boleto (boleto.html) */
+      'Llevas pendiente de pago ':'You still owe ',
+      'Se paga en el punto de encuentro, al empezar, directo con ':'Paid at the meeting point, at the start, directly with ',
+      'tu guía':'your guide',
+      'Lleva efectivo si puedes.':'Bring cash if you can.',
+
+      /* escaparate: bloque ODS y pie de tarjeta (index.html) */
+      'Medioambiente':'Environment',
+      'Lo que le queda al barrio: convivencia, patrimonio, grupos pequeños, quién decide y quién cobra. ONU Turismo lo trabaja con las ciudades, y es el terreno del overtourism.':
+        'What stays in the neighbourhood: coexistence, heritage, small groups, who decides and who gets paid. UN Tourism works on this with cities, and it’s where overtourism plays out.',
+      'Agua, energía, residuos, clima y ecosistemas. Es el corazón de la Declaración de Glasgow: medir, descarbonizar, regenerar.':
+        'Water, energy, waste, climate and ecosystems. It’s the heart of the Glasgow Declaration: measure, decarbonise, regenerate.',
+      'A dónde va el dinero: ingreso a quien protagoniza la experiencia, compra a productores de aquí y empleo digno. Es donde la Agenda 2030 nombra al turismo con todas sus letras, en la meta 8.9.':
+        'Where the money goes: income to the people at the heart of the experience, buying from local producers and decent work. It’s where the 2030 Agenda names tourism outright, in target 8.9.',
+      'Todavía no hay ninguna medida aquí':'Nothing measured here yet',
+      'El objetivo se declara en el paso <b>Impacto</b> de cada ficha.':'The goal is declared in the <b>Impact</b> step of each experience.',
+      'desde':'from',
+      'Están subidas todas las experiencias de la base, también borradores y prefichas. Las promociones y los objetivos de la ONU son demo.':
+        'All experiences from the database are loaded, including drafts and pre-listings. The promotions and the UN goals are demo.',
     }
   };
 
