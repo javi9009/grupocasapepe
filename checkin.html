@@ -165,6 +165,16 @@ input[type=range]{width:100%;accent-color:var(--naranja)}
 .tel select{font-size:14px;padding-left:9px;padding-right:4px}
 .foto-r{display:flex;gap:12px;align-items:center;margin-top:4px}
 .foto-r img{width:58px;height:58px;border-radius:50%;object-fit:cover;border:1.5px solid var(--linea)}
+/* la calculadora de venta minima */
+.vm-campos{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 14px}
+.vm-c{flex:1 1 150px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.vm-c span{font-size:12.5px;color:var(--gris)}
+.vm-c select,.vm-c input{width:100%}
+.vm-r{background:#F6F3EC;border:1px solid var(--linea);border-left:3px solid var(--verde);
+  border-radius:12px;padding:14px 16px;font-size:15px;line-height:1.6}
+.vm-r b{font-weight:700}
+.vm-r .vm-corte{margin-top:10px;padding-top:10px;border-top:1px dashed var(--linea)}
+.vm-r .vm-pie{margin-top:8px;font-size:13px;color:var(--gris);line-height:1.5}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head><body>
@@ -464,6 +474,26 @@ input[type=range]{width:100%;accent-color:var(--naranja)}
         hay una persona delante y no la foto de alguien. Las revisa una persona de la casa,
         junto a tu identificaci&oacute;n.</p>
       <div id="vidaCaja"></div>
+    </div>
+
+    <!-- VENTA MINIMA. Javi, 13-oct-2026: antes de firmar, que la productora vea
+         con numeros si su evento se sostiene. La cuenta es suya: la comision
+         que cobramos tiene que cubrir al menos la fianza del espacio, y de ahi
+         sale cuanto hay que vender, a cuanto el boleto y cuantos boletos
+         deberia llevar una semana antes. No bloquea nada: es una recomendacion
+         para que nadie monte un evento que ya nace corto. -->
+    <div class="card oculto" id="cardVenta">
+      <h2>Venta m&iacute;nima de tu evento</h2>
+      <p class="ay">Haz la cuenta antes de firmar. Cambia la sala, el aforo que esperas y
+        el precio que piensas poner, y mira si sale.</p>
+      <div class="vm-campos">
+        <label class="vm-c"><span>La sala</span><select id="vmSala"></select></label>
+        <label class="vm-c"><span>Asistentes que esperas</span>
+          <input id="vmPax" type="number" min="1" step="1" inputmode="numeric"></label>
+        <label class="vm-c"><span>Precio de tu boleto</span>
+          <input id="vmPrecio" type="number" min="1" step="1" inputmode="decimal"></label>
+      </div>
+      <div id="vmTexto"></div>
     </div>
 
     <div class="card" id="cardFirma">
@@ -2333,6 +2363,93 @@ function cargaFirma(){
     : 'El convenio de uso de los espacios del Ateneo: qué puedes montar, en qué condiciones '
       + 'y cómo se reparte lo que se venda.';
   pintaVida(); pintaFirma();
+  if(TIPO!=='operador') montaVenta();
+}
+
+/* VENTA MINIMA DEL EVENTO.
+   De donde sale cada numero:
+     venta minima = fianza / comision   -> lo que hay que vender para que lo que
+                    cobramos de comision cubra la fianza de la sala;
+     precio minimo = venta minima / asistentes esperados;
+     boletos a 7 dias = 30% de la venta minima, al precio que ella ponga.
+   Ojo con una cosa que no es evidente: nuestra comision NO se descuenta de su
+   boleto, se suma encima (ejemploComo() de mas arriba). Asi que estos pesos son
+   los SUYOS, y al publico el boleto le aparece mas caro; se dice abajo para que
+   nadie se lleve la sorpresa el dia que publique. */
+var VMS=[];
+function vmPesos(n){ var x=Math.round(n*100)/100;
+  var d = Math.abs(x-Math.round(x))<0.005 ? 0 : 2;   /* $5,000 y no $5,000.00 */
+  return '$'+x.toLocaleString('es-MX',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+function vmEntero(n){ return Math.round(n).toLocaleString('es-MX'); }
+
+function montaVenta(){
+  var caja=$('cardVenta'); if(!caja) return;
+  caja.classList.remove('oculto');
+  var sel=$('vmSala');
+  sel.innerHTML='<option value="5000|80">Fianza habitual &middot; $5,000</option>';
+  ['vmPax','vmPrecio'].forEach(function(id){
+    var el=$(id); if(el) el.addEventListener('input', pintaVenta);
+  });
+  sel.addEventListener('change', function(){ vmDesdeSala(); pintaVenta(); });
+  vmDesdeSala(); pintaVenta();
+  /* Las salas que de verdad tiene aprobadas, con su fianza y su aforo. Si
+     todavia no le aprobaron ninguna -lo normal al darse de alta-, se queda la
+     opcion de arriba y se dice que es orientativa. */
+  var tok = FICHA && FICHA.portal_token; if(!tok) return;
+  rpc('prod_portal_espacios',{p_token:tok}).then(function(r){
+    VMS=(r||[]).filter(function(x){ return Number(x.fianza_monto)>0; });
+    if(!VMS.length) return;
+    sel.innerHTML=VMS.map(function(x,i){
+      return '<option value="'+Number(x.fianza_monto)+'|'+(Number(x.capacidad)||80)+'">'+
+        esc(x.nombre)+' &middot; '+esc(x.sede_nombre||'')+'</option>'; }).join('');
+    vmDesdeSala(); pintaVenta();
+  }).catch(function(){});
+}
+
+function vmDesdeSala(){
+  var v=String($('vmSala').value||'5000|80').split('|');
+  $('vmPax').value = v[1]||80;
+  var fianza=Number(v[0])||5000, com=(comTotal()||35)/100;
+  $('vmPrecio').value = Math.ceil((fianza/com)/(Number(v[1])||80));
+}
+
+function pintaVenta(){
+  var v=String($('vmSala').value||'5000|80').split('|');
+  var fianza=Number(v[0])||5000;
+  var pct=comTotal()||35, com=pct/100;
+  var pax=Math.max(1, Number($('vmPax').value)||80);
+  var ventaMin=fianza/com;
+  var precioMin=ventaMin/pax;
+  var precio=Number($('vmPrecio').value)||precioMin;
+  var bol7=Math.ceil((ventaMin*0.30)/precio);
+  var bolTot=Math.ceil(ventaMin/precio);
+  var publico=precio*(1+com)+precio*com*0.16;
+  var sinSalas = !VMS.length;
+
+  $('vmTexto').innerHTML=
+    '<div class="vm-r">'+
+      'Tu fianza es de <b>'+vmPesos(fianza)+'</b> y la comisi&oacute;n de Sincr&eacute;tico es del <b>'+
+      pct+'%</b>. Para que el evento sea viable necesitas vender al menos <b>'+vmPesos(ventaMin)+
+      '</b> sin impuestos: con <b>'+vmEntero(pax)+'</b> asistentes esperados, el boleto deber&iacute;a '+
+      'costar al menos <b>'+vmPesos(precioMin)+'</b> sin impuestos.'+
+      '<div class="vm-corte">Si <b>siete d&iacute;as antes</b> de tu evento no llevas vendidos al menos '+
+      '<b>'+vmEntero(bol7)+' boletos</b> (el 30% de esa venta m&iacute;nima), revisaremos juntos la '+
+      'viabilidad del evento.</div>'+
+      '<div class="vm-pie">A '+vmPesos(precio)+' el boleto necesitas <b>'+vmEntero(bolTot)+
+      '</b> para llegar a la venta m&iacute;nima. Al p&uacute;blico ese boleto le aparece en '+
+      vmPesos(publico)+': lo tuyo, m&aacute;s nuestra comisi&oacute;n y su IVA. Lo que t&uacute; '+
+      'cobras no se toca.'+
+      (sinSalas?'<br>Esta cuenta usa la fianza m&aacute;s com&uacute;n. La de tu sala se confirma '+
+                'cuando te aprobemos la fecha.':'')+
+      '</div>'+
+      /* Si los boletos que hacen falta no caben en la sala, el evento no sale
+         por mucho que se vendan todos: mejor decirlo aqui que el dia del corte. */
+      (bolTot>pax
+        ? '<div class="vm-corte" style="color:#9A3412">Con ese precio no sale: '+
+          vmEntero(bolTot)+' boletos no caben en los '+vmEntero(pax)+' asistentes que esperas. '+
+          'Sube el precio a '+vmPesos(Math.ceil(ventaMin/pax))+' o m&aacute;s, o haz m&aacute;s de una funci&oacute;n.</div>'
+        : '')+
+    '</div>';
 }
 
 function vidaCompleta(){ return POSES.every(function(p){ return !!VIDA.rutas[p[0]]; }); }
