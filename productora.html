@@ -2458,92 +2458,300 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
      uno mas blando. */
   function prevDatos(){
     var tipo=$('evTipo')?$('evTipo').value:'';
-    var F=evtDef(tipo).f;
+    var def=evtDef(tipo), F=def.f;
     var esp=$('ev-espacio')?$('ev-espacio').value:'';
-    var eob=ESPACIOS.filter(function(x){return x.espacio_slug===esp;})[0];
-    var hi=$('ev-hora-ini')?$('ev-hora-ini').value:'';
-    var f1=($('ev-fecha')&&$('ev-fecha').value)||($('ev-desde')&&$('ev-desde').value)||'';
+    /* LA SALA SE LLAMA `slug`, NO `espacio_slug`. 13-oct-2026: esto es lo que
+       hacia que la previsualizacion dijera «sin sala» con la sala elegida, y
+       de paso que pidiera la sala como si faltara. `prod_portal_espacios`
+       devuelve `slug` y `nombre`, igual que el desplegable. */
+    var eob=ESPACIOS.filter(function(x){return x.slug===esp;})[0] || null;
+    var val=function(k){ return ($(k)&&$(k).value)||''; };
+    var num=function(k){ return Number(($(k)&&$(k).value)||0)||0; };
     var gratis=!!($('ev-gratis')&&$('ev-gratis').checked);
-    /* El precio vive en un campo distinto segun como cobre este tipo de
-       evento; se toma el primero que tenga algo. */
-    var precio=0;
-    ['ev-precio-persona','ev-precio-hora','ev-precio-renta','ev-precio-expo'].forEach(function(k){
-      if(!precio && $(k) && Number($(k).value||0)>0) precio=Number($(k).value);
-    });
+
+    /* COMO COBRA ESTE EVENTO. El precio vive en un campo distinto segun el
+       tipo, y la linea que lo explica tambien: no es lo mismo «por persona»
+       que «por hora con minimo de dos». */
+    var cobro='', precio=0;
+    if(F.indexOf('precio_persona')>=0 && num('ev-precio-persona')>0){ cobro='persona'; precio=num('ev-precio-persona'); }
+    else if(F.indexOf('precio_hora')>=0 && num('ev-precio-hora')>0){ cobro='hora'; precio=num('ev-precio-hora'); }
+    else if(F.indexOf('cobro_renta')>=0 && num('ev-precio-renta')>0){ cobro='renta'; precio=num('ev-precio-renta'); }
+    else if(F.indexOf('cobro_expo')>=0 && num('ev-precio-expo')>0){ cobro='expo'; precio=num('ev-precio-expo'); }
+    if(!precio){
+      [['ev-precio-persona','persona'],['ev-precio-hora','hora'],
+       ['ev-precio-renta','renta'],['ev-precio-expo','expo']].forEach(function(p){
+        if(!precio && num(p[0])>0){ cobro=p[1]; precio=num(p[0]); }
+      });
+    }
+    /* Los niveles de precio (general, preventa, estudiante…) manda sobre el
+       campo suelto: si la productora puso tres boletos, el precio de portada
+       es el mas barato y debajo van los tres. */
+    var tiers=(PR||[]).filter(function(p){return (p.nombre||'').trim() || Number(p.precio)>0;});
+    var conPrecio=tiers.filter(function(p){return Number(p.precio)>0;});
+    var desde=false;
+    if(conPrecio.length){
+      var mn=Math.min.apply(null,conPrecio.map(function(p){return Number(p.precio);}));
+      var mx=Math.max.apply(null,conPrecio.map(function(p){return Number(p.precio);}));
+      precio=mn; desde=(mx>mn); if(!cobro) cobro='persona';
+    }
+
+    var fIni=val('ev-fecha')||val('ev-desde');
+    var fFin=val('ev-hasta-vis')||val('ev-hasta');
     return {
       nombre:($('ev-nombre')&&$('ev-nombre').value.trim())||'',
       desc:($('ev-desc')&&$('ev-desc').value.trim())||'',
-      sala:eob?eob.espacio:'',
-      fecha:f1, hora:hi, gratis:gratis, precio:precio,
-      cupo:Number(($('ev-cupo')&&$('ev-cupo').value)||0),
-      foto:(FOTOS&&FOTOS.length&&(FOTOS[0].url||FOTOS[0]))||'',
-      pideHora:F.indexOf('hora')>=0
+      sala:eob?eob.nombre:'', sede:(eob&&eob.sede_nombre)||'Ateneo de Virreyes',
+      espObj:eob,
+      fecha:fIni, fechaFin:(fFin&&fFin!==fIni)?fFin:'',
+      hora:val('ev-hora-ini'), horaFin:val('ev-hora-fin'),
+      todoDia:!!($('ev-todoeldia')&&$('ev-todoeldia').checked),
+      gratis:gratis, precio:precio, desde:desde, cobro:cobro,
+      minHoras:num('ev-minh'),
+      renta:val('ev-renta'), expo:val('ev-expo'),
+      cupo:num('ev-cupo'), aforo:num('ev-aforo'), duracion:num('ev-duracion'),
+      materiales:val('ev-materiales'), horario:val('ev-horario'),
+      prod:val('ev-prod'), crew:num('ev-crew'),
+      fotos:(FOTOS||[]).map(function(f){return (f&&f.url)||f;}).filter(Boolean),
+      extra:(EXTRA||[]).filter(function(x){return (x.equipo||'').trim();}),
+      agenda:(AG||[]).filter(function(a){return (a.titulo||'').trim();}),
+      tiers:tiers,
+      impacto:(IMP||[]).filter(function(q){return q.marcado;}),
+      clase:CLASE, tipoN:def.n,
+      pideHora:F.indexOf('hora')>=0,
+      /* la portada es la primera foto: la misma que ve el huesped */
+      foto:(FOTOS&&FOTOS.length&&(FOTOS[0].url||FOTOS[0]))||''
     };
+  }
+
+  /* LA FICHA DE VENTA COMPLETA, NO UNA TARJETITA.
+     Javi, 13-oct-2026: «esta info esta muy limitada, tiene que mostrarse la
+     ficha de venta completa que es la que aparece en el formato de este link»
+     -> /sinc/espacios.html. Asi que esta pantalla usa esa misma anatomia:
+     portada 16/9, titulo en Oswald, subtitulo de sala y dia, la tarifa grande
+     en naranja oscuro con la linea que la explica debajo, la lista de lo que
+     incluye con viñeta naranja, y la caja de «aparta tu lugar». Lo que antes
+     era una tarjeta de 420px con cuatro datos.
+     Nada de esto cobra ni manda nada: es el espejo del formulario. */
+  function pvMoney(n){ n=Number(n||0); return n>0?('$'+n.toLocaleString('es-MX')):'—'; }
+  function pvMini(u,w){
+    if(!u || String(u).indexOf('/storage/v1/object/public/')<0) return u;
+    return String(u).replace('/storage/v1/object/public/','/storage/v1/render/image/public/')+
+           '?width='+w+'&quality=75&resize=cover';
+  }
+  function pvDia(f){
+    if(!f) return '';
+    var p=String(f).slice(0,10).split('-');
+    var d=new Date(+p[0],+p[1]-1,+p[2]);
+    if(isNaN(d.getTime())) return String(f);
+    return new Intl.DateTimeFormat('es-MX',{weekday:'long',day:'numeric',month:'long'}).format(d);
+  }
+  function pvDur(m){
+    m=Number(m||0); if(!m) return '';
+    var h=Math.floor(m/60), r=m%60;
+    return (h?h+' h':'')+(h&&r?' ':'')+(r?r+' min':'');
   }
   function previsualiza(){
     var d=prevDatos();
+    var priv=(d.clase==='privado');
+
+    /* LO QUE LE FALTA PARA SALIR: el mismo criterio que usa Casa Pepe al
+       aprobar, no uno mas blando. Un uso privado no se publica, asi que no se
+       le pide ni foto ni descripcion de venta. */
     var falta=[];
     if(!d.nombre) falta.push('el nombre');
     if(!d.sala)   falta.push('la sala');
     if(!d.fecha)  falta.push('el día');
-    if(d.pideHora && !d.hora) falta.push('la hora');
-    if(!d.desc)   falta.push('contar de qué va');
+    if(d.pideHora && !d.hora && !d.todoDia) falta.push('la hora');
+    if(!priv && !d.desc) falta.push('contar de qué va');
     if(!d.gratis && !(d.precio>0)) falta.push('el precio');
-    if(!d.foto)   falta.push('al menos una foto');
+    if(!priv && !d.foto) falta.push('al menos una foto');
 
-    var cuando='—';
+    /* Cuándo: un día, un rango de días, con hora o de día completo. */
+    var cuando='Falta el día';
     if(d.fecha){
-      var p=d.fecha.split('-');
-      var dd=new Date(+p[0],+p[1]-1,+p[2]);
-      cuando=new Intl.DateTimeFormat('es-MX',{weekday:'long',day:'numeric',month:'long'}).format(dd)+
-             (d.hora?' · '+d.hora+' h':'');
+      cuando=pvDia(d.fecha);
+      if(d.fechaFin) cuando+=' → '+pvDia(d.fechaFin);
+      if(d.todoDia) cuando+=' · todo el día';
+      else if(d.hora) cuando+=' · '+d.hora+(d.horaFin?'–'+d.horaFin:'')+' h';
     }
-    var tapa=d.foto
-      ? '<img src="'+esc(d.foto)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block">'
-      : '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;'+
-        'color:#A9A096;font:600 13px/1.4 system-ui;text-align:center;padding:16px">Sin foto todavía<br>'+
-        '<span style="font-weight:400">así se vería el hueco</span></div>';
-    var aviso=falta.length
-      ? '<div style="margin-top:14px;background:#F6E1DD;color:#9E3B2E;border-radius:10px;padding:11px 13px;font-size:13px;line-height:1.5"><b>Todavía no puede salir.</b> Falta '+esc(falta.join(' · '))+'.</div>'
-      : '<div style="margin-top:14px;background:#E1F0E7;color:#1D6B4A;border-radius:10px;padding:11px 13px;font-size:13px;line-height:1.5"><b>Listo para mandar.</b> Tiene todo lo que Casa Pepe pide para ponerlo a la venta.</div>';
 
-    var html=[
-      '<div style="border:1px solid #E6DFD6;border-radius:14px;overflow:hidden;background:#fff">',
-        '<div style="position:relative;aspect-ratio:16/9;background:#F4EFE8">',tapa,
-          '<span style="position:absolute;left:8px;bottom:8px;background:rgba(30,26,22,.82);color:#fff;',
-            'font:600 11px/1 Oswald,system-ui;letter-spacing:.04em;padding:4px 8px;border-radius:999px">',esc(cuando),'</span>',
-        '</div>',
-        '<div style="padding:12px 14px 14px">',
-          '<div style="font:700 16px/1.2 Oswald,system-ui;text-transform:uppercase">',esc(d.nombre||'(sin nombre)'),'</div>',
-          '<div style="color:#6E665C;font-size:12.5px;margin-top:4px">',esc([d.sala||'sin sala','Ateneo de Virreyes'].join(' · ')),'</div>',
-          (d.desc?'<p style="font-size:14px;line-height:1.55;color:#3C3630;margin:10px 0 0">'+esc(d.desc.slice(0,260))+(d.desc.length>260?'…':'')+'</p>':''),
-          '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:12px">',
-            '<span style="font:700 20px/1 Oswald,system-ui;color:#C9501A">',(d.gratis?'Entrada libre':(d.precio>0?('$'+d.precio.toLocaleString('es-MX')):'—')),'</span>',
-            (d.cupo?'<span style="font-size:12px;color:#6E665C">'+d.cupo+' lugares</span>':''),
-          '</div>',
-          '<div style="margin-top:12px;border:2px solid #F2682A;background:#F2682A;color:#fff;border-radius:9px;',
-            'padding:11px;text-align:center;font:600 13px/1 Oswald,system-ui;letter-spacing:.05em;',
-            'text-transform:uppercase;opacity:.55">Pedir lugar</div>',
-          '<div style="font-size:11.5px;color:#A9A096;text-align:center;margin-top:6px">El botón no funciona aquí: esto es una vista previa.</div>',
-        '</div>',
-      '</div>', aviso
-    ].join('');
+    /* La tarifa y la línea que la explica. */
+    var tarifa, letra='';
+    if(d.gratis){
+      tarifa='<b>Entrada libre</b>';
+      letra='Sin costo. Casa Pepe lo autoriza antes de publicarlo.';
+    }else if(d.precio>0){
+      tarifa=(d.desde?'<span class="pvdes">desde</span>':'')+'<b>'+pvMoney(d.precio)+'</b>';
+      letra={persona:'Por persona.',
+             hora:'Por hora'+(d.minHoras>1?', mínimo '+d.minHoras+' horas.':'.'),
+             renta:(d.renta==='renta_dia'?'Renta de la sala, por día.':'Renta de la sala, por hora.'),
+             expo:(d.expo==='comision_obra'?'Comisión sobre la venta de obra.':'Renta del espacio para la exposición.')
+            }[d.cobro]||'Por persona.';
+    }else{
+      tarifa='<b>Falta el precio</b>';
+      letra='Sin precio no se puede poner a la venta.';
+    }
+    if(!priv && d.precio>0) letra+=' El Ateneo cobra su intermediación sobre lo vendido.';
+
+    /* Lo que incluye: lo que hay escrito en el formulario, dicho como se lo
+       dirías a quien lo va a comprar. */
+    var inc=[];
+    if(d.aforo)      inc.push('Aforo de la sala: '+d.aforo+' personas');
+    if(d.cupo)       inc.push('Cupo de '+d.cupo+' lugares');
+    if(d.duracion)   inc.push('Dura '+pvDur(d.duracion));
+    if(d.horario)    inc.push('Horario de visita: '+d.horario);
+    if(d.materiales) inc.push('Materiales: '+d.materiales);
+    if(d.prod)       inc.push('Producción de '+d.prod.toLowerCase());
+    if(d.crew)       inc.push('Crew de '+d.crew+' personas');
+    d.extra.forEach(function(x){
+      inc.push((x.clase==='servicio'?'Servicio: ':'')+
+        (Number(x.cantidad)>1?Number(x.cantidad)+' × ':'')+x.equipo);
+    });
+    var e=d.espObj;
+    if(e && e.fianza_tipo==='monto' && e.fianza_monto)
+      inc.push('Garantía de la sala: '+pvMoney(e.fianza_monto)+' · se devuelve al terminar');
+    else if(e && e.fianza_tipo==='renta_mes')
+      inc.push('Garantía de la sala: un mes de renta · se devuelve al terminar');
+
+    var tapa=d.foto
+      ? '<img src="'+esc(pvMini(d.foto,1100))+'" alt="">'
+      : '<div class="pvhueco">Sin foto todavía<br><span>así se vería el hueco</span></div>';
+    var tiras=(d.fotos.length>1)
+      ? '<div class="pvtiras">'+d.fotos.slice(1,7).map(function(u){
+          return '<img src="'+esc(pvMini(u,260))+'" alt="">'; }).join('')+
+        (d.fotos.length>7?'<span class="pvmas">+'+(d.fotos.length-7)+'</span>':'')+'</div>'
+      : '';
+
+    var H=[];
+    H.push('<div class="pv">');
+    H.push('<div class="pvfoto">'+tapa+'</div>'+tiras);
+    H.push('<h1 class="pvh1">'+esc(d.nombre||'(sin nombre todavía)')+'</h1>');
+    H.push('<div class="pvsub">'+esc([d.sala||'sin sala', d.sede].filter(Boolean).join(' · '))+'</div>');
+    H.push('<div class="pvsub pvcuando">'+esc(cuando)+'</div>');
+    H.push('<div class="pvtarifa">'+tarifa+'</div>');
+    H.push('<div class="pvletra">'+esc(letra)+'</div>');
+    if(d.desc) H.push('<p class="pvdesc">'+esc(d.desc)+'</p>');
+    if(inc.length) H.push('<ul class="pvinc">'+inc.map(function(t){
+      return '<li>'+esc(t)+'</li>'; }).join('')+'</ul>');
+
+    /* Los niveles de boleto, como los ve quien elige cuál compra. */
+    if(d.tiers.length){
+      H.push('<div class="pvcaja"><h2>Qué boleto eliges</h2>');
+      H.push('<div class="pvotros">'+d.tiers.map(function(p){
+        return '<div class="pvfila"><div><b>'+esc(p.nombre||'(sin nombre)')+'</b>'+
+          (p.incluye?'<div class="pvnota">'+esc(p.incluye)+'</div>':'')+
+          (Number(p.cupo)?'<div class="pvnota">'+Number(p.cupo)+' lugares</div>':'')+
+          '</div><span>'+(Number(p.precio)>0?pvMoney(p.precio):'—')+'</span></div>';
+      }).join('')+'</div></div>');
+    }
+
+    /* El programa. */
+    if(d.agenda.length){
+      H.push('<div class="pvcaja"><h2>El programa</h2><div class="pvprog">'+
+        d.agenda.map(function(a){
+          var q=[a.fecha?String(a.fecha).slice(5).split('-').reverse().join('/'):'',a.hora||''].filter(Boolean).join(' · ');
+          return '<div class="pvfila"><div><b>'+esc(a.titulo)+'</b>'+
+            (a.ponente?'<div class="pvnota">'+esc(a.ponente)+'</div>':'')+'</div>'+
+            '<span class="pvh">'+esc(q)+'</span></div>';
+        }).join('')+'</div></div>');
+    }
+
+    /* Lo que deja en el barrio: no es decoración, es lo que Casa Pepe mira. */
+    if(d.impacto.length){
+      H.push('<div class="pvcaja"><h2>Lo que deja en el barrio</h2><ul class="pvinc">'+
+        d.impacto.slice(0,8).map(function(q){
+          return '<li>'+esc(q.texto||q.pregunta||q.titulo||'')+
+            (q.quien?' <span class="pvnota" style="display:inline">· '+esc(q.quien)+'</span>':'')+
+            (Number(q.monto_mxn)?' <span class="pvnota" style="display:inline">· '+pvMoney(q.monto_mxn)+'</span>':'')+
+            '</li>';
+        }).join('')+'</ul>'+
+        (d.impacto.length>8?'<div class="pvnota">y '+(d.impacto.length-8)+' más</div>':'')+
+        '</div>');
+    }
+
+    /* La caja de compra: el mismo bloque que remata la ficha de Sincrético.
+       Aquí no funciona y se dice. */
+    if(priv){
+      H.push('<div class="pvcaja"><h2>Uso privado</h2>'+
+        '<p class="pvay">No se publica ni se vende a nadie. Queda reservada la sala y declarado lo que pagas.</p></div>');
+    }else{
+      H.push('<div class="pvcaja"><h2>Aparta tu lugar</h2>'+
+        '<p class="pvay">Nos dices quién eres y qué día vienes, y el Ateneo te confirma el lugar y cómo pagarlo. El precio es el de arriba.</p>'+
+        '<div class="pvrej">'+
+          '<div><label>Tu nombre</label><div class="pvinp"></div></div>'+
+          '<div><label>Correo</label><div class="pvinp"></div></div>'+
+          '<div><label>WhatsApp</label><div class="pvinp"></div></div>'+
+          '<div><label>Cuántos son</label><div class="pvinp"></div></div>'+
+        '</div>'+
+        '<div class="pvbt">'+(d.gratis?'Apartar':'Pagar y apartar')+'</div>'+
+        '<div class="pvnota" style="text-align:center;margin-top:6px">Esto es una vista previa: el botón no cobra nada aquí.</div>'+
+      '</div>');
+    }
+    H.push('</div>');
+
+    var aviso=falta.length
+      ? '<div class="pvav mal"><b>Todavía no puede salir.</b> Falta '+esc(falta.join(' · '))+'.</div>'
+      : '<div class="pvav bien"><b>Listo para mandar.</b> Tiene todo lo que Casa Pepe pide para ponerlo a la venta.</div>';
+
+    var css='<style>'+
+      '.pv{background:#fff;border:1px solid #E6DFD6;border-radius:14px;padding:16px 18px 18px}'+
+      '.pvfoto{border-radius:12px;overflow:hidden;background:#F4EFE8;aspect-ratio:16/9;position:relative}'+
+      '.pvfoto img{width:100%;height:100%;object-fit:cover;display:block}'+
+      '.pvhueco{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;'+
+        'justify-content:center;color:#A9A096;font:600 13px/1.5 Inter,system-ui;text-align:center;padding:16px}'+
+      '.pvhueco span{font-weight:400}'+
+      '.pvtiras{display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap}'+
+      '.pvtiras img{width:58px;height:42px;object-fit:cover;border-radius:7px;border:1px solid #E6DFD6}'+
+      '.pvmas{font:600 12px/1 Oswald,system-ui;color:#6E665C}'+
+      '.pvh1{font:700 26px/1.12 Oswald,system-ui;text-transform:uppercase;margin:14px 0 5px;color:#1E1A16;letter-spacing:.02em}'+
+      '.pvsub{font:600 12.5px/1.35 Oswald,system-ui;letter-spacing:.06em;text-transform:uppercase;color:#6E665C}'+
+      '.pvcuando{margin-top:2px}'+
+      '.pvtarifa{display:flex;align-items:baseline;gap:9px;margin:14px 0 2px;flex-wrap:wrap}'+
+      '.pvtarifa b{font:700 32px/1 Oswald,system-ui;color:#C9501A}'+
+      '.pvdes{font:600 12px/1 Oswald,system-ui;letter-spacing:.07em;text-transform:uppercase;color:#6E665C}'+
+      '.pvletra{color:#6E665C;font:400 13px/1.5 Inter,system-ui}'+
+      '.pvdesc{font:400 14.5px/1.6 Inter,system-ui;color:#3C3630;margin:14px 0 0;white-space:pre-line}'+
+      '.pvinc{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:7px}'+
+      '.pvinc li{display:flex;gap:9px;font:400 14px/1.45 Inter,system-ui;color:#3C3630}'+
+      '.pvinc li:before{content:"·";color:#F2682A;font-weight:700}'+
+      '.pvcaja{background:#FBF7F2;border:1px solid #E6DFD6;border-radius:12px;padding:15px 16px;margin-top:20px}'+
+      '.pvcaja h2{font:700 16px/1.2 Oswald,system-ui;text-transform:uppercase;margin:0 0 4px;color:#1E1A16}'+
+      '.pvay{color:#6E665C;font:400 13px/1.55 Inter,system-ui;margin:0 0 12px}'+
+      '.pvnota{color:#A9A096;font:400 12px/1.45 Inter,system-ui;margin-top:3px}'+
+      '.pvotros,.pvprog{display:grid;gap:8px}'+
+      '.pvfila{display:flex;justify-content:space-between;align-items:center;gap:12px;background:#fff;'+
+        'border:1px solid #E6DFD6;border-radius:10px;padding:10px 13px}'+
+      '.pvfila b{font:700 14px/1.25 Oswald,system-ui;text-transform:uppercase;color:#1E1A16}'+
+      '.pvfila>span{font:600 14px/1 Oswald,system-ui;color:#C9501A;white-space:nowrap}'+
+      '.pvfila>span.pvh{color:#6E665C;font-size:12.5px;letter-spacing:.05em}'+
+      '.pvrej{display:grid;gap:10px;grid-template-columns:1fr 1fr}'+
+      '@media(max-width:520px){.pvrej{grid-template-columns:1fr}}'+
+      '.pvrej label{display:block;font:600 10.5px/1 Oswald,system-ui;letter-spacing:.09em;'+
+        'text-transform:uppercase;color:#6E665C;margin:0 0 5px}'+
+      '.pvinp{height:38px;border:1.5px solid #E6DFD6;border-radius:9px;background:#fff}'+
+      '.pvbt{margin-top:14px;border:2px solid #F2682A;background:#F2682A;color:#fff;border-radius:9px;'+
+        'padding:12px;text-align:center;font:600 13px/1 Oswald,system-ui;letter-spacing:.05em;'+
+        'text-transform:uppercase;opacity:.6}'+
+      '.pvav{margin-top:14px;border-radius:10px;padding:11px 13px;font:400 13px/1.5 Inter,system-ui}'+
+      '.pvav.mal{background:#F6E1DD;color:#9E3B2E}'+
+      '.pvav.bien{background:#E1F0E7;color:#1D6B4A}'+
+      '</style>';
 
     var ov=document.getElementById('prevOv');
     if(!ov){
       ov=document.createElement('div');
       ov.id='prevOv';
       ov.style.cssText='position:fixed;inset:0;background:rgba(30,26,22,.55);z-index:950;display:flex;'+
-        'align-items:center;justify-content:center;padding:18px';
+        'align-items:flex-start;justify-content:center;padding:18px;overflow:auto';
       ov.onclick=function(ev){ if(ev.target===ov) ov.remove(); };
       document.body.appendChild(ov);
     }
-    ov.innerHTML='<div style="background:#FBF7F2;border-radius:16px;max-width:420px;width:100%;'+
-      'max-height:88vh;overflow:auto;padding:16px">'+
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'+
+    ov.innerHTML='<div style="background:#FBF7F2;border-radius:16px;max-width:560px;width:100%;'+
+      'max-height:92vh;overflow:auto;padding:16px;margin:auto">'+ css +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">'+
         '<b style="font:700 14px/1.2 Oswald,system-ui;text-transform:uppercase">Así lo vería el huésped</b>'+
         '<button type="button" id="prevX" style="background:none;border:0;font-size:24px;line-height:1;cursor:pointer;color:#6E665C">×</button>'+
-      '</div>'+html+'</div>';
+      '</div>'+ H.join('') + aviso +'</div>';
     document.getElementById('prevX').onclick=function(){ ov.remove(); };
   }
 
