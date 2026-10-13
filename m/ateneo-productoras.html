@@ -252,6 +252,7 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
              constancia de a quién y cuándo. -->
         <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn ghost sm" id="btnConvenio" type="button">✉️ Mandarle el convenio</button>
+          <button class="btn ghost sm" id="btnVerContrato" type="button">📄 Ver el contrato</button>
           <span class="mini" id="convEstado"></span>
         </div>
         <!-- EVENTOS GRATUITOS. Javi, 10-oct-2026: «quita el candado de que los
@@ -264,6 +265,47 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
         <label class="chk" style="margin-top:12px"><input type="checkbox" data-c="puede_gratis"> <b>Puede programar eventos gratuitos</b> <small style="color:var(--muted)">· sus eventos gratis entran en revisión antes de publicarse</small></label>
         <div class="fld" style="margin-top:12px"><label>Notas internas</label><textarea data-c="notas" rows="2"></textarea></div>
       </div>
+
+      <!-- EL CONTRATO, A LA VISTA Y EDITABLE. Javi, 13-oct-2026: «no veo el
+           contrato para editarlo y enviar» y «en cada admin lo que se edita es
+           el contrato individual, no la plantilla».
+           Hasta hoy el convenio salía a ciegas: nadie de casa lo veía antes de
+           que se mandara. Aquí se ve ya con sus datos puestos —folio, comisión,
+           anexos—, se puede corregir, y lo corregido es lo que esa productora
+           lee y lo que firma. La plantilla no se toca: lo que se guarde aquí
+           vale sólo para esta ficha. -->
+      <div class="card" id="cajaContrato" style="display:none">
+        <h3>El contrato de esta productora</h3>
+        <div class="hint" id="ctrEstado">Cargando…</div>
+
+        <div id="ctrVista" style="display:none;margin-top:10px">
+          <div style="max-height:380px;overflow:auto;border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:14px;background:#fff">
+            <pre id="ctrTexto" style="white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.55;margin:0"></pre>
+          </div>
+          <div class="ft" style="justify-content:flex-start;margin-top:10px;gap:8px;flex-wrap:wrap">
+            <button class="btn ghost sm" id="btnEditarContrato" type="button">✏️ Editarlo</button>
+            <span class="mini" id="ctrOrigen"></span>
+          </div>
+        </div>
+
+        <div id="ctrEdicion" style="display:none;margin-top:10px">
+          <textarea id="ctrArea" rows="22" spellcheck="false"
+            style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--linea,#E3E0D6);border-radius:10px"></textarea>
+          <div class="hint" style="margin-top:6px">Se escribe en Markdown, igual que la plantilla. Lo que guardes aquí vale <b>sólo para esta productora</b>.</div>
+          <div class="ft" style="justify-content:flex-start;margin-top:10px;gap:8px;flex-wrap:wrap">
+            <button class="btn sm" id="btnGuardarContrato" type="button">Guardar y mandarlo a firmar</button>
+            <button class="btn ghost sm" id="btnSoloGuardar" type="button">Sólo guardar</button>
+            <button class="btn ghost sm" id="btnCancelarEd" type="button">Cancelar</button>
+            <button class="btn ghost sm" id="btnResetContrato" type="button" style="margin-left:auto;color:#B3261E">Volver a la plantilla</button>
+          </div>
+        </div>
+
+        <!-- LO FIRMADO, PARA REVISIÓN. Javi, 13-oct-2026. No es el texto de hoy:
+             es el que esa persona tuvo delante al firmar, congelado, con su
+             acuse. Es lo único que se puede enseñar si alguien discute qué firmó. -->
+        <div id="ctrFirmados" style="margin-top:16px"></div>
+      </div>
+
       <!-- BORRAR DE VERDAD. Javi, 10-oct-2026: quiere limpiar las fichas de
            prueba y volver a crearlas. Hasta hoy el botón solo estaba en el
            embudo, que es otra pantalla. Dar de baja (el selector de arriba) y
@@ -487,6 +529,13 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
   async function abrir(id){
     if(!id){cur=null;return;}
     cur=O.filter(function(o){return o.id===id;})[0];if(!cur)return;
+    /* El contrato se esconde al cambiar de ficha: si no, al saltar de una
+       productora a otra te quedabas mirando el contrato de la anterior con el
+       nombre de la nueva arriba. Se vuelve a abrir con «Ver el contrato». */
+    CTR=null;
+    (function(){ var c=document.getElementById('cajaContrato'); if(c) c.style.display='none';
+                 var e=document.getElementById('ctrEdicion');   if(e) e.style.display='none';
+                 var v=document.getElementById('ctrVista');     if(v) v.style.display='none'; })();
     /* La lista se trae UNA vez, al cargar la pantalla. Si la productora guardó
        algo desde su portal mientras esto estaba abierto, aquí se veía la foto
        vieja —y peor: al pulsar Guardar se le mandaba de vuelta lo viejo.
@@ -632,6 +681,105 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     b.disabled=false; b.textContent=antes;
   }
 
+
+  /* ================= EL CONTRATO INDIVIDUAL =================
+     Ver, editar y mandar a firmar el contrato de ESTA productora, y consultar
+     lo que ya firmó. Tres reglas que no se negocian:
+       · lo que se edita aquí es su contrato, nunca la plantilla;
+       · un contrato firmado no se edita — se hace una versión nueva;
+       · lo firmado se guarda tal cual lo vio quien firmó, y es lo que se enseña.
+     Javi, 13-oct-2026. */
+  var CTR = null;
+
+  async function rpc(nombre, body){
+    var r = await fetch(SB+'/rest/v1/rpc/'+nombre, {method:'POST', headers:hdr(),
+      body: JSON.stringify(body||{})});
+    var j = await r.json().catch(function(){return null;});
+    if(!r.ok) throw new Error((j && (j.message||j.error)) || 'no se pudo');
+    if(j && j.error) throw new Error(j.error);
+    return j;
+  }
+
+  async function cargaContrato(){
+    var caja=$('cajaContrato'); if(!caja||!cur) return;
+    caja.style.display='';
+    $('ctrEstado').textContent='Cargando…';
+    $('ctrVista').style.display='none'; $('ctrEdicion').style.display='none';
+    try{
+      CTR = await rpc('prod_contrato_admin', {p_id: cur.id});
+      $('ctrTexto').textContent = CTR.cuerpo || '(vacío)';
+      $('ctrOrigen').innerHTML = CTR.editado
+        ? '<b style="color:#B06A00">Texto propio de esta productora</b> · la plantilla no se aplica aquí'
+        : 'Sale de la plantilla <b>'+esc(CTR.plantilla_version||CTR.version||'')+'</b>, con sus datos ya puestos';
+      var crudos=(CTR.cuerpo||'').match(/\{\{[A-Z_]+\}\}/g);
+      $('ctrEstado').innerHTML = 'Folio <b>'+esc(CTR.folio||'')+'</b> · versión <b>'+esc(CTR.version||'')+'</b>'+
+        (CTR.firmado_at ? ' · <span style="color:var(--ok,#1D6B4A)">firmado</span>' : ' · sin firmar')+
+        (crudos ? ' · <b style="color:#B3261E">ojo: '+crudos.length+' campo(s) sin rellenar: '+esc([...new Set(crudos)].join(' '))+'</b>' : '');
+      $('ctrVista').style.display='';
+      $('btnEditarContrato').style.display = CTR.firmado_at ? 'none' : '';
+      pintaFirmados();
+    }catch(e){ $('ctrEstado').textContent = e.message; }
+  }
+
+  async function pintaFirmados(){
+    var d=$('ctrFirmados'); if(!d||!cur) return; d.innerHTML='';
+    try{
+      var j = await rpc('prod_contrato_admin_firmados', {p_id: cur.id});
+      var f = (j && j.firmados) || [];
+      if(!f.length){ d.innerHTML='<div class="hint">Todavía no ha firmado ninguna versión.</div>'; return; }
+      d.innerHTML = '<h3 style="margin-bottom:6px">Lo que ya firmó</h3>' + f.map(function(x,i){
+        var a=x.acuse||{};
+        return '<div style="border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:10px;margin-bottom:8px">'+
+          '<div><b>'+esc(x.folio||'')+'</b> · versión '+esc(x.version||'')+' · firmó <b>'+esc(x.firmante||'')+'</b> el '+esc(x.firmado_at||'')+'</div>'+
+          '<div class="mini" style="margin-top:3px">'+
+            (a.ip?'desde '+esc(a.ip):'')+(a.navegador?' · '+esc(String(a.navegador).slice(0,60)):'')+
+            ' · '+(x.largo||0)+' caracteres</div>'+
+          '<button class="btn ghost sm" style="margin-top:8px" data-firmado="'+i+'">Ver lo que firmó</button>'+
+          '<pre id="fir'+i+'" style="display:none;white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.5;'+
+            'max-height:320px;overflow:auto;border:1px solid var(--linea,#E3E0D6);border-radius:8px;padding:12px;background:#fff;margin:8px 0 0"></pre>'+
+        '</div>';
+      }).join('');
+      f.forEach(function(x,i){
+        var b=d.querySelector('[data-firmado="'+i+'"]'); if(!b) return;
+        b.addEventListener('click', function(){
+          var p=$('fir'+i); if(!p) return;
+          if(p.style.display==='none'){ p.textContent=x.cuerpo||''; p.style.display=''; b.textContent='Ocultar'; }
+          else { p.style.display='none'; b.textContent='Ver lo que firmó'; }
+        });
+      });
+    }catch(e){ d.innerHTML='<div class="hint">'+esc(e.message)+'</div>'; }
+  }
+
+  async function guardaContrato(mandar){
+    var txt=$('ctrArea').value;
+    try{
+      await rpc('prod_contrato_admin_guardar', {p_id: cur.id, p_cuerpo: txt});
+      toast(mandar ? 'Guardado. Mandando el convenio…' : 'Contrato guardado para esta productora.');
+      $('ctrEdicion').style.display='none';
+      await cargaContrato();
+      if(mandar) await mandaConvenio($('btnConvenio'));
+    }catch(e){ toast(e.message, true); }
+  }
+
+  (function engancha(){
+    var b;
+    b=$('btnVerContrato');    if(b) b.addEventListener('click', cargaContrato);
+    b=$('btnEditarContrato'); if(b) b.addEventListener('click', function(){
+      $('ctrArea').value = (CTR && CTR.cuerpo) || '';
+      $('ctrEdicion').style.display=''; $('ctrVista').style.display='none';
+    });
+    b=$('btnCancelarEd');     if(b) b.addEventListener('click', function(){
+      $('ctrEdicion').style.display='none'; $('ctrVista').style.display='';
+    });
+    b=$('btnSoloGuardar');    if(b) b.addEventListener('click', function(){ guardaContrato(false); });
+    b=$('btnGuardarContrato');if(b) b.addEventListener('click', function(){ guardaContrato(true); });
+    b=$('btnResetContrato');  if(b) b.addEventListener('click', async function(){
+      if(!confirm('¿Tiramos el texto propio de esta productora y volvemos a la plantilla?\n\nSe pierde lo que hayas editado aquí.')) return;
+      try{ await rpc('prod_contrato_admin_reset', {p_id: cur.id});
+           toast('Vuelta a la plantilla.'); $('ctrEdicion').style.display='none'; await cargaContrato(); }
+      catch(e){ toast(e.message, true); }
+    });
+  })();
 
   /* ---------- qué datos fiscales aplican, según quién es ----------
      Una persona física no tiene razón social: tiene nombre. Y una persona
