@@ -858,7 +858,9 @@ async function resize(file){
 async function ev(ticket_id,tipo,payload){ try{ await sb.from('mtto_ticket_eventos').insert({ticket_id,tipo,actor_id:ME.id,actor_nombre:ME.email,payload:payload||{}}); }catch(_){} }
 
 // ===== Resumen del día (al cerrar la jornada): reloj vs reportado + captura del tiempo no reportado =====
-const CATS_TIEMPO=[['reactivo','🔧 Reactivo'],['correctivo','🛠️ Correctivo'],['preventivo','🧰 Preventivo'],['administrativa','🗒️ Administrativa / briefing'],['compras','🛒 Compras / proveedores'],['otra','➕ Otra']];
+const CATS_TIEMPO=[['briefing','📋 Briefing o junta'],['huesped','🛎️ Atender huéspedes','¿Con qué te tocó apoyar?'],['visita','📦 Proveedor o visita','¿Quién vino hoy?'],['averia','🔧 Avería / mantenimiento'],['espera','⏳ Esperar'],['comida','🍽️ Comida'],['personal','🚻 Personal'],['otra','✏️ Otro']];
+// Validadora del reparto de tiempo (Deisy). employee_id estable.
+const DEISY_EMP='9086da9a-3589-4b21-a83d-8cd158f747a0';
 const prowD=(a,b,col)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0${col?';color:'+col:''}"><span>${a}</span><b>${b}</b></div>`;
 const _hhmm=x=>x?new Date(x).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}):null;
 window.resumenDia=async(auto)=>{
@@ -899,23 +901,27 @@ window.resumenDia=async(auto)=>{
     ${extraRows.length?`<div class="muted" style="font-size:12px;margin-top:8px">Ya enviaste hoy: ${extraRows.map(x=>esc(x.categoria)+' '+x.minutos+'m').join(' · ')}</div>`:''}
   </div><div class="foot">
     <button class="btn ghost sm" onclick="closeModal()">Cerrar</button>
-    ${sinAsignar>0?'<button class="btn sm" onclick="guardarTiempoDia()">Aceptar y enviar a Deisy</button>':''}
+    ${sinAsignar>0?'<button class="btn sm" id="btnGuardarTiempo" onclick="guardarTiempoDia()">Aceptar y enviar a Deisy</button>':''}
   </div>`);
   if(sinAsignar>0){ addBloqueTiempo(); recalcRestante(); }
 };
+const _phCat=c=>{const f=CATS_TIEMPO.find(x=>x[0]===c); return (f&&f[2])||'¿qué hiciste? (opcional)';};
 window.recalcRestante=()=>{
-  const el=$('restante'); if(!el)return;
+  const el=$('restante');
   const mins=[...document.querySelectorAll('.blq-min')].reduce((s,i)=>s+(parseInt(i.value)||0),0);
   const falta=(window._sinAsignar||0)-mins;
-  el.innerHTML = falta>0 ? `Faltan por asignar: <span style="color:var(--bad)">${fmtDur(falta)}</span>`
+  if(el) el.innerHTML = falta>0 ? `Faltan por asignar: <span style="color:var(--bad)">${fmtDur(falta)}</span>`
     : (falta===0 ? `<span style="color:var(--ok,#1D6B4A)">✅ Todo el limbo asignado</span>`
-    : `<span style="color:var(--warn,#8C6212)">Asignaste ${fmtDur(-falta)} de más</span>`);
+    : `<span style="color:var(--warn,#8C6212)">Te pasaste por ${fmtDur(-falta)} — baja algunos minutos</span>`);
+  const g=$('btnGuardarTiempo'); if(g) g.disabled = !(mins>0 && falta>=0);
 };
 window.addBloqueTiempo=()=>{
   const box=$('bloques'); if(!box)return;
   const div=document.createElement('div'); div.style.cssText='border:1px solid var(--rule);border-radius:8px;padding:8px;margin-bottom:6px;background:#fff';
   div.innerHTML=`<select class="blq-cat" style="width:100%;margin-bottom:5px">${CATS_TIEMPO.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join('')}</select>
-    <div style="display:flex;gap:6px"><input class="blq-min" type="number" min="1" placeholder="min" oninput="recalcRestante()" style="width:78px"><input class="blq-desc" placeholder="¿qué hiciste?" style="flex:1"></div>`;
+    <div style="display:flex;gap:6px"><input class="blq-min" type="number" min="1" placeholder="min" oninput="recalcRestante()" style="width:78px"><input class="blq-desc" placeholder="${_phCat(CATS_TIEMPO[0][0])}" style="flex:1"></div>`;
+  const sel=div.querySelector('.blq-cat'), desc=div.querySelector('.blq-desc');
+  sel.onchange=()=>{ desc.placeholder=_phCat(sel.value); };
   box.appendChild(div);
 };
 window.guardarTiempoDia=async()=>{
@@ -923,9 +929,10 @@ window.guardarTiempoDia=async()=>{
   const rows=[]; for(let i=0;i<cats.length;i++){ const m=parseInt(mins[i].value)||0; if(m<=0)continue;
     rows.push({employee_id:EMP,employee_nombre:EMPNAME,property_id:PROPID,fecha:hoyMX(),categoria:cats[i].value,minutos:m,descripcion:(descs[i].value||'').trim()||null,estado:'por_validar'}); }
   if(!rows.length)return toast('Pon minutos en al menos un bloque',false);
+  const tot=rows.reduce((s,r)=>s+r.minutos,0);
+  if(tot>(window._sinAsignar||0))return toast('La suma pasa de tu tiempo sin asignar',false);
   const {error}=await sb.from('mtto_tiempo').insert(rows); if(error)return toast('No se pudo guardar: '+error.message,false);
-  try{ const {data:cfg}=await sb.from('mtto_config').select('compras_emp_id,compras_user_id').eq('property_id',PROPID).maybeSingle();
-    if(cfg&&cfg.compras_user_id) await sb.from('notificaciones').insert({employee_id:cfg.compras_emp_id,user_id:cfg.compras_user_id,titulo:'⏱️ Tiempo por validar',cuerpo:EMPNAME+' reportó '+rows.length+' bloque(s) de tiempo de hoy.',icono:'⏱️',accion:{url:'/m/incidencias.html',tipo:'mtto_tiempo'},leido:false}); }catch(_){}
+  try{ await sb.rpc('crear_notificacion',{p_employee_id:DEISY_EMP,p_titulo:'⏱️ Tiempo por validar',p_cuerpo:EMPNAME+' reportó '+rows.length+' bloque(s) de tiempo de hoy.',p_icono:'⏱️',p_accion:{tipo:'mtto_tiempo',fecha:hoyMX()}}); }catch(_){}
   closeModal(); toast('Enviado a Deisy para validar ✅');
 };
 

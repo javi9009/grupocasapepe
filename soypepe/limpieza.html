@@ -375,6 +375,7 @@ const SIN_MEDIR=new Set(['front','nocturno','experiencias']);
 // Apoyo y pendientes: el hueco entre lo que marca el reloj checador y la suma
 // del tiempo real de los cuartos y las areas. Lo reparte cada recamarista.
 let APOYO=[],APOYO_CAT=[],ASIS=null,APOYO_SEL=null,APOYO_MIN=0,APOYO_COM='';
+let APOYO_PROMPTED=false;   // el reparto de cierre se abre solo una vez por sesion
 // Quien supervisa ve el reparto de todas las recamaristas del día, tenga o no
 // cuartos propios. El ama de llaves lo ve siempre por su turno.
 const SUPERVISORES=['javi@casapepe.mx','hola.puebla@casapepe.mx','hola.cdmx@casapepe.mx','housekeeping.cdmx@casapepe.mx','housekeeping.puebla@casapepe.mx'];
@@ -534,6 +535,10 @@ async function cargar(){
     if(!MIA) VISTA='rep';
   }
   pintar();
+  // Al cerrar turno, si quedo tiempo sin asignar, abre el reparto una sola vez.
+  if(!APOYO_PROMPTED && MIA && !SIN_MEDIR.has(MIA.turno) && ASIS && ASIS.check_out && apoyoFalta().falta>0){
+    APOYO_PROMPTED=true; setTimeout(abrirReparto,500);
+  }
 }
 
 function pintar(){
@@ -618,7 +623,7 @@ function pintar(){
   </div>`;
 
   html+=tarjetaValidar();
-  html+=tarjetaApoyo();
+  html+=tarjetaCierre();
 
   if(MIA && (MIA.turno==='nocturno' || llevaElDia())){
     html+=`<div class="auditcard dnd">
@@ -989,66 +994,139 @@ function minApoyoTareas(){
   return Math.round(total/60000)+Math.round(minutosEnCurso().min);
 }
 const apoyoHM=m=>m>=60?`${Math.floor(m/60)}h ${Math.round(m%60)}m`:`${Math.round(m)} min`;
-const apoyoCat=c=>APOYO_CAT.find(x=>x.codigo===c)||{nombre:c,icono:'',ayuda:''};
+// Opciones del reparto. Algunas abren un subcampo propio (a quien/que).
+const APOYO_OPS=[
+  {c:'briefing',  n:'Briefing o junta',        i:'📋'},
+  {c:'huesped',   n:'Atender huéspedes',  i:'🛎️', sub:'¿Con qué te tocó apoyar?'},
+  {c:'visita',    n:'Proveedor o visita',      i:'📦', sub:'¿Quién vino hoy?'},
+  {c:'lavanderia',n:'Lavandería de huéspedes', i:'🧺'},
+  {c:'espera',    n:'Esperar',                 i:'⏳'},
+  {c:'comida',    n:'Comida',                  i:'🍽️'},
+  {c:'personal',  n:'Personal',                i:'🚻'},
+  {c:'otro',      n:'Otro',                    i:'✏️', libre:true},
+];
+const apOp=c=>APOYO_OPS.find(o=>o.c===c)||{c:c,n:c,i:''};
+// Validadora del reparto de tiempo (Deisy). employee_id estable.
+const DEISY_EMP='9086da9a-3589-4b21-a83d-8cd158f747a0';
 
-function tarjetaApoyo(){
-  if(!MIA || SIN_MEDIR.has(MIA.turno)) return '';
+// hotel = lo que marco el reloj; tareas = lo medido en cuartos/areas;
+// ya = lo ya repartido. falta = lo que queda sin explicar.
+function apoyoFalta(){
   const hotel=minApoyoHotel();
-  if(!hotel) return `<div class="auditcard apoyo">
-    <div class="t">&#128995; Apoyo y pendientes</div>
-    <div class="s">Aqui vas a repartir el tiempo del dia que no es un cuarto ni un area
-      &mdash;el briefing, atender a un hu&eacute;sped, esperar a mantenimiento&mdash;.
-      Aparece en cuanto checas tu entrada.</div></div>`;
-
   const tareas=minApoyoTareas();
-  const puesto=APOYO.reduce((s,x)=>s+(x.minutos||0),0);
-  const falta=Math.max(0,hotel-tareas-puesto);
-  const sel=APOYO_SEL?apoyoCat(APOYO_SEL):null;
-
-  let opciones=[15,30,45,60,90].filter(m=>m<=falta);
-  if(falta>0 && opciones.indexOf(falta)<0) opciones.push(falta);
-  if(!opciones.length) opciones=[Math.max(falta,5)];
-
-  const caja=!sel?'':`<div class="caja">
-    ${sel.ayuda?`<div class="ay">${esc(sel.ayuda)}</div>`:''}
-    <div class="mins">${opciones.map(m=>`<button data-apmin="${m}"
-      class="${APOYO_MIN===m?'on':''}">${m===falta&&falta>0?'todo ('+m+')':m+' min'}</button>`).join('')}</div>
-    <input id="apCom" placeholder="&iquest;Qu&eacute; fue? (opcional)" maxlength="140" value="${esc(APOYO_COM)}">
-    <button class="ok" id="apOk" ${APOYO_MIN?'':'disabled'}>Guardar${APOYO_MIN?' '+apoyoHM(APOYO_MIN):''}</button>
-  </div>`;
-
-  const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>`<div class="it">
-    <span>${apoyoCat(x.categoria).icono||''}</span>
-    <span class="nm">${esc(apoyoCat(x.categoria).nombre)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}</span>
-    <span class="mn">${apoyoHM(x.minutos)}</span>
-    <button class="x" data-apdel="${x.id}" aria-label="Quitar">&times;</button></div>`).join('')}</div>`;
-
-  const completo = falta<=0;
-  return `<div class="auditcard apoyo">
-    <div class="t">&#128995; Apoyo y pendientes</div>
-    <div class="s">${completo
-      ? 'Tu d&iacute;a est&aacute; completo: todo lo que marc&oacute; el reloj queda explicado.'
-      : 'El tiempo que no es un cuarto ni un &aacute;rea tambi&eacute;n es trabajo. Rep&aacute;rtelo para que cuente en tus horas.'}</div>
-    <div class="reparto">
-      <div><b>${apoyoHM(hotel)}</b>en el hotel</div>
-      <div><b>${apoyoHM(tareas)}</b>cuartos y &aacute;reas</div>
-      <div class="falta"><b>${apoyoHM(falta)}</b>por repartir</div>
-    </div>
-    ${falta>0?`<div class="cats">${APOYO_CAT.map(c=>`<button class="cat ${APOYO_SEL===c.codigo?'on':''}"
-      data-apcat="${c.codigo}">${c.icono||''} ${esc(c.nombre)}</button>`).join('')}</div>`:''}
-    ${caja}${lista}</div>`;
+  const ya=APOYO.reduce((s,x)=>s+(x.minutos||0),0);
+  return {hotel:hotel, tareas:tareas, ya:ya, falta:Math.max(0,hotel-tareas-ya)};
 }
 
-async function guardarApoyo(){
-  if(!APOYO_SEL||!APOYO_MIN||!MIA) return;
-  const com=(($('apCom')||{}).value||'').trim();
-  const {error}=await sb.from('hk_apoyo').insert({
-    property_id:MIA.property_id, fecha:FECHA, employee_id:EMP, asignacion_id:MIA.id,
-    categoria:APOYO_SEL, minutos:APOYO_MIN, comentario:com||null,
-    capturado_por:USER?USER.id:null, capturado_por_nombre:NOMBRE});
-  if(error) return toast('No se pudo guardar: '+error.message);
-  APOYO_SEL=null; APOYO_MIN=0; APOYO_COM='';
-  toast('Apuntado · ya cuenta en tus horas');
+// La tarjeta del reparto aparece SOLO cuando ya checo salida (cierre de turno).
+function tarjetaCierre(){
+  if(!MIA || SIN_MEDIR.has(MIA.turno)) return '';
+  if(!ASIS || !ASIS.check_out) return '';
+  const {falta}=apoyoFalta();
+  const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>`<div class="it">
+    <span>${apOp(x.categoria).i||''}</span>
+    <span class="nm">${esc(apOp(x.categoria).n)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}</span>
+    <span class="mn">${apoyoHM(x.minutos)}</span>
+    <button class="x" data-apdel="${x.id}" aria-label="Quitar">&times;</button></div>`).join('')}</div>`;
+  if(falta<=0){
+    return `<div class="auditcard apoyo"><div class="t">&#128995; Cierre de tu d&iacute;a</div>
+      <div class="s">Todo lo que marc&oacute; el reloj queda explicado. &iexcl;Gracias!</div>${lista}</div>`;
+  }
+  return `<div class="auditcard apoyo"><div class="t">&#128995; Antes de irte</div>
+    <div class="s">Tienes <b>${apoyoHM(falta)}</b> sin asignar. Cuenta en qu&eacute; te ocupaste para que te cuente en tus horas.</div>
+    <button class="ok" id="btnReparto" style="margin-top:8px">Repartir mi tiempo</button>${lista}</div>`;
+}
+
+// ---- Overlay del reparto (se arma una sola vez, aparte de pintar) ----
+function cerrarReparto(){ const o=$('repOv'); if(o) o.remove(); }
+function abrirReparto(){
+  if(!MIA) return;
+  cerrarReparto();
+  const {falta}=apoyoFalta();
+  const chips=APOYO_OPS.map(o=>`<button type="button" data-rc="${o.c}"
+     style="font-size:12.5px;font-weight:700;padding:7px 11px;border-radius:99px;border:1px solid #d8d2c4;background:#fff;color:#4a3d94;margin:0 6px 6px 0">${o.i} ${esc(o.n)}</button>`).join('');
+  const ov=document.createElement('div'); ov.id='repOv';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(20,18,14,.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  ov.innerHTML=`<div style="background:#fbf8f1;border-radius:18px 18px 0 0;max-width:460px;width:100%;max-height:88vh;overflow:auto;padding:16px 15px 22px;box-shadow:0 -8px 30px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div style="font-size:16px;font-weight:800;color:#2c2920">&#128995; &iquest;En qu&eacute; te ocupaste hoy?</div>
+      <button type="button" id="repX" style="border:0;background:none;font-size:22px;color:#8e8c85;line-height:1">&times;</button></div>
+    <div style="font-size:13px;color:#6b6760;margin-bottom:10px">Tienes <b>${apoyoHM(falta)}</b> sin asignar. Toca lo que hiciste y reparte los minutos.</div>
+    <div style="margin-bottom:4px">${chips}</div>
+    <div id="repBloques"></div>
+    <div id="repSaldo" style="font-weight:800;font-size:13.5px;margin:10px 0 2px"></div>
+    <button type="button" id="repGuardar" disabled style="width:100%;margin-top:8px;padding:12px;border-radius:12px;border:0;background:#b9abd8;color:#2c2920;font-weight:800;font-size:15px">Guardar y enviar a Deisy</button>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.dataset.falta=falta;
+  ov.querySelector('#repX').onclick=cerrarReparto;
+  ov.onclick=e=>{ if(e.target===ov) cerrarReparto(); };
+  ov.querySelectorAll('[data-rc]').forEach(b=>b.onclick=()=>repAdd(b.dataset.rc));
+  ov.querySelector('#repGuardar').onclick=repGuardar;
+  repRecalc();
+}
+function repAdd(code){
+  const box=$('repBloques'); if(!box) return;
+  const o=apOp(code);
+  const div=document.createElement('div');
+  div.className='rblq'; div.dataset.cat=code;
+  div.style.cssText='border:1px solid #e3ddce;border-radius:12px;padding:10px;margin-bottom:8px;background:#fff';
+  div.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <b style="font-size:13.5px;color:#2c2920">${o.i} ${esc(o.n)}</b>
+      <button type="button" class="rdel" style="border:0;background:none;font-size:18px;color:#b2443a">&times;</button></div>
+    ${o.sub?`<input class="rsub" placeholder="${esc(o.sub)}" maxlength="140" style="width:100%;margin-bottom:6px;padding:8px;border:1px solid #d8d2c4;border-radius:8px;font-size:14px">`:''}
+    <div style="display:flex;gap:6px;align-items:center">
+      <input class="rmin" type="number" min="1" inputmode="numeric" placeholder="min" style="width:84px;padding:8px;border:1px solid #d8d2c4;border-radius:8px;font-size:14px">
+      <button type="button" class="rtodo" style="font-size:12px;font-weight:700;padding:8px 9px;border-radius:8px;border:1px solid #cdbff0;background:#efe9f8;color:#4d3a6b">resto</button>
+      <input class="rnota" placeholder="explica (opcional)" maxlength="140" style="flex:1;padding:8px;border:1px solid #d8d2c4;border-radius:8px;font-size:14px">
+    </div>`;
+  box.appendChild(div);
+  div.querySelector('.rdel').onclick=()=>{ div.remove(); repRecalc(); };
+  div.querySelector('.rmin').oninput=repRecalc;
+  div.querySelector('.rtodo').onclick=()=>{
+    const falta=Number(($('repOv')||{dataset:{}}).dataset.falta||0);
+    const mio=div.querySelector('.rmin');
+    const otros=[...document.querySelectorAll('.rmin')].filter(i=>i!==mio).reduce((s,i)=>s+(parseInt(i.value)||0),0);
+    mio.value=Math.max(0,falta-otros); repRecalc();
+  };
+  repRecalc();
+}
+function repTotal(){ return [...document.querySelectorAll('.rmin')].reduce((s,i)=>s+(parseInt(i.value)||0),0); }
+function repRecalc(){
+  const ov=$('repOv'); if(!ov) return;
+  const falta=Number(ov.dataset.falta||0), tot=repTotal(), resto=falta-tot;
+  const el=$('repSaldo');
+  if(el) el.innerHTML = resto>0 ? `Te faltan por repartir: <span style="color:#7a5ea8">${apoyoHM(resto)}</span>`
+    : resto===0 ? `<span style="color:#1d6b4a">&#10003; Todo repartido</span>`
+    : `<span style="color:#b2443a">Te pasaste por ${apoyoHM(-resto)} &mdash; baja algunos minutos</span>`;
+  const g=$('repGuardar'); if(g) g.disabled = !(tot>0 && resto>=0);
+}
+async function repGuardar(){
+  if(!MIA) return;
+  const falta=Number(($('repOv')||{dataset:{}}).dataset.falta||0);
+  const rows=[];
+  document.querySelectorAll('.rblq').forEach(div=>{
+    const m=parseInt(div.querySelector('.rmin').value)||0; if(m<=0) return;
+    const sub=((div.querySelector('.rsub')||{}).value||'').trim();
+    const nota=((div.querySelector('.rnota')||{}).value||'').trim();
+    const com=[sub,nota].filter(Boolean).join(' — ')||null;
+    rows.push({property_id:MIA.property_id, fecha:FECHA, employee_id:EMP, asignacion_id:MIA.id,
+      categoria:div.dataset.cat, minutos:m, comentario:com,
+      capturado_por:USER?USER.id:null, capturado_por_nombre:NOMBRE});
+  });
+  if(!rows.length) return toast('Pon minutos en al menos una opción');
+  const tot=rows.reduce((s,r)=>s+r.minutos,0);
+  if(tot>falta) return toast('La suma pasa de tu tiempo sin asignar');
+  const g=$('repGuardar'); if(g){ g.disabled=true; g.textContent='Guardando…'; }
+  const {error}=await sb.from('hk_apoyo').insert(rows);
+  if(error){ if(g){g.disabled=false;g.textContent='Guardar y enviar a Deisy';} return toast('No se pudo guardar: '+error.message); }
+  const resumen=rows.map(r=>apOp(r.categoria).n+' '+r.minutos+'m').join(' · ');
+  try{ await sb.rpc('crear_notificacion',{p_employee_id:DEISY_EMP,
+      p_titulo:'⏱️ Tiempo de apoyo por validar',
+      p_cuerpo:(NOMBRE||'Una camarista')+' repartió '+apoyoHM(tot)+' de hoy: '+resumen,
+      p_icono:'⏱️', p_accion:{tipo:'hk_apoyo', fecha:FECHA}}); }catch(_){}
+  cerrarReparto();
+  toast('Enviado a Deisy ✅ · ya cuenta en tus horas');
   cargar();
 }
 
@@ -1069,14 +1147,7 @@ function engancharCuartos(root){
   root.querySelectorAll('[data-pau]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); pausar(b.dataset.pau); });
   root.querySelectorAll('[data-rea]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); reanudar(b.dataset.rea); });
   root.querySelectorAll('[data-nom]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirNoMolestar(b.dataset.nom); });
-  root.querySelectorAll('[data-apcat]').forEach(b=>b.onclick=()=>{
-    APOYO_SEL = APOYO_SEL===b.dataset.apcat ? null : b.dataset.apcat;
-    APOYO_MIN=0; APOYO_COM=''; pintar(); });
-  root.querySelectorAll('[data-apmin]').forEach(b=>b.onclick=()=>{
-    const c=root.querySelector('#apCom'); if(c) APOYO_COM=c.value;
-    APOYO_MIN=Number(b.dataset.apmin); pintar(); });
-  const apc=root.querySelector('#apCom'); if(apc) apc.oninput=()=>{ APOYO_COM=apc.value; };
-  const apo=root.querySelector('#apOk'); if(apo) apo.onclick=guardarApoyo;
+  const br=root.querySelector('#btnReparto'); if(br) br.onclick=abrirReparto;
   root.querySelectorAll('[data-apdel]').forEach(b=>b.onclick=()=>borrarApoyo(b.dataset.apdel));
   const bd=root.querySelector('#btnDnd'); if(bd){ bd.onclick=abrirDnd; pintarDndChips(); }
 }
