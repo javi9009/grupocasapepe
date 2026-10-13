@@ -3017,14 +3017,25 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
             '<div class="ay">Sale arriba del todo. Máximo 160 caracteres.</div></div>'+
           '<div class="fld ancho"><label>Vuestra historia</label>'+
             '<textarea id="g-historia" rows="5" placeholder="De dónde venís, qué hacéis y por qué vale la pena ir.">'+esc(f.historia||'')+'</textarea></div>'+
-          '<div class="fld"><label>Logo (liga a la imagen)</label>'+
-            '<input id="g-logo_url" value="'+esc(f.logo_url||'')+'" placeholder="https://…">'+
-            '<div class="ay">O <a href="#" class="subeImg" data-destino="logo" style="color:var(--accent,#1f9d55);font-weight:600">sube un archivo</a>.'+
-            '<input type="file" accept="image/*" id="g-logo_file" style="display:none"></div></div>'+
-          '<div class="fld"><label>Portada (liga a la imagen)</label>'+
-            '<input id="g-portada_url" value="'+esc(f.portada_url||'')+'" placeholder="https://…">'+
-            '<div class="ay">Si la dejas vacía usamos la foto de tu último evento. O <a href="#" class="subeImg" data-destino="portada" style="color:var(--accent,#1f9d55);font-weight:600">sube un archivo</a>.'+
-            '<input type="file" accept="image/*" id="g-portada_file" style="display:none"></div>'+
+          /* SUBIR, NO PEGAR UNA LIGA. Javi, 13-oct-2026: «no permitas subir link,
+             o si lo pones que ponga también cargarla, y permite subirla
+             manualmente y ajustarla». Pegar una liga era lo primero que se veía
+             y lo único que parecía posible; subir estaba escondido en un
+             renglón de ayuda. Ahora el botón manda, y la liga queda debajo para
+             quien de verdad tenga su foto en un servidor. */
+          '<div class="fld"><label>Logo</label>'+
+            (f.logo_url?'<img src="'+esc(f.logo_url)+'" alt="" style="width:74px;height:74px;object-fit:contain;border:1px solid var(--linea);border-radius:10px;background:#fff;display:block;margin-bottom:8px">':'')+
+            '<button type="button" class="btn ghost sm subeImg" data-destino="logo">'+(f.logo_url?'Cambiar logo':'Subir mi logo')+'</button>'+
+            '<input type="file" accept="image/*" id="g-logo_file" style="display:none">'+
+            '<details style="margin-top:8px"><summary class="ay" style="cursor:pointer">…o pegar una liga</summary>'+
+              '<input id="g-logo_url" value="'+esc(f.logo_url||'')+'" placeholder="https://…" style="margin-top:6px"></details></div>'+
+          '<div class="fld"><label>Portada</label>'+
+            (f.portada_url?'<img src="'+esc(f.portada_url)+'" alt="" style="width:100%;max-width:280px;aspect-ratio:16/9;object-fit:cover;border:1px solid var(--linea);border-radius:10px;display:block;margin-bottom:8px">':'')+
+            '<button type="button" class="btn ghost sm subeImg" data-destino="portada">'+(f.portada_url?'Cambiar portada':'Subir y acomodar')+'</button>'+
+            '<input type="file" accept="image/*" id="g-portada_file" style="display:none">'+
+            '<div class="ay" style="margin-top:6px">Al subirla la acomodas tú: eliges qué parte se ve. Si la dejas vacía usamos la foto de tu último evento.</div>'+
+            '<details style="margin-top:8px"><summary class="ay" style="cursor:pointer">…o pegar una liga</summary>'+
+              '<input id="g-portada_url" value="'+esc(f.portada_url||'')+'" placeholder="https://…" style="margin-top:6px"></details>'+
             /* Y si ya subió fotos a sus eventos, que no tenga que volver a
                buscarlas en su teléfono: se eligen aquí de un toque. */
             (fotosDeEventos().length
@@ -3117,12 +3128,31 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     if((file.type||'').indexOf('image')!==0){ toast('Eso no es una imagen.',true); return; }
     if(file.size>25*1024*1024){ toast('La imagen pesa más de 25 MB.',true); return; }
     try{
-      toast('Subiendo…');
-      var dataUri=await new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.onerror=rej;fr.readAsDataURL(file);});
+      /* LA PORTADA SE ACOMODA ANTES DE SUBIR. Es la foto ancha del encabezado:
+         una foto vertical del teléfono salía cortada por la mitad y nadie
+         entendía por qué. El logo NO pasa por el recortador: recortar un logo
+         lo estropea. Si el recortador no cargó, conRecorte sube tal cual. */
+      var dataUri;
+      if(destino==='portada'){
+        dataUri = await conRecorte(file,'Acomoda tu portada','h');
+        if(!dataUri) return;            // cerró el recortador sin guardar
+        toast('Subiendo…');
+      }else{
+        toast('Subiendo…');
+        dataUri = await new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.onerror=rej;fr.readAsDataURL(file);});
+      }
       var r=await fetch(SB+'/functions/v1/prod-foto',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},hdrs()),body:JSON.stringify({token:TOK,destino:destino,imagen:dataUri})});
       var j=null; try{ j=await r.json(); }catch(_){}
       if(!r.ok||!j||j.error) throw new Error((j&&j.error)||('no se pudo subir ('+r.status+')'));
       var el=$('g-'+destino+'_url'); if(el) el.value=j.url;
+      /* Se guarda de una: subir y que no se vea hasta pulsar «Guardar» es el
+         camino corto a subirla tres veces creyendo que no funcionó. */
+      try{
+        var campo={}; campo[destino+'_url']=j.url;
+        await rpc('prod_portal_update',{p_token:TOK,p:campo});
+        FICHA=await rpc('prod_portal_ficha',{p_token:TOK});
+        pintaPagina(); guia();
+      }catch(_){}
       toast('Imagen subida ✓');
     }catch(e){ toast(e.message||'No se pudo subir',true); }
   }
