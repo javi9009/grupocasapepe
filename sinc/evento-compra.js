@@ -30,6 +30,7 @@ window.eventoCompra = (function () {
   var IVA = 0.16;
   var puesto = false;
 
+  function T(x){ try{ return window.sincI18n ? sincI18n.t(x) : x; }catch(_){ return x; } }
   function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function mx(n){ return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0}); }
@@ -125,40 +126,40 @@ window.eventoCompra = (function () {
     function disponibles(t){ return (t.cupo==null) ? Infinity : Math.max(0,(t.cupo||0)-(t.vendidos||0)); }
 
     var elegir = unico
-      ? '<div class="ecU"><div><div class="nm">'+esc(tiers[0].nombre||'Boleto')+'</div>'
+      ? '<div class="ecU"><div><div class="nm">'+esc(tiers[0].nombre||T('Boleto'))+'</div>'
           +(tiers[0].incluye?'<div class="inc">'+esc(tiers[0].incluye)+'</div>':'')
         +'</div><div class="pr">'+mx(tiers[0].precio)+'</div></div>'
       : tiers.map(function(t,i){
           var disp=disponibles(t), ago=disp<=0;
           return '<label class="ecT'+(ago?' ago':'')+'" data-i="'+i+'">'
             +'<input type="radio" name="ecTier"'+(ago?' disabled':'')+' value="'+i+'">'
-            +'<div><div class="nm">'+esc(t.nombre||'Boleto')+'</div>'
+            +'<div><div class="nm">'+esc(t.nombre||T('Boleto'))+'</div>'
               +(t.incluye?'<div class="inc">'+esc(t.incluye)+'</div>':'')
-              +(t.cupo!=null?'<div class="cupo">'+(ago?'Agotado':(disp+' disponibles'))+'</div>':'')
+              +(t.cupo!=null?'<div class="cupo">'+(ago?esc(T('Agotado')):(disp+' '+esc(T('disponibles'))))+'</div>':'')
             +'</div><div class="pr">'+mx(t.precio)+'</div></label>';
         }).join('');
 
     caja.innerHTML =
-       '<h2>Tu compra</h2>'
-      +'<p class="ecP">¿Cuántas personas vienen?</p>'
+       '<h2>'+esc(T('Tu compra'))+'</h2>'
+      +'<p class="ecP">'+esc(T('¿Cuántas personas vienen?'))+'</p>'
       +'<div class="ecCant"><button type="button" id="ecMenos">−</button>'
         +'<span class="n" id="ecN">1</span>'
         +'<button type="button" id="ecMas">+</button>'
         +'<span class="q" id="ecQ"></span></div>'
       +'<hr class="ecSep">'
-      +'<p class="ecP">'+(unico?'Tu boleto':'¿Qué boleto?')+'</p>'
+      +'<p class="ecP">'+esc(unico?T('Tu boleto'):T('¿Qué boleto?'))+'</p>'
       + elegir
       +'<hr class="ecSep">'
-      +'<label for="ecCod">¿Tienes un código de pago?</label>'
+      +'<label for="ecCod">'+esc(T('¿Tienes un código de pago?'))+'</label>'
       +'<div class="ecCod"><input type="text" id="ecCod" placeholder="Ej. ATENEO2X1" autocomplete="off">'
-        +'<button type="button" class="ecBc" id="ecAplicar">Aplicar</button></div>'
+        +'<button type="button" class="ecBc" id="ecAplicar">'+esc(T('Aplicar'))+'</button></div>'
       +'<div class="ecCm" id="ecCm"></div>'
       +'<hr class="ecSep">'
       +'<div class="ecD" id="ecD"></div>'
-      +'<button class="ecBt" id="ecPagar">Pagar</button>'
+      +'<button class="ecBt" id="ecPagar">'+esc(T('Pagar'))+'</button>'
       +'<div class="ecMsg" id="ecMsg"></div>'
-      +'<div class="ecPie">Pago seguro con Stripe. El cobro cae en la cuenta del productor.'
-        +(conIva?'<br>Precios al público, IVA incluido.':'')+'</div>';
+      +'<div class="ecPie">'+esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))
+        +(conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'')+'</div>';
 
     if (unico) SEL = 0;
     else Array.prototype.forEach.call(caja.querySelectorAll('.ecT input'), function(r){
@@ -201,7 +202,7 @@ window.eventoCompra = (function () {
       var max = SEL==null ? Infinity : disponibles(tiers[SEL]);
       $('ecMenos').disabled = (CANT<=1);
       $('ecMas').disabled   = (CANT>=max);
-      $('ecQ').textContent  = (max!==Infinity && max<10) ? ('quedan '+max) : '';
+      $('ecQ').textContent  = (max!==Infinity && max<10) ? (T('quedan ')+max) : '';
     }
     function msg(t,cls){ var m=$('ecMsg'); m.textContent=t; m.className='ecMsg '+cls; }
 
@@ -209,8 +210,8 @@ window.eventoCompra = (function () {
        total que se cobra lo vuelve a calcular ella al crear la reserva. */
     async function recalcula(){
       var d=$('ecD'), cm=$('ecCm');
-      if (SEL==null) { d.innerHTML='<div class="l"><span>Elige un boleto para ver el total</span></div>';
-                       $('ecPagar').disabled=true; $('ecPagar').textContent='Pagar'; return; }
+      if (SEL==null) { d.innerHTML='<div class="l"><span>'+esc(T('Elige un boleto para ver el total'))+'</span></div>';
+                       $('ecPagar').disabled=true; $('ecPagar').textContent=T('Pagar'); return; }
       var t = tiers[SEL];
       var sub = (t.precio||0)*CANT, total = sub, etiqueta = null;
       CODEINFO = null;
@@ -221,12 +222,12 @@ window.eventoCompra = (function () {
         if (info && info.valido) {
           CODEINFO = {codigo:codTxt, total:Number(info.total)};
           sub = Number(info.subtotal); total = Number(info.total);
-          etiqueta = info.etiqueta || 'Código aplicado';
+          etiqueta = info.etiqueta || T('Código aplicado');
           cm.textContent = etiqueta; cm.className = 'ecCm ok';
         } else {
-          cm.textContent = (info && info.mensaje) || 'Ese código no aplica.'; cm.className = 'ecCm mal';
-          d.innerHTML = '<div class="l"><span>'+esc(t.nombre||'Boleto')+' × '+CANT+'</span><span>'+mx(sub)+'</span></div>';
-          $('ecPagar').disabled = true; $('ecPagar').textContent = 'Pagar';
+          cm.textContent = (info && info.mensaje) || T('Ese código no aplica.'); cm.className = 'ecCm mal';
+          d.innerHTML = '<div class="l"><span>'+esc(t.nombre||T('Boleto'))+' × '+CANT+'</span><span>'+mx(sub)+'</span></div>';
+          $('ecPagar').disabled = true; $('ecPagar').textContent = T('Pagar');
           return;
         }
       } else { cm.textContent=''; cm.className='ecCm'; }
@@ -234,12 +235,12 @@ window.eventoCompra = (function () {
       var desc = sub - total;
       var iva  = total - (total/(1+IVA));
       d.innerHTML =
-         '<div class="l"><span>'+esc(t.nombre||'Boleto')+' × '+CANT+'</span><span>'+mx2(sub)+'</span></div>'
-        +(desc>0?'<div class="l desc"><span>Descuento '+esc(etiqueta||'')+'</span><span>−'+mx2(desc)+'</span></div>':'')
-        +(conIva?'<div class="l imp"><span>IVA '+Math.round(IVA*100)+'% incluido</span><span>'+mx2(iva)+'</span></div>':'')
-        +'<div class="l tot"><span>Total a pagar</span><b>'+mx(total)+'</b></div>';
+         '<div class="l"><span>'+esc(t.nombre||T('Boleto'))+' × '+CANT+'</span><span>'+mx2(sub)+'</span></div>'
+        +(desc>0?'<div class="l desc"><span>'+esc(T('Descuento'))+' '+esc(etiqueta||'')+'</span><span>−'+mx2(desc)+'</span></div>':'')
+        +(conIva?'<div class="l imp"><span>'+esc(T('IVA'))+' '+Math.round(IVA*100)+'% '+esc(T('incluido'))+'</span><span>'+mx2(iva)+'</span></div>':'')
+        +'<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>';
       $('ecPagar').disabled = false;
-      $('ecPagar').textContent = 'Pagar '+mx(total);
+      $('ecPagar').textContent = T('Pagar ')+mx(total);
       guarda();
     }
 
@@ -248,19 +249,19 @@ window.eventoCompra = (function () {
       if (SEL==null) return;
       var t = tiers[SEL], b = $('ecPagar'), txt = b.textContent;
       guarda();
-      b.disabled = true; b.textContent = 'Un momento…';
+      b.disabled = true; b.textContent = T('Un momento…');
 
       var yo = null;
       try {
         yo = await sincCuenta.exige({
-          titulo: 'Entra para pagar',
-          dice: 'Tu boleto lleva un QR y te llega por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.',
+          titulo: T('Entra para pagar'),
+          dice: T('Tu boleto lleva un QR y te llega por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.'),
           volverA: location.href
         });
       } catch(x){ console.error('cuenta', x); }
       if (!yo) { b.disabled=false; b.textContent=txt; return; }
 
-      msg('Apartando tu lugar…','bien');
+      msg(T('Apartando tu lugar…'),'bien');
       var r = await rpc('evento_reserva_crear', {
         p_evento_id: EV.id, p_precio_id: t.id, p_pax: CANT,
         p_nombre: (yo.nombre||'').trim(), p_email: (yo.email||'').trim(),
@@ -268,7 +269,7 @@ window.eventoCompra = (function () {
         p_codigo: (CODEINFO && CODEINFO.codigo) || ''
       });
       if (!r.ok || !r.data || r.data.error) {
-        msg((r.data && r.data.error) || 'No se pudo apartar tu lugar. Intenta de nuevo.','mal');
+        msg((r.data && r.data.error) || T('No se pudo apartar tu lugar. Intenta de nuevo.'),'mal');
         b.disabled=false; b.textContent=txt; return;
       }
       try{ sessionStorage.removeItem(LLAVE); }catch(_){}
@@ -304,18 +305,18 @@ window.eventoCompra = (function () {
     function $(i){ return caja.querySelector('#'+i); }
 
     caja.innerHTML =
-       '<h2>Aparta el espacio</h2>'
-      +'<p class="ecP">¿Qué día lo necesitas?</p>'
+       '<h2>'+esc(T('Aparta el espacio'))+'</h2>'
+      +'<p class="ecP">'+esc(T('¿Qué día lo necesitas?'))+'</p>'
       +'<div id="ecCalD"></div>'
       +'<hr class="ecSep">'
-      +'<p class="ecP">¿De qué hora a qué hora?</p>'
+      +'<p class="ecP">'+esc(T('¿De qué hora a qué hora?'))+'</p>'
       +'<div id="ecHoras"></div>'
       +'<hr class="ecSep">'
       +'<div class="ecD" id="ecD"></div>'
-      +'<button class="ecBt" id="ecPagar" disabled>Pagar</button>'
+      +'<button class="ecBt" id="ecPagar" disabled>'+esc(T('Pagar'))+'</button>'
       +'<div class="ecMsg" id="ecMsg"></div>'
-      +'<div class="ecPie">Pago seguro con Stripe. El cobro cae en la cuenta del productor.'
-        +(conIva?'<br>Precios al público, IVA incluido.':'')+'</div>';
+      +'<div class="ecPie">'+esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))
+        +(conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'')+'</div>';
 
     pintaMes(); pintaHoras(); recalcula();
     $('ecPagar').onclick = aPagar;
@@ -361,7 +362,7 @@ window.eventoCompra = (function () {
         h+='<button type="button" '+(ok?'data-d="'+f+'"':'disabled')
           +' class="'+(f===DIA?'sel':'')+'">'+i+'</button>';
       }
-      h+='</div><div class="ecLey">Verde: hay lugar. Tachado: ya está apartado o no se renta.</div></div>';
+      h+='</div><div class="ecLey">'+esc(T('Verde: hay lugar. Tachado: ya está apartado o no se renta.'))+'</div></div>';
       $('ecCalD').innerHTML=h;
       $('ecPrev').onclick=function(){ MES=new Date(MES.getFullYear(),MES.getMonth()-1,1); pintaMes(); };
       $('ecNext').onclick=function(){ MES=new Date(MES.getFullYear(),MES.getMonth()+1,1); pintaMes(); };
@@ -372,7 +373,7 @@ window.eventoCompra = (function () {
 
     function pintaHoras(){
       var c=$('ecHoras');
-      if(!DIA){ c.innerHTML='<div style="color:var(--gris);font-size:13.5px">Elige primero el día.</div>'; return; }
+      if(!DIA){ c.innerHTML='<div style="color:var(--gris);font-size:13.5px">'+esc(T('Elige primero el día.'))+'</div>'; return; }
       var l=ocupadoDe(DIA), h='<div class="ecHs">', i;
       for(i=H1;i<H2;i+=60){
         var tom=l.some(function(o){ return i<o.b && i+60>o.a; });
@@ -380,8 +381,8 @@ window.eventoCompra = (function () {
         h+='<button type="button" '+(tom?'disabled':'data-h="'+i+'"')+' class="'+cls+'">'+txt(i)+'</button>';
       }
       h+='</div><div class="ecLey">'
-        +(A==null?'Toca la hora en que empiezas.':(B==null?'Ahora la hora en que terminas.':'De '+txt(A)+' a '+txt(B)+' · <button type="button" id="ecOtra" style="border:0;background:0;color:var(--ok);text-decoration:underline;cursor:pointer;padding:0;font:inherit">cambiar</button>'))
-        +(MIN>1?' · mínimo '+MIN+' h':'')+'</div>';
+        +(A==null?esc(T('Toca la hora en que empiezas.')):(B==null?esc(T('Ahora la hora en que terminas.')):esc(T('De '))+txt(A)+esc(T(' a '))+txt(B)+' · <button type="button" id="ecOtra" style="border:0;background:0;color:var(--ok);text-decoration:underline;cursor:pointer;padding:0;font:inherit">'+esc(T('cambiar'))+'</button>'))
+        +(MIN>1?' · '+esc(T('mínimo '))+MIN+' h':'')+'</div>';
       c.innerHTML=h;
       if($('ecOtra')) $('ecOtra').onclick=function(){ A=null; B=null; pintaHoras(); recalcula(); };
       Array.prototype.forEach.call(c.querySelectorAll('[data-h]'),function(b){
@@ -392,7 +393,7 @@ window.eventoCompra = (function () {
           else {
             /* Que no se cuele nada ocupado entre el inicio y el fin. */
             var l2=ocupadoDe(DIA), choca=l2.some(function(o){ return A<o.b && (v+60)>o.a; });
-            if(choca){ msg('Entre esas dos horas hay algo ya apartado. Elige otro tramo.','mal'); return; }
+            if(choca){ msg(T('Entre esas dos horas hay algo ya apartado. Elige otro tramo.'),'mal'); return; }
             B=v+60; msg('','');
           }
           pintaHoras(); recalcula();
@@ -405,44 +406,44 @@ window.eventoCompra = (function () {
     function recalcula(){
       var d=$('ecD');
       if(!DIA || A==null || B==null){
-        d.innerHTML='<div class="l"><span>Elige el día y las horas para ver el total</span></div>';
-        $('ecPagar').disabled=true; $('ecPagar').textContent='Pagar'; return;
+        d.innerHTML='<div class="l"><span>'+esc(T('Elige el día y las horas para ver el total'))+'</span></div>';
+        $('ecPagar').disabled=true; $('ecPagar').textContent=T('Pagar'); return;
       }
       var horas=(B-A)/60;
       if(horas<MIN){
-        d.innerHTML='<div class="l"><span>El mínimo son '+MIN+' h</span></div>';
-        $('ecPagar').disabled=true; $('ecPagar').textContent='Pagar'; return;
+        d.innerHTML='<div class="l"><span>'+esc(T('El mínimo son '))+MIN+' h</span></div>';
+        $('ecPagar').disabled=true; $('ecPagar').textContent=T('Pagar'); return;
       }
       var total=TARIFA*horas, iva=total-(total/(1+IVA));
       d.innerHTML=
-         '<div class="l"><span>'+horas+' h × '+mx(TARIFA)+' la hora</span><span>'+mx2(total)+'</span></div>'
+         '<div class="l"><span>'+horas+' h × '+mx(TARIFA)+' '+esc(T('la hora'))+'</span><span>'+mx2(total)+'</span></div>'
         +'<div class="l imp"><span>'+esc(DIA)+' · '+txt(A)+'–'+txt(B)+'</span><span></span></div>'
-        +(conIva?'<div class="l imp"><span>IVA '+Math.round(IVA*100)+'% incluido</span><span>'+mx2(iva)+'</span></div>':'')
-        +'<div class="l tot"><span>Total a pagar</span><b>'+mx(total)+'</b></div>';
+        +(conIva?'<div class="l imp"><span>'+esc(T('IVA'))+' '+Math.round(IVA*100)+'% '+esc(T('incluido'))+'</span><span>'+mx2(iva)+'</span></div>':'')
+        +'<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>';
       $('ecPagar').disabled=false;
-      $('ecPagar').textContent='Pagar '+mx(total);
+      $('ecPagar').textContent=T('Pagar ')+mx(total);
     }
 
     async function aPagar(){
       if(!DIA || A==null || B==null) return;
       var b=$('ecPagar'), txtb=b.textContent;
-      b.disabled=true; b.textContent='Un momento…';
+      b.disabled=true; b.textContent=T('Un momento…');
       var yo=null;
       try{
         yo=await sincCuenta.exige({
-          titulo:'Entra para pagar',
-          dice:'Te mandamos la confirmación por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.',
+          titulo:T('Entra para pagar'),
+          dice:T('Te mandamos la confirmación por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.'),
           volverA:location.href });
       }catch(x){ console.error('cuenta',x); }
       if(!yo){ b.disabled=false; b.textContent=txtb; return; }
 
-      msg('Apartando el espacio…','bien');
+      msg(T('Apartando el espacio…'),'bien');
       var r=await rpc('evento_reserva_horas_crear',{
         p_evento_id:EV.id, p_dia:DIA, p_desde:txt(A)+':00', p_hasta:txt(B)+':00',
         p_nombre:(yo.nombre||'').trim(), p_email:(yo.email||'').trim(),
         p_telefono:(yo.telefono||'').trim() });
       if(!r.ok||!r.data||r.data.error){
-        msg((r.data&&r.data.error)||'No se pudo apartar. Intenta de nuevo.','mal');
+        msg((r.data&&r.data.error)||T('No se pudo apartar. Intenta de nuevo.'),'mal');
         b.disabled=false; b.textContent=txtb; return;
       }
       location.href='evento-pago.html?res='+encodeURIComponent(r.data.folio);
