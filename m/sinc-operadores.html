@@ -369,6 +369,31 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
           <div class="ft" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn" id="btnCtGenerar" type="button">Generar y mandárselo</button>
             <a class="btn" id="btnCtVer" target="_blank" rel="noopener" style="display:none">Ver el contrato ↗</a>
+            <button class="btn ghost" id="btnCtEditar" type="button">📄 Ver y editar aquí</button>
+          </div>
+          <!-- VER Y EDITAR EL CONTRATO DE ESTE OPERADOR. Javi, 13-oct-2026.
+               Hasta hoy se generaba y se mandaba sin que nadie de casa lo
+               leyera, y no habia forma de cambiarle una clausula a uno solo sin
+               tocar la plantilla de todos. Lo que se guarde aqui vale SOLO para
+               este operador, y es lo que firma: un guardian en la tabla impide
+               que al firmar se sustituya por la plantilla. -->
+          <div id="ctCaja" style="display:none;margin-top:12px">
+            <div class="mini" id="ctInfo" style="margin-bottom:6px"></div>
+            <div id="ctVista" style="max-height:340px;overflow:auto;border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:14px;background:#fff;color:#1E2415;font-size:13.5px;line-height:1.55"></div>
+            <div class="ft" style="justify-content:flex-start;margin-top:8px;gap:8px;flex-wrap:wrap">
+              <button class="btn ghost sm" id="ctBtnEd" type="button">✏️ Editarlo</button>
+              <button class="btn ghost sm" id="ctBtnCerrar" type="button">Cerrar</button>
+            </div>
+            <div id="ctEd" style="display:none;margin-top:10px">
+              <textarea id="ctArea" rows="20" spellcheck="false"
+                style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--linea,#E3E0D6);border-radius:10px"></textarea>
+              <div class="mini" style="margin-top:6px">Es el contrato de <b>este operador</b>, no la plantilla. Va en HTML sencillo: cada párrafo entre &lt;p&gt; y &lt;/p&gt;.</div>
+              <div class="ft" style="justify-content:flex-start;margin-top:8px;gap:8px;flex-wrap:wrap">
+                <button class="btn sm" id="ctBtnGuardar" type="button">Guardar</button>
+                <button class="btn ghost sm" id="ctBtnCancelar" type="button">Cancelar</button>
+              </div>
+            </div>
+            <div id="ctFirmados" style="margin-top:14px"></div>
           </div>
           <div class="mini" style="margin-top:8px">Le llega por correo con su propia liga. Lo lee, corrige sus datos fiscales si hace falta y firma. Al firmar queda activo y sus tours pueden publicarse —cada uno cuando tenga su impacto declarado.</div>
         </div>
@@ -824,6 +849,78 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
      Generar lo autoriza la función edge, no esta pantalla: aquí solo se pide.
      Si ya hay uno vivo, la función devuelve ese mismo y no duplica. */
   var CT=null;
+
+  /* ====== VER / EDITAR / REVISAR EL CONTRATO DE ESTE OPERADOR ======
+     Javi, 13-oct-2026. Lo que se edita aqui es SU contrato, no la plantilla.
+     Y lo firmado se guarda tal como lo vio quien firmo: es lo que se enseña
+     si alguien discute que acepto. */
+  var CTE=null;
+  async function rpcOp(nombre, body){
+    var r=await fetch(SB+'/rest/v1/rpc/'+nombre,{method:'POST',headers:hdr(),body:JSON.stringify(body||{})});
+    var j=await r.json().catch(function(){return null;});
+    if(!r.ok) throw new Error((j&&(j.message||j.error))||'no se pudo');
+    if(j&&j.error) throw new Error(j.error);
+    return j;
+  }
+  async function abreContratoEd(){
+    if(!cur) return;
+    var c=$('ctCaja'); c.style.display='';
+    $('ctInfo').textContent='Cargando…'; $('ctVista').innerHTML=''; $('ctEd').style.display='none';
+    try{
+      CTE=await rpcOp('contrato_tercero_ver',{p_cual:'operador',p_id:cur.id});
+      if(!CTE.hay){ $('ctInfo').textContent=CTE.mensaje||'Sin contrato vigente.'; pintaFirmadosOp(); return; }
+      $('ctVista').innerHTML=CTE.cuerpo||'';
+      var crudos=(CTE.cuerpo||'').match(/\{\{[A-Z_]+\}\}/g);
+      $('ctInfo').innerHTML='Folio <b>'+esc(CTE.folio||'')+'</b> · versión <b>'+esc(CTE.version||'')+'</b> · '+esc(CTE.estado||'')+
+        (CTE.editado?' · <b style="color:#B06A00">editado a mano para este operador</b>':' · sale de la plantilla')+
+        (crudos?' · <b style="color:#B3261E">'+crudos.length+' campo(s) sin rellenar</b>':'');
+      pintaFirmadosOp();
+    }catch(e){ $('ctInfo').textContent=e.message; }
+  }
+  async function pintaFirmadosOp(){
+    var d=$('ctFirmados'); if(!d||!cur) return; d.innerHTML='';
+    try{
+      var j=await rpcOp('contrato_tercero_firmados',{p_cual:'operador',p_id:cur.id});
+      var f=(j&&j.firmados)||[];
+      if(!f.length){ d.innerHTML='<div class="mini">Todavía no ha firmado ninguna versión.</div>'; return; }
+      d.innerHTML='<b style="font-size:13px">Lo que ya firmó</b>'+f.map(function(x,i){
+        var a=x.acuse||{};
+        return '<div style="border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:10px;margin-top:8px">'+
+          '<div class="mini"><b>'+esc(x.folio||'')+'</b> · '+esc(x.version||'')+' · firmó <b>'+esc(x.firmante||'')+'</b> el '+esc(x.firmado_at||'')+
+          (x.editado?' · <span style="color:#B06A00">texto editado a mano</span>':'')+'</div>'+
+          '<div class="mini" style="margin-top:2px">'+(a.ip?'desde '+esc(a.ip):'')+' · '+(x.largo||0)+' caracteres</div>'+
+          '<button class="btn ghost sm" style="margin-top:8px" data-fir="'+i+'">Ver lo que firmó</button>'+
+          '<div id="opfir'+i+'" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--linea,#E3E0D6);'+
+            'border-radius:8px;padding:12px;background:#fff;color:#1E2415;margin-top:8px;font-size:13px;line-height:1.5"></div>'+
+        '</div>';
+      }).join('');
+      f.forEach(function(x,i){
+        var b=d.querySelector('[data-fir="'+i+'"]'); if(!b) return;
+        b.addEventListener('click',function(){
+          var p=$('opfir'+i); if(!p) return;
+          if(p.style.display==='none'){ p.innerHTML=x.cuerpo||''; p.style.display=''; b.textContent='Ocultar'; }
+          else { p.style.display='none'; b.textContent='Ver lo que firmó'; }
+        });
+      });
+    }catch(e){ d.innerHTML='<div class="mini">'+esc(e.message)+'</div>'; }
+  }
+  (function enganchaCtr(){
+    var b;
+    b=$('btnCtEditar');  if(b) b.addEventListener('click', abreContratoEd);
+    b=$('ctBtnCerrar');  if(b) b.addEventListener('click', function(){ $('ctCaja').style.display='none'; });
+    b=$('ctBtnEd');      if(b) b.addEventListener('click', function(){
+      if(!CTE||!CTE.hay) return;
+      $('ctArea').value=CTE.cuerpo||''; $('ctEd').style.display='';
+    });
+    b=$('ctBtnCancelar');if(b) b.addEventListener('click', function(){ $('ctEd').style.display='none'; });
+    b=$('ctBtnGuardar'); if(b) b.addEventListener('click', async function(){
+      try{
+        await rpcOp('contrato_tercero_guardar',{p_cual:'operador',p_id:cur.id,p_cuerpo:$('ctArea').value});
+        toast('Guardado. Es lo que va a firmar.');
+        $('ctEd').style.display='none'; await abreContratoEd();
+      }catch(e){ toast(e.message,true); }
+    });
+  })();
   async function cargaContrato(id){
     CT=null;
     try{

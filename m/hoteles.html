@@ -257,6 +257,32 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
         <h3>El contrato en línea</h3>
         <div class="hint">La plantilla vive en la base, se arma con los datos de esta alta, le llega por correo con su propia liga y al firmarla queda congelada con su acuse de fecha, IP y navegador. Es el mismo mecanismo que el del touroperador.</div>
         <div id="ctCaja"><div class="mini">—</div></div>
+        <!-- VER Y EDITAR EL CONTRATO DE ESTE HOTEL. Javi, 13-oct-2026.
+             Va fuera de ctCaja porque esa se repinta entera cada vez. Lo que se
+             guarde aqui vale SOLO para este hotel, nunca la plantilla, y es lo
+             que firma: un guardian en hotel_contratos impide que la firma lo
+             sustituya por el texto del molde. -->
+        <div style="margin-top:10px">
+          <button class="btn ghost sm" id="hcBtnVer" type="button">📄 Ver y editar el contrato aquí</button>
+        </div>
+        <div id="hcCaja" style="display:none;margin-top:10px">
+          <div class="mini" id="hcInfo" style="margin-bottom:6px"></div>
+          <div id="hcVista" style="max-height:340px;overflow:auto;border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:14px;background:#fff;color:#1E2415;font-size:13.5px;line-height:1.55"></div>
+          <div class="ft" style="justify-content:flex-start;margin-top:8px;gap:8px;flex-wrap:wrap">
+            <button class="btn ghost sm" id="hcBtnEd" type="button">✏️ Editarlo</button>
+            <button class="btn ghost sm" id="hcBtnCerrar" type="button">Cerrar</button>
+          </div>
+          <div id="hcEd" style="display:none;margin-top:10px">
+            <textarea id="hcArea" rows="20" spellcheck="false"
+              style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--linea,#E3E0D6);border-radius:10px"></textarea>
+            <div class="mini" style="margin-top:6px">Es el contrato de <b>este hotel</b>, no la plantilla. Va en HTML sencillo: cada párrafo entre &lt;p&gt; y &lt;/p&gt;.</div>
+            <div class="ft" style="justify-content:flex-start;margin-top:8px;gap:8px;flex-wrap:wrap">
+              <button class="btn sm" id="hcBtnGuardar" type="button">Guardar</button>
+              <button class="btn ghost sm" id="hcBtnCancelar" type="button">Cancelar</button>
+            </div>
+          </div>
+          <div id="hcFirmados" style="margin-top:14px"></div>
+        </div>
       </div>
       <div class="card">
         <h3>Antes de firmar</h3>
@@ -824,6 +850,78 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
      los datos de esta alta, la manda por correo con su liga y congela el cuerpo
      al firmarse. Los tres campos de abajo son el registro de esa firma. */
   var CT=null;
+
+  /* ====== VER / EDITAR / REVISAR EL CONTRATO DE ESTE HOTEL ======
+     Javi, 13-oct-2026. Lo que se edita aqui es SU contrato, no la plantilla.
+     Y lo firmado se guarda tal como lo vio quien firmo. */
+  var HCE=null;
+  async function rpcHot(nombre, body){
+    var r=await fetch(SB+'/rest/v1/rpc/'+nombre,{method:'POST',headers:hdr(),body:JSON.stringify(body||{})});
+    var j=await r.json().catch(function(){return null;});
+    if(!r.ok) throw new Error((j&&(j.message||j.error))||'no se pudo');
+    if(j&&j.error) throw new Error(j.error);
+    return j;
+  }
+  async function abreContratoHot(){
+    if(!cur){ toast('Escoge un hotel',true); return; }
+    $('hcCaja').style.display='';
+    $('hcInfo').textContent='Cargando…'; $('hcVista').innerHTML=''; $('hcEd').style.display='none';
+    try{
+      HCE=await rpcHot('contrato_tercero_ver',{p_cual:'hotel',p_id:cur.id});
+      if(!HCE.hay){ $('hcInfo').textContent=HCE.mensaje||'Sin contrato vigente.'; pintaFirmadosHot(); return; }
+      $('hcVista').innerHTML=HCE.cuerpo||'';
+      var crudos=(HCE.cuerpo||'').match(/\{\{[A-Z_]+\}\}/g);
+      $('hcInfo').innerHTML='Folio <b>'+esc(HCE.folio||'')+'</b> · versión <b>'+esc(HCE.version||'')+'</b> · '+esc(HCE.estado||'')+
+        (HCE.editado?' · <b style="color:#B06A00">editado a mano para este hotel</b>':' · sale de la plantilla')+
+        (crudos?' · <b style="color:#B3261E">'+crudos.length+' campo(s) sin rellenar</b>':'');
+      pintaFirmadosHot();
+    }catch(e){ $('hcInfo').textContent=e.message; }
+  }
+  async function pintaFirmadosHot(){
+    var d=$('hcFirmados'); if(!d||!cur) return; d.innerHTML='';
+    try{
+      var j=await rpcHot('contrato_tercero_firmados',{p_cual:'hotel',p_id:cur.id});
+      var f=(j&&j.firmados)||[];
+      if(!f.length){ d.innerHTML='<div class="mini">Todavía no ha firmado ninguna versión.</div>'; return; }
+      d.innerHTML='<b style="font-size:13px">Lo que ya firmó</b>'+f.map(function(x,i){
+        var a=x.acuse||{};
+        return '<div style="border:1px solid var(--linea,#E3E0D6);border-radius:10px;padding:10px;margin-top:8px">'+
+          '<div class="mini"><b>'+esc(x.folio||'')+'</b> · '+esc(x.version||'')+' · firmó <b>'+esc(x.firmante||'')+'</b> el '+esc(x.firmado_at||'')+
+          (x.editado?' · <span style="color:#B06A00">texto editado a mano</span>':'')+'</div>'+
+          '<div class="mini" style="margin-top:2px">'+(a.ip?'desde '+esc(a.ip):'')+' · '+(x.largo||0)+' caracteres</div>'+
+          '<button class="btn ghost sm" style="margin-top:8px" data-hfir="'+i+'">Ver lo que firmó</button>'+
+          '<div id="hotfir'+i+'" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--linea,#E3E0D6);'+
+            'border-radius:8px;padding:12px;background:#fff;color:#1E2415;margin-top:8px;font-size:13px;line-height:1.5"></div>'+
+        '</div>';
+      }).join('');
+      f.forEach(function(x,i){
+        var b=d.querySelector('[data-hfir="'+i+'"]'); if(!b) return;
+        b.addEventListener('click',function(){
+          var p=$('hotfir'+i); if(!p) return;
+          if(p.style.display==='none'){ p.innerHTML=x.cuerpo||''; p.style.display=''; b.textContent='Ocultar'; }
+          else { p.style.display='none'; b.textContent='Ver lo que firmó'; }
+        });
+      });
+    }catch(e){ d.innerHTML='<div class="mini">'+esc(e.message)+'</div>'; }
+  }
+  (function enganchaHc(){
+    var b;
+    b=$('hcBtnVer');     if(b) b.addEventListener('click', abreContratoHot);
+    b=$('hcBtnCerrar');  if(b) b.addEventListener('click', function(){ $('hcCaja').style.display='none'; });
+    b=$('hcBtnEd');      if(b) b.addEventListener('click', function(){
+      if(!HCE||!HCE.hay) return;
+      $('hcArea').value=HCE.cuerpo||''; $('hcEd').style.display='';
+    });
+    b=$('hcBtnCancelar');if(b) b.addEventListener('click', function(){ $('hcEd').style.display='none'; });
+    b=$('hcBtnGuardar'); if(b) b.addEventListener('click', async function(){
+      try{
+        await rpcHot('contrato_tercero_guardar',{p_cual:'hotel',p_id:cur.id,p_cuerpo:$('hcArea').value});
+        toast('Guardado. Es lo que va a firmar.');
+        $('hcEd').style.display='none'; await abreContratoHot();
+      }catch(e){ toast(e.message,true); }
+    });
+  })();
+
   async function cargaContrato(){
     CT=null; if(!cur) return;
     var r=await get2('hotel_contratos?hotel_id=eq.'+cur.id+'&estado=in.(borrador,enviado,firmado)'
