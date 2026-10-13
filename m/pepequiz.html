@@ -497,7 +497,7 @@ function App() {
         };
         const [ue, cats, conteo, obl] = await Promise.all([
           fetch(SBU + "/rest/v1/v_empleados_publico?select=id,nombre,nombre_display,puesto,area,property_id,estatus,avatar_emoji&order=nombre_display.asc.nullslast", { headers: SBH }).then(r => r.json()).catch(() => []),
-          fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,nombre_en,emoji,color,construccion,orden,proyectos&en_pepequiz=is.true&order=orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
+          fetch(SBU + "/rest/v1/pq_categorias?select=id,nombre,nombre_en,emoji,color,construccion,orden,proyectos,grupo,grupo_en,grupo_orden&en_pepequiz=is.true&order=grupo_orden.asc,orden.asc", { headers: SBH }).then(r => r.json()).catch(() => []),
           (async () => {
             // Al abrir NO bajamos el banco (son miles de preguntas y tardaba media hora
             // en un celular). Sólo el conteo por categoría/idioma/plaza: 113 filas.
@@ -535,6 +535,8 @@ function App() {
                   idioma: idioma,
                   hayBono: !!(cuenta[c.id + "|" + PQCFG.idioma_bono] || 0),
                   construccion: (nPedido || nBase) === 0,
+                  grupo: (PQLANG === "en" && c.grupo_en) ? c.grupo_en : (c.grupo || null),
+                  grupoOrden: (c.grupo_orden == null ? 99 : c.grupo_orden),
                 };
               });
               CATEGORIES.length = 0; nuevas.forEach((c) => CATEGORIES.push(c));
@@ -1349,35 +1351,52 @@ function TourPila({ cat, onBack, onTrain }) {
 }
 
 /* ===================== SELECCIÓN DE CATEGORÍA ===================== */
+/* Agrupa los temas por el campo `grupo` de pq_categorias, respetando grupo_orden.
+   Lo que no trae grupo cae al final, suelto y sin encabezado. */
+function agrupaCats(cats) {
+  const out = [], idx = {};
+  cats.forEach((c) => {
+    const k = c.grupo || "";
+    if (idx[k] === undefined) { idx[k] = out.length; out.push({ nombre: c.grupo || null, orden: c.grupoOrden == null ? 99 : c.grupoOrden, cats: [] }); }
+    out[idx[k]].cats.push(c);
+  });
+  return out.sort((a, b) => a.orden - b.orden);
+}
+function CatCard({ c, obligatorios, prog, onPick }) {
+  const disabled = !(c.n > 0);
+  const obl = obligatorios.includes(c.id);
+  const aprobado = prog[c.id]?.estado === "aprobado";
+  const f = pqFlags(c.id);
+  const aro = f.conocimiento ? "0 0 0 2px #E9B44C" : (f.discurso ? "0 0 0 2px #7BD38966" : "none");
+  return (
+    <button style={{ ...S.catCard, borderColor: c.color, opacity: disabled ? 0.5 : 1, boxShadow: aro }} disabled={disabled} onClick={() => !disabled && onPick(c)}>
+      {obl && <span style={{ ...S.oblDot, background: aprobado ? "#7BD389" : c.color }}>{aprobado ? "✓" : "★"}</span>}
+      <div style={{ ...S.catEmoji, background: c.color + "22" }}>{c.emoji}</div>
+      <div style={S.catName}>{c.name}</div>
+      <div style={S.catCount}>{disabled ? L("En construcción") : "\u00a0"}</div>
+      {PQUID && !disabled && f.banco > 0 && <PilaBar aciertos={f.aciertos} banco={f.banco} color={c.color} />}
+      {(f.conocimiento || f.discurso) && <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
+        {f.conocimiento && <span style={CHIP_CON}>🧠 {L("Conocimiento")}</span>}
+        {f.discurso && <span style={CHIP_DIS}>🗣️ {L("Discurso")}</span>}
+      </div>}
+      <div style={{ ...S.catBar, background: c.color }} />
+    </button>
+  );
+}
 function CatSelect({ mode, obligatorios, prog, onPick }) {
   return (
     <div style={S.screen}>
       <h2 style={S.h2}>{mode === "gym" ? L("Elige tema para entrenar") : L("Elige tema del reto")}</h2>
       <p style={S.muted}>{mode === "gym" ? L("5 preguntas · el tiempo lo marca lo larga que sea") : L("5 preguntas · reto a contrarreloj")}</p>
       {PQUID && <p style={{ ...S.tinyNote, textAlign: "left", margin: "0 0 10px" }}>{L("Aro amarillo = cuenta para tu Conocimiento del puesto · aro verde = para tu Discurso Casa Pepe. La pila se llena con aciertos: al 90% del banco tienes el 10, y baja cuando entran preguntas nuevas.")}</p>}
-      <div style={S.catGrid}>
-        {CATEGORIES.map((c) => {
-          const disabled = !(c.n > 0);
-          const obl = obligatorios.includes(c.id);
-          const aprobado = prog[c.id]?.estado === "aprobado";
-          const f = pqFlags(c.id);
-          const aro = f.conocimiento ? "0 0 0 2px #E9B44C" : (f.discurso ? "0 0 0 2px #7BD38966" : "none");
-          return (
-            <button key={c.id} style={{ ...S.catCard, borderColor: c.color, opacity: disabled ? 0.5 : 1, boxShadow: aro }} disabled={disabled} onClick={() => !disabled && onPick(c)}>
-              {obl && <span style={{ ...S.oblDot, background: aprobado ? "#7BD389" : c.color }}>{aprobado ? "✓" : "★"}</span>}
-              <div style={{ ...S.catEmoji, background: c.color + "22" }}>{c.emoji}</div>
-              <div style={S.catName}>{c.name}</div>
-              <div style={S.catCount}>{disabled ? L("En construcción") : "\u00a0"}</div>
-              {PQUID && !disabled && f.banco > 0 && <PilaBar aciertos={f.aciertos} banco={f.banco} color={c.color} />}
-              {(f.conocimiento || f.discurso) && <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
-                {f.conocimiento && <span style={CHIP_CON}>🧠 {L("Conocimiento")}</span>}
-                {f.discurso && <span style={CHIP_DIS}>🗣️ {L("Discurso")}</span>}
-              </div>}
-              <div style={{ ...S.catBar, background: c.color }} />
-            </button>
-          );
-        })}
-      </div>
+      {agrupaCats(CATEGORIES).map((g) => (
+        <div key={g.nombre || "_"} style={{ marginBottom: 18 }}>
+          {g.nombre && <div style={S.grupoTitulo}><span>{g.nombre}</span><span style={S.grupoLinea} /></div>}
+          <div style={S.catGrid}>
+            {g.cats.map((c) => <CatCard key={c.id} c={c} obligatorios={obligatorios} prog={prog} onPick={onPick} />)}
+          </div>
+        </div>
+      ))}
       <p style={S.tinyNote}>{L("★ = obligatorio para tu puesto · ✓ = aprobado")}</p>
     </div>
   );
@@ -2109,6 +2128,8 @@ const S = {
 
   adminRow: { display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderRadius: 13, background: "#ffffff0a", color: "#fff" },
 
+  grupoTitulo: { display: "flex", alignItems: "center", gap: 10, margin: "0 0 10px", fontFamily: "'Outfit', system-ui, sans-serif", fontWeight: 700, fontSize: 13, letterSpacing: ".10em", textTransform: "uppercase", color: "#E9B44C" },
+  grupoLinea: { flex: 1, height: 1, background: "#ffffff1f" },
   reviewBtn: { marginTop: 8, padding: "14px", borderRadius: 14, background: "#ffffff10", border: "1px solid #ffffff22", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer" },
   revList: { display: "flex", flexDirection: "column", gap: 12, marginTop: 4 },
   revCard: { background: "#ffffff0a", border: "1.5px solid", borderRadius: 16, padding: "14px" },
