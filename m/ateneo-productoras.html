@@ -217,14 +217,31 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
                la ficha no la toca, porque guardarla sin comprobar es el bug
                que esto cierra. -->
           <div class="fld"><label>Cuenta conectada</label>
-            <input id="stAcctPega" placeholder="acct_… o vacío si todavía ninguna" autocapitalize="off" spellcheck="false">
-            <div class="ay">Se llena sola al vincular. Si ya tienes su <b>acct_</b>, pégalo y se comprueba con Stripe.</div></div>
+            <input id="stAcctPega" placeholder="acct_… se llena sola al vincular" autocapitalize="off" spellcheck="false">
+            <div class="ay">Se llena sola cuando él termina su alta. No hace falta escribir nada aquí.</div></div>
           <div class="fld"><label>¿Quién factura?</label><select data-c="quien_factura"><option value="productora">La productora</option><option value="casa_pepe">Casa Pepe</option></select></div>
         </div>
-        <div class="ft" style="justify-content:flex-start;margin-top:10px">
-          <button class="btn fantasma" id="btnAcctGuardar">Comprobar y guardar la cuenta</button>
+        <!-- DOS CAMINOS, Y EL PRIMERO ES EL BUENO. Javi, 13-oct-2026: desde la
+             ficha solo se podia PEGAR un acct_, y pegar el acct_ que el
+             productor ve en SU Stripe nunca funciona: esa cuenta es suya y la
+             plataforma del Ateneo no la ve. Lo que hay que hacer es mandarle la
+             liga de alta, que es lo que `productora-stripe-alta` ya sabia hacer
+             desde el portal del productor pero no se podia disparar desde aqui. -->
+        <div class="ft" style="justify-content:flex-start;margin-top:10px;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="btnStLiga">Crear su cuenta y darme la liga</button>
+          <button class="btn fantasma" id="btnStPortal">Copiar la liga de su portal</button>
         </div>
-        <div id="acctMsg" style="margin-top:10px"></div>
+        <div class="ay" style="margin-top:6px">La liga la completa él en Stripe: datos fiscales, identificación y su cuenta de banco. Aquí no se captura ni se guarda nada de eso.</div>
+        <div id="stLigaMsg" style="margin-top:10px"></div>
+
+        <details style="margin-top:14px">
+          <summary class="mini" style="cursor:pointer">Ya tiene una cuenta conectada con nosotros y quiero pegarla</summary>
+          <div class="ay" style="margin-top:8px">Solo sirve si esa cuenta ya nos autorizó. El <b>acct_</b> que él ve en su propio panel de Stripe no funciona aquí: nuestra plataforma no lo ve.</div>
+          <div class="ft" style="justify-content:flex-start;margin-top:10px">
+            <button class="btn fantasma" id="btnAcctGuardar">Comprobar y guardar la cuenta</button>
+          </div>
+          <div id="acctMsg" style="margin-top:10px"></div>
+        </details>
       </div>
       <!-- El COBRO DIVIDIDO se quita de aquí. Javi, 7-oct-2026: «en productores
            no lo metamos». La casilla existía pero no hacía nada: evento-checkout
@@ -941,6 +958,53 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
     var i=$('stAcctPega'); if(i)i.value=a||'';
     var m=$('acctMsg'); if(m)m.innerHTML='';
   }
+
+  /* LA LIGA DE ALTA, DESDE LA FICHA.
+     `productora-stripe-alta` crea la cuenta conectada en la plataforma del
+     Ateneo (Express, México, pesos) si todavía no existe, y devuelve la liga de
+     onboarding de Stripe. Esa liga es de UN SOLO USO y caduca pronto, así que
+     junto a ella se ofrece la del portal, que no caduca: desde su portal el
+     productor pulsa el botón y Stripe le genera una fresca cuando la necesite.
+     Javi, 13-oct-2026. */
+  function copiaTexto(t,ok){
+    try{
+      var ta=document.createElement('textarea');
+      ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta); toast(ok||'Liga copiada');
+    }catch(_){ toast('No se pudo copiar, cópiala a mano',true); }
+  }
+
+  var _elLiga=$('btnStLiga');
+  if(_elLiga) _elLiga.onclick=async function(){
+    if(!cur)return;
+    var b=this, m=$('stLigaMsg'), antes=b.textContent;
+    b.disabled=true; b.textContent='Hablando con Stripe…'; m.innerHTML='';
+    try{
+      var r=await fetch(SB+'/functions/v1/productora-stripe-alta',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'alta',productora_id:cur.id,origen:location.origin})});
+      var d=await r.json().catch(function(){return null;});
+      if(!r.ok||!d||!d.url) throw new Error((d&&d.error)||('HTTP '+r.status));
+      m.innerHTML='<div class="hint" style="background:#E8F5E9;color:#1B5E20;border-radius:10px;padding:10px 12px">'+
+        'Cuenta creada: <b>'+esc(d.cuenta)+'</b>. Mándale esta liga para que la complete en Stripe.'+
+        '<div style="margin-top:8px"><input readonly id="stLigaUrl" value="'+esc(d.url)+'" style="width:100%"></div>'+
+        '<div class="mini" style="margin-top:6px">Es de un solo uso y caduca pronto. Si se le pasa, no se pierde nada: entra a su portal y pulsa el botón, y Stripe le da otra.</div></div>';
+      var u=$('stLigaUrl'); if(u){ u.onclick=function(){this.select();}; copiaTexto(d.url,'Liga de Stripe copiada'); }
+      await load(cur.id);
+    }catch(x){
+      m.innerHTML='<div class="hint" style="background:#FDECEA;color:#B3261E;border-radius:10px;padding:10px 12px">'+esc(x.message)+'</div>';
+    }
+    b.disabled=false; b.textContent=antes;
+  };
+
+  /* La liga del portal ya la calcula pintaLiga() y vive en #ligaProd. Se
+     reutiliza en vez de volver a pedir el token: v_productoras no lo trae. */
+  var _elPortal=$('btnStPortal');
+  if(_elPortal) _elPortal.onclick=function(){
+    var el=$('ligaProd'), v=el&&el.value;
+    if(!v){ toast('Esta productora todavía no tiene liga de portal',true); return; }
+    copiaTexto(v,'Liga de su portal copiada');
+  };
 
   /* Pegar la cuenta a mano, comprobándola. La comprobación la hace la función
      edge: aquí no hay ninguna llave de Stripe y no puede haberla. Si Stripe no
