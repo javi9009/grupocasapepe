@@ -315,11 +315,19 @@ window.eventoCompra = (function () {
       +'<div class="ecD" id="ecD"></div>'
       +'<button class="ecBt" id="ecPagar" disabled>'+esc(T('Pagar'))+'</button>'
       +'<div class="ecMsg" id="ecMsg"></div>'
+      /* QUIÉN ESTÁ COMPRANDO, A LA VISTA. Javi, 14-oct-2026: «yo ya debo estar
+         autentificado, ¿no? Aunque no veo Javi arriba ni nada de mi usuario ni
+         la opción de darme de alta». Tenía razón en lo segundo: la pantalla no
+         decía nunca si había alguien dentro, así que el pop-up de entrar salía
+         de sorpresa al final, con el día y la hora ya elegidos. */
+      +'<div class="ecPie" id="ecYo" style="margin-top:6px"></div>'
       +'<div class="ecPie">'+esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))
         +(conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'')+'</div>';
 
     pintaMes(); pintaHoras(); recalcula();
     $('ecPagar').onclick = aPagar;
+    quienSoy();
+    retomaDeGoogle();
 
     function hhmm(t){ var m=String(t).match(/^(\d{1,2}):(\d{2})/); return m ? (+m[1])*60 + (+m[2]) : 0; }
     function dosp(n){ return (n<10?'0':'')+n; }
@@ -461,6 +469,63 @@ window.eventoCompra = (function () {
       $('ecPagar').textContent=T('Pagar ')+mx(total);
     }
 
+    /* VOLVER DE GOOGLE Y SEGUIR DONDE ESTABA. Javi, 14-oct-2026: «lo intento con
+       Google y me regresa a la misma página de seleccionar fecha».
+       Era verdad y era el peor sitio para perderse: entrar con Google saca al
+       navegador de la página y lo trae de vuelta limpia, así que el día y las
+       horas que acababa de elegir se quedaban por el camino y había que
+       empezar otra vez —con la sesión ya iniciada, pero sin saberlo—. Ahora lo
+       elegido viaja en la liga de vuelta y al volver se repone solo y se sigue
+       al pago, que es a donde iba. */
+    function ligaDeVuelta(){
+      var u=new URL(location.href);
+      u.searchParams.set('d', DIA);
+      u.searchParams.set('a', txt(A));
+      u.searchParams.set('b', txt(B));
+      u.searchParams.set('sigo', '1');
+      return u.toString();
+    }
+    function retomaDeGoogle(){
+      var p; try{ p=new URLSearchParams(location.search); }catch(_){ return; }
+      if(p.get('sigo')!=='1') return;
+      var d=p.get('d')||'', a=p.get('a')||'', bb=p.get('b')||'';
+      /* Se quitan de la liga ANTES de seguir: si el pago fallara, un recargue
+         no volvería a lanzarlo solo. */
+      try{
+        var u=new URL(location.href);
+        ['d','a','b','sigo'].forEach(function(k){ u.searchParams.delete(k); });
+        history.replaceState({}, '', u.pathname+(u.search||'')+u.hash);
+      }catch(_){ }
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{2}:\d{2}$/.test(a) || !/^\d{2}:\d{2}$/.test(bb)) return;
+      DIA=d; A=hhmm(a); B=hhmm(bb);
+      try{ MES=new Date(d+'T12:00:00'); MES.setDate(1); }catch(_){ }
+      pintaMes(); pintaHoras(); recalcula();
+      msg(T('Seguimos donde lo dejaste.'),'bien');
+      setTimeout(function(){ try{ aPagar(); }catch(_){ } }, 300);
+    }
+    /* Quién está comprando, dicho antes de pedir nada. */
+    async function quienSoy(){
+      var el=$('ecYo'); if(!el) return;
+      var yo=null;
+      try{ yo = (sincCuenta.yo && sincCuenta.yo()) || await sincCuenta.yoDeEstaLiga() || await sincCuenta.conSesionAbierta(); }catch(_){ }
+      if(yo && (yo.email||yo.nombre)){
+        el.innerHTML=esc(T('Reservas como ')) + '<b>'+esc(yo.nombre||yo.email)+'</b>';
+      }else{
+        el.innerHTML=esc(T('Para pagar te pedimos el correo al final. '))
+          +'<a href="#" id="ecEntrar">'+esc(T('Entrar ahora'))+'</a>';
+        var a=$('ecEntrar');
+        if(a) a.onclick=async function(ev){
+          ev.preventDefault();
+          try{
+            await sincCuenta.entra({ titulo:T('Entra con tu correo'),
+              dice:T('Así la reserva sale a tu nombre y el comprobante te llega a ti.'),
+              volverA:location.href });
+          }catch(_){ }
+          quienSoy();
+        };
+      }
+    }
+
     async function aPagar(){
       if(!DIA || A==null || B==null) return;
       var b=$('ecPagar'), txtb=b.textContent;
@@ -470,9 +535,10 @@ window.eventoCompra = (function () {
         yo=await sincCuenta.exige({
           titulo:T('Entra para pagar'),
           dice:T('Te mandamos la confirmación por correo: por eso necesitamos saber que el correo es tuyo de verdad. Es una vez y ya.'),
-          volverA:location.href });
+          volverA:ligaDeVuelta() });
       }catch(x){ console.error('cuenta',x); }
       if(!yo){ b.disabled=false; b.textContent=txtb; return; }
+      quienSoy();
 
       msg(T('Apartando el espacio…'),'bien');
       var r=await rpc('evento_reserva_horas_crear',{
