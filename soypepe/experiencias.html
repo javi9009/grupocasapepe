@@ -1117,11 +1117,21 @@ function bolProx(b){ const fs=(b.funciones||[]).filter(f=>f.fecha>=hoyISO()).sor
 function fmtFuncion(f){ try{ const d=new Date(f.fecha+'T'+(f.hora||'00:00')); return d.toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'})+(f.hora?(' · '+String(f.hora).slice(0,5)):''); }catch(_){ return f.fecha; } }
 function bolLink(b){ return (b.permite_online && b.pago_link) ? b.pago_link : ('https://casapepe.mx/x/boleto-'+b.id+'?ref='+encodeURIComponent(REF)); }
 function bolCard(b){
-  const prox=bolProx(b); const precio=(b.precio&&Number(b.precio)>0)?('$'+Number(b.precio).toLocaleString('es-MX')):'Gratis';
+  const prox=bolProx(b);
+  /* Una sala que se renta por horas no tiene función ni precio de entrada: lo
+     que se dice es la tarifa por hora y de qué hora a qué hora se puede. */
+  const precio=(b.precio&&Number(b.precio)>0)
+    ? ('$'+Number(b.precio).toLocaleString('es-MX')+(b.por_horas?' la hora':''))
+    : 'Gratis';
+  const cuandoTxt = prox ? fmtFuncion(prox)
+    : (b.por_horas
+        ? ('Por horas'+(b.hora_desde&&b.hora_hasta?(' · '+String(b.hora_desde).slice(0,5)+'–'+String(b.hora_hasta).slice(0,5)):'')
+           +(b.min_horas?(' · mínimo '+b.min_horas+' h'):''))
+        : 'Próximamente');
   return '<div class="exp" data-bol="'+esc(b.id)+'">'
     +'<span class="ph bol">'+(b.foto_url?('<img src="'+esc(b.foto_url)+'" alt="" loading="lazy" onerror="this.remove()">'):'<span class="ic">🎟️</span>')+'</span>'
     +'<span class="cuerpo"><h3>'+esc(b.titulo)+'</h3>'
-      +'<span class="l">'+(prox?esc(fmtFuncion(prox)):'Próximamente')+(b.zona?(' · '+esc(b.zona)):'')+'</span>'
+      +'<span class="l">'+esc(cuandoTxt)+(b.zona?(' · '+esc(b.zona)):'')+'</span>'
       +'<span class="pre"><span class="pvp">'+precio+'</span><span class="tag">'+(b.permite_online?'en línea':'taquilla')+'</span></span>'
     +'</span></div>';
 }
@@ -1133,11 +1143,42 @@ async function loadBoletos(){
   try{ const r=await fetch(SB_URL+'/rest/v1/ateneo_cine_eventos?select=id,titulo,subtitulo,descripcion,precio,pago_link,permite_online,permite_taquilla,zona,orden&activo=eq.true&order=orden',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}); evs=r.ok?await r.json():[]; }catch(e){}
   try{ const rf=await fetch(SB_URL+'/rest/v1/ateneo_cine_funciones?select=evento_id,fecha,hora,activo&activo=eq.true&fecha=gte.'+hoyISO()+'&order=fecha,hora',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}}); if(rf.ok)(await rf.json()).forEach(f=>{(fun[f.evento_id]=fun[f.evento_id]||[]).push(f);}); }catch(e){}
   BOLETOS = evs.map(e=>Object.assign({},e,{funciones:(fun[e.id]||[])})).filter(e=> e.funciones.length>0 || (e.permite_online && e.pago_link));
+  /* LO QUE DAN DE ALTA LAS PRODUCTORAS TAMBIÉN SE VENDE AQUÍ. Javi, 14-oct-2026:
+     «tampoco veo las imágenes de muerteada o reyes recording».
+     No era la foto: es que esta pestaña sólo miraba la lista vieja del cine del
+     Ateneo, y los eventos que dan de alta las productoras desde su portal viven
+     en otra tabla. Se añaden desde la misma vista pública que usa el escaparate
+     —v_concierge_eventos—, que trae ya el evento con fecha y el espacio que se
+     renta por horas (una sala de ensayo no tiene fecha: se reserva por tramo).
+     La foto de estos sí viene como URL, así que se pinta de una. */
+  try{
+    const re=await fetch(SB_URL+'/rest/v1/v_concierge_eventos?select=id,nombre,descripcion,espacio,fecha_inicio,es_gratis,precio,precio_desde,precio_por_hora,min_horas,hora_desde,hora_hasta,foto_url,productora',{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
+    if(re.ok){
+      const nuevos=(await re.json()).map(e=>{
+        const porHoras = !e.fecha_inicio;
+        const precio = e.es_gratis ? 0 : Number(e.precio!=null?e.precio:(e.precio_desde!=null?e.precio_desde:e.precio_por_hora))||0;
+        return {
+          id:e.id, titulo:e.nombre, descripcion:e.descripcion||'', precio:precio,
+          foto_url:e.foto_url||'', zona:e.espacio||'Ateneo de Virreyes',
+          permite_online:true, permite_taquilla:false,
+          pago_link:'https://casapepe.mx/sincretico/evento.html?id='+encodeURIComponent(e.id)+'&ref='+encodeURIComponent(MI_CODIGO_VENTA||REF),
+          funciones: e.fecha_inicio ? [{fecha:String(e.fecha_inicio).slice(0,10), hora:String(e.fecha_inicio).slice(11,16)}] : [],
+          por_horas:porHoras, min_horas:e.min_horas||null,
+          hora_desde:e.hora_desde||null, hora_hasta:e.hora_hasta||null,
+          productora:e.productora||'', de_productora:true
+        };
+      });
+      BOLETOS = BOLETOS.concat(nuevos);
+    }
+  }catch(e){}
   renderBoletos();
   cargaFotosBoletos();
 }
 async function cargaFotosBoletos(){
   for(const b of BOLETOS){
+    /* Los de las productoras traen la foto como URL y ya se pintó: esta vuelta
+       es sólo para las del cine, que van en base64 y se bajan de una en una. */
+    if(b.de_productora) continue;
     try{
       const r=await fetch(SB_URL+'/rest/v1/ateneo_cine_eventos?select=foto_url&id=eq.'+encodeURIComponent(b.id),{headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY}});
       if(!r.ok) continue;
@@ -1290,8 +1331,25 @@ function openRest(r){
    dentro del link (ref=, dto=); el QR es ese mismo link — no hay un código aparte que teclear. */
 let CP={t:null, desc:0, fecha:'', hora:'', ad:1, me:0, disp:null, pre:null, msg:''};
 
-// Comisión por persona de quien vende (servicios por %, experiencias por bono fijo).
-function bonoPPde(t){ const pvp=Number(t.pvp)||0; return t.cat ? bonoDe(t.cat,pvp) : (Number(t.bono_mxn)||0); }
+/* LA COMISIÓN DE QUIEN VENDE, Y DE AHÍ SALE EL DESCUENTO. Javi, 14-oct-2026:
+   «en la app de concierge no me deja dar descuento», y «la comisión que tiene
+   el concierge es la que se pone en el alta de hotel; ahora no hay ningún hotel
+   dado de alta, por lo que para los de Casa Pepe sería el 10%».
+   Esto devolvía 0 en cuanto la experiencia no traía bono en pesos —y sólo 4 de
+   las 26 lo tienen—, así que el botón de «+» del descuento no se movía nunca.
+   La tarjeta y la ficha ya decían «ganas el 10%»: el único sitio que no lo
+   sabía era justo el que manda. Orden: el % del alta de quien vende, el bono
+   en pesos de la experiencia si lo tiene cargado, y si no, el 10%. */
+const COMIS_CONCIERGE_PCT_DEF = 10;
+let MI_COMIS_PCT = COMIS_CONCIERGE_PCT_DEF;
+let MI_CODIGO_VENTA = '';
+function bonoPPde(t){
+  const pvp=Number(t.pvp)||0;
+  if(t.cat) return bonoDe(t.cat,pvp);
+  const fijo=Number(t.bono_mxn)||0;
+  if(fijo>0) return fijo;
+  return Math.round(pvp*(MI_COMIS_PCT||COMIS_CONCIERGE_PCT_DEF)/100);
+}
 // Paso del descuento según el tamaño de la comisión.
 function descStep(bpp){ return bpp>=300?50:(bpp>=120?25:10); }
 function totalCP(){
@@ -1490,6 +1548,21 @@ if(['gasto','caja'].includes(new URLSearchParams(location.search).get('abrir')||
 } else {
   wireCnav();
   load();
+  /* SU COMISIÓN Y SU CÓDIGO, PREGUNTADOS A LA BASE. La misma respuesta que usa
+     la base al crear la pre-reserva, para que la pantalla no prometa un
+     descuento que luego el servidor recorta. Si no contesta, se queda el 10%,
+     que es lo acordado mientras no haya hoteles dados de alta. */
+  (function miAlta(){
+    try{
+      fetch(SB_URL+'/rest/v1/rpc/sinc_mi_comision',{method:'POST',headers:lavHdr(),body:'{}'})
+        .then(function(r){ return r.ok?r.json():null; })
+        .then(function(j){
+          if(!j) return;
+          var p=Number(j.pct); if(p>0) MI_COMIS_PCT=p;
+          if(j.codigo) MI_CODIGO_VENTA=String(j.codigo);
+        }).catch(function(){});
+    }catch(_){ }
+  })();
 }
 </script>
 
