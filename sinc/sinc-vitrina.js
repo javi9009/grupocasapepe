@@ -201,13 +201,20 @@ window.sincVitrina = (function () {
      -que vive en /apepe/- habria que resolverlas contra otra carpeta. */
   function ficha(x, qs, base) {
     var liga = (base || '') + x.liga + (qs || '');
+    /* UN ESPACIO QUE SE RENTA POR HORAS NO TIENE FECHA, y es lo unico de la
+       vitrina que llega sin ella: una sala de ensayo, un estudio de grabacion.
+       Sin esto la tarjeta salia muda arriba y con el precio a secas, como si
+       200 fuera lo que cuesta entrar. 14-oct-2026. */
+    var porHoras = (x.fuente === 'evento' && !x.proxima_fecha);
     var badge = x.fuente === 'pase'
       ? (x.precio_lista ? '<span class="eti">Lanzamiento</span>' : '')
-      : (x.proxima_fecha ? '<span class="hora">' + esc(cuando(x.proxima_fecha, x.proxima_hora)) + '</span>' : '');
+      : (x.proxima_fecha ? '<span class="hora">' + esc(cuando(x.proxima_fecha, x.proxima_hora)) + '</span>'
+         : (porHoras ? '<span class="hora">Por horas</span>' : ''));
     var pr = x.gratis
       ? 'Entrada libre'
       : (x.precio != null
-          ? money(x.precio) + (x.precio_lista && Number(x.precio_lista) > Number(x.precio)
+          ? money(x.precio) + (porHoras ? ' la hora' : '')
+            + (x.precio_lista && Number(x.precio_lista) > Number(x.precio)
               ? '<s>' + money(x.precio_lista) + '</s>' : '')
           : '');
     return '<a class="sv-f" href="' + esc(liga) + '">'
