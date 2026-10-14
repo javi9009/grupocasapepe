@@ -723,6 +723,27 @@
       'Descuento':'Discount',
       'El cobro con tarjeta todavía no está configurado. Te mandaremos el enlace de pago.':'Card payment isn’t set up yet. We’ll send you the payment link.',
       'El mínimo son ':'The minimum is ',
+      /* Entrar, los paquetes de horas y lo que hay en la sala. Todo de hoy,
+         14-oct-2026: salía en español con la ficha puesta en inglés. */
+      'Para apartar necesitas tu cuenta. Entra ahora y no te lo pedimos al final.':
+        'You’ll need your account to book. Sign in now and we won’t ask at the end.',
+      'Entrar o crear cuenta':'Sign in or create an account',
+      'Reservas como ':'Booking as ',
+      /* «Entra con tu correo» ya está más abajo: no se repite aquí. */
+      'Así la reserva sale a tu nombre y el comprobante te llega a ti.':
+        'That way the booking is in your name and the receipt goes to you.',
+      'Así ves tus boletos y sus QR desde cualquier teléfono.':
+        'That way you can see your tickets and their QR codes from any phone.',
+      'Entra con tu cuenta para ver tus boletos y lo que has comprado.':
+        'Sign in to see your tickets and everything you’ve bought.',
+      'Seguimos donde lo dejaste.':'Picking up where you left off.',
+      'Paquete de ':'Package of ',
+      'Te ahorras con el paquete':'You save with the package',
+      'O por paquete: ':'Or by package: ',
+      'por ':'for ',
+      'Qué hay en la sala':'What’s in the room',
+      'Equipo':'Gear',
+      'todos los días':'every day',
       'Elige el día y las horas para ver el total':'Pick the day and hours to see the total',
       'Elige primero el día.':'Pick the day first.',
       'Elige un boleto para ver el total':'Pick a ticket to see the total',
