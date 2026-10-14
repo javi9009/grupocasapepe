@@ -403,6 +403,40 @@ window.eventoCompra = (function () {
 
     function msg(t,cls){ var m=$('ecMsg'); if(!m) return; m.textContent=t; m.className='ecMsg '+(t?cls:''); }
 
+    /* PAQUETES DE HORAS. Javi, 14-oct-2026, pedido por Fer de Reyes Recording:
+       «una tarifa de X h por X pesos». La regla: se aplican los paquetes de
+       mayor a menor mientras ahorren y lo que sobra va por hora suelta; nunca
+       puede salir más caro que todo por hora. Esta cuenta es la MISMA que hace
+       evento_horas_cotiza en la base, que es la que manda al cobrar: aquí se
+       repite sólo para que el precio se vea mientras elige, sin ir y volver al
+       servidor en cada clic. Si alguna vez discrepan, gana la base. */
+    var PAQS = (Array.isArray(EV.paquetes_horas) ? EV.paquetes_horas : [])
+                 .filter(function(p){ return Number(p.horas)>0 && Number(p.precio)>0; })
+                 .sort(function(a,b){ return Number(b.horas)-Number(a.horas); });
+    function cotiza(horas){
+      var resto=horas, total=0, lineas=[], v=0;
+      while(resto>0 && v<50){
+        v++;
+        var p=null;
+        for(var i=0;i<PAQS.length;i++){
+          if(Number(PAQS[i].horas)<=resto && Number(PAQS[i].precio) < Number(PAQS[i].horas)*TARIFA){ p=PAQS[i]; break; }
+        }
+        if(!p) break;
+        total+=Number(p.precio); resto-=Number(p.horas);
+        lineas.push({texto:T('Paquete de ')+p.horas+' h', importe:Number(p.precio)});
+      }
+      if(resto>0){
+        var s=Math.round(resto*TARIFA*100)/100;
+        total+=s;
+        lineas.push({texto:resto+' h × '+mx(TARIFA)+' '+T('la hora'), importe:s});
+      }
+      var simple=Math.round(horas*TARIFA*100)/100;
+      if(total>simple){
+        total=simple;
+        lineas=[{texto:horas+' h × '+mx(TARIFA)+' '+T('la hora'), importe:simple}];
+      }
+      return {total:Math.round(total*100)/100, lineas:lineas, ahorro:Math.max(0, simple-total)};
+    }
     function recalcula(){
       var d=$('ecD');
       if(!DIA || A==null || B==null){
@@ -414,9 +448,12 @@ window.eventoCompra = (function () {
         d.innerHTML='<div class="l"><span>'+esc(T('El mínimo son '))+MIN+' h</span></div>';
         $('ecPagar').disabled=true; $('ecPagar').textContent=T('Pagar'); return;
       }
-      var total=TARIFA*horas, iva=total-(total/(1+IVA));
+      var c=cotiza(horas), total=c.total, iva=total-(total/(1+IVA));
       d.innerHTML=
-         '<div class="l"><span>'+horas+' h × '+mx(TARIFA)+' '+esc(T('la hora'))+'</span><span>'+mx2(total)+'</span></div>'
+         c.lineas.map(function(l){
+           return '<div class="l"><span>'+esc(l.texto)+'</span><span>'+mx2(l.importe)+'</span></div>';
+         }).join('')
+        +(c.ahorro>0?('<div class="l imp"><span>'+esc(T('Te ahorras con el paquete'))+'</span><span>−'+mx(c.ahorro)+'</span></div>'):'')
         +'<div class="l imp"><span>'+esc(DIA)+' · '+txt(A)+'–'+txt(B)+'</span><span></span></div>'
         +(conIva?'<div class="l imp"><span>'+esc(T('IVA'))+' '+Math.round(IVA*100)+'% '+esc(T('incluido'))+'</span><span>'+mx2(iva)+'</span></div>':'')
         +'<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>';
