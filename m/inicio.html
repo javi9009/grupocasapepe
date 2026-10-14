@@ -174,10 +174,11 @@ DIRp.then(function(DIR){
   /* PepeFeliz (reputación, para todos) */
   guard(function(){
     var p1=sb.from('cp_reputacion_evolucion').select('nota,fecha_consulta').order('fecha_consulta',{ascending:false}).limit(1);
-    var p2=sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true});
+    // sin responder ACCIONABLE: contestables y recientes (≤14 días), no la cola histórica completa
+    var p2=sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true}).eq('contestable',true).lte('dias_esperando',14);
     return Promise.all([p1.catch(function(){return{};}),p2.catch(function(){return{};})]).then(function(a){
       var nota=a[0].data&&a[0].data[0]&&a[0].data[0].nota, pend=a[1].count;
-      setKpi('feliz',(nota!=null?(Number(nota).toFixed(1)+'<small>/10</small>'):'—'),(pend!=null?(pend+' sin responder'):'reputación'));
+      setKpi('feliz',(nota!=null?(Number(nota).toFixed(1)+'<small>/10</small>'):'—'),(pend!=null?(pend+' x responder · 14d'):'reputación'));
     });
   });
 
@@ -221,8 +222,8 @@ if(sb) guard(function(){ return window.__DIRp.then(function(DIR){
   var tareas=[
     sb.from('mtto_tickets').select('id',{count:'exact',head:true}).in('estado',['nuevo','validado','programado','en_proceso'])
       .then(function(r){ if(r.count) items.push({dot:'warn',t:'Mantenimiento abierto', d:'incidencias sin cerrar', ct:r.count, act:'Ver', href:'/mantenimiento.html'}); }).catch(function(){}),
-    sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true})
-      .then(function(r){ if(r.count) items.push({dot:'acc',t:'Reseñas sin responder', d:'reputación · cola', ct:r.count, act:'Responder', href:'/reputacion.html'}); }).catch(function(){}),
+    sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true}).eq('contestable',true).lte('dias_esperando',14)
+      .then(function(r){ if(r.count) items.push({dot:'acc',t:'Reseñas sin responder', d:'contestables · últimos 14 días', ct:r.count, act:'Responder', href:'/reputacion.html'}); }).catch(function(){}),
     sb.from('incidencias').select('id',{count:'exact',head:true}).eq('resuelto',false)
       .then(function(r){ if(r.count) items.push({dot:'warn',t:'Incidencias de RH', d:'sin resolver', ct:r.count, act:'Ver', href:'/m/incidencias.html'}); }).catch(function(){})
   ];
@@ -273,11 +274,9 @@ if(sb) window.__DIRp.then(function(DIR){
     // tickets de huésped (app) nuevos
     sb.from('apepe_tickets').select('id,tipo,titulo,estado,created_at').eq('estado','nuevo').order('created_at',{ascending:false}).limit(5)
       .then(function(r){ (r.data||[]).forEach(function(x){ items.push({dot:'warn',t:esc(x.titulo||('Ticket '+(x.tipo||''))), d:'app del huésped · '+esc(x.tipo||''), act:'Ver', href:'/m/apepe-tickets.html'}); }); }).catch(function(){}),
-    // incidencias de mantenimiento de hoy, Sincrético / por área
-    sb.from('mtto_tickets').select('id,clasificacion,created_at,ubic:ubicacion_id(nombre,area_negocio)').gte('created_at',hoy0).order('created_at',{ascending:false}).limit(30)
-      .then(function(r){ var sinc=(r.data||[]).filter(function(x){ var a=x.ubic&&x.ubic.area_negocio; return a&&String(a).toLowerCase().indexOf('sincret')>=0; });
-        if(sinc.length) items.push({dot:'acc',t:'Incidencias Sincrético (hoy)', d:'mantenimiento del día', ct:sinc.length, act:'Ver', href:'/mantenimiento.html'});
-      }).catch(function(){})
+    // incidencias de mantenimiento de Ateneo (Virreyes) creadas hoy
+    sb.from('mtto_tickets').select('id',{count:'exact',head:true}).eq('property_id','3e10a9ea-4913-4f7c-86ef-0c829caa851d').gte('created_at',hoy0)
+      .then(function(r){ if(r.count) items.push({dot:'acc',t:'Incidencias de Ateneo (hoy)', d:'Virreyes · mantenimiento', ct:r.count, act:'Ver', href:'/mantenimiento.html'}); }).catch(function(){})
   ];
   return Promise.all(tareas).then(function(){
     if(!items.length){ $('para').innerHTML='<div class="empty">Sin tickets nuevos hoy. ✨</div>'; return; }
