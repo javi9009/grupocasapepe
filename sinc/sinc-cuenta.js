@@ -49,18 +49,49 @@ window.sincCuenta = (function () {
      para que la recoja. Antes esto solo pasaba si la pantalla llamaba a la
      cuenta al cargar —la ficha del tour no lo hacía—, así que el pase se
      quedaba sin canjear y parecía que no había entrado nunca. */
-  function recoge() {
+  /* EL CANJE DE GOOGLE TARDA LO QUE TARDA, NO 1,2 SEGUNDOS.
+     Javi, 14-oct-2026: «me logueé con Google... y al reservar me vuelve a pedir
+     que me loguee». Al volver de Google la sesión no viene hecha: viene un
+     `code` en la liga que el SDK tiene que cambiar por sesión contra el
+     servidor. Esto borraba ese `code` por reloj, a los 1,2 s, y en un teléfono
+     con datos el canje tarda más: se quedaba sin code, sin sesión, y pidiéndole
+     entrar a alguien que acababa de entrar.
+     Ahora no se mira el reloj: se espera a que la sesión EXISTA y entonces se
+     limpia la liga. Y queda una promesa —lista()— para que las pantallas
+     esperen a eso en vez de adivinar. */
+  var LISTA = null;
+  function limpiaLiga() {
     try {
-      cli();
-      if (/[?&](code|error)=/.test(location.search)) {
-        setTimeout(function () {
-          var u = new URL(location.href);
-          ['code', 'error', 'error_description', 'state'].forEach(function (k) { u.searchParams.delete(k); });
-          history.replaceState({}, '', u.pathname + (u.search || '') + u.hash);
-        }, 1200);
-      }
+      var u = new URL(location.href);
+      ['code', 'error', 'error_description', 'state'].forEach(function (k) { u.searchParams.delete(k); });
+      history.replaceState({}, '', u.pathname + (u.search || '') + u.hash);
     } catch (_) {}
   }
+  function recoge() {
+    try {
+      var c = cli();
+      var vuelve = /[?&](code|error)=/.test(location.search) || /access_token=/.test(location.hash);
+      if (!vuelve) { LISTA = Promise.resolve(false); return; }
+      LISTA = new Promise(function (listo) {
+        var t0 = Date.now();
+        (function espera() {
+          c.auth.getSession().then(function (r) {
+            var hay = !!(r && r.data && r.data.session);
+            /* 12 s de margen: más que eso es que el canje falló de verdad, y
+               entonces vale más enseñarle la puerta otra vez que dejarlo
+               mirando una rueda. */
+            if (hay || Date.now() - t0 > 12000) { limpiaLiga(); listo(hay); }
+            else setTimeout(espera, 250);
+          }).catch(function () {
+            if (Date.now() - t0 > 12000) { limpiaLiga(); listo(false); }
+            else setTimeout(espera, 250);
+          });
+        })();
+      });
+    } catch (_) { LISTA = Promise.resolve(false); }
+  }
+  /* «¿Ya acabó de entrar?», para la pantalla que vuelve de Google. */
+  function lista() { return LISTA || Promise.resolve(false); }
 
   function esc(s) {
     return (s == null ? '' : String(s)).replace(/[&<>"]/g, function (c) {
@@ -591,6 +622,7 @@ window.sincCuenta = (function () {
     cliente: cli, sesion: sesion, hdr: hdr, yo: function () { return YO; },
     yaEntrado: yaEntrado, entra: entra, exige: exige, salir: salir, fn: fn,
     miPerfil: miPerfil, comoHuesped: comoHuesped, yoDeEstaLiga: yoDeEstaLiga, recoge: recoge,
+    lista: lista,
     conSesionAbierta: conSesionAbierta, paxReserva: paxReserva,
   };
 })();

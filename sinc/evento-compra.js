@@ -485,9 +485,15 @@ window.eventoCompra = (function () {
       u.searchParams.set('sigo', '1');
       return u.toString();
     }
-    function retomaDeGoogle(){
+    async function retomaDeGoogle(){
       var p; try{ p=new URLSearchParams(location.search); }catch(_){ return; }
       if(p.get('sigo')!=='1') return;
+      /* ESPERAR A QUE LA SESIÓN ESTÉ HECHA. Volver de Google no es entrar: el
+         SDK todavía tiene que canjear el código contra el servidor. Si se
+         seguía al pago antes de eso, se le pedía entrar otra vez al que
+         acababa de entrar —que es justo lo que le pasó a Javi—. */
+      try{ await sincCuenta.lista(); }catch(_){ }
+      try{ await quienSoy(); }catch(_){ }
       var d=p.get('d')||'', a=p.get('a')||'', bb=p.get('b')||'';
       /* Se quitan de la liga ANTES de seguir: si el pago fallara, un recargue
          no volvería a lanzarlo solo. */
@@ -507,6 +513,9 @@ window.eventoCompra = (function () {
     async function quienSoy(){
       var el=$('ecYo'); if(!el) return;
       var yo=null;
+      /* Si venimos de Google, primero que acabe de entrar: preguntar antes es
+         pintar «entra» a quien ya entró. */
+      try{ await sincCuenta.lista(); }catch(_){ }
       try{ yo = (sincCuenta.yo && sincCuenta.yo()) || await sincCuenta.yoDeEstaLiga() || await sincCuenta.conSesionAbierta(); }catch(_){ }
       if(yo && (yo.email||yo.nombre)){
         el.innerHTML='<div style="background:#F3EFE7;border-radius:10px;padding:10px 12px;font-size:14px">'
