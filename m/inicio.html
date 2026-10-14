@@ -80,12 +80,12 @@ h2{font-size:1.02rem;font-weight:700;margin:0}
 
   <div class="kpis" id="kpis"></div>
 
-  <div class="cols">
+  <div class="cols" id="cols">
     <div class="card">
       <div class="hd"><h2>Lo que necesita tu día</h2><a href="/m/incidencias.html" target="_top">Ver pendientes →</a></div>
       <div id="dia"><div class="loading">Cargando pendientes…</div></div>
     </div>
-    <div class="card">
+    <div class="card" id="paraCard" style="display:none">
       <div class="hd"><h2>Para ti · del día</h2><a href="/m/pepe-atender.html" target="_top">Pepe Atender →</a></div>
       <div id="para"><div class="loading">Cargando…</div></div>
     </div>
@@ -130,90 +130,88 @@ guard(function(){
   }).catch(function(){ $('meta').textContent = fechaLarga(); });
 });
 
-/* --- KPIs: se pintan como skeleton y cada uno se llena solo --- */
-var KPIS=[
-  {id:'ocup', l:'Ocupación prevista'},
-  {id:'adr',  l:'ADR sugerido'},
-  {id:'lleg', l:'Llegan hoy'},
-  {id:'cobr', l:'Por cobrar'},
-  {id:'feliz',l:'PepeFeliz'},
-  {id:'cier', l:'Cierre del día'}
-];
-$('kpis').innerHTML = KPIS.map(function(k){
-  return '<div class="kpi"><div class="l">'+k.l+'</div><div class="v sk" id="kv-'+k.id+'">····</div><div class="s sk" id="ks-'+k.id+'">··········</div></div>';
-}).join('');
+/* --- KPIs con compuerta de confidencialidad ---
+   Operativos (Llegan, PepeFeliz) los ve todo el equipo.
+   Dinero / revenue (Ocupación, ADR, Por cobrar, Cierre) y la tarjeta "Para ti"
+   SOLO dirección/corp (puede_ver_corp). Así la home es para todos sin filtrar
+   información confidencial a puestos operativos. */
 function setKpi(id,v,s){ var e=$('kv-'+id); if(e){e.classList.remove('sk'); e.innerHTML=v;} var f=$('ks-'+id); if(f){f.classList.remove('sk'); f.innerHTML=s||'';} }
-/* red de seguridad: si una fuente cuelga, no dejes el skeleton girando para siempre. */
-setTimeout(function(){
+function mkKpi(id,l){ return '<div class="kpi"><div class="l">'+esc(l)+'</div><div class="v sk" id="kv-'+id+'">····</div><div class="s sk" id="ks-'+id+'">··········</div></div>'; }
+function safetyNet(){ setTimeout(function(){
   document.querySelectorAll('.kpi .v.sk').forEach(function(e){ e.classList.remove('sk'); e.textContent='—'; });
   document.querySelectorAll('.kpi .s.sk').forEach(function(e){ e.classList.remove('sk'); e.textContent=''; });
   var d=$('dia'); if(d && /Cargando/.test(d.textContent)) d.innerHTML='<div class="empty">No se pudo cargar. Recarga el panel.</div>';
-  var p=$('para'); if(p && /Cargando/.test(p.textContent)) p.innerHTML='<div class="empty">No se pudo cargar. Recarga el panel.</div>';
-}, 6000);
+  var p=$('para'); if(p && /Cargando/.test(p.textContent)) p.innerHTML='<div class="empty">No se pudo cargar.</div>';
+}, 6000); }
 
-if(!sb){
-  KPIS.forEach(function(k){ setKpi(k.id,'—',''); });
-  $('dia').innerHTML='<div class="empty">No se pudo cargar la sesión.</div>';
-  $('para').innerHTML='<div class="empty">No se pudo cargar la sesión.</div>';
-}
+var DIRp;
+try{ DIRp = (sb && window.cpAcceso && cpAcceso.esDireccion) ? Promise.resolve(cpAcceso.esDireccion()).catch(function(){return false;}) : Promise.resolve(false); }
+catch(_){ DIRp = Promise.resolve(false); }
+window.__DIRp = DIRp;
 
-/* Pricing: ocupación prevista + ADR sugerido (última corrida, filas de hoy) */
-if(sb) guard(function(){
-  return sb.from('pricing_recomendaciones').select('run_date').order('run_date',{ascending:false}).limit(1)
-   .then(function(r){
-     var run = r.data && r.data[0] && r.data[0].run_date; if(!run){ setKpi('ocup','—'); setKpi('adr','—'); return; }
-     var hoy=hoyISO();
-     return sb.from('pricing_recomendaciones').select('fecha,final_recommendation,room_occupancy_pct').eq('run_date',run)
-       .then(function(rr){
-         var filas=(rr.data||[]).filter(function(x){ return String(x.fecha)===hoy; });
-         if(!filas.length) filas=(rr.data||[]).slice(0,40);
-         var occs=filas.map(function(x){return x.room_occupancy_pct;}).filter(function(x){return x!=null;});
-         var adrs=filas.map(function(x){return Number(x.final_recommendation);}).filter(function(x){return x>0;});
-         if(occs.length){ var o=occs.reduce(function(a,b){return a+b;},0)/occs.length; setKpi('ocup', Math.round(o*100)+'<small>%</small>','previsto · hoy'); } else setKpi('ocup','—','sin corrida de hoy');
-         if(adrs.length){ var a=adrs.reduce(function(s,b){return s+b;},0)/adrs.length; setKpi('adr', money(a),'sugerido · pricing'); } else setKpi('adr','—','');
-       });
-   });
-});
+DIRp.then(function(DIR){
+  var tiles=[];
+  if(DIR) tiles.push(mkKpi('ocup','Ocupación prevista'), mkKpi('adr','ADR sugerido'));
+  tiles.push(mkKpi('lleg','Llegan hoy'));
+  if(DIR) tiles.push(mkKpi('cobr','Por cobrar'), mkKpi('cier','Cierre del día'));
+  tiles.push(mkKpi('feliz','PepeFeliz'));
+  $('kpis').innerHTML = tiles.join('');
+  safetyNet();
 
-/* Dinero del día: llegan hoy + por cobrar (RPC fin_panel_dinero) */
-if(sb) guard(function(){
-  return sb.rpc('fin_panel_dinero',{p_property:null}).then(function(r){
-    var D=r.data||{};
-    var lh=D.llegan_hoy||{};
-    setKpi('lleg', (lh.n!=null?lh.n:'—'), (lh.saldo?('deben '+moneyK(lh.saldo)):'reservas de hoy'));
-    var porcaer=0; (D.stripe||[]).forEach(function(s){ porcaer+=Number(s.neto||0); });
-    var cobr = Number(lh.saldo||0)+porcaer;
-    setKpi('cobr', moneyK(cobr), (porcaer?('+ '+moneyK(porcaer)+' por caer'):'al llegar'));
-  }).catch(function(){ setKpi('lleg','—'); setKpi('cobr','—'); });
-});
+  if(!sb){ document.querySelectorAll('.kpi .v').forEach(function(e){e.classList.remove('sk');e.textContent='—';});
+    document.querySelectorAll('.kpi .s').forEach(function(e){e.classList.remove('sk');e.textContent='';}); return; }
 
-/* PepeFeliz: nota + reseñas sin responder */
-if(sb) guard(function(){
-  var p1=sb.from('cp_reputacion_evolucion').select('nota,fecha_consulta').order('fecha_consulta',{ascending:false}).limit(1);
-  var p2=sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true});
-  return Promise.all([p1.catch(function(){return{};}),p2.catch(function(){return{};})]).then(function(a){
-    var nota = a[0].data && a[0].data[0] && a[0].data[0].nota;
-    var pend = a[1].count;
-    setKpi('feliz', (nota!=null?(Number(nota).toFixed(1)+'<small>/10</small>'):'—'), (pend!=null?(pend+' sin responder'):'reputación'));
+  /* Llegadas (operativo, para todos): solo el número. El saldo por cobrar solo a dirección. */
+  guard(function(){
+    return sb.rpc('fin_panel_dinero',{p_property:null}).then(function(r){
+      var D=r.data||{}, lh=D.llegan_hoy||{};
+      setKpi('lleg', (lh.n!=null?lh.n:'—'), (DIR&&lh.saldo)?('deben '+moneyK(lh.saldo)):'reservas de hoy');
+      if(DIR){ var pc=0; (D.stripe||[]).forEach(function(s){ pc+=Number(s.neto||0); });
+        var cobr=Number(lh.saldo||0)+pc; setKpi('cobr', moneyK(cobr), (pc?('+ '+moneyK(pc)+' por caer'):'al llegar')); }
+    }).catch(function(){ setKpi('lleg','—'); if(DIR) setKpi('cobr','—'); });
+  });
+
+  /* PepeFeliz (reputación, para todos) */
+  guard(function(){
+    var p1=sb.from('cp_reputacion_evolucion').select('nota,fecha_consulta').order('fecha_consulta',{ascending:false}).limit(1);
+    var p2=sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true});
+    return Promise.all([p1.catch(function(){return{};}),p2.catch(function(){return{};})]).then(function(a){
+      var nota=a[0].data&&a[0].data[0]&&a[0].data[0].nota, pend=a[1].count;
+      setKpi('feliz',(nota!=null?(Number(nota).toFixed(1)+'<small>/10</small>'):'—'),(pend!=null?(pend+' sin responder'):'reputación'));
+    });
+  });
+
+  if(!DIR) return;  // lo confidencial, solo dirección/corp
+
+  /* Pricing: ocupación prevista + ADR sugerido */
+  guard(function(){
+    return sb.from('pricing_recomendaciones').select('run_date').order('run_date',{ascending:false}).limit(1).then(function(r){
+      var run=r.data&&r.data[0]&&r.data[0].run_date; if(!run){ setKpi('ocup','—'); setKpi('adr','—'); return; }
+      var hoy=hoyISO();
+      return sb.from('pricing_recomendaciones').select('fecha,final_recommendation,room_occupancy_pct').eq('run_date',run).then(function(rr){
+        var filas=(rr.data||[]).filter(function(x){return String(x.fecha)===hoy;}); if(!filas.length) filas=(rr.data||[]).slice(0,40);
+        var occs=filas.map(function(x){return x.room_occupancy_pct;}).filter(function(x){return x!=null;});
+        var adrs=filas.map(function(x){return Number(x.final_recommendation);}).filter(function(x){return x>0;});
+        if(occs.length){ var o=occs.reduce(function(a,b){return a+b;},0)/occs.length; setKpi('ocup',Math.round(o*100)+'<small>%</small>','previsto · hoy'); } else setKpi('ocup','—','sin corrida de hoy');
+        if(adrs.length){ var a=adrs.reduce(function(s,b){return s+b;},0)/adrs.length; setKpi('adr',money(a),'sugerido · pricing'); } else setKpi('adr','—','');
+      });
+    });
+  });
+
+  /* Cierre del día */
+  guard(function(){
+    return sb.from('v_ctb_dias_auditoria').select('fecha_operativa,validado,descuadres,poliza_id').order('fecha_operativa',{ascending:false}).limit(1).then(function(r){
+      var d=r.data&&r.data[0]; if(!d){ setKpi('cier','—'); return; }
+      var est,tag;
+      if(d.descuadres>0){est='Descuadre';tag='bad';} else if(d.poliza_id){est='En libro';tag='ok';}
+      else if(!d.validado){est='Sin validar';tag='warn';} else {est='Listo';tag='ok';}
+      setKpi('cier','<span class="tag '+tag+'">'+est+'</span>',String(d.fecha_operativa||'').slice(5));
+    });
   });
 });
 
-/* Cierre del día: última fecha operativa */
-if(sb) guard(function(){
-  return sb.from('v_ctb_dias_auditoria').select('fecha_operativa,validado,descuadres,poliza_id').order('fecha_operativa',{ascending:false}).limit(1)
-   .then(function(r){
-     var d=r.data&&r.data[0]; if(!d){ setKpi('cier','—'); return; }
-     var est,tag;
-     if(d.descuadres>0){est='Descuadre';tag='bad';}
-     else if(d.poliza_id){est='En libro';tag='ok';}
-     else if(!d.validado){est='Sin validar';tag='warn';}
-     else {est='Listo';tag='ok';}
-     setKpi('cier','<span class="tag '+tag+'">'+est+'</span>', String(d.fecha_operativa||'').slice(5));
-   });
-});
-
 /* ---------- LO QUE NECESITA TU DÍA ---------- */
-if(sb) guard(function(){
+if(sb) guard(function(){ return window.__DIRp.then(function(DIR){
   var items=[];
   var hoy0=hoyIni();
   // próximo viernes
@@ -226,7 +224,10 @@ if(sb) guard(function(){
     sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true})
       .then(function(r){ if(r.count) items.push({dot:'acc',t:'Reseñas sin responder', d:'reputación · cola', ct:r.count, act:'Responder', href:'/reputacion.html'}); }).catch(function(){}),
     sb.from('incidencias').select('id',{count:'exact',head:true}).eq('resuelto',false)
-      .then(function(r){ if(r.count) items.push({dot:'warn',t:'Incidencias de RH', d:'sin resolver', ct:r.count, act:'Ver', href:'/m/incidencias.html'}); }).catch(function(){}),
+      .then(function(r){ if(r.count) items.push({dot:'warn',t:'Incidencias de RH', d:'sin resolver', ct:r.count, act:'Ver', href:'/m/incidencias.html'}); }).catch(function(){})
+  ];
+  if(DIR){
+    tareas.push(
     sb.from('ctb_plan_pago').select('id,estatus,fecha_viernes').eq('fecha_viernes',fvier).neq('estatus','cancelado').limit(1)
       .then(function(r){ var p=r.data&&r.data[0]; if(p) items.push({dot:(p.estatus==='autorizado'?'ok':'bad'),t:'Plan de pagos del viernes', d:'estatus: '+esc(p.estatus||'—'), act:'Abrir', href:'/m/finanzas-plan-pagos.html'}); }).catch(function(){}),
     sb.from('pricing_recomendaciones').select('run_date').order('run_date',{ascending:false}).limit(1)
@@ -236,7 +237,8 @@ if(sb) guard(function(){
           if(mov) items.push({dot:'acc',t:'Movimientos de precio sugeridos', d:'pricing recomienda ajustar', ct:mov, act:'Ver', href:'/m/RH-PRICING.html'});
         });
       }).catch(function(){})
-  ];
+    );
+  }
   return Promise.all(tareas).then(function(){
     if(!items.length){ $('dia').innerHTML='<div class="empty">Nada urgente por ahora. 👌</div>'; return; }
     $('dia').innerHTML = items.map(function(it){
@@ -245,10 +247,13 @@ if(sb) guard(function(){
         +(it.href?'<a class="act" href="'+it.href+'" target="_top">'+esc(it.act||'Abrir')+'</a>':'')+'</div>';
     }).join('');
   });
-});
+}); });
 
-/* ---------- PARA TI · DEL DÍA (tickets + Ateneo/Sincrético) ---------- */
-if(sb) guard(function(){
+/* ---------- PARA TI · DEL DÍA (tickets + Ateneo/Sincrético) — SOLO DIRECCIÓN/CORP ---------- */
+if(sb) window.__DIRp.then(function(DIR){
+ if(!DIR){ var cols=$('cols'); if(cols) cols.style.gridTemplateColumns='1fr'; return; }  // operativos: sin tarjeta "Para ti"
+ var pc=$('paraCard'); if(pc) pc.style.display='';
+ return guard(function(){
   var items=[];
   var hoy0=hoyIni();
   var tDir=['seguridad','app','hablar','mejora_general','idea','sin_clasificar'];
@@ -282,6 +287,7 @@ if(sb) guard(function(){
         +(it.href?'<a class="act" href="'+it.href+'" target="_top">'+esc(it.act||'Abrir')+'</a>':'')+'</div>';
     }).join('');
   });
+ });
 });
 function tituloTicket(t){ var M={seguridad:'🔒 Seguridad',app:'📱 App',hablar:'💬 Quiere hablar',mejora_general:'💡 Mejora',idea:'💡 Idea',sin_clasificar:'📨 Sin clasificar'}; return M[t]||('📨 '+esc(t||'Ticket')); }
 function recorta(s){ s=String(s||''); return esc(s.length>70?s.slice(0,70)+'…':s); }
