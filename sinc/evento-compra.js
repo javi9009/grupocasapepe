@@ -306,6 +306,12 @@ window.eventoCompra = (function () {
 
     caja.innerHTML =
        '<h2>'+esc(T('Aparta el espacio'))+'</h2>'
+      /* ARRIBA, NO AL PIE. Javi, 14-oct-2026: «no leo el entrar ahora». Y no
+         era que faltara —estaba puesto y visible—: estaba al final de todo,
+         debajo del botón de pagar y en gris de letra pequeña, detrás de un
+         calendario que llena la pantalla del teléfono. Lo que no se lee es
+         como si no estuviera. Va arriba del todo y con cuerpo propio. */
+      +'<div id="ecYo" style="margin:0 0 12px"></div>'
       +'<p class="ecP">'+esc(T('¿Qué día lo necesitas?'))+'</p>'
       +'<div id="ecCalD"></div>'
       +'<hr class="ecSep">'
@@ -315,12 +321,6 @@ window.eventoCompra = (function () {
       +'<div class="ecD" id="ecD"></div>'
       +'<button class="ecBt" id="ecPagar" disabled>'+esc(T('Pagar'))+'</button>'
       +'<div class="ecMsg" id="ecMsg"></div>'
-      /* QUIÉN ESTÁ COMPRANDO, A LA VISTA. Javi, 14-oct-2026: «yo ya debo estar
-         autentificado, ¿no? Aunque no veo Javi arriba ni nada de mi usuario ni
-         la opción de darme de alta». Tenía razón en lo segundo: la pantalla no
-         decía nunca si había alguien dentro, así que el pop-up de entrar salía
-         de sorpresa al final, con el día y la hora ya elegidos. */
-      +'<div class="ecPie" id="ecYo" style="margin-top:6px"></div>'
       +'<div class="ecPie">'+esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))
         +(conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'')+'</div>';
 
@@ -509,10 +509,14 @@ window.eventoCompra = (function () {
       var yo=null;
       try{ yo = (sincCuenta.yo && sincCuenta.yo()) || await sincCuenta.yoDeEstaLiga() || await sincCuenta.conSesionAbierta(); }catch(_){ }
       if(yo && (yo.email||yo.nombre)){
-        el.innerHTML=esc(T('Reservas como ')) + '<b>'+esc(yo.nombre||yo.email)+'</b>';
+        el.innerHTML='<div style="background:#F3EFE7;border-radius:10px;padding:10px 12px;font-size:14px">'
+          +esc(T('Reservas como ')) + '<b>'+esc(yo.nombre||yo.email)+'</b></div>';
       }else{
-        el.innerHTML=esc(T('Para pagar te pedimos el correo al final. '))
-          +'<a href="#" id="ecEntrar">'+esc(T('Entrar ahora'))+'</a>';
+        el.innerHTML='<div style="background:#F3EFE7;border:1px solid #E6DFD6;border-radius:10px;padding:12px">'
+          +'<div style="font-size:14px;margin-bottom:8px">'+esc(T('Para apartar necesitas tu cuenta. Entra ahora y no te lo pedimos al final.'))+'</div>'
+          +'<button type="button" id="ecEntrar" style="width:100%;padding:11px;border-radius:9px;border:0;'
+          +'background:#E2611E;color:#fff;font:700 15px/1 Oswald,system-ui,sans-serif;letter-spacing:.3px;cursor:pointer">'
+          +esc(T('Entrar o crear cuenta'))+'</button></div>';
         var a=$('ecEntrar');
         if(a) a.onclick=async function(ev){
           ev.preventDefault();
