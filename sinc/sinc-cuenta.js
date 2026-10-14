@@ -27,9 +27,18 @@ window.sincCuenta = (function () {
   var _sb = null, YO = null, PRESTADA = null;
   function cli() {
     if (!_sb) {
+      /* EL FLUJO SE DICE, NO SE DA POR SUPUESTO. Javi, 14-oct-2026: entró con
+         Google tres veces y la cuenta no se abrió ninguna. Mirando el registro
+         del servidor: Google devolvía bien —el callback respondía—, pero desde
+         su teléfono NO salía nunca la petición que cambia el código por la
+         sesión. El SDK simplemente no lo intentaba. Aquí no se decía qué flujo
+         es, así que quedaba en manos de la versión que sirviera el CDN ese día,
+         y las dos posibles —code y token en el hash— se recogen de maneras
+         distintas. Se fija PKCE, que es el que manda el código en la liga, y
+         abajo se canjea a mano si la detección automática no lo hace. */
       _sb = supabase.createClient(SB, KEY, {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true,
-                storageKey: 'sinc-huesped-auth' },
+                flowType: 'pkce', storageKey: 'sinc-huesped-auth' },
       });
     }
     return _sb;
@@ -69,25 +78,14 @@ window.sincCuenta = (function () {
   }
   function recoge() {
     try {
-      var c = cli();
-      var vuelve = /[?&](code|error)=/.test(location.search) || /access_token=/.test(location.hash);
-      if (!vuelve) { LISTA = Promise.resolve(false); return; }
-      LISTA = new Promise(function (listo) {
-        var t0 = Date.now();
-        (function espera() {
-          c.auth.getSession().then(function (r) {
-            var hay = !!(r && r.data && r.data.session);
-            /* 12 s de margen: más que eso es que el canje falló de verdad, y
-               entonces vale más enseñarle la puerta otra vez que dejarlo
-               mirando una rueda. */
-            if (hay || Date.now() - t0 > 12000) { limpiaLiga(); listo(hay); }
-            else setTimeout(espera, 250);
-          }).catch(function () {
-            if (Date.now() - t0 > 12000) { limpiaLiga(); listo(false); }
-            else setTimeout(espera, 250);
-          });
-        })();
-      });
+      cli();
+      if (!VUELVE_DE_GOOGLE) { LISTA = Promise.resolve(false); return; }
+      /* Un solo reloj: el de esperaCanje. Tener dos esperas mirando lo mismo
+         es la forma segura de que una limpie la liga mientras la otra todavía
+         la necesita. La liga se limpia cuando el canje ha terminado, bien o
+         mal, no antes. */
+      LISTA = esperaCanje().then(function (ses) { limpiaLiga(); return !!ses; })
+                           .catch(function () { limpiaLiga(); return false; });
     } catch (_) { LISTA = Promise.resolve(false); }
   }
   /* «¿Ya acabó de entrar?», para la pantalla que vuelve de Google. */
@@ -167,18 +165,35 @@ window.sincCuenta = (function () {
     try { return /[?&]code=/.test(location.search) || /access_token=/.test(location.hash); }
     catch (_) { return false; }
   })();
+  /* La liga tal como llegó de Google. Se guarda al cargar porque recoge() la
+     limpia, y el canje a mano la necesita entera. */
+  var LIGA_DE_VUELTA = (function () { try { return location.href; } catch (_) { return ''; } })();
   var CANJE = null;
   function esperaCanje() {
     if (CANJE) return CANJE;
     if (!VUELVE_DE_GOOGLE) { CANJE = Promise.resolve(null); return CANJE; }
     CANJE = new Promise(function (listo) {
-      var t0 = Date.now(), c;
+      var t0 = Date.now(), c, pedido = false;
       try { c = cli(); } catch (_) { return listo(null); }
       (function mira() {
         c.auth.getSession().then(function (r) {
           var ses = r && r.data && r.data.session;
           if (ses) return listo(ses);
-          if (Date.now() - t0 > 6000) return listo(null);   // no la espera eterna
+          /* A LA SEGUNDA, A MANO. Javi, 14-oct-2026: tres intentos con Google y
+             ninguna sesión. En el registro del servidor se veía que su teléfono
+             NUNCA pedía el canje: el SDK no lo intentaba solo. Así que si al
+             segundo y medio no hay sesión, se pide aquí explícitamente. Si el
+             SDK ya lo había hecho, esta llamada falla sin consecuencia —el
+             código ya está gastado— y seguimos esperando a la sesión. */
+          if (!pedido && Date.now() - t0 > 1500 && /[?&]code=/.test(LIGA_DE_VUELTA)) {
+            pedido = true;
+            try {
+              c.auth.exchangeCodeForSession(LIGA_DE_VUELTA).catch(function (e) {
+                try { console.warn('canje de Google', (e && e.message) || e); } catch (_) {}
+              });
+            } catch (_) {}
+          }
+          if (Date.now() - t0 > 12000) return listo(null);   // no la espera eterna
           setTimeout(mira, 200);
         }).catch(function () { listo(null); });
       })();
