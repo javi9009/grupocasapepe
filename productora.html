@@ -218,7 +218,31 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   function fmtCuando(e){if(e.fecha_inicio&&e.fecha_fin&&String(e.fecha_inicio).slice(0,10)!==String(e.fecha_fin).slice(0,10))return String(e.fecha_inicio).slice(0,10)+'→'+String(e.fecha_fin).slice(0,10);return e.fecha_inicio?String(e.fecha_inicio).slice(0,16).replace('T',' '):'—';}
   function hdrs(){return {'apikey':KEY,'Authorization':'Bearer '+KEY};}
   async function get(path){var r=await fetch(SB+'/rest/v1/'+path,{headers:hdrs()});if(!r.ok)throw new Error(path+' '+r.status);return r.json();}
-  async function rpc(fn,body){var r=await fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',headers:Object.assign({'Content-Type':'application/json'},hdrs()),body:JSON.stringify(body||{})});if(!r.ok)throw new Error(fn+' '+r.status);return r.json();}
+  /* LA BASE DICE POR QUE, Y AQUI SE TIRABA A LA BASURA. Javi, 13-oct-2026:
+     «da este error: No se pudo enviar: prod_portal_evento 409».
+     Un 409 no le dice nada a nadie. La respuesta trae el motivo escrito
+     -Postgres manda code, message, hint y details- y esto solo miraba el
+     numero. Ahora se lee el cuerpo, se traducen los dos choques que de verdad
+     pasan aqui, y si es otro se enseña lo que dijo la base tal cual, que es lo
+     que se puede copiar y mandar. */
+  async function rpc(fn,body){
+    var r=await fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},hdrs()),
+      body:JSON.stringify(body||{})});
+    var t=await r.text(), j=null; try{ j=t?JSON.parse(t):null; }catch(_){}
+    if(!r.ok){
+      var code=(j&&j.code)||'';
+      var msg=(j&&(j.message||j.hint||j.details))||'';
+      /* 23P01: dos cosas quieren la misma sala al mismo tiempo. Es el choque
+         mas comun del portal y hasta hoy salia como un numero. */
+      if(code==='23P01' || /exclusion constraint/i.test(msg))
+        throw new Error('Esa sala ya está apartada en ese rato. Cambia el día o la hora, o escríbenos para que te la liberemos.');
+      if(code==='23505') throw new Error('Eso ya está dado de alta: no se puede repetir.');
+      if(code==='23514') throw new Error('Hay un dato que la base no acepta. '+(msg||''));
+      throw new Error(msg || (fn+' '+r.status));
+    }
+    return j;
+  }
   /* Javi, 10-oct-2026: «al poner nombre ya se queda como guardado arriba; al
      mandar queda como solicitud enviada; si se aprueba queda como publicado». */
   function estadoTag(e){var m={borrador:'guardado',propuesto:'solicitud enviada',confirmado:'confirmado',publicado:'publicado',realizado:'realizado',cancelado:'cancelado'};var c=(e.estado==='publicado'||e.estado==='confirmado')?'ok':(e.estado==='cancelado'?'bad':'warn');return '<span class="tag '+c+'">'+esc(m[e.estado]||e.estado)+'</span>';}
