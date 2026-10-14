@@ -32,6 +32,14 @@ window.sincVitrina = (function () {
   var SB  = 'https://rehophywchakfapivsbh.supabase.co';
   var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 
+  /* Idioma: si la pantalla cargó sinc-i18n.js, el escaparate traduce el
+     contenido de la base y sus rótulos; si no, se queda en español (nunca
+     un hueco). T() pasa un texto fijo por el diccionario; EN() dice si toca
+     traducir; FE() da los nombres de día/mes del idioma vivo. */
+  function T(s){ try{ return (window.sincI18n && sincI18n.t) ? sincI18n.t(s) : s; }catch(_){ return s; } }
+  function EN(){ try{ return !!(window.sincI18n && sincI18n.idioma && sincI18n.idioma() !== 'es'); }catch(_){ return false; } }
+  function FE(){ try{ if(window.sincI18n && sincI18n.fechas) return sincI18n.fechas(); }catch(_){} return null; }
+
   /* Los stickers se cuelgan de la carpeta de ESTE archivo, no de la raíz: el
      escaparate también se sirve por casapepe.mx/sincretico/, donde /img/ no
      existe. La regla /sinc/img/apepe/* de _redirects cierra el círculo. */
@@ -51,7 +59,7 @@ window.sincVitrina = (function () {
   function money(n) {
     if (n == null) return '';
     n = Number(n);
-    return n === 0 ? 'Gratis' : '$' + n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
+    return n === 0 ? T('Gratis') : '$' + n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
   }
   /* Supabase redimensiona al vuelo; se pide el ancho que de verdad se ve. */
   function mini(u, ancho) {
@@ -96,10 +104,12 @@ window.sincVitrina = (function () {
     var d = deYmd(f), hoy = new Date(); hoy.setHours(0,0,0,0);
     var dif = Math.round((d - hoy) / 86400000);
     var hh = h ? ' ' + String(h).slice(0,5) : '';
-    if (dif === 0) return 'Hoy' + hh;
-    if (dif === 1) return 'Mañana' + hh;
-    if (dif > 1 && dif < 7) return DIAS[d.getDay()] + ' ' + d.getDate() + hh;
-    return d.getDate() + ' ' + MESES[d.getMonth()] + hh;
+    var fe = FE();
+    var dias = (fe && fe.cortos) || DIAS, meses = (fe && fe.meses) || MESES;
+    if (dif === 0) return T('Hoy') + hh;
+    if (dif === 1) return T('Mañana') + hh;
+    if (dif > 1 && dif < 7) return dias[d.getDay()] + ' ' + d.getDate() + hh;
+    return d.getDate() + ' ' + meses[d.getMonth()] + hh;
   }
   function dur(m) {
     m = Number(m || 0); if (!m) return '';
@@ -174,9 +184,9 @@ window.sincVitrina = (function () {
         d.push('💬 ' + x.idiomas.map(function (i) { return String(i).slice(0,3); }).join('/'));
       /* El cupo sólo si es chico: Javi —«no pongas grupo máximo si supera las
          10 personas»—, porque un tope de 20 no promete un grupo pequeño. */
-      if (x.cupo_max && x.cupo_max <= 10) d.push('👥 máx ' + x.cupo_max);
+      if (x.cupo_max && x.cupo_max <= 10) d.push('👥 ' + T('máx ') + x.cupo_max);
     } else if (x.fuente === 'evento') {
-      if (x.cupo_max) d.push('👥 ' + x.cupo_max + ' lugares');
+      if (x.cupo_max) d.push('👥 ' + x.cupo_max + T(' lugares'));
       if (x.duracion_min) d.push(dur(x.duracion_min));
     } else if (x.fuente === 'pase') {
       if (x.resumen) d.push('📅 ' + x.resumen);
@@ -207,13 +217,13 @@ window.sincVitrina = (function () {
        200 fuera lo que cuesta entrar. 14-oct-2026. */
     var porHoras = (x.fuente === 'evento' && !x.proxima_fecha);
     var badge = x.fuente === 'pase'
-      ? (x.precio_lista ? '<span class="eti">Lanzamiento</span>' : '')
+      ? (x.precio_lista ? '<span class="eti">' + esc(T('Lanzamiento')) + '</span>' : '')
       : (x.proxima_fecha ? '<span class="hora">' + esc(cuando(x.proxima_fecha, x.proxima_hora)) + '</span>'
-         : (porHoras ? '<span class="hora">Por horas</span>' : ''));
+         : (porHoras ? '<span class="hora">' + esc(T('Por horas')) + '</span>' : ''));
     var pr = x.gratis
-      ? 'Entrada libre'
+      ? T('Entrada libre')
       : (x.precio != null
-          ? money(x.precio) + (porHoras ? ' la hora' : '')
+          ? money(x.precio) + (porHoras ? T(' la hora') : '')
             + (x.precio_lista && Number(x.precio_lista) > Number(x.precio)
               ? '<s>' + money(x.precio_lista) + '</s>' : '')
           : '');
@@ -233,11 +243,11 @@ window.sincVitrina = (function () {
     /* El Ateneo va en UN bloque, sin dividir —Javi: «es todo el mismo
        espacio»—, ordenado por lo que tiene fecha y luego los pases. */
     var ver = (!cat.es_ateneo && o.verTodas)
-      ? '<a href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">Ver todas &rarr;</a>'
+      ? '<a href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">' + esc(T('Ver todas')) + ' &rarr;</a>'
       : '';
     return '<div class="sv-fila" data-cat="' + esc(cat.slug) + '">'
-      + '<div class="sv-lab"><b>' + (cat.icono ? esc(cat.icono) + ' ' : '') + esc(cat.nombre) + '</b>' + ver + '</div>'
-      + (cat.dice ? '<p class="sv-dice">' + esc(cat.dice) + '</p>' : '')
+      + '<div class="sv-lab"><b>' + (cat.icono ? esc(cat.icono) + ' ' : '') + esc(T(cat.nombre)) + '</b>' + ver + '</div>'
+      + (cat.dice ? '<p class="sv-dice">' + esc(T(cat.dice)) + '</p>' : '')
       + '<div class="sv-carr">' + items.map(function (x) { return ficha(x, o.qs, o.base); }).join('') + '</div>'
       + '</div>';
   }
@@ -260,10 +270,10 @@ window.sincVitrina = (function () {
           p_prueba: !!o.prueba
         })
       });
-      if (!r.ok) throw new Error('La base respondió ' + r.status);
+      if (!r.ok) throw new Error(T('La base respondió ') + r.status);
       items = await r.json();
     } catch (x) {
-      caja.innerHTML = '<div class="sv-vacio">No pudimos cargar el catálogo. ' + esc(x.message) + '</div>';
+      caja.innerHTML = '<div class="sv-vacio">' + esc(T('No pudimos cargar el catálogo. ')) + esc(x.message) + '</div>';
       return { filas: 0, items: 0, error: x.message };
     }
     /* Con `solo` se pide un trozo del escaparate: la portada de la APePe
@@ -277,8 +287,26 @@ window.sincVitrina = (function () {
     }
     if (!items.length) {
       if (o.calladoSiVacio) { caja.innerHTML = ''; return { filas: 0, items: 0 }; }
-      caja.innerHTML = '<div class="sv-vacio">Todavía no hay nada publicado por aquí.</div>';
+      caja.innerHTML = '<div class="sv-vacio">' + esc(T('Todavía no hay nada publicado por aquí.')) + '</div>';
       return { filas: 0, items: 0 };
+    }
+
+    /* Idioma del huésped: se le pisan encima los textos de la base por fuente
+       (experiencia→op_experiencias, evento→eventos). aplica nunca lanza y sólo
+       pisa lo que la fila ya trae (x.nombre); si falta la traducción, queda el
+       español. Los pases de coworking no tienen tabla i18n propia aún. */
+    if (EN() && window.sincI18n && sincI18n.aplica) {
+      try {
+        var exps = [], evts = [];
+        items.forEach(function (x) {
+          if (x.fuente === 'experiencia') exps.push(x);
+          else if (x.fuente === 'evento') evts.push(x);
+        });
+        await Promise.all([
+          exps.length ? sincI18n.aplica('op_experiencias', exps, { clave: 'id' }) : null,
+          evts.length ? sincI18n.aplica('eventos', evts, { clave: 'id' }) : null
+        ]);
+      } catch (_) { /* nunca romper la vitrina por el idioma */ }
     }
 
     await cargaOds();

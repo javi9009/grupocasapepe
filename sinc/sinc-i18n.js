@@ -362,6 +362,21 @@
       'Noche y espectáculo':'Nightlife and shows',
       'Excursiones':'Day trips',
       'Otras experiencias':'Other experiences',
+      /* Categorías y subtítulos del escaparate (sinc-vitrina). Las que ya están
+         en inglés en la base (Tours, Shows) se leen igual; aquí van las demás. */
+      'En el Ateneo de Virreyes':'At the Ateneo de Virreyes',
+      'Ven a componer y crear a Virreyes':'Come compose and create at Virreyes',
+      'Lo que se ve desde una butaca: conciertos, funciones, lucha.':
+        'What you watch from a seat: concerts, shows, lucha libre.',
+      'Salir a la calle con alguien que la conoce: a pie, en bici o un día entero fuera.':
+        'Hit the streets with someone who knows them: on foot, by bike, or a full day out.',
+      'Por horas':'By the hour',
+      ' la hora':' per hour',
+      'Lanzamiento':'Launch',
+      'Ver todas':'See all',
+      'Todavía no hay nada publicado por aquí.':'Nothing published here yet.',
+      'máx ':'max ',
+      ' lugares':' seats',
       /* Estas dos familias ya están en inglés en la base; se dejan igual, y en
          español también se leen así. */
       'Deportes':'Sports',
