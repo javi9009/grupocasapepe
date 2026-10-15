@@ -634,12 +634,35 @@ function T(f){ try{ return window.apepeT ? window.apepeT(f) : f; }catch(e){ retu
   pintaGaleria(qs);
   pieGO(); piePremio();
 
+  /* LA SESIÓN QUE HAYA EN ESTE TELÉFONO, SEA LA QUE SEA.
+     Hay dos: la del panel del Grupo (sb-…-auth-token, la que deja Concierge&OP)
+     y la del huésped (sinc-huesped-auth, la que se abre desde la propia app en
+     «Lo tuyo»). Mirar sólo una era por qué a Kari no le salía el Concierge
+     aunque hubiera entrado. Quién es esa persona no se decide aquí: se le
+     pregunta a la base con el token. */
+  function tokenDeSesion(){
+    var tk='';
+    try{
+      for(var i=0;i<localStorage.length && !tk;i++){
+        var k=localStorage.key(i);
+        if(!k || !(/sb-.*-auth-token/.test(k) || k==='sinc-huesped-auth')) continue;
+        var raw=localStorage.getItem(k)||'';
+        /* supabase-js guarda algunas sesiones en base64; sin esto el JSON.parse
+           reventaba y se perdía la sesión buena en silencio. */
+        if(raw.indexOf('base64-')===0){ try{ raw=atob(raw.slice(7)); }catch(_){ continue; } }
+        var v=JSON.parse(raw||'null');
+        var s=(v&&(v.currentSession||v.session||v))||null;
+        if(s && s.access_token) tk=s.access_token;
+      }
+    }catch(_){ }
+    return tk;
+  }
+
   /* ---------- EL ATAJO AL CONCIERGE ----------
-     Mira si en este teléfono hay sesión del Grupo (la que deja SoyPepe, que es
-     el mismo navegador) y le pregunta a la base si a esa persona le toca el
-     Concierge. Si no hay sesión, ni se pregunta: el huésped no paga ni una
-     llamada de más. Si la respuesta es que no, el botón se queda escondido,
-     que es como nació. */
+     Mira si en este teléfono hay sesión y le pregunta a la base si a esa
+     persona le toca el Concierge. Si no hay sesión, ni se pregunta: el huésped
+     no paga ni una llamada de más. Si la respuesta es que no, el botón se queda
+     escondido, que es como nació. */
   (function atajoConcierge(){
     var a=$('conciBtn'); if(!a) return;
 
@@ -658,20 +681,7 @@ function T(f){ try{ return window.apepeT ? window.apepeT(f) : f; }catch(e){ retu
        sesiones, y esto sólo veía una: aunque entrara por la app, el botón
        seguía escondido. Vale cualquiera de las dos; quién es se lo sigue
        preguntando a la base, que mira su ficha y no el token. */
-    var tk='';
-    try{
-      for(var i=0;i<localStorage.length && !tk;i++){
-        var k=localStorage.key(i);
-        if(!k || !(/sb-.*-auth-token/.test(k) || k==='sinc-huesped-auth')) continue;
-        var raw=localStorage.getItem(k)||'';
-        /* supabase-js guarda algunas sesiones en base64; sin esto, el JSON.parse
-           reventaba y se perdía la sesión buena. */
-        if(raw.indexOf('base64-')===0){ try{ raw=atob(raw.slice(7)); }catch(_){ continue; } }
-        var v=JSON.parse(raw||'null');
-        var s=(v&&(v.currentSession||v.session||v))||null;
-        if(s && s.access_token) tk=s.access_token;
-      }
-    }catch(_){ }
+    var tk=tokenDeSesion();
     if(!tk) return;
     fetch(SB+'/rest/v1/rpc/soy_voluntario',{method:'POST',
       headers:{apikey:KEY,Authorization:'Bearer '+tk,'Content-Type':'application/json'},
@@ -1092,22 +1102,44 @@ function T(f){ try{ return window.apepeT ? window.apepeT(f) : f; }catch(e){ retu
      Si no hay reserva, o la llamada falla, se queda el marcador: antes eso que
      un hueco. Javi, 1-oct. */
   (function(){
-    var q=$('quien'); if(!q || !RESV) return;
+    var q=$('quien'); if(!q) return;
+    function pon(n){
+      n=String(n||'').trim(); if(!n) return false;
+      /* Nombre y primer apellido: el completo de Cloudbeds trae a veces
+         cuatro palabras y se sale de la línea. */
+      q.textContent=n.split(/\s+/).slice(0,2).join(' ');
+      /* Fuera el data-i18n o el traductor de idioma le vuelve a poner el
+         marcador en cuanto alguien cambie a inglés. */
+      q.removeAttribute('data-i18n');
+      return true;
+    }
+    /* CON SESIÓN TAMBIÉN TIENE NOMBRE. Javi, 15-oct-2026: «¿puedes colocar el
+       nombre arriba?, donde pone Pepe huésped». El saludo sólo se rellenaba si
+       entrabas por la liga de una reserva; quien entra con su cuenta —un
+       voluntario, alguien del equipo, un cliente que ya compró— seguía siendo
+       «Pepe huésped» en su propia app. Se pregunta a la base, que sabe mirar
+       su ficha de cliente, la de empleado o lo que dejó Google. */
+    function porSesion(){
+      var tk=tokenDeSesion(); if(!tk) return;
+      fetch(SB+'/rest/v1/rpc/sinc_mi_nombre',{method:'POST',
+        headers:{apikey:KEY,Authorization:'Bearer '+tk,'Content-Type':'application/json'},
+        body:'{}'})
+        .then(function(r){ return r.ok?r.json():null; })
+        .then(function(n){ pon(n); })
+        .catch(function(){});
+    }
+    /* La reserva manda: en el teléfono de recepción se saluda a quien duerme
+       aquí, no a quien dejó su cuenta abierta. */
+    if(!RESV){ porSesion(); return; }
     fetch(SB+'/functions/v1/apepe-reserva',{method:'POST',
       headers:{apikey:KEY,'Content-Type':'application/json'},
       body:JSON.stringify({resv:RESV})})
       .then(function(r){ return r.ok?r.json():null; })
       .then(function(j){
         var n=j&&j.ok&&j.reserva&&j.reserva.nombre?String(j.reserva.nombre).trim():'';
-        if(!n) return;
-        /* Nombre y primer apellido: el completo de Cloudbeds trae a veces
-           cuatro palabras y se sale de la línea. */
-        q.textContent=n.split(/\s+/).slice(0,2).join(' ');
-        /* Fuera el data-i18n o el traductor de idioma le vuelve a poner el
-           marcador en cuanto alguien cambie a inglés. */
-        q.removeAttribute('data-i18n');
+        if(!pon(n)) porSesion();
       })
-      .catch(function(){});
+      .catch(porSesion);
   })();
 
   if($('bExt')){
