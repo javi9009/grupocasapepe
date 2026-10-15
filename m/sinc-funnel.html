@@ -307,6 +307,16 @@ function pintaTours(){
         +(l.length>60?'<div class="nada">…y '+(l.length-60)+' más</div>':'')
         :'<div class="nada">Vacía</div>')+'</div></section>';
   }).join('');
+  /* NADIE ESCUCHABA ESTE CLIC. Javi, 15-oct-2026: «en el funnel no permites
+     abrir a la izquierda la ficha del tour y poder entrar a editar, o aceptar
+     si está en pendiente de aceptación».
+     Las tarjetas se pintaban con data-tour desde el principio y no tenían
+     handler: el tablero de tours se veía y no se podía tocar. Las de operador
+     sí abrían su panel. */
+  Array.prototype.forEach.call($('tablero').querySelectorAll('[data-tour]'),function(c){
+    c.style.cursor='pointer';
+    c.addEventListener('click',function(){ abreTour(c.getAttribute('data-tour')); });
+  });
 }
 function cambiaVista(v){
   VISTA=v;
@@ -559,6 +569,74 @@ function abre(id){
 function dato(k,v){
   return '<div class="dato"><span class="k">'+esc(k)+'</span><span class="v">'+
     (v==null||v===''?'<span style="color:var(--tenue)">—</span>':v)+'</span></div>';
+}
+
+/* ---------- LA FICHA DEL TOUR, EN EL MISMO PANEL ----------
+   El panel lateral ya existía para los operadores; el tour reusa el mismo
+   hueco. Aquí no se edita nada del contenido —eso es la ficha larga, que vive
+   en /ficha.html— pero sí se entra a ella de un clic y, si el tour pidió
+   validación, se acepta desde aquí. El candado sigue siendo la base: si le
+   falta algo, se dice antes de publicar. */
+function money(n){ return '$'+Math.round(Number(n)||0).toLocaleString('es-MX'); }
+async function publicaExp(id, estado){
+  var r=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+encodeURIComponent(id),
+    {method:'PATCH',
+     headers:Object.assign({'Content-Type':'application/json','Prefer':'return=minimal'},hdr()),
+     body:JSON.stringify({estado:estado})});
+  if(!r.ok){ var t=await r.text(); throw new Error(t.slice(0,220)||('La base respondió '+r.status)); }
+}
+function abreTour(id){
+  var t=TOURS.filter(function(x){return x.id===id;})[0];
+  if(!t) return;
+  abierto=id;
+  $('pNom').textContent = t.nombre||'sin nombre';
+  $('pDon').textContent = [t.es_nuestro?'de la casa':(t.operador||'sin operador'),
+                           t.ciudad, t.categoria].filter(Boolean).join(' · ');
+  var et = ETOUR.filter(function(e){return e.k===t.etapa_auto;})[0]||{};
+  var pendiente = (t.etapa_auto==='en_revision');
+
+  $('pCuerpo').innerHTML =
+    '<div class="bloque">'+
+      dato('Cómo va', esc(et.n||t.etapa_auto||'—'))+
+      dato('Su ficha', esc(t.estado_ficha||'—'))+
+      dato('Precio', t.precio_adulto?money(t.precio_adulto):null)+
+      dato('Vendidos', t.vendidos||null)+
+      dato('Recaudado', t.recaudado?money(t.recaudado):null)+
+    '</div>'+
+    (t.le_falta
+      ? '<div class="bloque"><h3>Para ponerlo a la venta</h3>'+
+        '<div style="color:var(--error,#9E3B2E);font-size:13.5px;line-height:1.5">Falta '+esc(t.le_falta)+'</div></div>'
+      : '')+
+    (pendiente
+      ? '<div class="bloque"><h3>Pidió validación</h3>'+
+        '<div style="font-size:13.5px;line-height:1.5;color:var(--gris)">Revisa su ficha y, si está bien, acéptala. '+
+        'Al aceptarla queda publicada y a la venta.</div>'+
+        '<button class="btn" id="tAcepta" style="margin-top:10px">Aceptar y publicar</button>'+
+        '<div id="tAceptaOk" style="margin-top:6px;font-size:12.5px;color:var(--gris)"></div></div>'
+      : '')+
+    '<div class="bloque"><h3>Abrirla</h3>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+      /* target="_top" para no anidar el panel dentro del iframe del dashboard. */
+      '<a class="btn" href="/ficha.html?id='+esc(t.id)+'" target="_top">Editar su ficha</a>'+
+      (t.link?'<a class="btn fan" href="'+esc(t.link)+'" target="_blank" rel="noopener">Ver como huésped</a>':'')+
+      '</div></div>';
+
+  var b=$('tAcepta');
+  if(b) b.onclick=async function(){
+    b.disabled=true; var antes=b.textContent; b.textContent='Publicando…';
+    try{
+      await publicaExp(t.id,'publicada');
+      $('tAceptaOk').textContent='Publicada.';
+      await carga(); cierra();
+    }catch(x){
+      b.disabled=false; b.textContent=antes;
+      $('tAceptaOk').style.color='var(--error,#9E3B2E)';
+      $('tAceptaOk').textContent='No se pudo: '+(x.message||x);
+    }
+  };
+
+  $('panel').classList.add('on'); $('velo').classList.add('on');
+  $('panel').setAttribute('aria-hidden','false');
 }
 async function historial(id){
   try{
