@@ -722,6 +722,32 @@ async function ficha(id){
            ? '<button class="btn" onclick="moverEtapa(\''+id+'\',true)">Volver al automático</button>' : '')+
        '</div></div>'+
      '<p class="msg" id="f-msg"></p></div>';
+  /* Extender el voluntariado. Cuando a alguien se le acaba su mes y queremos
+     que siga, no se le da de alta otra vez: se le extiende desde aqui. Le
+     llega por correo el contrato de extension -el mismo contrato con una
+     cabecera que dice de que fecha viene- y lo tiene que volver a firmar. Su
+     cama se alarga sola en Residencias y NO repite check-in. El contrato
+     anterior no se borra: se queda en su expediente como historico.
+     Javi, 16-oct. */
+  if(fr.carta==='aceptada'||(CARTA_VIVA&&CARTA_VIVA.estatus==='aceptada')){
+    const finAct=(CARTA_VIVA&&CARTA_VIVA.hasta)||fr.carta_hasta||fr.fechas_hasta||'';
+    const mas30=(function(d){ if(!d) return ''; const x=new Date(d+'T12:00:00');
+      x.setDate(x.getDate()+30); return x.toISOString().slice(0,10); })(finAct);
+    h+='<div class="card"><h2>Extender su voluntariado</h2>'+
+       '<p class="sub" style="margin-bottom:10px">Lo que tiene firmado termina el <b>'+f(finAct)+'</b>. '+
+       'Si le extiendes, le sale un <b>contrato de extensi\u00f3n</b> a su correo para que lo vuelva a firmar, '+
+       'se le alarga la cama en Residencias y <b>no tiene que hacer check-in otra vez</b>. '+
+       'El contrato de ahora se guarda como hist\u00f3rico en su expediente.</p>'+
+       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+       'Desde <input type="date" id="ex-desde" value="'+finAct+'"> '+
+       'Hasta <input type="date" id="ex-hasta" value="'+mas30+'"> '+
+       'Cama <input id="ex-cama" placeholder="la misma" style="width:120px">'+
+       '<button class="btn g" onclick="extender(\''+id+'\')">\u21bb Extender y mandarle el contrato</button>'+
+       '</div>'+
+       '<p class="chk" style="margin:8px 0 0">La extensi\u00f3n tiene que empezar el d\u00eda que acaba lo firmado o despu\u00e9s. '+
+       'Si dejas la cama en blanco se queda en la suya; si esa cama ya est\u00e1 ocupada en esas fechas, te lo dice y no hace nada.</p>'+
+       '<p class="msg" id="ex-msg"></p></div>';
+  }
   h+='<div class="card" id="expCard"><h2>Expediente</h2><p class="vacio">Cargando…</p></div>';
   c.innerHTML=h; abreFicha();
   if(document.getElementById('planCard')) planPanel(id);
@@ -1156,6 +1182,44 @@ async function aceptarCarta(id){
     m2.textContent='Quedó aceptado y la carta está guardada, pero EL CORREO NO SALIÓ: '+
       ((correo&&correo.detalle)||'error desconocido')+
       '. Mándalo a mano desde Cartas enviadas.';
+  }
+}
+/* El boton de extender. Hace tres cosas de un tiron porque las tres van
+   juntas: guarda la extension, alarga la cama y manda el contrato nuevo. Si el
+   correo no sale lo dice claro, igual que en Aceptar: lo peor es creer que
+   salio. Javi, 16-oct. */
+async function extender(id){
+  const desde=(document.getElementById('ex-desde')||{}).value||'';
+  const hasta=(document.getElementById('ex-hasta')||{}).value||'';
+  const cama=((document.getElementById('ex-cama')||{}).value||'').trim();
+  const m=document.getElementById('ex-msg'); if(!m) return;
+  if(!desde||!hasta){ m.className='msg e'; m.textContent='Pon desde cu\u00e1ndo y hasta cu\u00e1ndo le extiendes.'; return; }
+  if(hasta<=desde){ m.className='msg e'; m.textContent='La salida tiene que ser despu\u00e9s de la llegada.'; return; }
+  if(!confirm('\u00bfExtenderle hasta el '+hasta+' y mandarle el contrato de extensi\u00f3n para que lo firme?')) return;
+  m.className='msg'; m.textContent='Extendiendo y mandando el contrato\u2026';
+  let r=null;
+  try{ r=await rpc('vol_renovar',{p_id:id,p_desde:desde,p_hasta:hasta,p_unidad:cama||null}); }catch(e){ r=null; }
+  if(!r||r.error){ m.className='msg e'; m.textContent=(r&&r.error)||'No se pudo extender.'; return; }
+  let correo=null;
+  try{
+    const fx=await fetch(SBU+'/functions/v1/vol-carta-reenviar',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':SBK,'Authorization':'Bearer '+(T||SBK)},
+      body:JSON.stringify({carta_id:r.carta_id})});
+    const j=await fx.json().catch(()=>({}));
+    correo=(j&&j.hechos&&j.hechos[0])||{ok:false,detalle:(j&&j.error)||'sin respuesta'};
+  }catch(e){ correo={ok:false,detalle:e.message}; }
+  await bandeja(); await ficha(id);
+  const m2=document.getElementById('ex-msg')||document.getElementById('f-msg'); if(!m2) return;
+  if(correo&&correo.ok){
+    m2.className='msg k';
+    m2.textContent='\u2713 Extendido hasta el '+hasta+' en la cama '+(r.unidad||'')+
+      ', y el contrato de extensi\u00f3n sali\u00f3 a '+(correo.a||'su correo')+'. Falta que lo firme.';
+  } else {
+    m2.className='msg e';
+    m2.textContent='Qued\u00f3 extendido y el contrato est\u00e1 guardado, pero EL CORREO NO SALI\u00d3: '+
+      ((correo&&correo.detalle)||'error desconocido')+
+      '. M\u00e1ndalo a mano desde Cartas enviadas.';
   }
 }
 /* Rechazar y archivar SI guardaban, pero la ficha abierta se quedaba igual:
