@@ -550,6 +550,23 @@
 
       /* el boleto */
       'Buscando tu boleto…':'Looking for your ticket…',
+
+      /* pedir la devolución desde el boleto */
+      '¿Ya no puedes venir?':'Can’t make it any more?',
+      'Puedes pedirnos que te lo devolvamos. Aunque tu tarifa no sea reembolsable, lo miramos caso por caso.':
+        'You can ask us for a refund. Even if your rate is non-refundable, we look at each case.',
+      'Pedir la devolución':'Ask for a refund',
+      'Cuéntanos qué pasó':'Tell us what happened',
+      'No hace falta que sea largo. Nos ayuda a resolverlo más rápido.':
+        'It doesn’t have to be long. It helps us sort it out faster.',
+      'Me salió un imprevisto y no voy a llegar…':'Something came up and I won’t make it…',
+      'Enviar la solicitud':'Send the request',
+      'Enviando…':'Sending…',
+      'Tenemos tu solicitud':'We have your request',
+      'Vamos a revisar si ya tuvimos que gastar algo por tu reserva —boletos, apartar el lugar, alimentos o la nómina del día—. Si todavía no hemos incurrido en ese gasto, te devolvemos la parte que se pueda liberar. Te escribimos a tu correo en cuanto lo tengamos.':
+        'We’ll check whether we already had to spend anything on your booking — tickets, holding the venue, food or the day’s wages. If we haven’t incurred that cost yet, we’ll refund you whatever can still be released. We’ll write to your email as soon as we know.',
+      'No pudimos enviarla. Inténtalo otra vez en un momento.':
+        'We couldn’t send it. Try again in a moment.',
       'No encontramos ese boleto':'We couldn\u2019t find that ticket',
       'Revisa el enlace del correo, o escríbenos y lo buscamos por tu nombre.':
         'Check the link in the email, or write to us and we\u2019ll look it up by your name.',
