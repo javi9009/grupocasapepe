@@ -2688,18 +2688,107 @@ gmp-place-autocomplete,.gmpac{
       $('salidaVaria').innerHTML='<div class="aviso">Primero dinos '+(m==='por_dia'?'qué días sale, en «Cuándo sale»':'a qué horas sale, en «La ceremonia»')+'. Luego vuelve aquí y le pones lugar a cada uno.</div>';
       return;
     }
-    $('salidaVaria').innerHTML='<table><thead><tr><th>'+(m==='por_dia'?'Día':'Hora')+'</th><th>'+
+    /* AQUÍ NO VA UN DESPLEGABLE. Javi, 15-oct-2026: «donde selecciono el punto
+       de salida cuando sale de un sitio distinto cada día, no pongas el
+       desplegable de lugares preseleccionados sino un Google Maps para
+       escogerlo, como arriba».
+       La lista corta obligaba a que el sitio ya estuviera en el catálogo: si el
+       taller del sábado se daba en un sitio nuevo, no había manera de ponerlo, y
+       quien llenaba la ficha acababa eligiendo «el más parecido». Ahora cada día
+       busca en el mapa igual que el campo de arriba, y lo que se elige entra al
+       catálogo de lugares —con su dirección y sus coordenadas— para que quede
+       disponible en las paradas, en el mapa del recorrido y en las demás fichas.
+       Si Google no carga, el campo sigue siendo un texto con la lista de siempre
+       detrás, así que nunca se queda mudo. */
+    $('salidaVaria').innerHTML='<table><thead><tr><th style="width:86px">'+(m==='por_dia'?'Día':'Hora')+'</th><th>'+
       (noSeMueve()?'Se da en':'Sale de')+'</th></tr></thead><tbody>'+
       claves.map(function(k){
-        return '<tr><td><b>'+esc(k)+'</b></td><td><select data-lug="'+esc(k)+'"><option value="">—</option>'+
-          LUG.map(function(l){return '<option value="'+l.id+'">'+esc(l.nombre)+'</option>';}).join('')+'</select></td></tr>';
-      }).join('')+'</tbody></table>';
+        return '<tr data-fila="'+esc(k)+'" data-lugid=""><td style="vertical-align:top;padding-top:13px"><b>'+esc(k)+'</b></td><td>'+
+          '<input class="bLug" data-lug="'+esc(k)+'" list="dlVaria" placeholder="Busca el lugar en el mapa" autocomplete="off"'+
+            ' style="width:100%;padding:7px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit;font-size:13px">'+
+          '<div class="mini lugEco" style="margin-top:5px">Sin lugar todavía.</div>'+
+        '</td></tr>';
+      }).join('')+'</tbody></table>'+
+      '<datalist id="dlVaria">'+LUG.map(function(l){
+        return '<option value="'+esc(l.nombre)+'">'+esc(l.barrio||l.direccion||'')+'</option>';}).join('')+'</datalist>';
+
+    Array.prototype.forEach.call($('salidaVaria').querySelectorAll('tr[data-fila]'),function(tr){
+      var inp=tr.querySelector('.bLug');
+      autocompleta(inp,function(p){
+        tr.querySelector('.lugEco').textContent='Guardando el lugar…';
+        lugarDeGoogle(p).then(function(l){ ponLugarFila(tr,l); })
+          .catch(function(x){ tr.querySelector('.lugEco').textContent=
+            'No se pudo guardar ese lugar: '+((x&&x.message)||x); });
+      });
+      /* escrito a mano —o sin Google—: si coincide con uno del catálogo, se enlaza */
+      inp.onchange=function(){
+        var l=lugarDelCatalogo(inp.value);
+        if(l){ponLugarFila(tr,l);return;}
+        if(!tr.getAttribute('data-lugid'))
+          tr.querySelector('.lugEco').textContent=
+            'Ese no está en la lista: búscalo en el mapa para que quede con su dirección.';
+      };
+    });
+    enchufaAC();
+
     get('op_exp_lugares?select=*&experiencia_id=eq.'+ID).then(function(rows){
       rows.forEach(function(r){
-        var k=r.dia||r.hora;var s=$('salidaVaria').querySelector('[data-lug="'+k+'"]');
-        if(s&&r.lugar_id)s.value=r.lugar_id;
+        var k=r.dia||r.hora;
+        var tr=$('salidaVaria').querySelector('tr[data-fila="'+k+'"]');
+        if(!tr||!r.lugar_id)return;
+        var l=LUG.filter(function(x){return x.id===r.lugar_id;})[0];
+        if(l)ponLugarFila(tr,l);
+        else tr.setAttribute('data-lugid',r.lugar_id);   /* del catálogo viejo: se respeta */
       });
     });
+  }
+  /* Deja el lugar marcado en la fila y lo dice en palabras: el buscador de
+     Google se queda en blanco después de elegir, así que sin esta línea no
+     habría manera de saber qué sitio quedó puesto en cada día. */
+  function ponLugarFila(tr,l){
+    tr.setAttribute('data-lugid',l.id);
+    var inp=tr.querySelector('.bLug');
+    if(inp&&inp.style.display!=='none')inp.value=l.nombre;
+    tr.querySelector('.lugEco').innerHTML='✓ <b>'+esc(l.nombre)+'</b>'+
+      (l.barrio?' · '+esc(l.barrio):'')+
+      (l.direccion?'<br><span style="color:var(--gris)">'+esc(l.direccion)+'</span>':'')+
+      ' <a href="#" class="quitaLug" style="color:var(--naranja-oscuro)">quitar</a>';
+    var q=tr.querySelector('.quitaLug');
+    if(q)q.onclick=function(e){
+      e.preventDefault();
+      tr.setAttribute('data-lugid','');
+      var i=tr.querySelector('.bLug');
+      if(i){i.value='';if(i._gmp)i._gmp.value='';}
+      tr.querySelector('.lugEco').textContent='Sin lugar todavía.';
+    };
+  }
+  /* Lo que se elige en el mapa entra al catálogo de lugares. Se busca antes por
+     el identificador de Google y luego por nombre, para no acabar con cinco
+     «La Cósmica» distintas. */
+  async function lugarDeGoogle(p){
+    var pid=String(p.place_id||'').trim();
+    if(pid){
+      var ya=LUG.filter(function(x){return x.maps_place_id===pid;})[0];
+      if(ya)return ya;
+      var r=await get('sinc_lugares?select=*&maps_place_id=eq.'+encodeURIComponent(pid)+'&limit=1');
+      if(r[0]){LUG.push(r[0]);return r[0];}
+    }
+    var nom=String(p.name||p.direccion||'').trim();
+    var mismo=lugarDelCatalogo(nom);
+    if(mismo)return mismo;
+    if(!nom)throw new Error('ese sitio no trae nombre');
+    var rr=await post('sinc_lugares',[{
+      nombre:nom, barrio:p.barrio||null, ciudad:'Ciudad de México',
+      direccion:p.direccion||null,
+      lat:(p.lat==null?null:p.lat), lng:(p.lng==null?null:p.lng),
+      maps_place_id:pid||null, operador_id:E.operador_id||null
+    }],true);
+    var j=null; try{ j=await rr.json(); }catch(_){}
+    if(!rr.ok)throw new Error((j&&(j.message||j.hint))||('la base respondió '+rr.status));
+    var nuevo=Array.isArray(j)?j[0]:j;
+    if(!nuevo||!nuevo.id)throw new Error('la base no devolvió el lugar');
+    LUG.push(nuevo);
+    return nuevo;
   }
 
   /* ---------- horas de salida ---------- */
@@ -5098,11 +5187,12 @@ gmp-place-autocomplete,.gmpac{
     // lugares por día u hora
     if(b.salida_modo!=='fijo'){
       await del('op_exp_lugares','experiencia_id=eq.'+ID);
-      var filas=Array.prototype.map.call($('salidaVaria').querySelectorAll('[data-lug]'),function(s,i){
-        if(!s.value)return null;
-        var k=s.getAttribute('data-lug');
-        return b.salida_modo==='por_dia'?{experiencia_id:ID,dia:k,lugar_id:s.value,orden:i}
-                                        :{experiencia_id:ID,hora:k,lugar_id:s.value,orden:i};
+      var filas=Array.prototype.map.call($('salidaVaria').querySelectorAll('tr[data-fila]'),function(tr,i){
+        var lid=tr.getAttribute('data-lugid')||'';
+        if(!lid)return null;
+        var k=tr.getAttribute('data-fila');
+        return b.salida_modo==='por_dia'?{experiencia_id:ID,dia:k,lugar_id:lid,orden:i}
+                                        :{experiencia_id:ID,hora:k,lugar_id:lid,orden:i};
       }).filter(Boolean);
       if(filas.length)await post('op_exp_lugares',filas);
     }

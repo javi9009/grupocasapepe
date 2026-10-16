@@ -118,6 +118,48 @@ select.sel:focus,textarea.nota:focus{outline:none;border-color:var(--naranja);bo
 .linea-t:last-child{border-bottom:none}
 .linea-t span{color:var(--tenue);display:block;font-size:11.5px}
 .ok{color:var(--ok);font-size:12px}
+
+/* ---------- DOS CAJONES ----------
+   Javi, 15-oct-2026: «al darle a ver reserva del cliente que aparezca este
+   detalle y se desplace el módulo anterior de resumen al centro de la página».
+   El resumen del tour no se cierra: se corre a la izquierda y deja sitio al
+   detalle de la venta, para poder mirar los dos a la vez —de qué tour es y
+   quién lo compró— sin perder el hilo. En teléfono no hay dos huecos: el
+   detalle se pone encima y al cerrarlo vuelve el resumen. */
+.panel.corrido{right:min(470px,50vw);transition:right .22s ease,transform .22s ease}
+.panel2{position:fixed;top:0;right:0;bottom:0;width:min(470px,100%);background:var(--papel);
+  z-index:53;transform:translateX(100%);transition:transform .22s ease;overflow-y:auto;
+  box-shadow:-20px 0 50px -30px rgba(30,26,22,.7)}
+.panel2.on{transform:none}
+@media(max-width:900px){ .panel.corrido{right:0} }
+.dl{display:grid;grid-template-columns:118px 1fr;gap:3px 10px;font-size:13px;margin:0}
+.dl dt{color:var(--gris)}
+.dl dd{margin:0;word-break:break-word}
+.dl dd a{color:var(--naranja-oscuro)}
+.sec{font-family:Oswald;font-weight:600;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--gris);margin:16px 0 7px;padding-top:12px;border-top:1px solid var(--linea)}
+.sec:first-child{margin-top:0;padding-top:0;border-top:0}
+.dinero{width:100%;border-collapse:collapse;font-size:13px}
+.dinero td{padding:4px 0}
+.dinero td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.dinero tr.sub td{color:var(--gris);padding-left:10px;font-size:12.5px}
+.dinero tr.tot td{font-weight:700;border-top:1px solid var(--linea);padding-top:7px}
+.vta{display:block;width:100%;text-align:left;border:1px solid var(--linea);background:var(--blanco);
+  border-radius:9px;padding:8px 10px;margin-bottom:7px;cursor:pointer;font:inherit}
+.vta:hover{border-color:var(--naranja);background:var(--naranja-suave)}
+.vta b{font-family:Oswald;font-weight:600;font-size:12.5px;text-transform:uppercase;display:block}
+.vta .m{color:var(--gris);font-size:11.5px;margin-top:2px;display:flex;gap:6px;flex-wrap:wrap}
+.sal{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--linea);font-size:12.8px}
+.sal:last-child{border-bottom:0}
+.sal .cu{margin-left:auto;display:flex;gap:5px;align-items:center}
+.sal input{width:58px;border:1.5px solid var(--linea);border-radius:7px;padding:5px 7px;font:inherit;
+  font-size:12.5px;text-align:center}
+.sal input:focus{outline:none;border-color:var(--naranja);box-shadow:0 0 0 3px var(--naranja-suave)}
+.tag{display:inline-block;font-family:Oswald;font-weight:600;font-size:9.5px;text-transform:uppercase;
+  letter-spacing:.07em;border-radius:999px;padding:2px 8px;background:var(--hueso);color:var(--gris)}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}
+.tag.warn{background:var(--alerta-bg);color:var(--alerta)}
+.tag.bad{background:#F4E2DE;color:#9E3B2E}
 </style>
 <link rel="icon" type="image/png" href="/dash-192.png">
 <link rel="apple-touch-icon" href="/dash-192.png">
@@ -176,6 +218,14 @@ select.sel:focus,textarea.nota:focus{outline:none;border-color:var(--naranja);bo
     <div class="don" id="pDon"></div>
   </div>
   <div class="pc" id="pCuerpo"></div>
+</aside>
+<aside class="panel2" id="panel2" aria-hidden="true">
+  <div class="ph">
+    <button class="cerrar" id="p2Cerrar">×</button>
+    <h2 id="p2Nom">—</h2>
+    <div class="don" id="p2Don"></div>
+  </div>
+  <div class="pc" id="p2Cuerpo"></div>
 </aside>
 
 <script src="/cp-acceso.js"></script>
@@ -249,6 +299,17 @@ async function get(p){
   if(r.status===401){ if(await renueva()) r=await fetch(SB+'/rest/v1/'+p,{headers:hdr()}); }
   if(!r.ok)throw new Error('La base respondió '+r.status);
   return await r.json();
+}
+/* PATCH con el mismo reintento de sesión que get(): el token caduca a la hora
+   y sin esto el cupo se quedaba cambiado en pantalla y no en la base. */
+async function patchT(tabla,q,cuerpo){
+  var body=JSON.stringify(cuerpo);
+  function manda(){ return fetch(SB+'/rest/v1/'+tabla+'?'+q,{method:'PATCH',
+    headers:Object.assign({'Prefer':'return=minimal'},hdr()),body:body}); }
+  var r=await manda();
+  if(r.status===401){ if(await renueva()) r=await manda(); }
+  if(!r.ok){ var t=await r.text(); throw new Error(t.slice(0,220)||('la base respondió '+r.status)); }
+  return true;
 }
 async function rpc(f,b){
   var cuerpo=JSON.stringify(b||{});
@@ -438,11 +499,21 @@ async function mueve(id,etapa){
 
 /* ---------- la ficha lateral ---------- */
 function cierra(){
+  cierra2();
   $('panel').classList.remove('on'); $('velo').classList.remove('on');
   $('panel').setAttribute('aria-hidden','true'); abierto=null;
 }
+/* El segundo cajón se cierra solo: el resumen vuelve a su sitio y se queda. */
+function cierra2(){
+  $('panel2').classList.remove('on'); $('panel2').setAttribute('aria-hidden','true');
+  $('panel').classList.remove('corrido');
+}
 $('pCerrar').onclick=cierra; $('velo').onclick=cierra;
-document.addEventListener('keydown',function(e){if(e.key==='Escape')cierra();});
+$('p2Cerrar').onclick=cierra2;
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape')return;
+  if($('panel2').classList.contains('on'))cierra2(); else cierra();
+});
 
 function abre(id){
   var o=OPS.filter(function(x){return x.id===id;})[0];
@@ -603,6 +674,17 @@ function abreTour(id){
       dato('Vendidos', t.vendidos||null)+
       dato('Recaudado', t.recaudado?money(t.recaudado):null)+
     '</div>'+
+    /* LO IMPORTANTE, SIN SALIR DE AQUÍ. Javi, 15-oct-2026: «en la ficha
+       auméntame la información importante: últimas ventas, y abre los detalles
+       —próximas salidas, cupo— para poder editarlo desde ahí».
+       El panel enseñaba cinco cifras y dos botones; para ver quién había
+       comprado o cuánto cupo quedaba el lunes había que irse a Operación y
+       volver. Los dos bloques de abajo se cargan aparte para que el panel
+       abra de inmediato y no se quede esperando a la base. */
+    '<div class="bloque"><h3>Próximas salidas</h3><div id="tSalidas" '+
+      'style="font-size:12.5px;color:var(--gris)">Mirando el calendario…</div></div>'+
+    '<div class="bloque"><h3>Últimas ventas</h3><div id="tVentas" '+
+      'style="font-size:12.5px;color:var(--gris)">Buscando…</div></div>'+
     (t.le_falta
       ? '<div class="bloque"><h3>Para ponerlo a la venta</h3>'+
         '<div style="color:var(--error,#9E3B2E);font-size:13.5px;line-height:1.5">Falta '+esc(t.le_falta)+'</div></div>'
@@ -635,9 +717,180 @@ function abreTour(id){
     }
   };
 
+  cierra2();
   $('panel').classList.add('on'); $('velo').classList.add('on');
   $('panel').setAttribute('aria-hidden','false');
+  salidasDe(t); ventasDe(t);
 }
+
+/* ---------- PRÓXIMAS SALIDAS, CON EL CUPO A MANO ----------
+   El calendario cuelga de `experiencias`, no de `op_experiencias`, así que
+   primero hay que preguntar de qué experiencia es esta ficha. Si el tour
+   todavía no tiene calendario no es un error: es que nadie lo ha programado. */
+async function salidasDe(t){
+  var c=$('tSalidas'); if(!c)return;
+  try{
+    var oe=await get('op_experiencias?select=experiencia_id&id=eq.'+encodeURIComponent(t.id)+'&limit=1');
+    var ex=oe&&oe[0]&&oe[0].experiencia_id;
+    if(!ex){ c.textContent='Este tour todavía no cuelga de un calendario.'; return; }
+    var hoy=new Date().toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'});
+    var S=await get('v_sinc_salidas?select=id,fecha,hora,estado,cupo_max,cupo_tomado,cupo_libre,guia'+
+      '&experiencia_id=eq.'+encodeURIComponent(ex)+'&fecha=gte.'+hoy+'&order=fecha.asc,hora.asc&limit=10');
+    if(!S.length){ c.textContent='No tiene ninguna salida por delante.'; return; }
+    c.innerHTML=S.map(function(x){
+      return '<div class="sal" data-sal="'+esc(x.id)+'">'+
+        '<div><b>'+esc(fcorta(x.fecha))+'</b> '+esc((x.hora||'').slice(0,5))+
+          (x.guia?'<br><span style="color:var(--tenue);font-size:11.5px">'+esc(x.guia)+'</span>':'')+
+          (x.estado&&x.estado!=='programada'?' <span class="tag">'+esc(x.estado)+'</span>':'')+'</div>'+
+        '<div class="cu"><span style="color:var(--gris)">'+(x.cupo_tomado||0)+' de</span>'+
+          '<input type="number" min="0" max="999" value="'+(x.cupo_max==null?'':x.cupo_max)+'" '+
+            'data-cupo="'+esc(x.id)+'" title="Cupo máximo"></div>'+
+      '</div>';
+    }).join('')+'<div id="salMsg" style="margin-top:7px;font-size:11.5px;color:var(--gris)"></div>';
+    Array.prototype.forEach.call(c.querySelectorAll('[data-cupo]'),function(i){
+      var antes=i.value;
+      i.onchange=async function(){
+        var v=i.value===''?null:Math.max(0,parseInt(i.value,10)||0);
+        var fila=S.filter(function(z){return z.id===i.getAttribute('data-cupo');})[0]||{};
+        if(v!=null && v < (fila.cupo_tomado||0)){
+          i.value=antes;
+          $('salMsg').textContent='No puedes dejar el cupo por debajo de los '+(fila.cupo_tomado||0)+' que ya van vendidos.';
+          return;
+        }
+        i.disabled=true; $('salMsg').textContent='Guardando…';
+        try{
+          await patchT('sinc_salidas','id=eq.'+encodeURIComponent(i.getAttribute('data-cupo')),{cupo_max:v});
+          antes=i.value; fila.cupo_max=v;
+          $('salMsg').textContent='Cupo guardado.';
+        }catch(x){
+          i.value=antes;
+          $('salMsg').textContent='No se pudo: '+(x.message||x);
+        }
+        i.disabled=false;
+      };
+    });
+  }catch(x){ c.textContent='No se pudieron leer las salidas: '+(x.message||x); }
+}
+
+/* ---------- ÚLTIMAS VENTAS ----------
+   Cada una abre su detalle completo en el segundo cajón. */
+var VENTAS=[];
+async function ventasDe(t){
+  var c=$('tVentas'); if(!c)return;
+  try{
+    VENTAS=await get('v_sinc_portal?select=*&op_experiencia_id=eq.'+encodeURIComponent(t.id)+
+      '&order=reservada_at.desc&limit=12');
+    if(!VENTAS.length){ c.textContent='Todavía no ha vendido nada.'; return; }
+    c.innerHTML=VENTAS.map(function(x){
+      return '<button class="vta" data-vta="'+esc(x.id)+'">'+
+        '<b>'+esc(x.huesped||'sin nombre')+'</b>'+
+        '<div class="m"><span>'+esc(x.folio||'')+'</span>'+
+          '<span>'+esc(fcorta(x.fecha_salida))+(x.hora_salida?' · '+esc(String(x.hora_salida).slice(0,5)):'')+'</span>'+
+          '<span>'+(x.pax||0)+' pax</span><span>'+money(x.total)+'</span></div>'+
+        '<div class="m">'+pill(x.estado_crudo,TOURE)+' '+pill(x.pago_estado_crudo,PAGOE)+'</div>'+
+      '</button>';
+    }).join('');
+    Array.prototype.forEach.call(c.querySelectorAll('[data-vta]'),function(b){
+      b.onclick=function(){ abreVenta(b.getAttribute('data-vta')); };
+    });
+  }catch(x){ c.textContent='No se pudieron leer las ventas: '+(x.message||x); }
+}
+
+/* ---------- EL DETALLE DE LA VENTA, EN EL SEGUNDO CAJÓN ----------
+   Es el mismo detalle que se ve en Operación, de lectura: desde el funnel se
+   mira, y para tocarla —moverla de día, cancelarla, cambiarle el estado— se
+   entra a Operación con un clic, que es donde vive ese trabajo y donde queda
+   apuntado quién lo hizo. */
+var TOURE={pendiente:'Por confirmar',confirmada:'Reservado',solicita_cancelacion:'Solicita cancelación',
+           cancelada:'Cancelado',no_show:'No show',en_tour:'En tour',completada:'Vivido',
+           termino_sin_escaneo:'Terminó sin escanear'};
+var PAGOE={sin_cobro:'Sin cobro',pendiente:'Sin cobrar',pagado:'Pagado',pagado_parcial:'Pagado parcialmente',
+           fallido:'Falló la tarjeta',caducado:'Caducó',solicita_reembolso:'Solicita reembolso',
+           reembolsado:'Reembolsado',reembolso_parcial:'Reembolso parcial',en_disputa:'En disputa'};
+var TONOE={confirmada:'',en_tour:'ok',completada:'ok',cancelada:'bad',no_show:'bad',
+           solicita_cancelacion:'warn',termino_sin_escaneo:'warn',pendiente:'warn',
+           pagado:'ok',pagado_parcial:'warn',sin_cobro:'',solicita_reembolso:'warn',
+           reembolsado:'bad',reembolso_parcial:'warn',fallido:'bad',caducado:'bad',en_disputa:'bad'};
+function pill(v,mapa){ return '<span class="tag'+(TONOE[v]?' '+TONOE[v]:'')+'">'+esc(mapa[v]||v||'—')+'</span>'; }
+function fcorta(f){ if(!f)return '—';
+  try{ return new Date(f+'T12:00:00Z').toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'}); }
+  catch(_){ return f; } }
+function flarga(f){ if(!f)return '—';
+  try{ return new Date(f+'T12:00:00Z').toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}); }
+  catch(_){ return f; } }
+function fhora(s){ if(!s)return '—';
+  try{ return new Date(s).toLocaleString('es-MX',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(_){ return s; } }
+function fl(k,v){ return '<dt>'+esc(k)+'</dt><dd>'+(v==null||v===''?'<span style="color:var(--tenue)">—</span>':v)+'</dd>'; }
+
+function abreVenta(id){
+  var x=VENTAS.filter(function(z){return z.id===id;})[0]; if(!x)return;
+  $('p2Nom').textContent=x.huesped||'—';
+  $('p2Don').textContent=[x.tour, flarga(x.fecha_salida)+(x.hora_salida?' · '+String(x.hora_salida).slice(0,5):'')]
+    .filter(Boolean).join(' · ');
+
+  var com=[['Neto del touroperador',x.neto_operador],['Bono del anfitrión',x.bono_concierge],
+           ['Para el hotel',x.al_hotel],['Margen de Sincrético',x.margen_sincretico]]
+    .filter(function(c){ return c[1]!=null && Number(c[1])!==0; });
+
+  $('p2Cuerpo').innerHTML=
+    '<div class="bloque">'+
+      '<div class="sec">La reserva</div>'+
+      '<dl class="dl">'+
+        fl('Folio',esc(x.folio||''))+
+        fl('Reservada el',fhora(x.reservada_at))+
+        fl('Personas',(x.pax||0)+(x.menores?' ('+(x.adultos||0)+' adultos, '+x.menores+' menores)':''))+
+        fl('Canal',esc(x.canal||''))+
+        fl('Estado del tour',pill(x.estado_crudo,TOURE))+
+        fl('Estado del pago',pill(x.pago_estado_crudo,PAGOE))+
+      '</dl>'+
+      '<div class="sec">Quién viene</div>'+
+      '<dl class="dl">'+
+        fl('Nombre',esc(x.huesped||''))+
+        fl('Correo',x.email?'<a href="mailto:'+esc(x.email)+'">'+esc(x.email)+'</a>':'')+
+        fl('Teléfono',x.telefono?'<a href="tel:'+esc(String(x.telefono).replace(/\s/g,''))+'">'+esc(x.telefono)+'</a>':'')+
+        fl('País',esc(x.pais||''))+
+        fl('Idioma',esc(x.idioma||''))+
+      '</dl>'+
+      '<div class="sec">La salida</div>'+
+      '<dl class="dl">'+
+        fl('Tour',esc(x.tour||''))+
+        fl('Touroperadora',esc(x.touroperadora||''))+
+        fl('Día y hora',flarga(x.fecha_salida)+(x.hora_salida?' · '+String(x.hora_salida).slice(0,5):''))+
+        fl('Dónde se recoge',esc(x.recogida||''))+
+        fl('Casa',esc(x.sede||''))+
+        fl('Boletos escaneados',(x.boletos_usados||0)+' de '+(x.boletos||0))+
+      '</dl>'+
+      '<div class="sec">Quién la vendió</div>'+
+      '<dl class="dl">'+
+        fl('Hotel',esc(x.hotel||''))+
+        fl('Anfitrión',esc(x.anfitrion||''))+
+        fl('Código de venta',esc(x.codigo_venta||''))+
+      '</dl>'+
+      '<div class="sec">El dinero</div>'+
+      '<table class="dinero">'+
+        '<tr><td>Precio de lista</td><td>'+money(x.bruto)+'</td></tr>'+
+        (Number(x.descuento_mxn)>0?'<tr class="sub"><td>Descuento ('+Number(x.descuento_pct)+'%)</td><td>−'+money(x.descuento_mxn)+'</td></tr>':'')+
+        (Number(x.seguro_mxn)>0?'<tr class="sub"><td>Cobertura</td><td>'+money(x.seguro_mxn)+'</td></tr>':'')+
+        (Number(x.propina_mxn)>0?'<tr class="sub"><td>Propina</td><td>'+money(x.propina_mxn)+'</td></tr>':'')+
+        '<tr class="tot"><td>Paga el huésped</td><td>'+money(x.total)+'</td></tr>'+
+        (x.cobro_dividido?'<tr class="sub"><td>Con tarjeta ahora</td><td>'+money(x.pago_ahora)+'</td></tr>'+
+                          '<tr class="sub"><td>Al guía el día del tour</td><td>'+money(x.pago_resto)+'</td></tr>':'')+
+        (com.length?'<tr><td colspan="2" style="padding-top:10px;color:var(--gris);font-size:11.5px">A dónde va</td></tr>':'')+
+        com.map(function(c){return '<tr class="sub"><td>'+esc(c[0])+'</td><td>'+money(c[1])+'</td></tr>';}).join('')+
+      '</table>'+
+      (x.notas?'<div class="sec">Notas</div><div style="white-space:pre-wrap;font-size:12.8px">'+esc(x.notas)+'</div>':'')+
+    '</div>'+
+    '<div class="bloque"><h3>Tocarla</h3>'+
+      '<div style="font-size:12.5px;color:var(--gris);line-height:1.5">Moverla de día, cambiarle el estado '+
+      'o cancelarla se hace en Operación, que es donde queda apuntado quién lo hizo.</div>'+
+      '<div style="margin-top:9px"><a class="btn" target="_top" '+
+        'href="/m/sinc-operacion.html?r='+esc(x.id)+'">Abrirla en Operación</a></div></div>';
+
+  $('panel').classList.add('corrido');
+  $('panel2').classList.add('on'); $('panel2').setAttribute('aria-hidden','false');
+}
+
 async function historial(id){
   try{
     var ev=await get('crm_funnel_eventos?select=*&touroperador_id=eq.'+id+'&order=fecha.desc&limit=25');
