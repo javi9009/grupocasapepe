@@ -2173,8 +2173,9 @@ async function renderProductividad(){
   const wk=PROG_WK;
   // Otras tareas validadas (admin/compras/briefing/otra) para la columna "h real" de la matriz
   const dom=(()=>{const d=new Date(wk+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+6);return d.toISOString().slice(0,10);})();
-  let extraCat={}; try{ const {data:tiempoR}=await sb.from('mtto_tiempo').select('categoria,minutos').eq('property_id',PROP.id).eq('estado','validado').gte('fecha',wk).lte('fecha',dom);
-    (tiempoR||[]).forEach(x=>{extraCat[x.categoria]=(extraCat[x.categoria]||0)+(x.minutos||0);}); }catch(_){}
+  let extraCat={}, extraByEmp={}; try{ const {data:tiempoR}=await sb.from('mtto_tiempo').select('categoria,minutos,employee_id').eq('property_id',PROP.id).eq('estado','validado').gte('fecha',wk).lte('fecha',dom);
+    (tiempoR||[]).forEach(x=>{ extraCat[x.categoria]=(extraCat[x.categoria]||0)+(x.minutos||0);
+      const e=extraByEmp[x.employee_id]=extraByEmp[x.employee_id]||{min:0,byCat:{}}; e.min+=(x.minutos||0); e.byCat[x.categoria]=(e.byCat[x.categoria]||0)+(x.minutos||0); }); }catch(_){}
   const activos=tks.filter(t=>!["cerrado","cancelado"].includes(t.estado)||doneWk(t)===wk);
   // KPIs globales
   const reactPend=tks.filter(t=>t.clasificacion==="reactivo"&&!DONEP(t)&&t.estado!=="cancelado");
@@ -2190,7 +2191,7 @@ async function renderProductividad(){
   const board=TECS.filter(t=>t.property_id===PROP.id);
   const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||""));
   if(jefe&&!board.some(t=>t.id===jefe.id))board.push(jefe);
-  const cards=board.map(t=>techProdCard(t,tks,PUESTOS[t.id],wk)).join("");
+  const cards=board.map(t=>techProdCard(t,tks,PUESTOS[t.id],wk,extraByEmp[t.id])).join("");
   $("#view").innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWkProd(-1)">◀</button><select id="wkP" style="width:auto" onchange="PROG_WK=this.value;renderProductividad()">${weekOpts(wk)}</select><button class="btn ghost sm" type="button" onclick="shiftWkProd(1)">▶</button></div></div>
@@ -2261,9 +2262,11 @@ async function confirmarEntrega(id){
   closeModal();
   try{ if(typeof renderProductividad==='function'&&document.querySelector('#view'))renderProductividad(); }catch(_){}
 }
-function techProdCard(t,tks,pu,wk){
+function techProdCard(t,tks,pu,wk,extra){
   const cap=puestoCap(pu); const jorMin=(cap.sem||48)*60; const capMin=cap.prog*60||1;
-  const NP='#005b80';                                  // color de lo NO programado
+  const NP='#005b80', OTR='#7A5FB0';                   // azul=no programado · morado=otras tareas (briefing/compras/admin)
+  const CATLBL={reactivo:'Reactivo',correctivo:'Correctivo',preventivo:'Preventivo',administrativa:'Admin/briefing',compras:'Compras',otra:'Otra'};
+  const hOtras=(extra&&extra.min)||0;                  // minutos de otras tareas validadas (sin ticket)
   const isPlan=r=>r.semana_programada&&mondayOf(r.semana_programada)===wk;
   const openWk=r=>{const d=(r.reportado_at||r.created_at||'').slice(0,10);return d&&mondayOf(d)===wk;};
   const isReal=r=>DONEP(r)&&doneWk(r)===wk;             // realizado = hecho esta semana
@@ -2274,7 +2277,7 @@ function techProdCard(t,tks,pu,wk){
   const realizados=mias.filter(isReal);
   const hPlan=realizados.filter(isPlan).reduce((s,r)=>s+hrs(r),0);
   const hNoPlan=realizados.filter(r=>!isPlan(r)).reduce((s,r)=>s+hrs(r),0);
-  const hTotal=hPlan+hNoPlan;
+  const hTotal=hPlan+hNoPlan+hOtras;                   // realizado = tickets + otras tareas validadas
   const pendEjec=Math.max(0,jorMin-hTotal);            // forecast: horas de jornada por ejecutar
   const abiertos=mias.filter(openWk);
   const porCompletar=mias.filter(r=>!['resuelto','cerrado','cancelado'].includes(r.estado));
@@ -2286,7 +2289,8 @@ function techProdCard(t,tks,pu,wk){
   const efCol=ef==null?"var(--muted)":(ef<=100?"var(--ok)":(ef<=120?"var(--warn)":"var(--bad)"));
   // barra vs jornada (48h): verde=programado, azul=no programado; tooltip con horas y trabajos
   const base=Math.max(jorMin,hTotal,1);
-  const w1=Math.round(hPlan/base*100), w2=Math.round(hNoPlan/base*100);
+  const w1=Math.round(hPlan/base*100), w2=Math.round(hNoPlan/base*100), w3=Math.round(hOtras/base*100);
+  const otrasDesglose=extra&&extra.byCat?Object.entries(extra.byCat).map(([k,m])=>`${CATLBL[k]||k} ${Math.round(m/60*10)/10}h`).join(' · '):'';
   const nPlan=realizados.filter(isPlan).length, nNoPlan=realizados.filter(r=>!isPlan(r)).length;
   // detalle por tipo: horas hechas/asignadas + trabajos realizados/asignados, abre cada trabajo
   const det=[['preventivo','🛠️ Preventivos'],['reactivo','⚡ Reactivos'],['correctivo','🔧 Correctivos']].map(([k,lbl])=>{
@@ -2308,10 +2312,12 @@ function techProdCard(t,tks,pu,wk){
     <div style="height:9px;background:var(--surface-2,#EFE9DD);border-radius:5px;overflow:hidden;display:flex;margin:4px 0">
       <i title="Programado: ${(hPlan/60).toFixed(1)}h · ${nPlan} trab" style="display:block;height:100%;width:${w1}%;background:var(--ok)"></i>
       <i title="No programado: ${(hNoPlan/60).toFixed(1)}h · ${nNoPlan} trab" style="display:block;height:100%;width:${w2}%;background:${NP}"></i>
+      <i title="Otras tareas (briefing/compras/admin): ${(hOtras/60).toFixed(1)}h${otrasDesglose?' · '+otrasDesglose:''}" style="display:block;height:100%;width:${w3}%;background:${OTR}"></i>
     </div>
     <div class="prodrow"><span class="muted">🔮 Pendiente de ejecutar</span><span><b>${(pendEjec/60).toFixed(1)}h</b> de ${(jorMin/60).toFixed(0)}h</span></div>
     <div class="prodrow"><span class="muted">Carga vs capacidad (${cap.prog.toFixed(1)}h)</span><span>${capPct}%</span></div>
     <div class="prodrow"><span>📋 Asignados · realizados</span><span>${asignados.length} · ${realizados.length}</span></div>
+    ${hOtras>0?`<div class="prodrow"><span title="${esc(otrasDesglose)}"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${OTR};margin-right:5px"></span>🗒️ Otras tareas (sin ticket)</span><span><b>${(hOtras/60).toFixed(1)}h</b></span></div>`:''}
     <div class="prodrow"><span>📂 Solicitados esta semana · por completar</span><span>${abiertos.length} · ${porCompletar.length}</span></div>
     ${det?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">➕ Detalle por tipo</summary><div style="margin-top:4px">${det}</div></details>`:''}
   </div></div>`;
