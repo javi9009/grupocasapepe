@@ -975,6 +975,7 @@ async function cargarApoyo(){
   const {data:s}=await sb.from('asistencias').select('check_in,check_out')
     .eq('fecha',FECHA).eq('employee_id',EMP).maybeSingle();
   ASIS=s||null;
+  await cargarApoyoAtras();
 }
 
 // Lo que llevas en el hotel: el reloj completo si ya checaste salida, y lo
@@ -1039,6 +1040,33 @@ function fraseDesempeno(){
   return `Hoy has tenido un <b>${p.pct}%</b> de productividad en tus cuartos.`;
 }
 
+// Javi, 17-oct: se reporta por dia, y si no lo conto, a los tres dias se cierra.
+// Pasada la ventana ese tiempo deja de poder explicarse y no cuenta como
+// trabajo. Hasta hoy la pantalla solo dejaba ver el dia de hoy, asi que un dia
+// olvidado no habia manera de recuperarlo ni queriendo.
+const APOYO_DIAS=3;
+const fechaCorta=f=>{ try{ return new Date(f+'T12:00:00Z').toLocaleDateString('es-MX',
+  {weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}); }catch(e){ return f; } };
+let APOYO_ATRAS=[];          // [{fecha, falta}] de los dias abiertos hacia atras
+const apoyoDiasDesde=f=>Math.round((Date.parse(hoyMX()+'T12:00:00Z')-Date.parse(f+'T12:00:00Z'))/86400000);
+const apoyoDiaAbierto=f=>apoyoDiasDesde(f)<=APOYO_DIAS;
+
+// Los dias de atras se leen de la MISMA vista que mira la jefa, para que no
+// haya dos cuentas distintas del mismo hueco.
+async function cargarApoyoAtras(){
+  APOYO_ATRAS=[];
+  if(!EMP) return;
+  const desde=new Date(Date.parse(hoyMX()+'T12:00:00Z')-APOYO_DIAS*86400000).toISOString().slice(0,10);
+  try{
+    const {data}=await sb.from('v_hk_jornada_efectiva')
+      .select('fecha,sin_repartir_min,checador_min')
+      .eq('employee_id',EMP).gte('fecha',desde).lt('fecha',hoyMX()).order('fecha');
+    APOYO_ATRAS=(data||[])
+      .filter(d=>d.checador_min!=null && Math.round(Number(d.sin_repartir_min||0))>=15)
+      .map(d=>({fecha:d.fecha, falta:Math.round(Number(d.sin_repartir_min))}));
+  }catch(e){}
+}
+
 function apoyoFalta(){
   const hotel=minApoyoHotel();
   const tareas=minApoyoTareas();
@@ -1059,37 +1087,59 @@ function tarjetaApoyo(){
   if(!MIA || SIN_MEDIR.has(MIA.turno)) return '';
   if(!ASIS || !ASIS.check_out) return '';
   const {falta}=apoyoFalta();
-  const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>`<div class="it">
+  const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>{
+    const tocable=(x.estado||'pendiente')==='pendiente';
+    const sello=x.estado==='validado'?'<span class="cm">&#10003; Deisy lo valid&oacute;'+
+        (x.minutos_validados!=null&&x.minutos_validados!==x.minutos?' en '+apoyoHM(x.minutos_validados):'')+'</span>'
+      :x.estado==='rechazado'?'<span class="cm">Deisy no lo cont&oacute;</span>':'';
+    return `<div class="it">
     <span>${apOp(x.categoria).i||''}</span>
-    <span class="nm">${esc(apOp(x.categoria).n)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}</span>
+    <span class="nm">${esc(apOp(x.categoria).n)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}${sello}</span>
     <span class="mn">${apoyoHM(x.minutos)}</span>
-    <button class="x" data-apdel="${x.id}" aria-label="Quitar">&times;</button></div>`).join('')}</div>`;
+    ${tocable?`<button class="x" data-apedit="${x.id}" aria-label="Cambiar" style="font-size:15px">&#9998;</button>
+       <button class="x" data-apdel="${x.id}" aria-label="Quitar">&times;</button>`
+     :'<span class="x" style="opacity:.35" title="Ya revisado">&#128274;</span>'}</div>`;}).join('')}</div>`;
+
+  // Los dias de atras que siguen abiertos. Si no los cuenta, a los tres dias
+  // se cierran y ese tiempo deja de contar.
+  const atras=!APOYO_ATRAS.length?'':`<div class="puesto">${APOYO_ATRAS.map(d=>{
+    const quedan=APOYO_DIAS-apoyoDiasDesde(d.fecha);
+    return `<div class="it"><span>&#128197;</span>
+      <span class="nm">${esc(fechaCorta(d.fecha))}<span class="cm">${apoyoHM(d.falta)} sin contar &middot;
+        ${quedan<=0?'se cierra hoy':quedan===1?'te queda 1 d&iacute;a':'te quedan '+quedan+' d&iacute;as'}</span></span>
+      <button class="ok" style="width:auto;padding:7px 11px;font-size:12.5px"
+        data-apdia="${d.fecha}" data-apfal="${d.falta}">Contar</button></div>`;}).join('')}</div>`;
   if(falta<=0){
     return `<div class="auditcard apoyo"><div class="t">&#128995; Cierre de tu d&iacute;a</div>
-      <div class="s">Todo lo que marc&oacute; el reloj queda explicado. &iexcl;Gracias!</div>${lista}</div>`;
+      <div class="s">Todo lo que marc&oacute; el reloj queda explicado. &iexcl;Gracias!</div>${lista}${atras}</div>`;
   }
   const frase=fraseDesempeno();
   return `<div class="auditcard apoyo"><div class="t">&#128995; Antes de irte</div>
     <div class="s">${frase?frase+'<br>':''}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b>
       y <b>${apoyoHM(falta)}</b> no han sido reportadas. &iquest;En qu&eacute; te has ocupado hoy?</div>
-    <button class="ok" id="btnReparto" style="margin-top:8px">Contar en qu&eacute; me ocup&eacute;</button>${lista}</div>`;
+    <button class="ok" id="btnReparto" style="margin-top:8px">Contar en qu&eacute; me ocup&eacute;</button>${lista}${atras}</div>`;
 }
 
 // ---- Overlay del reparto (se arma una sola vez, aparte de pintar) ----
 function cerrarReparto(){ const o=$('repOv'); if(o) o.remove(); }
-function abrirReparto(){
+let REP_FECHA=null;
+function abrirReparto(fecha,faltaDia){
   if(!MIA) return;
   cerrarReparto();
-  const {falta}=apoyoFalta();
+  REP_FECHA=fecha||FECHA;
+  if(!apoyoDiaAbierto(REP_FECHA)){ toast('Ese día ya se cerró'); return; }
+  const falta=faltaDia!=null?Number(faltaDia):apoyoFalta().falta;
   const chips=APOYO_OPS.map(o=>`<button type="button" data-rc="${o.c}"
      style="font-size:12.5px;font-weight:700;padding:7px 11px;border-radius:99px;border:1px solid #d8d2c4;background:#fff;color:#4a3d94;margin:0 6px 6px 0">${o.i} ${esc(o.n)}</button>`).join('');
   const ov=document.createElement('div'); ov.id='repOv';
   ov.style.cssText='position:fixed;inset:0;background:rgba(20,18,14,.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
   ov.innerHTML=`<div style="background:#fbf8f1;border-radius:18px 18px 0 0;max-width:460px;width:100%;max-height:88vh;overflow:auto;padding:16px 15px 22px;box-shadow:0 -8px 30px rgba(0,0,0,.2)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-      <div style="font-size:16px;font-weight:800;color:#2c2920">&#128995; &iquest;En qu&eacute; te ocupaste hoy?</div>
+      <div style="font-size:16px;font-weight:800;color:#2c2920">&#128995; &iquest;En qu&eacute; te ocupaste ${REP_FECHA===FECHA?'hoy':'el '+esc(fechaCorta(REP_FECHA))}?</div>
       <button type="button" id="repX" style="border:0;background:none;font-size:22px;color:#8e8c85;line-height:1">&times;</button></div>
-    <div style="font-size:13px;color:#6b6760;margin-bottom:10px">${(()=>{const f=fraseDesempeno();return f?f+'<br>':'';})()}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b> y <b>${apoyoHM(falta)}</b> no han sido reportadas. Toca lo que hiciste y reparte los minutos.</div>
+    <div style="font-size:13px;color:#6b6760;margin-bottom:10px">${REP_FECHA===FECHA
+      ? `${(()=>{const f=fraseDesempeno();return f?f+'<br>':'';})()}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b> y <b>${apoyoHM(falta)}</b> no han sido reportadas.`
+      : `De ese d&iacute;a quedaron <b>${apoyoHM(falta)}</b> sin contar.`} Toca lo que hiciste y reparte los minutos.</div>
     <div style="margin-bottom:4px">${chips}</div>
     <div id="repBloques"></div>
     <div id="repSaldo" style="font-weight:800;font-size:13.5px;margin:10px 0 2px"></div>
@@ -1149,7 +1199,8 @@ async function repGuardar(){
     const sub=((div.querySelector('.rsub')||{}).value||'').trim();
     const nota=((div.querySelector('.rnota')||{}).value||'').trim();
     const com=[sub,nota].filter(Boolean).join(' — ')||null;
-    rows.push({property_id:MIA.property_id, fecha:FECHA, employee_id:EMP, asignacion_id:MIA.id,
+    rows.push({property_id:MIA.property_id, fecha:(REP_FECHA||FECHA), employee_id:EMP,
+      asignacion_id:(REP_FECHA||FECHA)===FECHA?MIA.id:null,
       categoria:div.dataset.cat, minutos:m, comentario:com,
       capturado_por:USER?USER.id:null, capturado_por_nombre:NOMBRE});
   });
@@ -1162,17 +1213,49 @@ async function repGuardar(){
   const resumen=rows.map(r=>apOp(r.categoria).n+' '+r.minutos+'m').join(' · ');
   try{ await sb.rpc('crear_notificacion',{p_employee_id:DEISY_EMP,
       p_titulo:'⏱️ Tiempo de apoyo por validar',
-      p_cuerpo:(NOMBRE||'Una camarista')+' repartió '+apoyoHM(tot)+' de hoy: '+resumen,
-      p_icono:'⏱️', p_accion:{tipo:'hk_apoyo', fecha:FECHA}}); }catch(_){}
+      p_cuerpo:(NOMBRE||'Una camarista')+' repartió '+apoyoHM(tot)+
+        ((REP_FECHA||FECHA)===FECHA?' de hoy: ':' del '+fechaCorta(REP_FECHA)+': ')+resumen,
+      p_icono:'⏱️', p_accion:{tipo:'hk_apoyo', fecha:(REP_FECHA||FECHA)}}); }catch(_){}
   cerrarReparto();
   toast('Enviado a Deisy ✅ · ya cuenta en tus horas');
   cargar();
 }
 
+// Se quita o se cambia SOLO lo que Deisy no ha tocado todavia, y solo mientras
+// el dia siga abierto. Si ya lo valido, cambiarlo por detras seria tumbar su
+// decision sin que se entere.
+function apoyoEditable(x){
+  if(!x) return false;
+  if((x.estado||'pendiente')!=='pendiente') return false;
+  return apoyoDiaAbierto(x.fecha||FECHA);
+}
 async function borrarApoyo(id){
-  const {error}=await sb.from('hk_apoyo').delete().eq('id',id);
+  const x=APOYO.find(y=>y.id===id);
+  if(!apoyoEditable(x)) return toast('Eso ya lo revisó Deisy: no se puede quitar');
+  const {error}=await sb.from('hk_apoyo').delete().eq('id',id).eq('estado','pendiente');
   if(error) return toast('No se pudo quitar: '+error.message);
   toast('Quitado');
+  cargar();
+}
+
+// Cambiar minutos y explicacion de un apunte que aun no ha pasado por Deisy.
+async function editarApoyo(id){
+  const x=APOYO.find(y=>y.id===id);
+  if(!apoyoEditable(x)) return toast('Eso ya lo revisó Deisy: no se puede cambiar');
+  const otros=APOYO.filter(y=>y.id!==id).reduce((a,y)=>a+Number(y.minutos||0),0);
+  const tope=Math.round(apoyoFalta().falta)+Number(x.minutos||0);
+  const m=prompt(`${apOp(x.categoria).n}\n¿Cuántos minutos? (máximo ${tope})`, String(x.minutos));
+  if(m===null) return;
+  const min=Math.max(0,Math.round(Number(m)||0));
+  if(!min) return toast('Pon un número de minutos');
+  if(min>tope) return toast('No puedes reportar más de lo que marcó el reloj');
+  const com=prompt('¿Quieres cambiar la explicación? (déjalo igual si está bien)', x.comentario||'');
+  if(com===null) return;
+  const {error}=await sb.from('hk_apoyo')
+    .update({minutos:min, comentario:(com||'').trim()||null, updated_at:new Date().toISOString()})
+    .eq('id',id).eq('estado','pendiente');
+  if(error) return toast('No se pudo cambiar: '+error.message);
+  toast('Cambiado');
   cargar();
 }
 
@@ -1188,6 +1271,8 @@ function engancharCuartos(root){
   root.querySelectorAll('[data-nom]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); abrirNoMolestar(b.dataset.nom); });
   const br=root.querySelector('#btnReparto'); if(br) br.onclick=abrirReparto;
   root.querySelectorAll('[data-apdel]').forEach(b=>b.onclick=()=>borrarApoyo(b.dataset.apdel));
+  root.querySelectorAll('[data-apedit]').forEach(b=>b.onclick=()=>editarApoyo(b.dataset.apedit));
+  root.querySelectorAll('[data-apdia]').forEach(b=>b.onclick=()=>abrirReparto(b.dataset.apdia,b.dataset.apfal));
   const bd=root.querySelector('#btnDnd'); if(bd){ bd.onclick=abrirDnd; pintarDndChips(); }
 }
 // Busca una tarea esté donde esté (mi orden o el reparto completo).
