@@ -1000,6 +1000,7 @@ const APOYO_OPS=[
   {c:'huesped',   n:'Atender huéspedes',  i:'🛎️', sub:'¿Con qué te tocó apoyar?'},
   {c:'visita',    n:'Proveedor o visita',      i:'📦', sub:'¿Quién vino hoy?'},
   {c:'lavanderia',n:'Lavandería de huéspedes', i:'🧺'},
+  {c:'mtto',      n:'Mantenimiento',           i:'🔧', sub:'¿Qué se estaba arreglando?'},
   {c:'espera',    n:'Esperar',                 i:'⏳'},
   {c:'comida',    n:'Comida',                  i:'🍽️'},
   {c:'personal',  n:'Personal',                i:'🚻'},
@@ -1011,6 +1012,29 @@ const DEISY_EMP='9086da9a-3589-4b21-a83d-8cd158f747a0';
 
 // hotel = lo que marco el reloj; tareas = lo medido en cuartos/areas;
 // ya = lo ya repartido. falta = lo que queda sin explicar.
+// Cómo le fue en sus cuartos: lo estimado contra lo que de verdad costó. Es el
+// mismo número de la pila que ya ve durante el día, para que no le aparezca una
+// cifra nueva justo al cerrar.
+function productividadDia(){
+  const ts=(MIA&&MIA.hk_tareas)?MIA.hk_tareas:[];
+  const hechas=ts.filter(t=>t.minutos_reales!=null);
+  const est=hechas.reduce((s,t)=>s+(t.minutos_estimados||0),0);
+  const real=hechas.reduce((s,t)=>s+Number(t.minutos_reales||0),0);
+  if(!hechas.length || real<=0) return null;
+  return {pct:Math.round(est/real*100), est, real, n:hechas.length};
+}
+
+// La frase cambia según cómo le fue. Nunca regaña: quien lee esto acaba de
+// terminar ocho horas de pie.
+function fraseDesempeno(){
+  const p=productividadDia();
+  if(!p) return '';
+  if(p.pct>=110) return `&iexcl;Hoy has tenido un <b>${p.pct}%</b> de productividad en tus cuartos! Un di&aacute;a redondo.`;
+  if(p.pct>=100) return `&iexcl;Hoy has tenido un <b>${p.pct}%</b> de productividad en tus cuartos!`;
+  if(p.pct>=90)  return `Hoy has tenido un <b>${p.pct}%</b> de productividad en tus cuartos, muy cerca de lo estimado.`;
+  return `Hoy has tenido un <b>${p.pct}%</b> de productividad en tus cuartos.`;
+}
+
 function apoyoFalta(){
   const hotel=minApoyoHotel();
   const tareas=minApoyoTareas();
@@ -1025,13 +1049,12 @@ function apoyoFalta(){
 // Ahora sale DURANTE el turno en cuanto hay un hueco que merezca la pena, y al
 // cerrar cambia de tono. El umbral existe para no dar la lata por cinco minutos
 // entre un cuarto y el siguiente.
-const APOYO_MIN_VISIBLE=20;
+// El reparto se pide AL FINAL DE LA JORNADA, cuando ya checo salida. Javi,
+// 17-oct: no es una tarea de media manana, es el cierre del dia.
 function tarjetaApoyo(){
   if(!MIA || SIN_MEDIR.has(MIA.turno)) return '';
-  if(!ASIS || !ASIS.check_in) return '';
-  const cerrado=!!ASIS.check_out;
+  if(!ASIS || !ASIS.check_out) return '';
   const {falta}=apoyoFalta();
-  if(!cerrado && falta<APOYO_MIN_VISIBLE) return '';
   const lista=!APOYO.length?'':`<div class="puesto">${APOYO.map(x=>`<div class="it">
     <span>${apOp(x.categoria).i||''}</span>
     <span class="nm">${esc(apOp(x.categoria).n)}${x.comentario?`<span class="cm">${esc(x.comentario)}</span>`:''}</span>
@@ -1041,12 +1064,11 @@ function tarjetaApoyo(){
     return `<div class="auditcard apoyo"><div class="t">&#128995; Cierre de tu d&iacute;a</div>
       <div class="s">Todo lo que marc&oacute; el reloj queda explicado. &iexcl;Gracias!</div>${lista}</div>`;
   }
-  return `<div class="auditcard apoyo"><div class="t">&#128995; ${cerrado?'Antes de irte':'Tu tiempo fuera de los cuartos'}</div>
-    <div class="s">${cerrado
-      ? `Tienes <b>${apoyoHM(falta)}</b> sin asignar. Cuenta en qu&eacute; te ocupaste para que te cuente en tus horas.`
-      : `Llevas <b>${apoyoHM(falta)}</b> que no son de ning&uacute;n cuarto. Cu&eacute;ntalo ahora y no lo dejes para
-         cuando ya te hayas ido: si no queda apuntado, <b>no cuenta como trabajo</b>.`}</div>
-    <button class="ok" id="btnReparto" style="margin-top:8px">${cerrado?'Repartir mi tiempo':'Contar en qu&eacute; me ocup&eacute;'}</button>${lista}</div>`;
+  const frase=fraseDesempeno();
+  return `<div class="auditcard apoyo"><div class="t">&#128995; Antes de irte</div>
+    <div class="s">${frase?frase+'<br>':''}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b>
+      y <b>${apoyoHM(falta)}</b> no han sido reportadas. &iquest;En qu&eacute; te has ocupado hoy?</div>
+    <button class="ok" id="btnReparto" style="margin-top:8px">Contar en qu&eacute; me ocup&eacute;</button>${lista}</div>`;
 }
 
 // ---- Overlay del reparto (se arma una sola vez, aparte de pintar) ----
@@ -1063,7 +1085,7 @@ function abrirReparto(){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
       <div style="font-size:16px;font-weight:800;color:#2c2920">&#128995; &iquest;En qu&eacute; te ocupaste hoy?</div>
       <button type="button" id="repX" style="border:0;background:none;font-size:22px;color:#8e8c85;line-height:1">&times;</button></div>
-    <div style="font-size:13px;color:#6b6760;margin-bottom:10px">Tienes <b>${apoyoHM(falta)}</b> sin asignar. Toca lo que hiciste y reparte los minutos.</div>
+    <div style="font-size:13px;color:#6b6760;margin-bottom:10px">${(()=>{const f=fraseDesempeno();return f?f+'<br>':'';})()}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b> y <b>${apoyoHM(falta)}</b> no han sido reportadas. Toca lo que hiciste y reparte los minutos.</div>
     <div style="margin-bottom:4px">${chips}</div>
     <div id="repBloques"></div>
     <div id="repSaldo" style="font-weight:800;font-size:13.5px;margin:10px 0 2px"></div>
@@ -1110,7 +1132,8 @@ function repRecalc(){
   const el=$('repSaldo');
   if(el) el.innerHTML = resto>0 ? `Te faltan por repartir: <span style="color:#7a5ea8">${apoyoHM(resto)}</span>`
     : resto===0 ? `<span style="color:#1d6b4a">&#10003; Todo repartido</span>`
-    : `<span style="color:#b2443a">Te pasaste por ${apoyoHM(-resto)} &mdash; baja algunos minutos</span>`;
+    : `<span style="color:#b2443a">Te pasaste por ${apoyoHM(-resto)}. No puedes reportar m&aacute;s minutos
+         de los que marc&oacute; el reloj: baja alguno.</span>`;
   const g=$('repGuardar'); if(g) g.disabled = !(tot>0 && resto>=0);
 }
 async function repGuardar(){
