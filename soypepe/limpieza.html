@@ -1048,6 +1048,7 @@ const APOYO_DIAS=3;
 const fechaCorta=f=>{ try{ return new Date(f+'T12:00:00Z').toLocaleDateString('es-MX',
   {weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}); }catch(e){ return f; } };
 let APOYO_ATRAS=[];          // [{fecha, falta}] de los dias abiertos hacia atras
+let JORN=null;               // la fila de HOY en la vista que mira la jefa
 const apoyoDiasDesde=f=>Math.round((Date.parse(hoyMX()+'T12:00:00Z')-Date.parse(f+'T12:00:00Z'))/86400000);
 const apoyoDiaAbierto=f=>apoyoDiasDesde(f)<=APOYO_DIAS;
 
@@ -1056,22 +1057,42 @@ const apoyoDiaAbierto=f=>apoyoDiasDesde(f)<=APOYO_DIAS;
 async function cargarApoyoAtras(){
   APOYO_ATRAS=[];
   if(!EMP) return;
+  JORN=null;
   const desde=new Date(Date.parse(hoyMX()+'T12:00:00Z')-APOYO_DIAS*86400000).toISOString().slice(0,10);
   try{
     const {data}=await sb.from('v_hk_jornada_efectiva')
-      .select('fecha,sin_repartir_min,checador_min')
-      .eq('employee_id',EMP).gte('fecha',desde).lt('fecha',hoyMX()).order('fecha');
+      .select('fecha,sin_repartir_min,apoyo_pendiente_min,checador_min,tareas_min')
+      .eq('employee_id',EMP).gte('fecha',desde).lte('fecha',hoyMX()).order('fecha');
+    const hoy=hoyMX();
+    JORN=(data||[]).find(d=>d.fecha===hoy)||null;
+    // Lo que queda por contar es el hueco MENOS lo que ya apunto y esta
+    // esperando a Deisy: si no, al dia siguiente le volveria a pedir el mismo
+    // rato que ya explico.
+    const hueco=d=>Math.max(0,Math.round(Number(d.sin_repartir_min||0))-Math.round(Number(d.apoyo_pendiente_min||0)));
     APOYO_ATRAS=(data||[])
-      .filter(d=>d.checador_min!=null && Math.round(Number(d.sin_repartir_min||0))>=15)
-      .map(d=>({fecha:d.fecha, falta:Math.round(Number(d.sin_repartir_min))}));
+      .filter(d=>d.fecha!==hoy && d.checador_min!=null && hueco(d)>=15)
+      .map(d=>({fecha:d.fecha, falta:hueco(d)}));
   }catch(e){}
 }
 
+// Mientras esta dentro no hay nada cerrado, asi que la cuenta se hace aqui con
+// lo que lleva. En cuanto checa salida el numero se CONGELA y sale de la misma
+// vista que mira la jefa: reloj - cuartos - apoyo ya validado - entrada
+// anticipada. Antes el navegador hacia su propia resta y le faltaba la entrada
+// anticipada: a Sara el 17-oct le salia 1h donde la jefa veia 53 min, porque
+// los 7 min que entro antes de su hora son trabajo, no hueco.
 function apoyoFalta(){
+  const pend=APOYO.filter(x=>(x.estado||'pendiente')==='pendiente')
+                  .reduce((s,x)=>s+Number(x.minutos||0),0);
+  if(JORN && JORN.checador_min!=null){
+    const hueco=Math.round(Number(JORN.sin_repartir_min||0));
+    return {hotel:Math.round(Number(JORN.checador_min)), tareas:Math.round(Number(JORN.tareas_min||0)),
+            ya:pend, falta:Math.max(0,hueco-pend), cerrado:true};
+  }
   const hotel=minApoyoHotel();
   const tareas=minApoyoTareas();
   const ya=APOYO.reduce((s,x)=>s+(x.minutos||0),0);
-  return {hotel:hotel, tareas:tareas, ya:ya, falta:Math.max(0,hotel-tareas-ya)};
+  return {hotel:hotel, tareas:tareas, ya:ya, falta:Math.max(0,hotel-tareas-ya), cerrado:false};
 }
 
 // Antes esto salia SOLO despues de checar salida, y ahi ya nadie mira el
@@ -1115,7 +1136,7 @@ function tarjetaApoyo(){
   }
   const frase=fraseDesempeno();
   return `<div class="auditcard apoyo"><div class="t">&#128995; Antes de irte</div>
-    <div class="s">${frase?frase+'<br>':''}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b>
+    <div class="s">${frase?frase+'<br>':''}Estuviste en tu turno <b>${apoyoHM(apoyoFalta().hotel)}</b>
       y <b>${apoyoHM(falta)}</b> no han sido reportadas. &iquest;En qu&eacute; te has ocupado hoy?</div>
     <button class="ok" id="btnReparto" style="margin-top:8px">Contar en qu&eacute; me ocup&eacute;</button>${lista}${atras}</div>`;
 }
@@ -1138,12 +1159,12 @@ function abrirReparto(fecha,faltaDia){
       <div style="font-size:16px;font-weight:800;color:#2c2920">&#128995; &iquest;En qu&eacute; te ocupaste ${REP_FECHA===FECHA?'hoy':'el '+esc(fechaCorta(REP_FECHA))}?</div>
       <button type="button" id="repX" style="border:0;background:none;font-size:22px;color:#8e8c85;line-height:1">&times;</button></div>
     <div style="font-size:13px;color:#6b6760;margin-bottom:10px">${REP_FECHA===FECHA
-      ? `${(()=>{const f=fraseDesempeno();return f?f+'<br>':'';})()}Estuviste en tu turno <b>${apoyoHM(minApoyoHotel())}</b> y <b>${apoyoHM(falta)}</b> no han sido reportadas.`
+      ? `${(()=>{const f=fraseDesempeno();return f?f+'<br>':'';})()}Estuviste en tu turno <b>${apoyoHM(apoyoFalta().hotel)}</b> y <b>${apoyoHM(falta)}</b> no han sido reportadas.`
       : `De ese d&iacute;a quedaron <b>${apoyoHM(falta)}</b> sin contar.`} Toca lo que hiciste y reparte los minutos.</div>
     <div style="margin-bottom:4px">${chips}</div>
     <div id="repBloques"></div>
     <div id="repSaldo" style="font-weight:800;font-size:13.5px;margin:10px 0 2px"></div>
-    <button type="button" id="repGuardar" disabled style="width:100%;margin-top:8px;padding:12px;border-radius:12px;border:0;background:#b9abd8;color:#2c2920;font-weight:800;font-size:15px">Guardar y enviar a Deisy</button>
+    <button type="button" id="repGuardar" disabled style="width:100%;margin-top:8px;padding:12px;border-radius:12px;border:0;background:#b9abd8;color:#2c2920;font-weight:800;font-size:15px">Guardar</button>
   </div>`;
   document.body.appendChild(ov);
   ov.dataset.falta=falta;
@@ -1209,7 +1230,7 @@ async function repGuardar(){
   if(tot>falta) return toast('La suma pasa de tu tiempo sin asignar');
   const g=$('repGuardar'); if(g){ g.disabled=true; g.textContent='Guardando…'; }
   const {error}=await sb.from('hk_apoyo').insert(rows);
-  if(error){ if(g){g.disabled=false;g.textContent='Guardar y enviar a Deisy';} return toast('No se pudo guardar: '+error.message); }
+  if(error){ if(g){g.disabled=false;g.textContent='Guardar';} return toast('No se pudo guardar: '+error.message); }
   const resumen=rows.map(r=>apOp(r.categoria).n+' '+r.minutos+'m').join(' · ');
   try{ await sb.rpc('crear_notificacion',{p_employee_id:DEISY_EMP,
       p_titulo:'⏱️ Tiempo de apoyo por validar',
@@ -1217,7 +1238,7 @@ async function repGuardar(){
         ((REP_FECHA||FECHA)===FECHA?' de hoy: ':' del '+fechaCorta(REP_FECHA)+': ')+resumen,
       p_icono:'⏱️', p_accion:{tipo:'hk_apoyo', fecha:(REP_FECHA||FECHA)}}); }catch(_){}
   cerrarReparto();
-  toast('Enviado a Deisy ✅ · ya cuenta en tus horas');
+  toast('Guardado ✅ · ya cuenta en tus horas');
   cargar();
 }
 
