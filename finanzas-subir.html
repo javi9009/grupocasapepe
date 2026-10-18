@@ -363,13 +363,20 @@
   var LOC_LABEL={cdmx:'CDMX', corp:'Corporativo', pue:'Puebla', sayu:'Sayulita', sinc:'Sincrético'};
 
   function parseResultados(matrix){
-    // 1) fila de ENCABEZADO DE DEPARTAMENTO: la que contiene CDMX y SAYULITA
+    // 1) fila de ENCABEZADO DE DEPARTAMENTO: la que trae los departamentos.
+    // No se puede exigir ninguno en concreto. El archivo de septiembre de 2026
+    // vino sin la columna SAYULITA —Sayulita ya había salido— y el lector, que
+    // la pedía por nombre, se quedó ciego justo ahí y dijo que no entendía el
+    // formato. Basta con que la fila traiga CDMX y al menos otro departamento
+    // conocido; los que falten simplemente no se cargan.
     var hdr=-1;
     for(var i=0;i<matrix.length && i<40;i++){
       var up=(matrix[i]||[]).map(function(c){return normCell(c);});   // normCell ya va en MAYÚSCULAS
-      if(up.indexOf('CDMX')>=0 && up.indexOf('SAYULITA')>=0){ hdr=i; break; }
+      var cuantos=0;
+      for(var k=0;k<up.length;k++){ if(DEPT_MAP[up[k]]) cuantos++; }
+      if(cuantos>=2 && up.indexOf('CDMX')>=0){ hdr=i; break; }
     }
-    if(hdr<0) return {ok:false, error:'no-header'};
+    if(hdr<0) return {ok:false, error:'no encontré la fila de departamentos (CDMX, PUEBLA, CORPORATIVO…) en las primeras 40 filas del archivo'};
     var H=(matrix[hdr]||[]).map(function(c){return normCell(c);});
     // 2) columnas por depto: real = donde aparece el nombre, aa = la siguiente
     var locCols={};
@@ -377,7 +384,7 @@
       var loc=DEPT_MAP[H[c]];
       if(loc && locCols[loc]==null) locCols[loc]={real:c, aa:c+1};
     }
-    if(locCols.cdmx==null || locCols.pue==null) return {ok:false, error:'no-header'};
+    if(locCols.cdmx==null || locCols.pue==null) return {ok:false, error:'encontré la fila de departamentos pero le falta CDMX o PUEBLA'};
     // columna "Total" del archivo (la última etiquetada TOTAL) para el cuadre
     var totalCol=-1;
     for(var c2=H.length-1;c2>=0;c2--){ if(H[c2]==='TOTAL'){ totalCol=c2; break; } }
@@ -429,7 +436,7 @@
     var rows=Object.keys(accMap).map(function(k){ return accMap[k]; });
     var calcIng=0;  LOC_ORDER.forEach(function(l){ if(locCols[l]) calcIng+=perLocIngresos[l]; });
     var calcNeta=0; LOC_ORDER.forEach(function(l){ if(locCols[l]) calcNeta+=perLocNeta[l]; });
-    if(!rows.length) return {ok:false, error:'no-rows'};
+    if(!rows.length) return {ok:false, error:'encontré el encabezado pero ninguna fila de cuenta (las que empiezan por un código tipo 400-01) debajo'};
     return {ok:true, locCols:locCols, rows:rows,
       perLocIngresos:perLocIngresos, calcIngresosTotal:round2(calcIng),
       perLocNeta:perLocNeta, calcNetaTotal:round2(calcNeta),
@@ -480,7 +487,9 @@
             var matrix=XLSX.utils.sheet_to_json(ws,{header:1, blankrows:false});
             var parsed=parseResultados(matrix);
             if(!parsed.ok){
-              notify('No pude leer el formato — revísalo conmigo. El archivo quedó guardado.', false);
+              // Decir QUÉ no se supo leer, no solo que no se supo: un fallo mudo
+              // cuesta una tarde de adivinar cuál de las cuarenta filas falla.
+              notify('No pude leer el formato: '+(parsed.error||'revísalo conmigo')+'. El archivo quedó guardado.', false);
               return null;
             }
             parsed.anio=ctx.anio; parsed.mes=ctx.mes; parsed.email=sessEmail; parsed.uploadId=ctx.uploadId; parsed.nombre_archivo=ctx.nombre_archivo;
@@ -1008,6 +1017,15 @@
         var estado;
         if(rec.procesado){
           estado='<span class="badge ok">✅ Procesado</span>';
+          // Un archivo ya procesado se puede volver a leer. El botón no aplica
+          // nada: abre el reporte de cambios contra lo que fin_pl tiene hoy. Si
+          // el mes está bien cargado sale sin diferencias, y si alguien movió
+          // una cifra a mano, se ve. Aprobar sigue siendo un paso aparte.
+          if(rec.tipo==='resultados' && rec.storage_path){
+            estado+=' <button class="btn btn-ghost btn-proc" style="padding:4px 12px;font-size:12px;"'
+              +' data-id="'+esc(rec.id)+'" data-anio="'+esc(rec.anio)+'" data-mes="'+esc(rec.mes)+'"'
+              +' data-path="'+esc(rec.storage_path)+'" data-nombre="'+esc(rec.nombre_archivo)+'">Revisar de nuevo</button>';
+          }
         } else {
           estado='<span class="badge pend">⏳ Pendiente</span>';
           // "Procesar" solo para Resultados (P&L) aún no procesados
@@ -1210,6 +1228,7 @@
     if(!t || !t.closest) return;
     var bp=t.closest('button.btn-proc');
     if(bp){
+      var etiqueta=bp.textContent;              // 'Procesar' o 'Revisar de nuevo'
       bp.disabled=true; bp.textContent='Procesando…';
       processResultados({
         storage_path:bp.getAttribute('data-path'),
@@ -1217,7 +1236,7 @@
         mes:parseInt(bp.getAttribute('data-mes'),10),
         uploadId:(bp.getAttribute('data-id')||null),
         nombre_archivo:bp.getAttribute('data-nombre')
-      }).then(function(){ bp.disabled=false; bp.textContent='Procesar'; });
+      }).then(function(){ bp.disabled=false; bp.textContent=etiqueta; });
       return;
     }
     var bd=t.closest('button.btn-dl');
