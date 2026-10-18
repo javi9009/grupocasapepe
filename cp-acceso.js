@@ -62,11 +62,19 @@
       return _cache;
     }catch(_){ _cache=null; return null; }
   }
+  /* El token de la sesión, no la llave pública. Lo mismo que mira el portero. */
+  function tokJwt(){ try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k&&/sb-.*-auth-token/.test(k)){ var v=JSON.parse(localStorage.getItem(k)||'null'); var s=v&&(v.currentSession||v); if(s&&s.access_token) return s.access_token; } } }catch(_){} return ''; }
   var _dir=undefined;
   async function esDireccion(){
     if(_dir!==undefined) return _dir;
     var em=tokEmail(); if(!em){ _dir=false; return false; }
-    try{ var r=await fetch(SB+'/rest/v1/rpc/puede_ver_corp',{method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json'},body:'{}'}); if(!r.ok){_dir=false;return false;} var a=await r.json(); _dir=(a===true); return _dir; }catch(_){ _dir=false; return false; }
+    /* PREGUNTABA SIN SESIÓN. Javi, 18-oct-2026: «no lo veo». Y no lo veía nadie:
+       esta llamada iba firmada con la llave pública, y `puede_ver_corp` mira
+       `auth.jwt()->>'email'`, que sin sesión viene vacío. Devolvía false
+       SIEMPRE, hasta para el director, así que la portada del panel escondía
+       a todo el mundo la ocupación, el ADR, el por cobrar y el cierre del día. */
+    var jwt=tokJwt(); if(!jwt){ _dir=false; return false; }
+    try{ var r=await fetch(SB+'/rest/v1/rpc/puede_ver_corp',{method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+jwt,'Content-Type':'application/json'},body:'{}'}); if(!r.ok){_dir=false;return false;} var a=await r.json(); _dir=(a===true); return _dir; }catch(_){ _dir=false; return false; }
   }
   async function permite(proy){ var u=await ubicaciones(); if(!u) return true; return u.indexOf(toProy(proy))>=0; }
   async function filtra(list,getSede){ var u=await ubicaciones(); if(!u||!Array.isArray(list)) return list; var dir=await esDireccion(); getSede=getSede||function(x){return x&&(x.sede||x.proyecto||x.propiedad);}; return list.filter(function(x){ var p=toProy(getSede(x)); if(!p) return true; if(p==='corp' && !dir) return false; return u.indexOf(p)>=0; }); }
