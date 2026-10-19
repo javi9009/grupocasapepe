@@ -144,6 +144,9 @@ h1{font-size:19px;margin:0;font-weight:700}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:11.5px;font-weight:600;background:var(--surface-2);color:var(--ink);border-radius:999px;padding:4px 10px}
 .chip.lvl{background:var(--accent-soft);color:var(--accent)}
+.tag-pet{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;padding:2px 7px;
+  border-radius:6px;background:#EFE6FA;color:#5B21B6}
+.tag-pet.ok{background:#DCEFE6;color:#137A56}
 
 /* ---------- EL FUNNEL DEL HUÉSPED ----------
    Javi, 19-oct-2026: «mismo diseño de pantalla y concepto que los que hemos
@@ -385,7 +388,28 @@ h1{font-size:19px;margin:0;font-weight:700}
   function tieneFicha(r){ return !!r.checkin_id; }
   function estaEnCasa(r){ return String(r.cb_status||'').toLowerCase()==='checked_in'; }
   function grupoDe(r){ return estaEnCasa(r) ? 'encasa' : (tieneFicha(r) ? 'online' : 'sin'); }
-  function pasaSub(r){ return FSUB==='todos' || grupoDe(r)===FSUB; }
+  /* EN CASA SIN PAPELES. Javi, 19-oct-2026, sobre un huésped que estaba en
+     casa y no tenía nada: «¿ahí cómo lo podemos reportar?». Contados en la
+     base ese día: 73 personas durmiendo en las dos casas, 64 sin una sola
+     ficha. No es una rareza, es el estado normal, y es el que hay que poder
+     mirar de un golpe mientras la gente sigue dentro. */
+  function enCasaSinPapeles(r){ return estaEnCasa(r) && !tieneFicha(r); }
+  /* TRES PREGUNTAS, NO TRES CAJONES. Aranza, 19-oct-2026, por Javi: «hay una
+     que se llama Rebeca que sí se le hizo el registro y no lo tienes
+     considerado». Y tenía razón: Rebecca tiene su ficha desde las 12:06, pero
+     como ya estaba en casa yo la metía en «En casa» y la sacaba de «Check-in
+     online», que marcaba CERO. Un cero donde sí hubo registro es peor que no
+     poner nada. Ahora cada chip responde a su pregunta y no se quitan gente
+     unos a otros: los números no suman el total, y está bien que no sumen. */
+  function pasaSub(r){
+    if(FSUB==='todos') return true;
+    if(FSUB==='sin') return !tieneFicha(r);
+    if(FSUB==='online') return tieneFicha(r);
+    if(FSUB==='encasa') return estaEnCasa(r);
+    if(FSUB==='sinpapeles') return enCasaSinPapeles(r);
+    if(FSUB==='peticion') return tienePeticion(r);
+    return true;
+  }
   function subChip(g,v,txt,n,sel){
     return '<button class="sd" data-g="'+g+'" data-v="'+v+'" aria-selected="'+(sel?'true':'false')+'">'+
       txt+' <span>'+n+'</span></button>';
@@ -607,14 +631,17 @@ h1{font-size:19px;margin:0;font-weight:700}
     }
     if(!/^(hoy|manana|pasado|prox)$/.test(FILTRO)){ c.style.display='none'; return; }
     var dia=DATA.filter(function(r){ return esDia(r,FILTRO); });
-    var g={sin:0,online:0,encasa:0};
-    dia.forEach(function(r){ g[grupoDe(r)]++; });
+    var g={sin:0,online:0,encasa:0}, sp=0, pe=0;
+    dia.forEach(function(r){ g[grupoDe(r)]++; if(enCasaSinPapeles(r)) sp++; if(tienePeticion(r)) pe++; });
     c.style.display='flex';
     c.innerHTML='<span class="sdlbl">Ver</span>'+
       subChip('s','todos','Todos',dia.length,FSUB==='todos')+
       subChip('s','sin','Sin check-in',g.sin,FSUB==='sin')+
       subChip('s','online','Check-in online',g.online,FSUB==='online')+
-      subChip('s','encasa','En casa',g.encasa,FSUB==='encasa');
+      subChip('s','encasa','En casa',g.encasa,FSUB==='encasa')+
+      '<span class="sdsep"></span>'+
+      subChip('s','sinpapeles','⚠️ En casa sin papeles',sp,FSUB==='sinpapeles')+
+      subChip('s','peticion','🛏️ Peticiones',pe,FSUB==='peticion');
     engancha(c);
   }
   function engancha(cc){
@@ -765,7 +792,36 @@ h1{font-size:19px;margin:0;font-weight:700}
     mapaReservas();
     aplicaSede(); pintaSedes();
     render();
+    /* Lo entregado y lo pedido, de todas las reservas a la vez. Va después del
+       primer render a propósito: son datos de adorno comparados con la lista,
+       y no merecen retrasarla. Cuando llegan, se repinta. */
+    cargaEstancias();
   }
+  var ESTS={};
+  async function cargaEstancias(){
+    var ids={};
+    (RAW.DATA||[]).forEach(function(r){ if(r.reservation_id) ids[String(r.reservation_id)]=1; });
+    (RAW.SAL||[]).forEach(function(s){ if(s.reservation_id) ids[String(s.reservation_id)]=1; });
+    var lista=Object.keys(ids);
+    if(!lista.length) return;
+    try{
+      var filas=await rpc('apepe_estancia_lista',{p_reservas:lista});
+      ESTS={}; (Array.isArray(filas)?filas:[]).forEach(function(e){ ESTS[String(e.reservation_id)]=e; });
+      render();
+    }catch(e){ /* sin esto la pantalla sigue siendo la de siempre */ }
+  }
+  function estDe(x){ var k=String((x&&x.reservation_id)||''); return k?(ESTS[k]||null):null; }
+  var PETLBL={cama_baja:'cama baja',cama_alta:'cama alta',no_ruidosa:'cuarto no ruidoso',
+    piso_bajo:'planta baja',salida_tarde:'salida tarde',llegada_tarde:'llega de madrugada',
+    llegada_temprana:'llegada temprana'};
+  function petTexto(e){
+    if(!e) return '';
+    var ps=Array.isArray(e.peticiones)?e.peticiones:[];
+    var t=ps.map(function(p){ return PETLBL[p]||p; });
+    if(e.peticion_nota) t.push(e.peticion_nota);
+    return t.join(' · ');
+  }
+  function tienePeticion(x){ var e=estDe(x); return !!(e && petTexto(e)); }
   function render(){
     // 1) llenar las 4 cajas con su conteo de check-in
     var box={hoy:['dHoy','sHoy'],manana:['dMan','sMan'],pasado:['dPas','sPas'],prox:['dPro','sPro']};
@@ -819,10 +875,15 @@ h1{font-size:19px;margin:0;font-weight:700}
       var wbTag=WBSET[String(r.reservation_id)]?' <span class="tag-wb">💌 winback</span>':'';
       var u=UPSET[String(r.reservation_id)];
       if(u) wbTag+=' <span class="tag-up">⬆️ upgrade '+money2(u.monto)+' sin aplicar</span>';
+      /* La petición, en la fila. Javi, 19-oct-2026: «que aparezca en el
+         resumen del listado del cliente (…) para verlos todos de una vez». */
+      var e=estDe(r), pt=petTexto(e), petTag='';
+      if(pt) petTag=' <span class="tag-pet'+(e&&e.peticiones_ok?' ok':'')+'">'+
+        (e&&e.peticiones_ok?'✓ ':'🛏️ ')+esc(pt)+'</span>';
       return '<div class="row" data-i="'+idx+'">'+
         '<span class="dot '+est.cls+'"></span>'+
         '<div class="grow"><div class="nm">'+esc(r.nombre||'—')+wbTag+'</div>'+
-          '<div class="mk">'+marcadores(r)+'</div>'+
+          '<div class="mk">'+marcadores(r)+petTag+'</div>'+
           '<div class="meta">Llega '+fdate(r.desde)+' → '+fdate(r.hasta)+acc+'</div></div>'+
         '<span class="pill '+est.cls+'">'+(est.cls==='gris'?'':'✓ ')+est.txt+'</span></div>';
     }).join('');
@@ -1413,7 +1474,9 @@ h1{font-size:19px;margin:0;font-weight:700}
         '<input type="checkbox" id="entSecadora"'+(es.secadora?' checked':'')+' style="width:17px;height:17px"> Se le dio secadora</label>'+
       '<input id="entNota" placeholder="Nota (depósito de la llave, lo que sea)" value="'+esc(es.nota||'')+'" '+
         'style="width:100%;margin-top:10px;padding:9px 11px;border:1.5px solid var(--rule);border-radius:9px;font:inherit">'+
-      '<button class="btn" id="btnEnt" style="margin-top:10px">Guardar entrega</button>'+
+      '<button class="btn" id="btnEnt" style="margin-top:10px">'+
+        (estaEnCasa(r)?'Guardar entrega':'Guardar entrega y hacer check-in')+'</button>'+
+      (estaEnCasa(r)?'':'<div class="note" style="margin-top:6px">Al guardar se marca la llegada en Cloudbeds.</div>')+
       (es.entrega_at?('<div class="note" style="margin-top:7px">Última vez: '+esc(es.entrega_por||'')+' · '+fdt(es.entrega_at)+'</div>'):'')+
       '<div class="note" id="entAviso" style="margin-top:7px"></div>', false);
 
@@ -1548,12 +1611,24 @@ h1{font-size:19px;margin:0;font-weight:700}
       bE.disabled=true; bE.textContent='Guardando…';
       try{
         await rpc('apepe_entrega_guardar',{p_reserva:rid,p_sede:sede,p_llaves:ll,p_toallas:to,p_secadora:sec,p_nota:nota,p_por:quienSoy()});
-        diAviso('entAviso','✓ Guardado. Mandándolo a Cloudbeds…');
-        var cb=await notaCB(rid,sede,'🔑 Entrega: '+ll+' llave(s) · '+to+' toalla(s)'+(sec?' · secadora':'')+
-          (nota?(' · '+nota):'')+' — '+(quienSoy()||'recepción'));
-        diAviso('entAviso',(cb&&cb.ok)?'✓ Guardado y anotado en Cloudbeds.':'✓ Guardado aquí. La nota de Cloudbeds no salió.');
+        /* Guardar la entrega ES hacer el check-in. Javi, 19-oct-2026: «le das
+           y ya tendría que ir a Cloudbeds y cambiar el estado a check-in». La
+           nota en Cloudbeds se quita: con tenerlo aquí basta. */
+        if(estaEnCasa(r)){ diAviso('entAviso','✓ Guardado.'); }
+        else{
+          diAviso('entAviso','✓ Guardado. Marcando la llegada en Cloudbeds…');
+          var tok=sessTok(), cb=null;
+          try{ cb=await fetch(SB+'/functions/v1/apepe-cb-estado',{method:'POST',
+            headers:{apikey:KEY,Authorization:'Bearer '+(tok||KEY),'Content-Type':'application/json'},
+            body:JSON.stringify({reservation_id:rid,prop:(sede==='puebla'?'puebla':'cdmx'),estado:'checked_in'})
+          }).then(function(x){return x.json();}); }catch(e){}
+          if(cb&&cb.ok){ diAviso('entAviso','✓ Guardado y <b>check-in hecho en Cloudbeds</b>.');
+            setTimeout(function(){ $('ov').classList.remove('on'); cargar(); },1400); }
+          else diAviso('entAviso','✓ Guardado aquí, pero <b>Cloudbeds no aceptó el check-in</b>'+
+            ((cb&&cb.cloudbeds&&cb.cloudbeds.message)?(': '+esc(cb.cloudbeds.message)):'')+'. Márcalo a mano.',true);
+        }
       }catch(e){ diAviso('entAviso','No se pudo guardar.',true); }
-      bE.disabled=false; bE.textContent='Guardar entrega';
+      bE.disabled=false; bE.textContent=estaEnCasa(r)?'Guardar entrega':'Guardar entrega y hacer check-in';
     };
 
     var bP=$('btnPet');
