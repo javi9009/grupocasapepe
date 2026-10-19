@@ -1271,6 +1271,135 @@ h1{font-size:19px;margin:0;font-weight:700}
   function avisoFuera(){ var e=$('avisoTop'); if(e) e.style.display='none'; }
 
   function sessTok(){ try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k&&/sb-.*-auth-token/.test(k)){ var v=JSON.parse(localStorage.getItem(k)||'null'); var s=v&&(v.currentSession||v); if(s&&s.access_token) return s.access_token; } } }catch(e){} return ''; }
+  /* ================= AVISARLE AL HUÉSPED =================
+     Javi, 19-oct-2026: "desde Front, en su ficha, que puedan notificarle de lo
+     más común o mandarle un mensaje especial, con un editor completo".
+
+     Sale en la campanita de su APePe, que es donde ya mira sus avisos. Las
+     frecuentes viven en apepe_notif_plantilla —se editan sin tocar código— y
+     el mensaje especial se escribe aquí, con su sticker y su versión en
+     inglés: el huésped lee la app en su idioma y un aviso a medio traducir se
+     nota más que uno que no llega.
+
+     Si la reserva no tiene app, se dice y no se finge que se mandó. */
+  var PLANT=null;
+  var STICKERS=['\ud83d\udd14','\ud83d\udd11','\ud83e\uddf3','\ud83d\udce6','\ud83c\udf73','\ud83d\udd50','\ud83d\udee0\ufe0f',
+    '\ud83c\udf79','\ud83c\udf7b','\u2615','\ud83c\udf2e','\ud83d\udc80','\ud83c\udf3c','\ud83c\udfb8','\ud83c\udfad',
+    '\ud83d\uddfa\ufe0f','\ud83d\ude8c','\ud83c\udfa1','\u2600\ufe0f','\ud83c\udf19','\u2764\ufe0f','\u2728','\ud83c\udf89','\ud83d\udc4b'];
+
+  async function cargaPlantillas(){
+    if(PLANT) return PLANT;
+    try{ PLANT=await rpcGet('apepe_notif_plantilla?select=*&activa=is.true&order=orden'); }
+    catch(e){ PLANT=[]; }
+    return PLANT;
+  }
+  function rpcGet(path){
+    return fetch(SB+'/rest/v1/'+path,{headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY)}})
+      .then(function(r){ return r.ok?r.json():[]; });
+  }
+
+  function bloqueAvisar(rid){
+    return '<div class="sec"><h3>Avisarle por la app</h3>'+
+      '<div class="note">Le llega a la campanita de su APePe. Lo m\u00e1s com\u00fan de un toque, o escr\u00edbele t\u00fa.</div>'+
+      '<div id="avChips" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px"></div>'+
+      '<div style="margin-top:10px"><button class="btn ghost" id="avEscribir">\u270f\ufe0f Escribirle un mensaje</button></div>'+
+      '<div id="avEditor" style="display:none;margin-top:12px;border:1px solid var(--linea,#E6DFD6);border-radius:12px;padding:12px">'+
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+          '<span class="note">Sticker</span>'+
+          '<span id="avIcoSel" style="font-size:24px;line-height:1">\ud83d\udd14</span>'+
+          '<button class="btn ghost sm" id="avIcoAbre">Cambiar</button>'+
+        '</div>'+
+        '<div id="avIcos" style="display:none;gap:6px;flex-wrap:wrap;margin-top:8px"></div>'+
+        '<input id="avTit" placeholder="T\u00edtulo \u2014 lo que se lee primero" maxlength="60" '+
+          'style="width:100%;margin-top:10px;padding:9px 11px;border:1.5px solid var(--linea,#E6DFD6);border-radius:9px;font:inherit">'+
+        '<textarea id="avCue" rows="3" placeholder="El mensaje" maxlength="400" '+
+          'style="width:100%;margin-top:7px;padding:9px 11px;border:1.5px solid var(--linea,#E6DFD6);border-radius:9px;font:inherit"></textarea>'+
+        '<details style="margin-top:9px"><summary class="note" style="cursor:pointer">En ingl\u00e9s (recomendado)</summary>'+
+          '<input id="avTitEn" placeholder="Title" maxlength="60" '+
+            'style="width:100%;margin-top:7px;padding:9px 11px;border:1.5px solid var(--linea,#E6DFD6);border-radius:9px;font:inherit">'+
+          '<textarea id="avCueEn" rows="3" placeholder="The message" maxlength="400" '+
+            'style="width:100%;margin-top:7px;padding:9px 11px;border:1.5px solid var(--linea,#E6DFD6);border-radius:9px;font:inherit"></textarea>'+
+        '</details>'+
+        '<div class="note" style="margin-top:10px">As\u00ed lo va a ver</div>'+
+        '<div id="avPrev" style="display:flex;gap:10px;align-items:flex-start;background:#FBF7F2;'+
+          'border-radius:10px;padding:11px;margin-top:5px"></div>'+
+        '<div style="margin-top:11px"><button class="btn" id="avMandar">Mandar el aviso</button></div>'+
+      '</div>'+
+      '<div class="note" id="avAviso" style="margin-top:9px"></div></div>';
+  }
+
+  async function enchufaAvisar(rid){
+    var chips=$('avChips'); if(!chips) return;
+    var l=await cargaPlantillas();
+    chips.innerHTML = l.length
+      ? l.map(function(t){
+          return '<button class="btn ghost sm" data-pl="'+esc(t.slug)+'" title="'+esc(t.titulo)+'">'+
+                 esc(t.icono||'\ud83d\udd14')+' '+esc(t.nombre)+'</button>'; }).join('')
+      : '<span class="note">No hay avisos frecuentes dados de alta.</span>';
+    Array.prototype.forEach.call(chips.querySelectorAll('[data-pl]'),function(b){
+      b.onclick=function(){ manda(rid,{p_slug:b.getAttribute('data-pl')}, b); };});
+
+    var ed=$('avEditor'), ab=$('avEscribir');
+    if(ab) ab.onclick=function(){
+      var on = ed.style.display==='none';
+      ed.style.display = on?'':'none';
+      ab.textContent = on?'\u2715 Cerrar el mensaje':'\u270f\ufe0f Escribirle un mensaje';
+      if(on) prev();
+    };
+
+    var caja=$('avIcos');
+    caja.innerHTML = STICKERS.map(function(e){
+      return '<button type="button" class="btn ghost sm" data-ico="'+esc(e)+'" '+
+             'style="font-size:19px;padding:4px 8px;line-height:1">'+esc(e)+'</button>'; }).join('');
+    $('avIcoAbre').onclick=function(){
+      caja.style.display = caja.style.display==='none'?'flex':'none'; };
+    Array.prototype.forEach.call(caja.querySelectorAll('[data-ico]'),function(b){
+      b.onclick=function(){ $('avIcoSel').textContent=b.getAttribute('data-ico');
+        caja.style.display='none'; prev(); };});
+
+    ['avTit','avCue'].forEach(function(id){ var el=$(id); if(el) el.oninput=prev; });
+
+    function prev(){
+      var p=$('avPrev'); if(!p) return;
+      var ti=($('avTit').value||'').trim(), cu=($('avCue').value||'').trim();
+      p.innerHTML='<span style="font-size:22px;line-height:1">'+esc($('avIcoSel').textContent)+'</span>'+
+        '<span><span style="font-weight:700;font-size:14.5px">'+esc(ti||'El t\u00edtulo del aviso')+'</span>'+
+        (cu?'<div style="font-size:13px;color:#3C3630;margin-top:2px;line-height:1.45">'+esc(cu)+'</div>':'')+
+        '<div style="font-size:11.5px;color:#A9A096;margin-top:4px">ahora mismo</div></span>';
+    }
+
+    $('avMandar').onclick=function(){
+      var ti=($('avTit').value||'').trim();
+      if(!ti){ $('avAviso').textContent='El aviso necesita un t\u00edtulo.'; return; }
+      manda(rid,{
+        p_titulo:ti, p_cuerpo:($('avCue').value||'').trim()||null,
+        p_titulo_en:($('avTitEn').value||'').trim()||null,
+        p_cuerpo_en:($('avCueEn').value||'').trim()||null,
+        p_icono:$('avIcoSel').textContent
+      }, $('avMandar'));
+    };
+  }
+
+  async function manda(rid, extra, btn){
+    var av=$('avAviso'); var old=btn?btn.textContent:'';
+    if(btn){ btn.disabled=true; btn.textContent='Mandando\u2026'; }
+    try{
+      var cuerpo={p_reservation:rid}; for(var k in extra) cuerpo[k]=extra[k];
+      var r=await rpc('apepe_notif_enviar', cuerpo);
+      if(r && r.ok){
+        av.innerHTML='\u2713 Le lleg\u00f3 <b>'+esc(r.icono||'')+' '+esc(r.titulo||'')+'</b> a su campanita.';
+        if(btn && btn.id==='avMandar'){ $('avTit').value=''; $('avCue').value='';
+          $('avTitEn').value=''; $('avCueEn').value=''; }
+      } else if(r && r.motivo==='sin_token'){
+        av.innerHTML='Esta reserva <b>no tiene app</b>: no hay a d\u00f3nde mandarle el aviso. '+
+                     'M\u00e1ndale antes su link de check-in.';
+      } else {
+        av.textContent='No se pudo mandar.';
+      }
+    }catch(e){ av.textContent='No se pudo mandar: '+String(e.message||e); }
+    if(btn){ btn.disabled=false; btn.textContent=old; }
+  }
+
   async function enviarLink(rid,prop,btn){
     var av=$('linkAviso'); var tok=sessTok();
     if(!tok){ av.textContent='Inicia sesión en el panel para poder mandar el correo.'; return; }
@@ -1360,9 +1489,11 @@ h1{font-size:19px;margin:0;font-weight:700}
         if(u) h0+='<div class="sec"><a href="'+esc(u)+'" target="_blank" rel="noopener" '+
           'style="color:var(--accent);font-weight:600;text-decoration:none">Abrir la reserva '+
           esc(r.reservation_id||'')+' en Cloudbeds ↗</a></div>'; })();
+      if(r.reservation_id) h0+=bloqueAvisar(r.reservation_id);
       B.innerHTML=h0;
       var be=$('btnEnviarLink'); if(be) be.onclick=function(){ enviarLink(r.reservation_id,r.sede||'cdmx',be); };
       var bc=$('btnCopiarLink'); if(bc) bc.onclick=function(){ copiarLink(r.reservation_id,r.sede||'cdmx'); };
+      if(r.reservation_id) enchufaAvisar(r.reservation_id);
       return;
     }
     B.innerHTML='<div class="note">Cargando detalle…</div>';
@@ -1498,8 +1629,10 @@ h1{font-size:19px;margin:0;font-weight:700}
     html+=cajon('cajUp','⬆️','Free upgrades','Pendiente de definir',
       '<div class="note">Este módulo queda apuntado y sin tocar: ofrecer el upgrade, el correo al huésped para que lo acepte y el cambio en Cloudbeds. Se construye cuando lo decidas.</div>', false);
 
+    if(r.reservation_id) html+=bloqueAvisar(r.reservation_id);
     B.innerHTML=perfil+coment+html;
     engancharFicha(d,r);
+    if(r.reservation_id) enchufaAvisar(r.reservation_id);
   }
   /* Un cajón: el concepto fuera, la acción dentro. <details> nativo, que se
      abre solo donde hace falta y no necesita un gramo de JavaScript. */
