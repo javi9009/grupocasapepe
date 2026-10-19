@@ -390,7 +390,11 @@
     }).observe(document.body, {childList:true, subtree:true});
   }
 
-  function arranca(){ tira(); llamada(); vigilaIdioma(); cartas(); vigilaCartas(); }
+  /* En las apps del equipo (guiño) NO se pintan cartas sobre los iconos: el
+     guiño vive solo en la cabecera (tira). Las cartas y su observador quedan
+     para las pantallas de huésped (completa), donde sí es la ambientación.
+     Javi, 19-oct: "muertos sí, pero la vista del equipo sin calaveras". */
+  function arranca(){ tira(); llamada(); vigilaIdioma(); if(modo === 'completa'){ cartas(); vigilaCartas(); } }
 
   if(document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', arranca);
