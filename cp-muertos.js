@@ -206,7 +206,11 @@
       '<span class="dm-tcuerpo">'+
         '<span class="dm-tcuando">'+esc(cuando(x))+'</span>'+
         '<h4>'+esc(x.nombre)+'</h4>'+
-        '<span class="dm-tpie">'+(pr?esc(pr):(ingles()?'Free':'Entrada libre'))+'</span>'+
+        /* SIN PRECIO NO SE DICE \u00abentrada libre\u00bb. Cinco de las seis piezas
+           vienen sin precio en la base y no todas son gratis: inventarlo le
+           miente al hu\u00e9sped. Mientras no tengan precio, la tarjeta invita a
+           abrir la ficha, que s\u00ed sabe. */
+        '<span class="dm-tpie">'+(pr?esc(pr):(ingles()?'See details':'Ver la ficha'))+'</span>'+
       '</span></a>';
   }
 
