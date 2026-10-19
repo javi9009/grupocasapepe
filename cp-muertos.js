@@ -208,22 +208,64 @@
     'soypepe/limpieza':   C+'08-la-llave.webp',
     'soypepe/room-audit': C+'14-el-palacio.webp'
   };
-  /* las cabeceras de área no tienen enlace: se reconocen por su nombre */
-  var AREAS = {
-    'hu\u00e9spedes':      C+'10-la-catrina.webp',
-    'ama de llaves':  C+'08-la-llave.webp',
-    'mantenimiento':  C+'39-el-arqui.webp',
-    'gu\u00edas':          C+'11-el-mariachi.webp',
-    'compras y stocks': C+'42-el-tianguis.webp',
-    'restaurante':    C+'34-el-pulque.webp',
-    'experiencias':   C+'19-el-alebrije.webp'
+  /* NO TODO TIENE ENLACE. Varios atajos de SoyPepe no llevan data-href — unos
+     se identifican por su id, otros son «próximamente» y no van a ningún
+     sitio— y las cabeceras de área tampoco. Lo único que tienen todos es el
+     texto que el Pepe lee, así que el mapa de verdad es por etiqueta. */
+  var ETIQUETAS = {
+    'check-in hu\u00e9spedes': C+'25-el-castillo.webp',
+    'early check-in':      C+'51-el-encuentro.webp',
+    'los olvidados':       C+'46-el-cine-de-oro.webp',
+    'cobrar':              C+'45-el-pepesero.webp',
+    'preg\u00fantale a pepe':  C+'23-los-filosofos.webp',
+    'eloy queda':          C+'30-el-kaliman.webp',
+    'mis trabajos':        C+'33-el-tlachiquero.webp',
+    'la gu\u00eda del gu\u00eda':  C+'24-los-historiadores.webp',
+    'salidas del d\u00eda':    '/img/apepe/stickers/hola-perrito.webp',
+    'pedidos':             C+'12-los-de-pastor.webp',
+    'inventario':          C+'17-los-centzon-totochtin.webp',
+    'recibir':             C+'26-el-organillero.webp',
+    'mi n\u00f3mina':          C+'20-el-pepe.webp',
+    'valoraciones':        C+'48-la-periodista.webp',
+    'room audit':          C+'14-el-palacio.webp',
+    'mi limpieza':         C+'08-la-llave.webp',
+    'gasto de caja':       C+'04-el-juarez.webp',
+    'mis vacaciones':      C+'50-la-isla.webp',
+    'mi horario':          C+'49-la-jacaranda.webp',
+    'mi expediente':       C+'53-el-codice-boturini.webp',
+    'firmar':              C+'55-el-madero.webp',
+    'mi jefe':             C+'31-el-tata.webp',
+    'clases':              C+'47-los-poetas-novohispanos.webp',
+    'talleres':            C+'19-el-alebrije.webp',
+    'experiencias':        C+'11-el-mariachi.webp',
+    'hu\u00e9spedes':          C+'10-la-catrina.webp',
+    'ama de llaves':       C+'08-la-llave.webp',
+    'mantenimiento':       C+'39-el-arqui.webp',
+    'gu\u00edas':              C+'11-el-mariachi.webp',
+    'compras y stocks':    C+'42-el-tianguis.webp',
+    'restaurante':         C+'34-el-pulque.webp'
   };
 
   function pinta(hueco, src){
     if(!hueco || hueco.querySelector('img.dm-carta')) return;
     hueco.innerHTML = '<img class="dm-carta" src="'+src+'" alt="" loading="lazy">';
   }
+  function limpia(t){
+    return (t||'').replace(/[\u203a]/g,' ').replace(/\s+/g,' ').trim().toLowerCase();
+  }
+  function porEtiqueta(raiz, sel, selHueco, selTexto){
+    Array.prototype.forEach.call(raiz.querySelectorAll(sel), function(el){
+      var hueco = el.querySelector(selHueco);
+      if(!hueco || hueco.querySelector('img.dm-carta')) return;
+      var tx = selTexto ? (el.querySelector(selTexto)||{}).textContent : el.textContent;
+      var nom = limpia(tx);
+      if(!nom) return;
+      if(ETIQUETAS[nom]){ pinta(hueco, ETIQUETAS[nom]); return; }
+      for(var k in ETIQUETAS){ if(nom.indexOf(k) >= 0){ pinta(hueco, ETIQUETAS[k]); return; } }
+    });
+  }
   function cartas(){
+    /* primero por ruta, que es lo más exacto */
     Array.prototype.forEach.call(document.querySelectorAll('[data-href],[href]'), function(el){
       var ruta = el.getAttribute('data-href') || el.getAttribute('href') || '';
       var m = /\/((?:soypepe|m)\/[a-z0-9-]+)\.html/.exec(ruta);
@@ -231,16 +273,23 @@
       var src = CARTAS[m[1]];
       if(src) pinta(el.querySelector('.b') || el.querySelector('.ic'), src);
     });
-    /* cabeceras de área */
-    Array.prototype.forEach.call(document.querySelectorAll('.area-h'), function(h){
-      var nom = (h.textContent||'').replace(/[\u203a\s]+$/,'').trim().toLowerCase();
-      for(var k in AREAS){
-        if(nom.indexOf(k) >= 0){ pinta(h.querySelector('.ai'), AREAS[k]); break; }
-      }
-    });
+    /* y luego por etiqueta, que es lo que cubre al resto */
+    porEtiqueta(document, '.circle', '.b', '.t');
+    porEtiqueta(document, '.area-h', '.ai', null);
+  }
+  /* SOYPEPE SE PINTA DESPUÉS DE ENTRAR. Las áreas y la mitad de los atajos no
+     existen hasta que carga la sesión y sus permisos, así que una sola pasada
+     al cargar dejaba seis emojis sin carta. Se vuelve a pasar cada vez que el
+     árbol cambia; pintar es idempotente, así que no cuesta nada. */
+  function vigilaCartas(){
+    if(!window.MutationObserver) return;
+    var t = null;
+    new MutationObserver(function(){
+      clearTimeout(t); t = setTimeout(cartas, 120);
+    }).observe(document.body, {childList:true, subtree:true});
   }
 
-  function arranca(){ tira(); llamada(); vigilaIdioma(); cartas(); }
+  function arranca(){ tira(); llamada(); vigilaIdioma(); cartas(); vigilaCartas(); }
 
   if(document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', arranca);
