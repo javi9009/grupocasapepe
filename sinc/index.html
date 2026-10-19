@@ -424,6 +424,9 @@ window.CARGA=sincCargando.monta('cargando',{pie:(window.sincI18n?sincI18n.t('Car
 
 <div id="todo" class="oculto">
 
+  <!-- 0 · en qué ciudad mirar (ver apepeDonde) -->
+  <div id="ciudadBar" class="oculto" style="max-width:1120px;margin:14px auto 0;padding:0 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
+
   <!-- 1 · portada con las promociones -->
   <div class="hero">
     <div class="in">
@@ -547,7 +550,41 @@ var FAMILIAS=['Eventos','Talleres','Day Tours','Deportes','Taco Tour','Walking t
 var PRUEBA=new URLSearchParams(location.search).get('prueba')==='1';
 /* La sede de esta portada. Qué está a la venta lo decide la base
    —sinc_catalogo_sede—, no esta pantalla. */
-var SEDE='CDMX';
+/* DONDE PASA LO QUE SE LE OFRECE. Javi, 19-oct-2026, recien llegado a Puebla:
+   "hice check-in en Puebla y las experiencias que me manda son de CDMX".
+   Esta pantalla llevaba la sede escrita a fuego -var SEDE='CDMX'- asi que daba
+   igual donde durmiera el huesped: a todo el mundo se le ensenaba CDMX.
+   Ahora hay un ESTADO, que es lo que pidio Javi:
+     · EN CASA -tiene una reserva viva-: solo la ciudad de esa reserva. No se
+       le ofrece lo que no puede hacer esta semana.
+     · LIBRE   -sin reserva, o ya se fue-: todo el pais, y arriba los filtros
+       de ciudad para que elija.
+   La liga manda sobre las dos (?ciudad=Puebla|CDMX|todo): es lo que tocan los
+   chips, y lo que deja al huesped de Puebla mirar CDMX si le apetece.
+   El estado se lee del aparato, donde lo deja apepe/resv.js: el token de la
+   reserva, su fecha de salida y la sede que resolvio. Sin nada de eso, libre. */
+function apepeDonde(){
+  var tok='', hasta='', sede='';
+  try{ tok=localStorage.getItem('apepe_resv')||''; }catch(_){}
+  try{ hasta=String(localStorage.getItem('apepe_resv_hasta')||'').slice(0,10); }catch(_){}
+  try{ sede=String(localStorage.getItem('apepe_sede')||'').toLowerCase(); }catch(_){}
+  var hoy=''; try{ hoy=new Date().toISOString().slice(0,10); }catch(_){}
+  /* Con reserva y sin fecha sabida se le trata como en casa: el token es
+     reciente y equivocarse por ahi solo le ensena de mas, no de menos. */
+  var enCasa = !!tok && (!hasta || !hoy || hasta >= hoy);
+  return { enCasa:enCasa, ciudad: enCasa ? (sede==='puebla'?'Puebla':'CDMX') : null };
+}
+var DONDE=apepeDonde();
+var CIUDAD_LIGA=(function(){
+  var q=String(new URLSearchParams(location.search).get('ciudad')||'').trim();
+  if(!q) return undefined;                       /* no dijo nada */
+  if(/^(todo|todas|mx|mexico|méxico)$/i.test(q)) return null;   /* todo el pais */
+  if(/^pue/i.test(q)) return 'Puebla';
+  if(/^(cdmx|ciudad)/i.test(q)) return 'CDMX';
+  return q;
+})();
+var SEDE = (CIUDAD_LIGA!==undefined) ? CIUDAD_LIGA : DONDE.ciudad;   /* null = todo el pais */
+var QCIU = (CIUDAD_LIGA!==undefined) ? ('&ciudad='+encodeURIComponent(SEDE||'todo')) : '';
 var QS=PRUEBA?'&prueba=1':'';
 
 /* El QR del concierge trae su código. Se guarda en cuanto entra y viaja con el
@@ -740,6 +777,7 @@ async function arranca(){
   $('cargando').classList.add('oculto');
   $('todo').classList.remove('oculto');
 
+  pintaCiudad();
   montaBuscador();
   montaTabs();
   pintaPromos();
@@ -756,8 +794,37 @@ async function arranca(){
     if(!r || !r.filas) $('sVitrina').classList.add('oculto');
   }).catch(function(){ $('sVitrina').classList.add('oculto'); });
   $('cuentaLista').textContent=CAT.length+' '+T('en total · filtra por precio, por día y por tipo');
-  $('aTodas').href='todas.html'+(PRUEBA||CODIGO?'?':'')+
-    [PRUEBA?'prueba=1':'',CODIGO?'c='+encodeURIComponent(CODIGO):''].filter(Boolean).join('&');
+  var _qt=[PRUEBA?'prueba=1':'',CODIGO?'c='+encodeURIComponent(CODIGO):'',
+            (CIUDAD_LIGA!==undefined?'ciudad='+encodeURIComponent(SEDE||'todo'):'')].filter(Boolean);
+  $('aTodas').href='todas.html'+(_qt.length?('?'+_qt.join('&')):'');
+}
+
+/* LOS CHIPS DE CIUDAD. Solo cuando esta libre: al huesped que duerme aqui
+   esta semana no se le pone a elegir ciudad, se le ensena la suya. A el se le
+   deja una linea discreta por si quiere mirar el resto del pais -alguien que
+   se va manana a CDMX tiene todo el derecho a reservar desde Puebla-. */
+function pintaCiudad(){
+  var b=document.getElementById('ciudadBar'); if(!b) return;
+  function liga(c){
+    var q=new URLSearchParams(location.search); q.set('ciudad', c||'todo');
+    return location.pathname+'?'+q.toString();
+  }
+  if(DONDE.enCasa && CIUDAD_LIGA===undefined){
+    b.innerHTML='<span class="mini" style="color:#8A8078">'+
+      esc(T('Lo que se puede hacer donde te quedas:'))+' <b>'+esc(SEDE||'')+'</b>'+
+      ' · <a href="'+esc(liga('todo'))+'" style="color:var(--naranja-oscuro,#C9501A);font-weight:600">'+
+      esc(T('ver todo México'))+'</a></span>';
+    b.classList.remove('oculto'); return;
+  }
+  var opciones=[['','Todo México'],['CDMX','Ciudad de México'],['Puebla','Puebla']];
+  b.innerHTML=opciones.map(function(o){
+    var on=(o[0]||null)===(SEDE||null);
+    return '<a href="'+esc(liga(o[0]))+'" style="text-decoration:none;border:1.5px solid '+
+      (on?'var(--tinta,#1E1A16)':'var(--linea,#E6DFD6)')+';background:'+(on?'var(--tinta,#1E1A16)':'#fff')+
+      ';color:'+(on?'#fff':'var(--gris,#6E665C)')+';border-radius:999px;padding:7px 15px;'+
+      'font-weight:600;font-size:13px">'+esc(T(o[1]))+'</a>'; }).join('')+
+    (DONDE.enCasa?'':'');
+  b.classList.remove('oculto');
 }
 
 /* ---------- 1 · promociones ---------- */
