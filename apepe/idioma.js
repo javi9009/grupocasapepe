@@ -231,7 +231,7 @@
     'No se pudo retar': 'Could not send the challenge',
     'Ranking · cartas': 'Leaderboard · cards',
     'Recepción y sala': 'Front desk living room',
-    'Salir a cazarlos': 'Catch \'em all',
+    '¡Atrápalos ya!': 'Catch \'em all',
     'Te mudas de cama': 'You change beds',
     'Tu nueva reserva': 'Your new booking',
     'Ver experiencias': 'See experiences',
