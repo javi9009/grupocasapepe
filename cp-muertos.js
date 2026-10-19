@@ -61,33 +61,55 @@
   pon('link',{rel:'stylesheet',
     href:'https://fonts.googleapis.com/css2?family=Rye&display=swap'});
 
-  /* UNA SOLA CABECERA. La tira se mete dentro de la que la app ya tiene,
-     pegada a su filo de abajo. Si la app no tiene cabecera, se pone suelta
-     arriba. Lo que nunca hace es apilarse encima de otra: eso es lo que se
-     veía como un header doble. */
+  /* UNA SOLA CABECERA. El lema se mete DENTRO de la que la app ya tiene,
+     en medio, entre el saludo y el conmutador de idioma; la cabecera se
+     tiñe de cempasúchil y el papel picado cuelga de su filo de abajo, una
+     sola vez. Si la app no tiene cabecera, el lema va suelto arriba. */
   function cabecera(){
     return document.querySelector('header.top') ||
            document.querySelector('header') ||
            document.querySelector('.top');
   }
+  function cartelHTML(){
+    return 'Amor <span class="dm-flor" aria-hidden="true">&#10048;</span> ir venimos';
+  }
   function tira(){
-    if(document.getElementById('dmTira')) return;
-    var t = document.createElement('div');
-    t.className = 'dm-tira'; t.id = 'dmTira';
-    t.innerHTML = '<div class="dm-picado" aria-hidden="true"></div>'+
-      '<div class="dm-lema">Amor <span aria-hidden="true">&#10048;</span> ir venimos</div>';
+    if(document.getElementById('dmCartel')) return;
     var cab = cabecera();
-    if(cab){
-      t.classList.add('dm-en-cabecera');
-      /* la franja de colores de la casa cede el sitio: hacen lo mismo */
-      var franja = cab.querySelector('.franja');
-      if(franja) franja.style.display = 'none';
-      cab.appendChild(t);
-    } else if(document.body.firstChild){
-      document.body.insertBefore(t, document.body.firstChild);
-    } else {
-      document.body.appendChild(t);
+    var c = document.createElement('div');
+    c.className = 'dm-cartel'; c.id = 'dmCartel';
+    c.innerHTML = cartelHTML();
+
+    if(!cab){
+      c.style.background = 'var(--dm-cempa-hondo)';
+      c.style.padding = '10px 14px';
+      document.body.insertBefore(c, document.body.firstChild);
+      return;
     }
+
+    cab.classList.add('dm-cab-tenida');
+
+    /* en medio: detrás del bloque del saludo y delante de lo que haya a la
+       derecha (campanita, ES/EN). Si la fila no existe, al final de la
+       cabecera, que sigue siendo dentro y no encima. */
+    var fila = cab.querySelector('.in') || cab.firstElementChild;
+    var izq  = fila && (fila.querySelector('.izq') || fila.children[0]);
+    if(izq && izq.parentNode) izq.parentNode.insertBefore(c, izq.nextSibling);
+    else (fila || cab).appendChild(c);
+
+    /* EL SALUDO SE ACORTA. Javi: «quita el Casa Pepe de Bienvenido» — el
+       logo ya lo dice, y en temporada ese sitio lo necesita el lema. */
+    var bienv = cab.querySelector('.bienv');
+    if(bienv){
+      var t = bienv.textContent.replace(/\s+a\s+casa\s+pepe\s*$/i,'')
+                               .replace(/\s+to\s+casa\s+pepe\s*$/i,'');
+      if(t.trim()) bienv.textContent = t.trim();
+    }
+
+    var picado = document.createElement('div');
+    picado.className = 'dm-picado dm-filo';
+    picado.setAttribute('aria-hidden','true');
+    cab.appendChild(picado);
   }
 
   /* La puerta a la colección. La app dice dónde con <div id="dmColeccion">;
@@ -105,13 +127,11 @@
     var a = document.createElement('a');
     a.className = 'dm-llamada'; a.id = 'dmLlamada';
     a.href = '/sinc/muertos.html';
-    /* El título ya está arriba, en la tira. Repetirlo aquí era decir lo
-       mismo dos veces en la misma pantalla; abajo va el botón, que es lo
-       único que hace falta. Javi, 19-oct-2026. */
     a.innerHTML =
-      '<span class="dm-tx"><b>Ver Colecci\u00f3n D\u00eda de Muertos</b>'+
-      '<small>Vive el D\u00eda de Muertos con Casa Pepe.</small></span>'+
-      '<span class="dm-fl" aria-hidden="true">&rarr;</span>';
+      '<span class="dm-tx"><b>Vive el D\u00eda de Muertos</b>'+
+      '<small>Los desfiles, las catrinas, los alebrijes y una noche que no se '+
+      'parece a ninguna otra del a\u00f1o.</small>'+
+      '<span class="dm-boton">Ver la colecci\u00f3n</span></span>';
     hueco.appendChild(a);
   }
 
