@@ -260,16 +260,72 @@ async function pintaReserva(){
   if(v.desayuno)l.push([T('Desayuno'), v.desayuno]);
   if(v.reserva)l.push([T('Reserva'), v.reserva]);
   if(v.fuente)l.push([T('Reservaste por'), v.fuente]);
+  /* PAGAR EL CUARTO. Javi, 19-oct-2026: "pagar el cuarto no esta bien; tienes
+     que generar un link de Stripe por el monto de la reserva". Antes esto solo
+     DECIA "sin metodo de pago, saldo pendiente" y no ofrecia nada: el huesped
+     leia que debia y se quedaba igual. El importe no lo pone esta pantalla
+     -solo lo ensena-: lo saca del saldo de Cloudbeds la funcion que abre el
+     cobro, que es la unica que habla con Stripe. */
+  var _saldo=Number((v.pago&&v.pago.saldo)||0);
+  var _pagar = _saldo>0
+    ? ('<div style="margin-top:12px;border-top:1px solid var(--linea,#E6DFD6);padding-top:12px">'+
+       '<div class="li"><span>'+esc(T('Te falta por pagar'))+'</span><b>$'+
+         esc(Math.round(_saldo).toLocaleString('es-MX'))+' '+esc((v.pago&&v.pago.moneda)||'MXN')+'</b></div>'+
+       '<button class="btn" id="btnPagar" type="button">'+esc(T('Pagar con tarjeta'))+'</button>'+
+       '<div class="note" id="pagoAviso" style="margin-top:7px"></div></div>')
+    : '';
+
   $('res').innerHTML=l.map(function(x){
     return '<div class="li"><span>'+esc(x[0])+'</span><b>'+esc(x[1])+'</b></div>';}).join('')+
     (j.ya_checkin?'<div style="margin-top:10px"><span class="et ok">'+esc(T('Check-in hecho'))+'</span></div>'
       :'<a class="btn" href="/apepe/checkin.html'+qs+'">'+esc(T('Hacer el check-in'))+'</a>')+
+    _pagar+
     /* Una reserva que te hizo otro -el equipo, tu pareja, tu empresa- no llega
        sola a esta app: hay que pedirla. Javi, 19-oct-2026. */
     '<div style="margin-top:12px;text-align:center"><a href="/apepe/checkin.html?otra=1" '+
       'style="font-size:12.5px;color:var(--gris,#6E665C)">'+
       esc(T('¿Tienes otra reserva a tu nombre? Búscala'))+'</a></div>';
+  enchufaPago();
   return v;
+}
+
+/* El boton solo pide la liga y manda alla: ni el importe ni la llave de Stripe
+   pasan por el telefono. */
+function enchufaPago(){
+  var b=document.getElementById('btnPagar'); if(!b) return;
+  b.onclick=async function(){
+    var av=document.getElementById('pagoAviso');
+    b.disabled=true; var old=b.textContent; b.textContent=T('Abriendo el pago…');
+    try{
+      var j=await fn('apepe-cuarto-checkout',{resv:RESV});
+      if(j&&j.ok&&j.url){ location.href=j.url; return; }
+      if(j&&j.motivo==='sin_saldo'){ av.textContent=T('Tu cuenta ya está en cero.'); }
+      else if(j&&j.motivo==='sin_llave'){ av.textContent=T('El pago con tarjeta todavía no está activo en esta casa. Págalo en recepción.'); }
+      else { av.textContent=(j&&j.error)||T('No pudimos abrir el pago.'); }
+    }catch(e){ av.textContent=T('No pudimos abrir el pago.'); }
+    b.disabled=false; b.textContent=old;
+  };
+}
+
+/* LA VUELTA DE STRIPE NO CONFIRMA NADA. ?pago=ok en la barra lo escribe
+   cualquiera: lo que vale es lo que conteste apepe-cuarto-confirma, que se lo
+   pregunta a Stripe y de paso registra el pago en Cloudbeds. */
+async function miraVueltaDePago(){
+  var q=new URLSearchParams(location.search);
+  if(q.get('pago')!=='ok') return;
+  var cs=q.get('cs')||'';
+  var caja=document.getElementById('res'); if(!caja) return;
+  try{
+    var j=await fn('apepe-cuarto-confirma', cs?{cs:cs}:{resv:RESV});
+    var av=document.getElementById('pagoAviso');
+    if(j&&j.pagado){
+      var t='✓ '+T('Pago recibido. ¡Gracias!');
+      if(j.registrado_en_pms===false) t+=' '+T('Enséñale esto a recepción para que lo cuadren.');
+      if(av){ av.innerHTML='<b>'+esc(t)+'</b>'; } else { caja.insertAdjacentHTML('afterbegin','<div class="li"><span>'+esc(t)+'</span></div>'); }
+    }
+  }catch(_){}
+  try{ q.delete('pago'); q.delete('cs');
+       history.replaceState(null,'',location.pathname+(q.toString()?('?'+q.toString()):'')); }catch(_){}
 }
 
 /* ---------- los papeles ---------- */
@@ -517,7 +573,7 @@ async function pintaAvisos(){
   };
 }
 
-pintaReserva();
+pintaReserva().then(miraVueltaDePago).catch(function(){ miraVueltaDePago(); });
 pintaEstancias();
 pintaDocs();
 pintaBoletos();
