@@ -171,34 +171,72 @@
      ventana vuelve el emoji solo, porque esto no toca el HTML de nadie.
      Lo que NO entra: bruja, araña, calabaza tallada. Eso es Halloween, y
      esta casa vende lo otro. */
+  /* TODOS, NO ALGUNOS. Javi, 18-oct-2026: «consigue más iconos y que todos
+     sean de Día de Muertos». Las 55 cartas de la baraja están recortadas en
+     /img/muertos/, así que reasignar cualquiera es cambiar una línea de aquí.
+     Cada carta se eligió por lo que dice, no por rellenar: Los Olvidados lleva
+     El Cine de Oro porque es la película de Buñuel; Cobrar lleva El Pepesero,
+     que es el que cobra; Ama de Llaves lleva La Llave. */
+  var C = '/img/muertos/';
   var CARTAS = {
-    'salidas-dia':   '/img/apepe/stickers/hola-perrito.webp',   /* el xolo de barro */
-    'experiencias':  '/img/muertos/11-el-mariachi.webp',
-    'mis-guias':     '/img/muertos/10-la-catrina.webp',
-    'talleres':      '/img/muertos/19-el-alebrije.webp',
-    'limpieza':      '/img/muertos/08-la-llave.webp',
-    'room-audit':    '/img/muertos/25-el-castillo.webp',
-    'cambio-cuarto': '/img/muertos/08-la-llave.webp',
-    'inventario':    '/img/muertos/42-el-tianguis.webp',
-    'recibir':       '/img/muertos/26-el-organillero.webp',
-    'nomina':        '/img/muertos/20-el-pepe.webp',
-    'mi-jefe':       '/img/muertos/31-el-tata.webp',
-    'clases':        '/img/muertos/23-los-filosofos.webp',
-    'procedimientos':'/img/muertos/24-los-historiadores.webp',
-    'documentos':    '/img/muertos/53-el-codice-boturini.webp',
-    'extension':     '/img/muertos/54-la-luna.webp'
+    /* huéspedes */
+    'm/apepe-recepcion':  C+'25-el-castillo.webp',          /* Check-in */
+    'soypepe/cambio-cuarto': C+'51-el-encuentro.webp',      /* Early check-in */
+    'soypepe/tanfos':     C+'46-el-cine-de-oro.webp',       /* Los Olvidados */
+    'm/vnum-cobrar':      C+'45-el-pepesero.webp',          /* Cobrar */
+    'soypepe/extension':  C+'54-la-luna.webp',
+    /* oficio y gente */
+    'soypepe/procedimientos': C+'23-los-filosofos.webp',    /* Pregúntale a Pepe */
+    'soypepe/clases':     C+'47-los-poetas-novohispanos.webp',
+    'soypepe/documentos': C+'53-el-codice-boturini.webp',
+    'soypepe/nomina':     C+'20-el-pepe.webp',
+    'soypepe/mi-jefe':    C+'31-el-tata.webp',
+    'soypepe/firmar':     C+'48-la-periodista.webp',
+    'soypepe/quiero-ser-pepe': C+'01-los-padres.webp',
+    /* mantenimiento */
+    'm/eloy':             C+'30-el-kaliman.webp',
+    'm/mis-mtto':         C+'33-el-tlachiquero.webp',
+    /* guías y experiencias */
+    'soypepe/mis-guias':  C+'24-los-historiadores.webp',
+    'soypepe/salidas-dia':'/img/apepe/stickers/hola-perrito.webp',  /* el xolo */
+    'soypepe/experiencias': C+'11-el-mariachi.webp',
+    'soypepe/talleres':   C+'19-el-alebrije.webp',
+    /* compras y casa */
+    'm/pedidos':          C+'12-los-de-pastor.webp',
+    'soypepe/inventario': C+'17-los-centzon-totochtin.webp',
+    'soypepe/recibir':    C+'26-el-organillero.webp',
+    'soypepe/limpieza':   C+'08-la-llave.webp',
+    'soypepe/room-audit': C+'14-el-palacio.webp'
   };
+  /* las cabeceras de área no tienen enlace: se reconocen por su nombre */
+  var AREAS = {
+    'hu\u00e9spedes':      C+'10-la-catrina.webp',
+    'ama de llaves':  C+'08-la-llave.webp',
+    'mantenimiento':  C+'39-el-arqui.webp',
+    'gu\u00edas':          C+'11-el-mariachi.webp',
+    'compras y stocks': C+'42-el-tianguis.webp',
+    'restaurante':    C+'34-el-pulque.webp',
+    'experiencias':   C+'19-el-alebrije.webp'
+  };
+
+  function pinta(hueco, src){
+    if(!hueco || hueco.querySelector('img.dm-carta')) return;
+    hueco.innerHTML = '<img class="dm-carta" src="'+src+'" alt="" loading="lazy">';
+  }
   function cartas(){
-    var sitios = document.querySelectorAll('[data-href],[href]');
-    Array.prototype.forEach.call(sitios, function(el){
+    Array.prototype.forEach.call(document.querySelectorAll('[data-href],[href]'), function(el){
       var ruta = el.getAttribute('data-href') || el.getAttribute('href') || '';
-      var m = /\/soypepe\/([a-z-]+)\.html/.exec(ruta);
+      var m = /\/((?:soypepe|m)\/[a-z0-9-]+)\.html/.exec(ruta);
       if(!m) return;
       var src = CARTAS[m[1]];
-      if(!src) return;
-      var hueco = el.querySelector('.b') || el.querySelector('.ic');
-      if(!hueco || hueco.querySelector('img.dm-carta')) return;
-      hueco.innerHTML = '<img class="dm-carta" src="'+src+'" alt="" loading="lazy">';
+      if(src) pinta(el.querySelector('.b') || el.querySelector('.ic'), src);
+    });
+    /* cabeceras de área */
+    Array.prototype.forEach.call(document.querySelectorAll('.area-h'), function(h){
+      var nom = (h.textContent||'').replace(/[\u203a\s]+$/,'').trim().toLowerCase();
+      for(var k in AREAS){
+        if(nom.indexOf(k) >= 0){ pinta(h.querySelector('.ai'), AREAS[k]); break; }
+      }
     });
   }
 
