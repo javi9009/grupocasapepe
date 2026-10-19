@@ -504,6 +504,17 @@ gmp-place-autocomplete,.gmpac{
           <div class="fld"><label>Categoría</label><select data-c="categoria_slug"></select></div>
           <div class="fld"><label>Tipo</label><select data-c="tipo_slug"></select></div>
           <div class="fld"><label>Edad mínima</label><select data-c="edad_minima"></select></div>
+          <!-- LA TEMPORADA A LA QUE PERTENECE. Javi, 19-oct-2026: «un apartado
+               en los tours o eventos a la hora de crearlos que puedan escoger
+               la colección». Una ficha es de una temporada o de ninguna: no
+               tiene sentido que un tour sea de Muertos y de Navidad a la vez,
+               así que es un desplegable y no casillas. No vive en la tabla de
+               la experiencia —vive en sinc_coleccion_item— porque la misma
+               colección junta tours y eventos. -->
+          <div class="fld"><label>Colección de temporada</label>
+            <select id="colSel"><option value="">Ninguna</option></select>
+            <div class="ay">Si la pones aquí, sale en la galería de esa temporada y se viste con sus colores.</div>
+          </div>
           <div class="fld ancho"><label>Una línea que la venda</label><input data-c="resumen" maxlength="120"><div class="ay">Máximo 120 caracteres.</div></div>
           <div class="fld ancho"><label>Cuéntala</label><textarea data-c="descripcion" rows="4"></textarea></div>
         </div>
@@ -2480,7 +2491,36 @@ gmp-place-autocomplete,.gmpac{
   function idAGastro(x){var g=GAS.filter(function(y){return y.id===x.gastro_id;})[0];return g?g.nombre:'';}
   function idATangible(x){var t=TAN.filter(function(y){return y.id===x.tangible_id;})[0];return t?t.nombre:'';}
 
+  /* ---------- la temporada ---------- */
+  var COLS=[], COL_ACTUAL='';
+  async function cargaColecciones(){
+    COLS=await get('sinc_colecciones?select=id,slug,nombre,desde,hasta,activa&order=orden');
+    var mia=await get('sinc_coleccion_item?select=coleccion_id&op_experiencia_id=eq.'+ID+'&limit=1');
+    COL_ACTUAL=(mia&&mia[0]&&mia[0].coleccion_id)||'';
+    var sel=$('colSel'); if(!sel)return;
+    /* la temporada en curso va primero y se marca: es la que casi siempre se busca */
+    sel.innerHTML='<option value="">Ninguna</option>'+COLS.map(function(c){
+      return '<option value="'+c.id+'"'+(COL_ACTUAL===c.id?' selected':'')+'>'+
+             esc(c.nombre)+(c.activa?' \u00b7 en curso':'')+'</option>';}).join('');
+  }
+  /* Se guarda aparte del resto de la ficha: no es una columna de la
+     experiencia, es una fila en la tabla que une temporadas con piezas. */
+  async function guardaColeccion(){
+    var sel=$('colSel'); if(!sel)return;
+    var v=sel.value||'';
+    if(v===COL_ACTUAL)return;                     /* nada que mover */
+    await del('sinc_coleccion_item','op_experiencia_id=eq.'+ID);
+    if(v){
+      var hay=await get('sinc_coleccion_item?select=orden&coleccion_id=eq.'+v+'&order=orden.desc&limit=1');
+      var ord=(hay&&hay[0]&&Number(hay[0].orden)||0)+10;
+      var r=await post('sinc_coleccion_item',[{coleccion_id:v,op_experiencia_id:ID,orden:ord}]);
+      if(!r.ok){error('La ficha se guard\u00f3, pero no pudimos ponerla en la colecci\u00f3n.');return;}
+    }
+    COL_ACTUAL=v;
+  }
+
   async function detalle(){
+    await cargaColecciones();
     var g=await get('op_exp_gastros?select=gastro_id&experiencia_id=eq.'+ID);
     var t=await get('op_exp_tangibles?select=tangible_id&experiencia_id=eq.'+ID);
     var p=await get('op_exp_protagonistas?select=protagonista_id,orden&experiencia_id=eq.'+ID+'&order=orden');
@@ -5288,6 +5328,9 @@ gmp-place-autocomplete,.gmpac{
       if(!ri.ok)error('La ficha se guardó, pero el impacto no: '+(await ri.text()).slice(0,140));
       else IMP=await get('op_exp_impacto?select=*&experiencia_id=eq.'+ID);
     }
+
+    // la temporada, antes de las paradas: es una fila suelta y no estorba a nadie
+    await guardaColeccion();
 
     // paradas, también de una pieza
     PAR=leeParadas().filter(function(p){return p.titulo;});
