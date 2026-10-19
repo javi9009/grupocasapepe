@@ -28,7 +28,11 @@
   }
   function esTemporada(){
     var md = hoyCDMX().slice(5);          /* MM-DD */
-    return md >= DESDE || md <= HASTA;     /* cruza el cambio de mes */
+    /* La ventana vive dentro del mismo año (24-oct → 3-nov), así que es un
+       Y, no un O. Con el O que escribí primero, '12-25' >= '10-24' daba
+       cierto y la temporada se quedaba encendida en Navidad y el resto
+       del año. Lo cazó la prueba de fechas, no la pantalla. */
+    return md >= DESDE && md <= HASTA;
   }
   function forzado(){
     try{ return new URLSearchParams(location.search).get('muertos'); }catch(_){ return null; }
