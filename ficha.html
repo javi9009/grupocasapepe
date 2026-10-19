@@ -782,6 +782,18 @@ gmp-place-autocomplete,.gmpac{
         <h3>A dónde se va el dinero de esta reserva</h3>
         <div class="porque">La derrama turística es injusta por definición. ¿Si un vaso se derrama cae el agua igual por todos lados? Obviamente no. Por eso una derrama justa es aquella que, desde la administración de los márgenes y el valor del trabajo de los proveedores, está repartida justamente. Aquí te damos la oportunidad de que compartas la ética de tu gestión administrativa, que a veces pasa desapercibida.</div>
         <div class="hint">Anota aquellos elementos que forman parte de tu tour y qué valor —en pesos o en % del coste del tour— tiene impacto en la comunidad local. Si hay algo que no estamos considerando, no dudes en ponerlo abajo.</div>
+        <!-- EL TAMAÑO DEL GRUPO, ARRIBA. Javi, 19-oct-2026: «hay veces que un
+             impacto económico al trajinero se le da por todo el grupo; luego tú
+             divides un promedio del grupo». El divisor es del tour, no de cada
+             renglón, así que se pregunta una vez y aquí arriba: lo que viene
+             debajo depende de este número. -->
+        <div class="fld" id="fldGrupoProm" style="max-width:300px;margin-top:14px">
+          <label>Un grupo típico de este tour</label>
+          <input type="number" min="1" step="1" data-c="grupo_promedio" id="grupoProm" placeholder="8">
+          <div class="ay">Cuánta gente trae una salida normal. Con este número se reparte
+            entre los viajeros lo que se paga de una vez por toda la salida —la trajinera,
+            la camioneta, el permiso—. Si lo dejas vacío usamos el grupo mínimo.</div>
+        </div>
         <div id="impTabla" style="margin-top:12px"></div>
         <div id="impResumen"></div>
       </div>
@@ -4368,8 +4380,17 @@ gmp-place-autocomplete,.gmpac{
     return '<div class="linea">'+
       '<div class="fld"><label>'+(i===0?esc(x[4]):'Y también')+'</label>'+
         '<input data-quien="'+x[0]+'" value="'+esc(g&&g.nota||'')+'" placeholder="Nombre"></div>'+
-      '<div class="fld"><label>$ por persona</label>'+
+      '<div class="fld"><label>Cu\u00e1nto</label>'+
         '<input type="number" min="0" step="10" data-mxn="'+x[0]+'" value="'+(g&&g.monto_mxn!=null?g.monto_mxn:'')+'" placeholder="80"></div>'+
+      /* AL TRAJINERO SE LE PAGA LA TRAJINERA, NO LA CABEZA. Antes todo monto
+         era por persona a la fuerza, y quien cobra por salida entera ten\u00eda que
+         dividir a mano \u2014y cuando el grupo cambiaba, la cifra quedaba mintiendo.
+         Ahora lo dice el rengl\u00f3n y la cuenta la hace la base. */
+      '<div class="fld"><label>\u00bfPor?</label>'+
+        '<select data-base="'+x[0]+'">'+
+          '<option value="persona"'+(g&&g.base==='grupo'?'':' selected')+'>persona</option>'+
+          '<option value="grupo"'+(g&&g.base==='grupo'?' selected':'')+'>todo el grupo</option>'+
+        '</select></div>'+
       '<div class="fld"><label>o % de lo tuyo</label>'+
         '<input type="number" min="0" max="100" step="1" data-imp="'+x[0]+'" value="'+(g&&g.pct!=null?g.pct:'')+'" placeholder="10"></div>'+
       '<div>'+(i>0?'<button type="button" class="quitar" data-quitalinea="1">✕</button>':'')+'</div>'+
@@ -4384,6 +4405,12 @@ gmp-place-autocomplete,.gmpac{
   function enganchaLineas(){
     Array.prototype.forEach.call($('impTabla').querySelectorAll('input'),function(el){
       el.oninput=resumenImpacto;});
+    /* el \u00abpor persona / por grupo\u00bb cambia la cuenta: hay que repintar */
+    Array.prototype.forEach.call($('impTabla').querySelectorAll('[data-base]'),function(sel){
+      sel.onchange=resumenImpacto;});
+    /* y el tama\u00f1o del grupo, que vive arriba y fuera de la tabla, tambi\u00e9n */
+    var gp=$('grupoProm');
+    if(gp&&!gp._enganchado){ gp.oninput=resumenImpacto; gp._enganchado=true; }
     Array.prototype.forEach.call($('impTabla').querySelectorAll('[data-prota]'),function(sel){
       sel.onchange=function(){
         var pr=PRO.filter(function(y){return y.id===sel.value;})[0];
@@ -4422,7 +4449,7 @@ gmp-place-autocomplete,.gmpac{
       var si=c.querySelector('[data-si]').classList.contains('on');
       var no=c.querySelector('[data-no]').classList.contains('on');
       if(!si&&!no)return;                       // sin contestar, no se guarda
-      if(no){out.push({clave:k,quien:t.quien,responde:false,orden:0,pct:null,monto_mxn:null,nota:null});return;}
+      if(no){out.push({clave:k,quien:t.quien,responde:false,orden:0,pct:null,monto_mxn:null,nota:null,base:'persona'});return;}
       var n=0;
       Array.prototype.forEach.call(c.querySelectorAll('.linea'),function(fila){
         var mxn=fila.querySelector('[data-mxn]').value, pct=fila.querySelector('[data-imp]').value;
@@ -4433,9 +4460,11 @@ gmp-place-autocomplete,.gmpac{
         /* si se eligió del equipo, manda el nombre del catálogo */
         if(pid){var pr=PRO.filter(function(y){return y.id===pid;})[0]; if(pr)nom=pr.nombre;}
         var el=fila.querySelector('[data-enlace]');
+        var selB=fila.querySelector('[data-base]');
         out.push({clave:k,quien:t.quien,responde:true,orden:n++,
           pct:pct===''?null:Number(pct),
           monto_mxn:mxn===''?null:Number(mxn),
+          base:(selB&&selB.value==='grupo')?'grupo':'persona',
           protagonista_id:pid||null,
           enlace:(el&&el.value.trim())||null,
           nota:nom||null});
@@ -4444,9 +4473,18 @@ gmp-place-autocomplete,.gmpac{
     return out;
   }
   /* Todo acaba en lo mismo: cuántos pesos del precio del tour llegan ahí. */
+  function grupoProm(){
+    var v=Number(($('grupoProm')&&$('grupoProm').value)||0);
+    if(v>0)return v;
+    v=Number(E.grupo_promedio||E.cupo_min||E.cupo_max||0);
+    return v>0?v:1;
+  }
   function aPesos(x,t,pvp){
     if(!x.responde)return 0;
-    if(x.monto_mxn!=null)return x.monto_mxn;
+    /* lo declarado por grupo se divide entre la gente de una salida: es la
+       misma plata, pero por boleto es lo que de verdad pone cada viajero */
+    if(x.monto_mxn!=null)
+      return x.base==='grupo' ? Math.round(x.monto_mxn/grupoProm()) : x.monto_mxn;
     if(x.pct!=null&&pvp)return Math.round(pvp*x.pct*t.pct/10000);
     return 0;
   }
@@ -4461,7 +4499,17 @@ gmp-place-autocomplete,.gmpac{
       if(!el)return;
       var mias=l.filter(function(y){return y.clave===x[0]&&y.responde;});
       var p=mias.reduce(function(a,y){return a+aPesos(y,t,pvp);},0);
-      el.innerHTML=p?('Entre '+mias.length+' '+(mias.length===1?': ':'son ')+'<b>'+money(p)+'</b> de cada boleto.'):'';
+      /* SI ALGO SE DECLAR\u00d3 POR GRUPO, SE DICE LA CUENTA EN VOZ ALTA. Quien
+         escribe 600 por una trajinera tiene que ver en qu\u00e9 se convierte por
+         boleto antes de guardar; si no, el n\u00famero de arriba parece un error. */
+      var porGrupo=mias.filter(function(y){return y.base==='grupo'&&y.monto_mxn!=null;});
+      el.innerHTML=p
+        ? ('Entre '+mias.length+' '+(mias.length===1?': ':'son ')+'<b>'+money(p)+'</b> de cada boleto.'+
+           (porGrupo.length
+             ? ' <span style="opacity:.8">('+porGrupo.map(function(y){
+                 return money(y.monto_mxn)+' por salida entre '+grupoProm();}).join(', ')+')</span>'
+             : ''))
+        : '';
     });
 
     var pesos=l.reduce(function(a,x){return a+aPesos(x,t,pvp);},0);
@@ -5069,7 +5117,7 @@ gmp-place-autocomplete,.gmpac{
       if(el.type==='checkbox'){b[c]=!!el.checked;return;}
       var v=el.value.trim();
       if(['edad_minima','cupo_min','cupo_max','cupo_max_grupo2','llegada_min','neto_adulto','neto_menor',
-          'montaje_min','desmontaje_min'].indexOf(c)>=0)b[c]=v===''?null:Number(v);
+          'montaje_min','desmontaje_min','grupo_promedio'].indexOf(c)>=0)b[c]=v===''?null:Number(v);
       /* Los dos del evento son <select> con 'true'/'false': sin esto llegarían
          como texto a una columna booleana. */
       else if(['hay_alcohol','catering_propio'].indexOf(c)>=0)b[c]=(v==='true');
