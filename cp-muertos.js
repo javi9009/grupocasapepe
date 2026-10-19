@@ -145,13 +145,11 @@
   function textoLlamada(){
     return ingles()
       ? '<span class="dm-tx"><b>Live D\u00eda de Muertos</b>'+
-        '<small>The parades, the catrinas, the alebrijes and a night like no '+
-        'other in the year.</small>'+
-        '<span class="dm-boton">See the collection</span></span>'
+        '<small>Parades, catrinas and alebrijes.</small></span>'+
+        '<span class="dm-boton">See collection</span>'
       : '<span class="dm-tx"><b>Vive el D\u00eda de Muertos</b>'+
-        '<small>Los desfiles, las catrinas, los alebrijes y una noche que no se '+
-        'parece a ninguna otra del a\u00f1o.</small>'+
-        '<span class="dm-boton">Ver la colecci\u00f3n</span></span>';
+        '<small>Desfiles, catrinas y alebrijes.</small></span>'+
+        '<span class="dm-boton">Ver colecci\u00f3n</span>';
   }
   /* y se reescribe sola cuando el huésped cambia de idioma */
   function vigilaIdioma(){
