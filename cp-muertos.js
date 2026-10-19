@@ -19,7 +19,9 @@
    ============================================================ */
 (function(){
   'use strict';
-  var DESDE = '10-24', HASTA = '11-03';
+  /* Javi, 18-oct-2026: «arranca desde hoy, ya es temporada». La ventana
+     empieza el 18 en vez del 24; el cierre sigue siendo el 3 de noviembre. */
+  var DESDE = '10-18', HASTA = '11-03';
 
   function hoyCDMX(){
     try{
