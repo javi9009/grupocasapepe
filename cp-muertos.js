@@ -61,39 +61,59 @@
   pon('link',{rel:'stylesheet',
     href:'https://fonts.googleapis.com/css2?family=Rye&display=swap'});
 
-  /* El guiño es una tira y ya. La completa lleva el cartel entero y la
-     puerta a la colección, que es lo único que de verdad hay que vender
-     estos diez días. */
-  function arranca(){
+  /* UNA SOLA CABECERA. La tira se mete dentro de la que la app ya tiene,
+     pegada a su filo de abajo. Si la app no tiene cabecera, se pone suelta
+     arriba. Lo que nunca hace es apilarse encima de otra: eso es lo que se
+     veía como un header doble. */
+  function cabecera(){
+    return document.querySelector('header.top') ||
+           document.querySelector('header') ||
+           document.querySelector('.top');
+  }
+  function tira(){
     if(document.getElementById('dmTira')) return;
     var t = document.createElement('div');
     t.className = 'dm-tira'; t.id = 'dmTira';
-
-    var cartel = modo === 'completa'
-      ? '<div class="dm-portada" style="padding:16px 16px 20px">'+
-          '<h2 style="font-size:clamp(26px,7vw,38px)">Amor <span class="dm-flor" aria-hidden="true">&#10048;</span> ir venimos</h2>'+
-          '<div class="dm-casa">casa pepe</div>'+
-          '<a href="/sinc/muertos.html" style="display:inline-block;margin-top:13px;'+
-            'font-family:Oswald,Inter,sans-serif;font-weight:600;font-size:12.5px;letter-spacing:.06em;'+
-            'text-transform:uppercase;color:#fff;text-decoration:none;border:2px solid rgba(255,255,255,.6);'+
-            'border-radius:9px;padding:9px 16px">Ver la Colecci\u00f3n D\u00eda de Muertos</a>'+
-        '</div>'
-      : '<div class="dm-lema">Amor <span aria-hidden="true">&#10048;</span> ir venimos'+
-          '<small>Temporada de Muertos &middot; del 24 de octubre al 3 de noviembre</small></div>';
-
-    t.innerHTML = '<div class="dm-picado" aria-hidden="true"></div>' + cartel;
-    if(document.body.firstChild) document.body.insertBefore(t, document.body.firstChild);
-    else document.body.appendChild(t);
-
-    /* y el papel picado también abajo, que es como cuelga de verdad */
-    if(modo === 'completa'){
-      var abajo = document.createElement('div');
-      abajo.className = 'dm-picado abajo dm-pie-picado';
-      abajo.setAttribute('aria-hidden','true');
-      abajo.style.marginTop = '24px';
-      document.body.appendChild(abajo);
+    t.innerHTML = '<div class="dm-picado" aria-hidden="true"></div>'+
+      '<div class="dm-lema">Amor <span aria-hidden="true">&#10048;</span> ir venimos</div>';
+    var cab = cabecera();
+    if(cab){
+      t.classList.add('dm-en-cabecera');
+      /* la franja de colores de la casa cede el sitio: hacen lo mismo */
+      var franja = cab.querySelector('.franja');
+      if(franja) franja.style.display = 'none';
+      cab.appendChild(t);
+    } else if(document.body.firstChild){
+      document.body.insertBefore(t, document.body.firstChild);
+    } else {
+      document.body.appendChild(t);
     }
   }
+
+  /* La puerta a la colección. La app dice dónde con <div id="dmColeccion">;
+     si no lo dice, cae debajo de la primera fila de atajos. */
+  function llamada(){
+    if(modo !== 'completa') return;
+    if(document.getElementById('dmLlamada')) return;
+    var hueco = document.getElementById('dmColeccion');
+    if(!hueco){
+      var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
+      if(!ref) return;
+      hueco = document.createElement('div');
+      ref.parentNode.insertBefore(hueco, ref.nextSibling);
+    }
+    var a = document.createElement('a');
+    a.className = 'dm-llamada'; a.id = 'dmLlamada';
+    a.href = '/sinc/muertos.html';
+    a.innerHTML =
+      '<span class="dm-tx"><b>Amor &#10048; ir venimos</b>'+
+      '<small>La Colecci\u00f3n D\u00eda de Muertos: desfiles, catrinas, alebrijes y una noche '+
+      'que no se parece a ninguna otra del a\u00f1o.</small></span>'+
+      '<span class="dm-fl" aria-hidden="true">&rarr;</span>';
+    hueco.appendChild(a);
+  }
+
+  function arranca(){ tira(); llamada(); }
 
   if(document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', arranca);
