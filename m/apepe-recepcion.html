@@ -362,8 +362,8 @@ h1{font-size:19px;margin:0;font-weight:700}
     {c:'encasa',    n:'En casa',          d:'Cloudbeds dice que ya llegó'},
     {c:'cuarto',    n:'Cambió de cuarto', sinmedir:'No se registra el cambio de habitación.'},
     {c:'extension', n:'Se quedó más',     d:'Extensión firmada, cobrada o por cobrar'},
-    {c:'salio',     n:'Se va hoy',        d:'El check-out del día: salidas de hoy y los ya marcados'},
-    {c:'tarde',     n:'Late checkout',    d:'Dejó sus cosas y se queda unas horas más'},
+    {c:'salio',     n:'Se va hoy',        sinpct:true, d:'El check-out del día: los que salen ese día'},
+    {c:'tarde',     n:'Late checkout',    sinpct:true, d:'Dejó sus cosas y se queda unas horas más'},
     {c:'valoro',    n:'Valoró',           sinmedir:'La encuesta de salida todavía no existe.'}
   ];
   function etapaDe(r,extset){
@@ -399,9 +399,17 @@ h1{font-size:19px;margin:0;font-weight:700}
   function pintaTira(){
     var t=$('tira'); if(!t) return;
     var ds=diasConLlegada(), hoy=ymd(0);
-    t.innerHTML='<button class="fd todos" data-f="" aria-selected="'+(FDIA?'false':'true')+'">'+
-        '<span class="dd">Todas</span><span class="dq">'+DATA.length+'</span></button>'+
-      ds.map(function(d){
+    /* SÓLO EL DÍA. Javi, 19-oct-2026: «no me pongas los 292, ponme SOLO la
+       info del día». Fuera el botón «Todas»: un embudo que mezcla al que
+       llega hoy con el que llega en nueve días no dice nada de ninguno de los
+       dos. Si no hay día elegido se toma hoy, y si hoy no tiene llegadas, el
+       primero que venga después. */
+    if(!FDIA && ds.length){
+      var hayHoy=ds.filter(function(d){return d.f===hoy;}).length;
+      if(hayHoy) FDIA=hoy;
+      else { var post=ds.filter(function(d){return d.f>=hoy;}); FDIA=(post[0]||ds[ds.length-1]).f; }
+    }
+    t.innerHTML=ds.map(function(d){
         var p=d.f.split('-'), dt=new Date(+p[0],+p[1]-1,+p[2]);
         return '<button class="fd'+(d.f===hoy?' hoy':'')+'" data-f="'+d.f+'" aria-selected="'+(FDIA===d.f?'true':'false')+'">'+
           '<span class="dd">'+(+p[2])+'</span>'+
@@ -412,44 +420,52 @@ h1{font-size:19px;margin:0;font-weight:700}
       b.onclick=function(){ FDIA=b.getAttribute('data-f'); render(); };
     });
     var i=ds.map(function(d){return d.f;}).indexOf(FDIA);
-    if($('tiraAnt')) $('tiraAnt').disabled=(i<=0 && FDIA!=='');
-    if($('tiraSig')) $('tiraSig').disabled=(FDIA!=='' && i>=ds.length-1);
+    if($('tiraAnt')) $('tiraAnt').disabled=(i<=0);
+    if($('tiraSig')) $('tiraSig').disabled=(i<0||i>=ds.length-1);
+    var MESL=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
     $('tiraTit').textContent = FDIA
-      ? ('Llegadas del '+(+FDIA.split('-')[2])+' de '+['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][+FDIA.split('-')[1]-1]+(FDIA===hoy?' · hoy':''))
-      : 'Todas las llegadas de la ventana';
-    /* Que el día elegido se vea, aunque la tira sea larga. */
+      ? ((+FDIA.split('-')[2])+' de '+MESL[+FDIA.split('-')[1]-1]+(FDIA===hoy?' · hoy':''))
+      : 'Sin llegadas en la ventana';
+    /* Que el día elegido se vea, aunque la tira sea larga: las residencias de
+       Virreyes dejan llegadas de hace un mes al principio y la tira abría en
+       septiembre. */
     var sel=t.querySelector('.fd[aria-selected="true"]');
     if(sel && sel.scrollIntoView) try{ sel.scrollIntoView({block:'nearest',inline:'center'}); }catch(_){}
   }
   function mueveDia(d){
     var ds=diasConLlegada().map(function(x){return x.f;});
     if(!ds.length) return;
-    var i=ds.indexOf(FDIA);
-    if(FDIA===''){ FDIA = d>0 ? ds[0] : ds[ds.length-1]; }
-    else { i+=d; if(i<0||i>=ds.length) return; FDIA=ds[i]; }
-    render();
+    var i=ds.indexOf(FDIA)+d;
+    if(i<0||i>=ds.length) return;
+    FDIA=ds[i]; render();
   }
   function pintarFunnel(){
     pintaTira();
     var EXTSET={}; EXT.forEach(function(e){ if(e.reservation_id) EXTSET[String(e.reservation_id)]=e; });
     var por={}; ETAPASF.forEach(function(e){ por[e.c]=[]; });
+    /* La cohorte del día: los que LLEGAN ese día, seguidos por sus etapas.
+       Un salido no cabe en ella —si se fue, es de otro día—, así que la
+       columna de salidas se llena aparte, con los que SE VAN ese día. */
     DATA.forEach(function(r,i){
-      if(FDIA && String(r.desde||'').slice(0,10)!==FDIA) return;
-      por[etapaDe(r,EXTSET)].push(i);
+      if(String(r.desde||'').slice(0,10)!==FDIA) return;
+      var et=etapaDe(r,EXTSET);
+      if(et==='salio') et='encasa';
+      por[et].push(i);
     });
-    /* Las salidas de hoy que no están en la ventana cargada: salieron de una
-       reserva que entró antes. Se enseñan igual —son parte del embudo— pero
-       sin ficha, porque de ésas no tenemos la reserva aquí. */
+    DATA.forEach(function(r,i){
+      if(String(r.hasta||'').slice(0,10)===FDIA) por.salio.push(i);
+    });
+    /* Las salidas de hoy que no están en la ventana cargada: entraron antes de
+       los días que trae esta pantalla. Se enseñan igual, pero sin ficha. */
     var enData={}; DATA.forEach(function(r){ if(r.reservation_id) enData[String(r.reservation_id)]=1; });
-    /* Las de hoy sólo cuentan cuando se mira hoy o se mira todo: una salida de
-       hoy no pinta nada en el embudo de los que llegan el martes. */
-    var hoyEs=(!FDIA || FDIA===ymd(0));
+    var hoyEs=(FDIA===ymd(0));
     var sueltas=hoyEs?SAL.filter(function(s){ return !enData[String(s.reservation_id||'')]; }):[];
+    /* El late checkout lo marca housekeeping por la mañana: sólo existe hoy. */
     var tardeHoy=hoyEs?LC:[];
     function extra(c){ return c==='salio'?sueltas.length : c==='tarde'?tardeHoy.length : 0; }
 
     var medidas=ETAPASF.filter(function(e){ return !e.sinmedir; });
-    var tot=FDIA?DATA.filter(function(r){return String(r.desde||'').slice(0,10)===FDIA;}).length:DATA.length;
+    var tot=por.reservo.length+por.papeles.length+por.validado.length+por.encasa.length+por.extension.length;
     var maxc=0;
     medidas.forEach(function(e){ var n=por[e.c].length+extra(e.c); if(n>maxc) maxc=n; });
     $('embudo').innerHTML=medidas.map(function(e){
@@ -491,17 +507,19 @@ h1{font-size:19px;margin:0;font-weight:700}
             esc(st[1])+'</span>'+
             (Number(x.monto)>0?('<span class="etq">'+money2(x.monto)+'</span>'):'')+'</div></div>';
       }).join('');
+      /* Las columnas de salida no son parte de la cohorte que llega: darles un
+         porcentaje sobre ella da cosas como 113%. */
       return '<section class="col"><div class="cab">'+
         '<div class="num">Etapa '+(i+1)+'</div><h2>'+esc(e.n)+'</h2>'+
-        '<div class="cuenta">'+n+'<span class="pct">'+(tot?Math.round(n/tot*100):0)+'%</span></div>'+
+        '<div class="cuenta">'+n+(e.sinpct?'':('<span class="pct">'+(tot?Math.round(n/tot*100):0)+'%</span>'))+'</div>'+
         '</div><div class="cuerpo">'+(cuerpo||'<div class="nada">Vacía</div>')+'</div></section>';
     }).join('');
 
     Array.prototype.forEach.call($('tablero').querySelectorAll('.tj[data-i]'),function(b){
       b.onclick=function(){ try{ abrir(DATA[+b.getAttribute('data-i')]); }catch(_){} };
     });
-    $('sub').textContent=tot+' huéspedes en los próximos días · '+
-      por.reservo.length+' sin tocar el check-in · '+por.encasa.length+' en casa';
+    $('sub').textContent=tot+' llegan · '+por.reservo.length+' sin tocar el check-in · '+
+      por.encasa.length+' ya en casa · '+(por.salio.length+sueltas.length)+' se van';
   }
   function pintaVista(){
     var f=(VISTA==='funnel');
