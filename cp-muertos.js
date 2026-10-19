@@ -73,7 +73,7 @@
            document.querySelector('.top');
   }
   function cartelHTML(){
-    return 'Amor <span class="dm-flor" aria-hidden="true">&#10048;</span> ir venimos';
+    return 'AMOR <span class="dm-flor" aria-hidden="true">&#10048;</span> IR VENIMOS';
   }
   function tira(){
     if(document.getElementById('dmCartel')) return;
