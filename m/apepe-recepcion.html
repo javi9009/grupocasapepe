@@ -286,6 +286,29 @@ h1{font-size:19px;margin:0;font-weight:700}
        reserva al enviar; la vista previa los enseña ya rellenos para que se lea
        como lo va a leer el huésped. -->
   <div id="vCorreos" style="display:none">
+    <!-- El envío automático: lo que hace que el correo salga solo cuando la
+         reserva nace o se cancela. Vive aquí porque es de los correos, y
+         porque quien decide encenderlo es quien escribe los textos. -->
+    <details class="caj" id="coAuto" style="margin-bottom:14px;background:#fff;border:1px solid var(--linea,#E2DCCF);border-radius:12px;padding:0">
+      <summary style="padding:12px 14px;cursor:pointer;font-family:Oswald,sans-serif;text-transform:uppercase;font-size:13px;letter-spacing:.04em">⚡ Envío automático <span id="coAutoEst" style="font-family:Inter,sans-serif;text-transform:none;letter-spacing:0;color:var(--gris,#6B6459);font-size:12.5px">· comprobando…</span></summary>
+      <div style="padding:0 14px 14px">
+        <p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:var(--gris,#6B6459)">
+          Cuando está puesto, Cloudbeds nos avisa en el momento en que nace o se cancela una reserva, y el correo sale en segundos.
+          Mientras el interruptor de envío esté apagado, sale al buzón de la casa y no al huésped.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn ghost sm" id="coDiag">Comprobar</button>
+          <button class="btn ghost sm" id="coSusc">Poner el aviso</button>
+          <input id="coRid" placeholder="ID de reserva para probar" style="flex:1;min-width:170px;padding:8px 11px;border:1.5px solid var(--linea,#E2DCCF);border-radius:10px;font:inherit;font-size:13.5px">
+          <button class="btn ghost sm" id="coProbar">Probar con esa reserva</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <span style="font-size:13px;color:var(--gris,#6B6459)">Interruptor general:</span>
+          <b id="coInt" style="font-size:13px">—</b>
+          <button class="btn ghost sm" id="coIntBtn">Cambiar</button>
+        </div>
+        <pre id="coAutoSal" style="margin:10px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;color:#3C3630;background:#FBF9F5;border:1px dashed var(--linea,#E2DCCF);border-radius:10px;padding:10px;max-height:260px;overflow:auto;display:none"></pre>
+      </div>
+    </details>
     <div class="co-cols">
       <div class="co-lista" id="coLista"></div>
       <div class="co-edit" id="coEdit">
@@ -694,6 +717,7 @@ h1{font-size:19px;margin:0;font-weight:700}
         b.setAttribute('aria-selected', b.getAttribute('data-v')===VISTA?'true':'false');
       });
       cargaCorreos();
+      enchufaAuto();
       return;
     }
     $('vFunnel').style.display=f?'block':'none';
@@ -2070,6 +2094,56 @@ h1{font-size:19px;margin:0;font-weight:700}
       b.onclick=function(){ CORSEL=+b.getAttribute('data-i'); pintaListaCorreos(); pintaEditor(); };
     });
     if(CORSEL===null) $('coEdit').innerHTML='<div class="co-vacio">Elige un correo de la izquierda para editarlo.</div>';
+  }
+
+  /* El envío automático, desde el panel: comprobar que Cloudbeds nos deja
+     escuchar, poner el aviso, probarlo con una reserva de verdad y encender o
+     apagar el interruptor. Todo pasa por la sesión de quien lo pulsa. */
+  function coSal(txt){ var e=$('coAutoSal'); if(!e) return; e.style.display='block'; e.textContent=txt; }
+  async function fn(ruta,metodo){
+    var tok=sessTok(); if(!tok) throw new Error('sin sesión');
+    return await fetch(SB+'/functions/v1/'+ruta,{method:metodo||'GET',
+      headers:{apikey:KEY,Authorization:'Bearer '+tok}}).then(function(r){return r.json();});
+  }
+  async function pintaInterruptor(){
+    try{
+      var r=await rpc('apepe_envio_estado',{});
+      var on=!!(r&&r.activo);
+      if($('coInt')){ $('coInt').textContent=on?'ENCENDIDO · salen al huésped':'APAGADO · salen a la recepción';
+        $('coInt').style.color=on?'var(--accent,#137A56)':'#9E3B2E'; }
+      if($('coIntBtn')) $('coIntBtn').textContent=on?'Apagar':'Encender';
+      if($('coAutoEst')) $('coAutoEst').textContent=on?'· encendido':'· apagado (modo prueba)';
+    }catch(e){ if($('coAutoEst')) $('coAutoEst').textContent='· no pude leer el estado'; }
+  }
+  function enchufaAuto(){
+    if($('coDiag')) $('coDiag').onclick=async function(){
+      coSal('Preguntando a Cloudbeds…');
+      try{ coSal(JSON.stringify(await fn('apepe-cb-hook?admin=diag'),null,1)); }
+      catch(e){ coSal('No pude preguntar: '+e.message); }
+    };
+    if($('coSusc')) $('coSusc').onclick=async function(){
+      if(!confirm('Voy a pedirle a Cloudbeds que nos avise de cada reserva nueva y de cada cancelación. ¿Sigo?')) return;
+      coSal('Dando de alta el aviso…');
+      try{ coSal(JSON.stringify(await fn('apepe-cb-hook?admin=suscribir'),null,1)); }
+      catch(e){ coSal('No pude darlo de alta: '+e.message); }
+    };
+    if($('coProbar')) $('coProbar').onclick=async function(){
+      var rid=(($('coRid')||{}).value||'').trim();
+      if(!rid){ coSal('Escribe el ID de una reserva de Cloudbeds.'); return; }
+      coSal('Probando con la reserva '+rid+'…');
+      try{ coSal(JSON.stringify(await fn('apepe-cb-hook?admin=probar&rid='+encodeURIComponent(rid)),null,1)); }
+      catch(e){ coSal('No pude probar: '+e.message); }
+    };
+    if($('coIntBtn')) $('coIntBtn').onclick=async function(){
+      var r=await rpc('apepe_envio_estado',{}).catch(function(){return null;});
+      var on=!!(r&&r.activo);
+      var msg=on?'Los correos dejarán de salir al huésped y volverán a la recepción. ¿Apago?'
+                :'A partir de ahora los correos saldrán AL HUÉSPED. ¿Enciendo?';
+      if(!confirm(msg)) return;
+      try{ await rpc('apepe_envio_interruptor',{p_activo:!on,p_por:quienSoy()}); await pintaInterruptor(); }
+      catch(e){ coSal('No pude cambiarlo.'); }
+    };
+    pintaInterruptor();
   }
 
   function campo(id,etiqueta,valor,ayuda,multi){
