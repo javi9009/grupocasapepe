@@ -130,15 +130,79 @@
     var a = document.createElement('a');
     a.className = 'dm-llamada'; a.id = 'dmLlamada';
     a.href = '/sinc/muertos.html';
-    a.innerHTML =
-      '<span class="dm-tx"><b>Vive el D\u00eda de Muertos</b>'+
-      '<small>Los desfiles, las catrinas, los alebrijes y una noche que no se '+
-      'parece a ninguna otra del a\u00f1o.</small>'+
-      '<span class="dm-boton">Ver la colecci\u00f3n</span></span>';
+    a.innerHTML = textoLlamada();
     hueco.appendChild(a);
   }
 
-  function arranca(){ tira(); llamada(); }
+  /* LO QUE YO ESCRIBO TAMBIÉN HABLA INGLÉS. La app del huésped se conmuta
+     entre ES y EN, y mis textos entraban siempre en español: un huésped en
+     inglés veía la app traducida y mi tarjeta no. El nombre de la campaña no
+     se traduce — Amor ir venimos es el nombre, no una frase. */
+  function ingles(){
+    var l = (document.documentElement.getAttribute('lang') || '').slice(0,2).toLowerCase();
+    return l === 'en';
+  }
+  function textoLlamada(){
+    return ingles()
+      ? '<span class="dm-tx"><b>Live D\u00eda de Muertos</b>'+
+        '<small>The parades, the catrinas, the alebrijes and a night like no '+
+        'other in the year.</small>'+
+        '<span class="dm-boton">See the collection</span></span>'
+      : '<span class="dm-tx"><b>Vive el D\u00eda de Muertos</b>'+
+        '<small>Los desfiles, las catrinas, los alebrijes y una noche que no se '+
+        'parece a ninguna otra del a\u00f1o.</small>'+
+        '<span class="dm-boton">Ver la colecci\u00f3n</span></span>';
+  }
+  /* y se reescribe sola cuando el huésped cambia de idioma */
+  function vigilaIdioma(){
+    if(!window.MutationObserver) return;
+    new MutationObserver(function(){
+      var a = document.getElementById('dmLlamada');
+      if(a) a.innerHTML = textoLlamada();
+    }).observe(document.documentElement, {attributes:true, attributeFilter:['lang']});
+  }
+
+  /* ---------- LAS CARTAS DE LA LOTERÍA EN SOYPEPE ----------
+     Javi, 18-oct-2026: «podrías poner iconos en SoyPepe de Día de Muertos…
+     un catrín, un mariachi catrín… las salidas del día puede ser un xolo».
+     No hacen falta iconos nuevos: la casa ya tiene una baraja de lotería
+     catrín de 55 cartas, ilustración propia y en esta misma paleta. Durante
+     la temporada cada atajo cambia su emoji por su carta; al cerrarse la
+     ventana vuelve el emoji solo, porque esto no toca el HTML de nadie.
+     Lo que NO entra: bruja, araña, calabaza tallada. Eso es Halloween, y
+     esta casa vende lo otro. */
+  var CARTAS = {
+    'salidas-dia':   '/img/apepe/stickers/hola-perrito.webp',   /* el xolo de barro */
+    'experiencias':  '/img/muertos/11-el-mariachi.webp',
+    'mis-guias':     '/img/muertos/10-la-catrina.webp',
+    'talleres':      '/img/muertos/19-el-alebrije.webp',
+    'limpieza':      '/img/muertos/08-la-llave.webp',
+    'room-audit':    '/img/muertos/25-el-castillo.webp',
+    'cambio-cuarto': '/img/muertos/08-la-llave.webp',
+    'inventario':    '/img/muertos/42-el-tianguis.webp',
+    'recibir':       '/img/muertos/26-el-organillero.webp',
+    'nomina':        '/img/muertos/20-el-pepe.webp',
+    'mi-jefe':       '/img/muertos/31-el-tata.webp',
+    'clases':        '/img/muertos/23-los-filosofos.webp',
+    'procedimientos':'/img/muertos/24-los-historiadores.webp',
+    'documentos':    '/img/muertos/53-el-codice-boturini.webp',
+    'extension':     '/img/muertos/54-la-luna.webp'
+  };
+  function cartas(){
+    var sitios = document.querySelectorAll('[data-href],[href]');
+    Array.prototype.forEach.call(sitios, function(el){
+      var ruta = el.getAttribute('data-href') || el.getAttribute('href') || '';
+      var m = /\/soypepe\/([a-z-]+)\.html/.exec(ruta);
+      if(!m) return;
+      var src = CARTAS[m[1]];
+      if(!src) return;
+      var hueco = el.querySelector('.b') || el.querySelector('.ic');
+      if(!hueco || hueco.querySelector('img.dm-carta')) return;
+      hueco.innerHTML = '<img class="dm-carta" src="'+src+'" alt="" loading="lazy">';
+    });
+  }
+
+  function arranca(){ tira(); llamada(); vigilaIdioma(); cartas(); }
 
   if(document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', arranca);
