@@ -30,6 +30,25 @@
   var p, cambio = false, vals = {};
   try { p = new URLSearchParams(location.search); } catch (_) { p = null; }
 
+  /* LA LIGA DEL CORREO TRAE A OTRA PERSONA.
+     Aranza, 19-oct-2026: abrió el check-in desde el correo de prueba y le salió
+     la reserva de Gloria, de una prueba vieja; a Javi le había salido la de
+     Nicolás. El token se guarda en el aparato y se reponía en la URL aunque
+     quien entrara fuera otro, así que el segundo veía los datos del primero.
+     Cuando la liga viene identificando una reserva por su número —?q=, ?cb=,
+     ?reserva=, que es como la manda el correo— el que entra NO es el de antes:
+     se borra lo guardado y se empieza de cero. Esto son datos de otra persona,
+     no una preferencia de la app. */
+  var ligaDeOtro = false;
+  try {
+    ligaDeOtro = !!(p && (p.get('q') || p.get('cb') || p.get('reserva')) && !bueno(p.get('resv')));
+  } catch (_) {}
+  if (ligaDeOtro) {
+    ['apepe_resv','apepe_sol','apepe_resv_hasta','apepe_resv_visto','apepe_sede_token'].forEach(function (x) {
+      try { localStorage.removeItem(x); } catch (_) {}
+    });
+  }
+
   Object.keys(CLAVES).forEach(function (nom) {
     var k = CLAVES[nom];
     var deLaUrl = p ? bueno(p.get(nom)) : '';
@@ -42,7 +61,7 @@
       }
       guarda(k, deLaUrl); vals[nom] = deLaUrl; return;
     }
-    var guardado = lee(k);
+    var guardado = ligaDeOtro ? '' : lee(k);
     if (guardado && p) { p.set(nom, guardado); cambio = true; }
     vals[nom] = guardado;
   });
