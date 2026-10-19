@@ -115,29 +115,129 @@
     cab.appendChild(picado);
   }
 
-  /* La puerta a la colección. La app dice dónde con <div id="dmColeccion">;
-     si no lo dice, cae debajo de la primera fila de atajos. */
+  /* ---------- LA VITRINA DE LA COLECCIÓN ----------
+     Javi, 19-oct-2026: «en vez del botón pon un carrusel con las tarjetas de
+     los tours que van en la colección, y un detalle alrededor del carrusel
+     que se sienta especial». El botón mandaba a otra página a ver qué hay;
+     la vitrina ya enseña qué hay, con foto, fecha y precio, y el que quiere
+     todo sigue teniendo su puerta al final del riel.
+
+     El detalle de alrededor es el mantel de papel de una ofrenda: la franja
+     de cempasúchil con el filo calado en arcos arriba y abajo. NO es el
+     banderín de la cabecera —es otro papel, otro corte— así que no se
+     repite el mismo motivo dos veces en la misma pantalla.
+
+     Si la base no contesta o la colección viene vacía, cae sola a la
+     tarjeta-botón de antes: una vitrina sin género es peor que una puerta. */
+  var SB  = 'https://rehophywchakfapivsbh.supabase.co';
+  var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  var COL = null;                      /* lo que devolvió la colección */
+
+  function esc(t){
+    return (t==null?'':String(t)).replace(/[&<>"]/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; });
+  }
+  function money(n){
+    return (n==null||n==='') ? null : '$'+Math.round(Number(n)).toLocaleString('es-MX');
+  }
+  var MESES = {
+    es:['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+        'septiembre','octubre','noviembre','diciembre'],
+    en:['January','February','March','April','May','June','July','August',
+        'September','October','November','December']
+  };
+  function dia(f){
+    if(!f) return '';
+    var p = String(f).split('-');
+    return ingles() ? MESES.en[+p[1]-1]+' '+(+p[2]) : (+p[2])+' de '+MESES.es[+p[1]-1];
+  }
+
+  function donde(){
+    var h = document.getElementById('dmColeccion');
+    if(h) return h;
+    var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
+    if(!ref) return null;
+    h = document.createElement('div');
+    ref.parentNode.insertBefore(h, ref.nextSibling);
+    return h;
+  }
+
   function llamada(){
     if(modo !== 'completa') return;
     if(document.getElementById('dmLlamada')) return;
-    var hueco = document.getElementById('dmColeccion');
-    if(!hueco){
-      var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
-      if(!ref) return;
-      hueco = document.createElement('div');
-      ref.parentNode.insertBefore(hueco, ref.nextSibling);
+    var h = donde(); if(!h) return;
+    var s = document.createElement('section');
+    s.id = 'dmLlamada'; s.className = 'dm-vitrina dm-vit-cargando';
+    h.appendChild(s);
+    fetch(SB+'/rest/v1/v_sinc_coleccion?select=*&coleccion=eq.dia-de-muertos&order=orden.asc',
+          {headers:{apikey:KEY, Authorization:'Bearer '+KEY}})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(L){ COL = L || []; })
+      .catch(function(){ COL = []; })
+      .then(function(){ pintaVitrina(); });
+  }
+
+  /* MISMO ORDEN QUE LA GALERÍA: lo que viene primero, de lo más próximo a
+     lo más lejano; luego lo que aún no tiene fecha; al final lo vivido. */
+  function ordenada(){
+    var hoy = hoyCDMX(), prox=[], sin=[], pas=[];
+    (COL||[]).forEach(function(x){
+      if(x.proxima)                        prox.push(x);
+      else if(x.ultima && x.ultima < hoy)  pas.push(x);
+      else                                 sin.push(x);
+    });
+    prox.sort(function(a,b){ return a.proxima < b.proxima ? -1 : a.proxima > b.proxima ? 1 : 0; });
+    pas .sort(function(a,b){ return a.ultima  > b.ultima  ? -1 : a.ultima  < b.ultima  ? 1 : 0; });
+    return prox.concat(sin, pas);
+  }
+
+  function cuando(x){
+    var hoy = hoyCDMX(), en = ingles();
+    if(x.proxima) return dia(x.proxima);
+    if(x.ultima && x.ultima < hoy) return (en?'Was on ':'Fue el ')+dia(x.ultima);
+    return en ? 'Date to be confirmed' : 'Fecha por confirmar';
+  }
+  function tarjeta(x){
+    var hoy = hoyCDMX();
+    var ida = !!(x.ultima && x.ultima < hoy && !x.proxima);
+    var pr  = money(x.precio);
+    return '<a class="dm-tarj'+(ida?' pasada':'')+'" href="'+esc(x.liga||'/sinc/muertos.html')+'">'+
+      '<span class="dm-tfoto"'+(x.foto?' style="background-image:url(&quot;'+esc(x.foto)+'&quot;)"':'')+'></span>'+
+      '<span class="dm-tcuerpo">'+
+        '<span class="dm-tcuando">'+esc(cuando(x))+'</span>'+
+        '<h4>'+esc(x.nombre)+'</h4>'+
+        '<span class="dm-tpie">'+(pr?esc(pr):(ingles()?'Free':'Entrada libre'))+'</span>'+
+      '</span></a>';
+  }
+
+  function pintaVitrina(){
+    var s = document.getElementById('dmLlamada'); if(!s) return;
+    var en = ingles(), L = ordenada();
+
+    if(!L.length){                      /* la red falló: la puerta de siempre */
+      s.className = '';
+      s.innerHTML = '<a class="dm-llamada" href="/sinc/muertos.html">'+textoLlamada()+'</a>';
+      return;
     }
-    var a = document.createElement('a');
-    a.className = 'dm-llamada'; a.id = 'dmLlamada';
-    a.href = '/sinc/muertos.html';
-    a.innerHTML = textoLlamada();
-    hueco.appendChild(a);
+    var flor = '<span class="dm-flor" aria-hidden="true">&#10048;</span>';
+    s.className = 'dm-vitrina';
+    s.innerHTML =
+      '<div class="dm-vit-cab">'+
+        '<b>'+flor+' '+(en?'Live D\u00eda de Muertos':'Vive el D\u00eda de Muertos')+' '+flor+'</b>'+
+        '<a class="dm-vit-todo" href="/sinc/muertos.html">'+(en?'See all':'Ver todo')+'</a>'+
+      '</div>'+
+      '<div class="dm-riel">'+
+        L.slice(0,8).map(tarjeta).join('')+
+        '<a class="dm-tarj dm-tarj-fin" href="/sinc/muertos.html"><span>'+
+          (en?'See the whole collection':'Ver la colecci\u00f3n completa')+
+        '</span></a>'+
+      '</div>';
   }
 
   /* LO QUE YO ESCRIBO TAMBIÉN HABLA INGLÉS. La app del huésped se conmuta
      entre ES y EN, y mis textos entraban siempre en español: un huésped en
      inglés veía la app traducida y mi tarjeta no. El nombre de la campaña no
-     se traduce — Amor ir venimos es el nombre, no una frase. */
+     se traduce — AMOR IR VENIMOS es el nombre, no una frase. */
   function ingles(){
     var l = (document.documentElement.getAttribute('lang') || '').slice(0,2).toLowerCase();
     return l === 'en';
@@ -151,12 +251,11 @@
         '<small>Desfiles, catrinas y alebrijes.</small></span>'+
         '<span class="dm-boton">Ver colecci\u00f3n</span>';
   }
-  /* y se reescribe sola cuando el huésped cambia de idioma */
+  /* y se repinta sola cuando el huésped cambia de idioma */
   function vigilaIdioma(){
     if(!window.MutationObserver) return;
     new MutationObserver(function(){
-      var a = document.getElementById('dmLlamada');
-      if(a) a.innerHTML = textoLlamada();
+      if(COL !== null) pintaVitrina();
     }).observe(document.documentElement, {attributes:true, attributeFilter:['lang']});
   }
 
