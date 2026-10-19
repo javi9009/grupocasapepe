@@ -105,10 +105,12 @@
     var a = document.createElement('a');
     a.className = 'dm-llamada'; a.id = 'dmLlamada';
     a.href = '/sinc/muertos.html';
+    /* El título ya está arriba, en la tira. Repetirlo aquí era decir lo
+       mismo dos veces en la misma pantalla; abajo va el botón, que es lo
+       único que hace falta. Javi, 19-oct-2026. */
     a.innerHTML =
-      '<span class="dm-tx"><b>Amor &#10048; ir venimos</b>'+
-      '<small>La Colecci\u00f3n D\u00eda de Muertos: desfiles, catrinas, alebrijes y una noche '+
-      'que no se parece a ninguna otra del a\u00f1o.</small></span>'+
+      '<span class="dm-tx"><b>Ver Colecci\u00f3n D\u00eda de Muertos</b>'+
+      '<small>Vive el D\u00eda de Muertos con Casa Pepe.</small></span>'+
       '<span class="dm-fl" aria-hidden="true">&rarr;</span>';
     hueco.appendChild(a);
   }
