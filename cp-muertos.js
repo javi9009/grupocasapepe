@@ -95,6 +95,7 @@
        derecha (campanita, ES/EN). Si la fila no existe, al final de la
        cabecera, que sigue siendo dentro y no encima. */
     var fila = cab.querySelector('.in') || cab.firstElementChild;
+    if(fila) fila.classList.add('dm-fila');
     var izq  = fila && (fila.querySelector('.izq') || fila.children[0]);
     if(izq && izq.parentNode) izq.parentNode.insertBefore(c, izq.nextSibling);
     else (fila || cab).appendChild(c);
