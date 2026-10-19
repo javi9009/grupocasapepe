@@ -112,7 +112,20 @@ const SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 const sb=createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
 const $=id=>document.getElementById(id);
 const ELOY='eloy.queda@casapepe.mx';
-let ME=null, prop=$('prop').value, pendingFoto=null, PEND=[];
+let ME=null, prop=$('prop').value, pendingFoto=null, PEND=[], UBIS=[];
+async function loadUbis(){ try{ const {data}=await sb.from('mtto_ubicaciones').select('id,nombre').eq('property_id',prop).order('orden'); UBIS=data||[]; }catch(_){ UBIS=[]; } }
+// Mejor coincidencia del área (texto libre de Eloy) contra el catálogo de ubicaciones
+function matchUbic(area){
+  if(!area||!UBIS.length) return '';
+  const a=String(area).toLowerCase().trim();
+  const aslug=a.replace(/[^a-z0-9]/g,'');
+  for(const u of UBIS){ const n=(u.nombre||'').toLowerCase(); if(n===a||n.replace(/[^a-z0-9]/g,'')===aslug) return u.id; }
+  const num=(a.match(/\d{2,4}/)||[])[0];
+  if(num){ for(const u of UBIS){ if(String(u.nombre||'').match(/\d{2,4}/)?.[0]===num) return u.id; } }
+  let best='';
+  for(const u of UBIS){ const n=(u.nombre||'').toLowerCase(); if(n.length>=3 && (a.includes(n)||n.includes(a))){ best=u.id; break; } }
+  return best;
+}
 function mondayOf(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);return x.toISOString().slice(0,10);}
 function toast(m,ok=true){const el=$('toast');el.textContent=m;el.className='toast show'+(ok?'':' bad');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),3000);}
 
@@ -177,6 +190,14 @@ window.cpReabrir=async id=>{
   notifTec(t.asignado_a,'↩️ Reporte reabierto',(t.titulo||'Trabajo')+' — el reportante dice que no quedó bien.');
   quitarPend(id); toast('Se reabrió y volverá al plan del técnico.');
 };
+function ubicSelectHtml(area){
+  const sug=matchUbic(area);
+  const opts=['<option value="">— Sin especificar</option>']
+    .concat(UBIS.map(u=>`<option value="${u.id}" ${sug===u.id?'selected':''}>${esc(u.nombre)}</option>`))
+    .concat(['<option value="__new">➕ Otra / no está en la lista…</option>']).join('');
+  return `<select id="ubicSel" style="width:100%;padding:8px;border-radius:8px;border:1px solid ${sug?'var(--brand)':'#c9a24a'};background:#fff;font-size:13.5px;color:var(--ink)">${opts}</select>`
+    + (area?`<div style="font-size:11px;color:var(--ink2);margin-top:3px">Eloy entendió: "${esc(area)}"${sug?'':' — elige el cuarto/área correcto 👆'}</div>`:'<div style="font-size:11px;color:#9a7b1e;margin-top:3px">Elige el cuarto/área 👆</div>');
+}
 function resumenCard(r){
   const fila=(k,v,cap)=> v?`<dt>${k}</dt><dd class="${cap?'cap':''}">${esc(v)}</dd>`:'';
   const foto=r.foto?`<dt>Foto</dt><dd><img src="${esc(r.foto)}" alt="foto"></dd>`:'';
@@ -184,7 +205,7 @@ function resumenCard(r){
     <h3>📋 Resumen del ticket</h3>
     <dl>
       ${fila('Ubicación', r.propiedad)}
-      ${fila('Área', r.area)}
+      <dt>Cuarto / área</dt><dd>${ubicSelectHtml(r.area)}</dd>
       ${fila('Clasificación', r.clasificacion, true)}
       ${fila('Estado', r.estado||'nuevo', true)}
       ${fila('Título', r.titulo)}
@@ -203,7 +224,16 @@ function wireResumen(r){
     if(sending) return; sending=true;
     btn.disabled=true; btn.textContent='Enviando…';
     try{
-      const d=await call('crear_ticket', { resumen:r });
+      let ubicId=$('ubicSel')?$('ubicSel').value:'';
+      if(ubicId==='__new'){
+        const nom=(prompt('¿Cuál es el cuarto o área? (se agrega al catálogo)', r.area||'')||'').trim();
+        if(!nom){ sending=false; btn.disabled=false; btn.textContent='Enviar ticket ✅'; return; }
+        const {data:nu,error:e1}=await sb.from('mtto_ubicaciones').insert({property_id:prop,tipo:'area',nombre:nom,activo:true}).select('id,nombre').single();
+        if(e1||!nu) throw new Error((e1&&e1.message)||'No pude agregar la ubicación');
+        UBIS.push({id:nu.id,nombre:nu.nombre}); ubicId=nu.id;
+      }
+      const d=await call('crear_ticket', { resumen:r, ubicacion_id: ubicId||null });
+      if(ubicId && d && d.ticket && d.ticket.id){ try{ await sb.from('mtto_tickets').update({ubicacion_id:ubicId}).eq('id',d.ticket.id); }catch(_){} }
       render(d.messages||[], d.ticket);
     }catch(err){
       btn.disabled=false; btn.textContent='Enviar ticket ✅';
@@ -236,12 +266,13 @@ async function boot(){
       }
     }
   }catch(_){}
+  try{ await loadUbis(); }catch(_){}
   try{ const d=await call('open'); render(d.messages||[]); }
   catch(e){ $('feed').innerHTML='<div id="login">Error: '+esc(e.message)+'</div>'; }
   try{ await loadPend(); renderPend(); }catch(_){}
 }
 $('pendBtn').onclick=async()=>{ await loadPend(); renderPend(); if(!PEND.length) toast('No tienes reportes por confirmar 👍'); };
-$('prop').onchange=()=>{ prop=$('prop').value; };
+$('prop').onchange=()=>{ prop=$('prop').value; loadUbis(); };
 $('txt').addEventListener('input',()=>{ $('txt').style.height='auto'; $('txt').style.height=Math.min(120,$('txt').scrollHeight)+'px'; });
 
 // ---- foto real (bucket buzon) ----
