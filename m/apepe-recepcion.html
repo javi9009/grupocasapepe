@@ -240,6 +240,31 @@ h1{font-size:19px;margin:0;font-weight:700}
   function fdt(s){ if(!s) return '—'; var d=new Date(s); return isNaN(d.getTime())?s:d.toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }
   var LBL={verde:'Validado',naranja:'Por validar',gris:'Sin check-in',fisico:'Check-in físico'};
 
+  /* DOS COSAS DISTINTAS. Javi, 19-oct-2026: «si hizo el check-in él, ya tiene
+     la app y sólo falta cobrar y darle llave y toalla; si está en casa, ya
+     tiene la toalla». El check-in ONLINE dice que sus papeles están en regla;
+     el FÍSICO dice que la persona está aquí, y ése lo marca recepción en
+     Cloudbeds. Se puede tener uno sin el otro, así que la etiqueta dice las
+     dos cosas y no una palabra ambigua. */
+  function estado(r){
+    var enCasa = String(r.cb_status||'').toLowerCase()==='checked_in';
+    var papeles = r.semaforo!=='gris';
+    if(enCasa) return { cls:'fisico', txt: papeles?'En casa · con papeles':'En casa · sin papeles' };
+    if(r.semaforo==='verde')   return { cls:'verde',   txt:'Listo · falta llegar' };
+    if(r.semaforo==='naranja') return { cls:'naranja', txt:'Por validar · falta llegar' };
+    return { cls:'gris', txt:'Sin check-in' };
+  }
+
+  /* La reserva, en Cloudbeds. El id va prefijado con «r» o te deja en el
+     listado en vez de abrir la reserva. */
+  var CB_PID={cdmx:'10668',puebla:'201759'};
+  function ligaCB(res,sede){
+    var pid=CB_PID[String(sede||'cdmx').toLowerCase()]; var id=String(res||'').trim();
+    if(!pid||!id) return '';
+    var slug=/^r/i.test(id)?id:('r'+id);
+    return 'https://hotels.cloudbeds.com/connect/'+pid+'#/reservations/'+encodeURIComponent(slug);
+  }
+
   async function cargar(){
     $('sub').textContent='Cargando…';
     /* Qué propiedad ver: la del usuario. Puebla ve Puebla, CDMX ve CDMX; quien
@@ -353,16 +378,16 @@ h1{font-size:19px;margin:0;font-weight:700}
     L.innerHTML=arr.map(function(r,i){
       var idx=DATA.indexOf(r);
       var acc=r.n_acompanantes?(' · +'+r.n_acompanantes+' acomp.'):'';
-      var done=r.semaforo!=='gris';
+      var est=estado(r);
       var wbTag=WBSET[String(r.reservation_id)]?' <span class="tag-wb">💌 winback</span>':'';
       var u=UPSET[String(r.reservation_id)];
       if(u) wbTag+=' <span class="tag-up">⬆️ upgrade '+money2(u.monto)+' sin aplicar</span>';
       return '<div class="row" data-i="'+idx+'">'+
-        '<span class="dot '+r.semaforo+'"></span>'+
+        '<span class="dot '+est.cls+'"></span>'+
         '<div class="grow"><div class="nm">'+esc(r.nombre||'—')+wbTag+'</div>'+
           '<div class="mk">'+marcadores(r)+'</div>'+
           '<div class="meta">Llega '+fdate(r.desde)+' → '+fdate(r.hasta)+acc+'</div></div>'+
-        '<span class="pill '+r.semaforo+'">'+(done?'✓ ':'')+LBL[r.semaforo]+'</span></div>';
+        '<span class="pill '+est.cls+'">'+(est.cls==='gris'?'':'✓ ')+est.txt+'</span></div>';
     }).join('');
     Array.prototype.forEach.call(L.querySelectorAll('.row'),function(el){
       el.onclick=function(){ abrir(DATA[+el.getAttribute('data-i')]); };
@@ -824,6 +849,12 @@ h1{font-size:19px;margin:0;font-weight:700}
             '<button class="btn ghost" id="btnCopiarLink">Copiar link</button>'+
           '</div><div class="note" id="linkAviso" style="margin-top:9px"></div></div>';
       }
+      /* También aquí: sin check-in es justo cuando más falta hace mirar la
+         reserva en Cloudbeds. */
+      (function(){ var u=ligaCB(r.reservation_id,r.sede||'cdmx');
+        if(u) h0+='<div class="sec"><a href="'+esc(u)+'" target="_blank" rel="noopener" '+
+          'style="color:var(--accent);font-weight:600;text-decoration:none">Abrir la reserva '+
+          esc(r.reservation_id||'')+' en Cloudbeds ↗</a></div>'; })();
       B.innerHTML=h0;
       var be=$('btnEnviarLink'); if(be) be.onclick=function(){ enviarLink(r.reservation_id,r.sede||'cdmx',be); };
       var bc=$('btnCopiarLink'); if(bc) bc.onclick=function(){ copiarLink(r.reservation_id,r.sede||'cdmx'); };
@@ -848,8 +879,25 @@ h1{font-size:19px;margin:0;font-weight:700}
       campo('Documento',esc((d.doc_tipo||'—')+(d.doc_numero?(' · '+d.doc_numero):'')))+
       campo('Nacimiento',dd.nacimiento?fdate(dd.nacimiento):'—')+
       campo('Estancia',fdate(d.desde)+' → '+fdate(d.hasta)+' ('+(d.noches||'—')+' noches)')+
+      /* Javi, 19-oct-2026: «un link en cada ficha que me lleve a su reserva
+         concreta en Cloudbeds». */
+      campo('Reserva',(function(){
+        var res=d.reservation_id||r.reservation_id, u=ligaCB(res,r.sede||'cdmx');
+        if(!res) return '—';
+        return u?('<a href="'+esc(u)+'" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;text-decoration:none">'+esc(res)+' · abrir en Cloudbeds ↗</a>'):esc(res);
+      })())+
       campo('Correo',esc(dd.email||'—'))+
       campo('Celular',esc(dd.tel||'—'))+
+    '</div>';
+    /* De dónde salió el check-in y si la persona ya está en casa. Son dos
+       preguntas distintas y recepción necesita las dos. */
+    var ORI={online_huesped:'Lo hizo el huésped por su cuenta',tablet_recepcion:'Hecho en la tablet de recepción',mostrador:'Hecho en el mostrador'};
+    html+='<div class="sec"><h3>Cómo llegó</h3>'+
+      '<div class="note">'+(d.origen?esc(ORI[d.origen]||d.origen):'No consta de dónde se hizo · ficha anterior al 19-oct')+
+        (d.hecho_por?(' · lo capturó '+esc(d.hecho_por)):'')+'</div>'+
+      '<div class="note" style="margin-top:5px">'+(d.llegada_at
+        ? ('🔑 En casa desde '+fdt(d.llegada_at)+(d.llegada_por?(' · '+esc(d.llegada_por)):''))
+        : 'Todavía no ha llegado. La llegada se marca sola cuando recepción le hace el check-in en Cloudbeds.')+'</div>'+
     '</div>';
     html+='<div class="sec"><h3>Contrato e identidad</h3>'+
       '<span class="badge '+(d.consentimiento?'ok':'no')+'">'+(d.consentimiento?'✓ Aceptó términos y condiciones':'Sin aceptar')+'</span>';
