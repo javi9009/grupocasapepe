@@ -39,10 +39,57 @@ function fechaLarga(f: string | null) {
   return `${dd} ${+p[2]} de ${MESES[+p[1] - 1]}`;
 }
 
-async function destinatarios(): Promise<string[]> {
+/* A QUIEN LE LLEGA CADA RESERVA. Javi (de parte de Aranza), 19-oct-2026:
+   "cada vez que se reserve un tour se tiene que mandar el correo a la
+   persona del hotel donde el cliente reservo". Antes solo salia a una lista
+   fija: el hotel donde duerme el huesped no se enteraba, y la touroperadora
+   que opera el tour tampoco. Ahora el aviso se arma por reserva:
+
+     1. el buzon de la casa      - sinc_config.avisos_reserva_correos
+     2. el hotel del huesped     - hoteles.email_notificaciones
+     3. la touroperadora         - tour_operadores.email_notificaciones
+
+   El cuarto destinatario -el cliente- no va aqui: a el le llega su boleto
+   con el QR, que es otro correo y otra cosa. Mandarle este, que lleva el
+   boton de "Abrir la reserva" del panel, seria ensenarle la cocina.
+
+   Si un correo falta, se sigue sin el: un aviso a medias llega; uno que
+   revienta, no. */
+async function destinatarios(reservaId: string): Promise<{ para: string[]; quien: string[] }> {
+  const para: string[] = [];
+  const quien: string[] = [];
+  const mete = (correo: unknown, etiqueta: string) => {
+    const e = String(correo ?? "").trim();
+    if (!e || !e.includes("@")) return;
+    if (para.some((y) => y.toLowerCase() === e.toLowerCase())) return;
+    para.push(e); quien.push(`${etiqueta}: ${e}`);
+  };
+
   const c = await sb(`sinc_config?select=valor&clave=eq.avisos_reserva_correos&limit=1`);
-  const v = String(c.body?.[0]?.valor ?? "").trim();
-  return v ? v.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) : [];
+  String(c.body?.[0]?.valor ?? "").split(/[,;\s]+/).forEach((x) => mete(x, "casa"));
+
+  const rr = await sb(`sinc_reservas?select=hotel_id,op_experiencia_id&id=eq.${encodeURIComponent(reservaId)}&limit=1`);
+  const fila = rr.body?.[0] ?? {};
+
+  if (fila.hotel_id) {
+    const h = await sb(`hoteles?select=nombre_comercial,email_notificaciones,email&id=eq.${encodeURIComponent(fila.hotel_id)}&limit=1`);
+    const hh = h.body?.[0];
+    if (hh) mete(hh.email_notificaciones || hh.email, `hotel ${hh.nombre_comercial ?? ""}`.trim());
+  }
+
+  if (fila.op_experiencia_id) {
+    const o = await sb(`op_experiencias?select=operador_id&id=eq.${encodeURIComponent(fila.op_experiencia_id)}&limit=1`);
+    const opid = o.body?.[0]?.operador_id;
+    if (opid) {
+      const t = await sb(`tour_operadores?select=nombre_comercial,email_notificaciones,email,recibe_reservas&id=eq.${encodeURIComponent(opid)}&limit=1`);
+      const tt = t.body?.[0];
+      /* recibe_reservas en false es una decision del operador, no un olvido */
+      if (tt && tt.recibe_reservas !== false) {
+        mete(tt.email_notificaciones || tt.email, `operador ${tt.nombre_comercial ?? ""}`.trim());
+      }
+    }
+  }
+  return { para, quien };
 }
 
 Deno.serve(async (req) => {
@@ -65,7 +112,7 @@ Deno.serve(async (req) => {
     const x = r.body?.[0];
     if (!x) return json({ ok: false, aviso: "esa reserva no existe" });
 
-    const para = await destinatarios();
+    const { para, quien } = await destinatarios(String(reserva_id));
     if (!para.length) return json({ ok: true, correo: false, aviso: "sin destinatarios configurados" });
     if (!RESEND) return json({ ok: true, correo: false, aviso: "sin RESEND_API_KEY" });
 
@@ -106,7 +153,7 @@ Deno.serve(async (req) => {
           ${filas.map(([k, v]) => `<tr><td style="padding:5px 10px 5px 0;color:#6B6459;white-space:nowrap;vertical-align:top">${esc(k)}</td><td style="padding:5px 0;font-weight:600">${esc(v)}</td></tr>`).join("")}
         </table>
         <p style="margin:22px 0"><a href="${esc(liga)}" style="background:#C9501A;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:600;display:inline-block">Abrir la reserva</a></p>
-        <p style="color:#A49B8C;font-size:12px">Este aviso sale solo, en cuanto entra la reserva. Para cambiar a quien le llega, la clave es <b>avisos_reserva_correos</b> en sinc_config.</p>
+        <p style="color:#A49B8C;font-size:12px">Este aviso sale solo, en cuanto entra la reserva, y va a la casa, al hotel donde duerme el huesped y a la touroperadora que lo opera. Al huesped le llega su boleto aparte.<br>Le llego a: ${quien.map(esc).join(" &middot; ")}</p>
       </div>`;
 
     const asunto = dev
@@ -119,7 +166,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ from: "Sincretico <no-reply@casapepe.mx>", to: para, subject: asunto, html }),
     });
 
-    return json({ ok: true, correo: env.ok, para, detalle: env.ok ? null : (await env.text()).slice(0, 300) });
+    return json({ ok: true, correo: env.ok, para, quien, detalle: env.ok ? null : (await env.text()).slice(0, 300) });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }
