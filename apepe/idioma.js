@@ -713,6 +713,7 @@
     'No pudimos crear tu pedido.': 'We couldn\'t create your order.',
     'Ahora mismo no pudimos abrir el pago con tarjeta. Inténtalo en un minuto, o pídelo en efectivo contra entrega.': 'We couldn\'t open card payment right now. Try again in a minute, or order it cash on delivery.',
     'Nuestras comunidades': 'Our communities',
+    'Ahora tú eres parte de nuestras comunidades': "Now you're part of our communities",
     'Confirmada': 'Confirmed',
     'gratis': 'free',
     'Bienvenido a Pepe GO!': 'Welcome to Pepe GO!',
