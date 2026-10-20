@@ -121,7 +121,7 @@
       <span class="verWrap" id="verWrap"></span>
       <div class="wk"><button class="arrow" onclick="shiftWk(-1)">‹</button><b id="wkLbl"></b><button class="arrow" onclick="shiftWk(1)">›</button></div>
     </div>
-    <div class="seg"><button id="segHoy" class="on" onclick="setView('hoy')">Hoy</button><button id="segSem" onclick="setView('semana')">Esta semana</button></div>
+    <div class="seg"><button id="segHoy" class="on" onclick="setView('hoy')">Hoy</button><button id="segSem" onclick="setView('semana')">Esta semana</button><button id="segBolsa" style="display:none" onclick="setView('bolsa')">🗂️ Bolsa</button></div>
     <div class="filts" id="filts"></div>
     <div class="cap" id="cap"></div>
     <div id="list"></div>
@@ -187,7 +187,18 @@ function guessRiesgo(t){ if(t.riesgo_nota!=null)return t.riesgo_nota; const of=t
   if(/quimic|cloro|acido|solvente/.test(tx))return 'Usa guantes y ventila; nunca mezcles químicos.';
   return ''; }
 
-let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], HOY=[], VPROP=null, TIMER=null, WORKSET=new Set(), CFG=null, PU=null;
+let ME=null, EMP=null, EMPNAME=null, PROPID=null, WK=mondayOf(new Date()), VIEW='hoy', FILT='', curId=null, curAction=null, SUP=false, VIEWEMP=null, VIEWNAME='tú', TECLIST=[], TICKS=[], ENTR=[], HOY=[], VPROP=null, TIMER=null, WORKSET=new Set(), CFG=null, PU=null, SEDES=[];
+// Sedes de las que el colaborador puede jalar tareas (multi-propiedad), de usuario_proyectos
+async function loadSedes(){
+  try{
+    const {data:ups}=await sb.from('usuario_proyectos').select('proyecto').eq('employee_id',EMP);
+    const slugs=(ups||[]).map(x=>x.proyecto).filter(Boolean);
+    let s=[];
+    if(slugs.length){ const {data:pc}=await sb.from('proyectos_catalogo').select('proyecto,nombre,emoji,property_id').in('proyecto',slugs); s=(pc||[]).filter(p=>p.property_id); }
+    if(PROPID && !s.some(x=>x.property_id===PROPID)) s.unshift({property_id:PROPID,nombre:'Mi sede',emoji:'🏨',proyecto:''});
+    return s;
+  }catch(_){ return PROPID?[{property_id:PROPID,nombre:'Mi sede',emoji:'🏨',proyecto:''}]:[]; }
+}
 function puDef(){ return PU||{horas_semana:48,dias_trabajo:[0,1,2,3,4,5],admin_dia:0,admin_horas:4,reactivo_horas:8,lectura_horas:0.5,lectura_dias:[0,1,2,3,4,5]}; }
 
 function toast(t,ok=true){const m=$('msg');m.textContent=t;m.className='msg show'+(ok?'':' bad');setTimeout(()=>m.classList.remove('show'),3200);}
@@ -213,11 +224,13 @@ async function boot(){
   const RS=['Director','Gerente Operativo','Gerente Administrativo','Gerencia','Dueño','Owner'];
   SUP=(emp&&RS.includes(emp.rol))||CORP.includes((ME.email||'').toLowerCase());
   if(SUP){ TECLIST=await loadTecs(); renderVerSelector(); }
+  try{ SEDES=await loadSedes(); }catch(_){ SEDES=[]; }
+  if(SEDES.length>1){ const b=$('segBolsa'); if(b)b.style.display=''; }
   renderFilts();
   render();
 }
 window.shiftWk=n=>{WK=addDays(WK,n*7);render();};
-window.setView=v=>{VIEW=v;$('segHoy').className=v==='hoy'?'on':'';$('segSem').className=v==='semana'?'on':'';render();};
+window.setView=v=>{VIEW=v;$('segHoy').className=v==='hoy'?'on':'';$('segSem').className=v==='semana'?'on':'';const sb3=$('segBolsa');if(sb3)sb3.className=v==='bolsa'?'on':'';if(v==='bolsa')renderBolsa();else render();};
 window.setFilt=f=>{FILT=f===FILT?'':f;renderFilts();paint();};
 function renderFilts(){
   const fs=[['','Todos'],['reactivo','Reactivo'],['correctivo','Correctivo'],['preventivo','Preventivo']];
@@ -451,6 +464,52 @@ window.bellModal=()=>{ if(!HOY.length){ toast('Nada nuevo hoy 👍'); return; }
   modal(`<h3>🔔 Solicitudes de hoy (${HOY.length})</h3>
    <p style="color:var(--ink2);font-size:13px;margin:0 0 10px">Lo que mandaron hoy. Decide cuándo lo haces.</p>
    ${HOY.map(triCard).join('')}`);
+};
+// ====== BOLSA DE TAREAS (multi-sede) ======
+async function renderBolsa(){
+  $('wkLbl') && ($('wkLbl').textContent='Bolsa de tareas');
+  $('btnAdd') && ($('btnAdd').style.display='none');
+  $('btnReport') && ($('btnReport').style.display='none');
+  const sedes = SEDES.length?SEDES:(PROPID?[{property_id:PROPID,nombre:'Mi sede',emoji:'🏨'}]:[]);
+  const propIds = sedes.map(s=>s.property_id).filter(Boolean);
+  if(!propIds.length){ $('list').innerHTML='<div class="empty">No tienes sedes asignadas.</div>'; return; }
+  $('list').innerHTML='<div class="empty">Cargando bolsa…</div>';
+  const [{data:avail},{data:mine}] = await Promise.all([
+    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre)').in('property_id',propIds).is('asignado_a',null)
+      .in('estado',['nuevo','validado','programado']).order('reportado_at',{ascending:false}),
+    sb.from('mtto_tickets').select('minutos_estimados').eq('asignado_a',EMP).eq('semana_programada',WK)
+      .in('estado',['validado','programado','en_proceso','pausado'])
+  ]);
+  const list=(avail||[]).filter(t=>!['cerrado','cancelado'].includes(t.estado));
+  const cargaH=((mine||[]).reduce((s,t)=>s+(t.minutos_estimados||0),0)/60);
+  const byProp={}; list.forEach(t=>{(byProp[t.property_id]=byProp[t.property_id]||[]).push(t);});
+  let html=`<div style="margin:2px 2px 10px">
+    <div style="font-weight:800;font-size:16px">🗂️ Bolsa de tareas · ${list.length}</div>
+    <div class="psub">Jala los trabajos sin asignar de tus sedes. Llevas <b>${cargaH.toFixed(1)}h / 48h</b> esta semana.</div></div>`;
+  if(!list.length){ html+='<div class="empty" style="padding:16px">No hay trabajos sin asignar en tus sedes 👍</div>'; }
+  else{
+    sedes.forEach(s=>{ const items=byProp[s.property_id]||[]; if(!items.length)return;
+      html+=`<div style="font-weight:700;font-size:13px;color:var(--ink2);margin:14px 2px 6px">${s.emoji||'🏨'} ${esc(s.nombre)} · ${items.length}</div>`
+        + items.map(bolsaCard).join(''); });
+  }
+  $('list').innerHTML=html;
+}
+function bolsaCard(t){
+  const cl=CLS[t.clasificacion]||['c-info',t.clasificacion||''];
+  return `<div class="task"><div class="h"><span class="ic">🗂️</span>
+    <div style="flex:1;min-width:0"><div class="nm">${esc(t.titulo||'Trabajo')}</div>
+      <div class="meta"><span class="chip ${cl[0]}">${cl[1]}</span><span>📍 ${esc(t.ubic?t.ubic.nombre:'—')}</span>${t.minutos_estimados?`<span>⏱️ ${t.minutos_estimados}m</span>`:''}${t.reportado_por_nombre?`<span>por ${esc(t.reportado_por_nombre)}</span>`:''}</div></div></div>
+    ${t.descripcion?`<div class="desc">${esc(t.descripcion)}</div>`:''}
+    <div class="acts"><button class="btn sm" style="flex:1" onclick="jalarTarea('${t.id}')">🪝 Jalar a mi semana</button><button class="btn ghost sm" onclick="verInfo('${t.id}')">＋ info</button></div></div>`;
+}
+window.jalarTarea=async(id)=>{
+  const patch={asignado_a:EMP,asignado_nombre:EMPNAME,semana_programada:WK,estado:'programado',dia_programado:null};
+  const {data:upd,error}=await sb.from('mtto_tickets').update(patch).eq('id',id).is('asignado_a',null)
+    .in('estado',['nuevo','validado','programado']).select('id');
+  if(error)return toast(error.message,false);
+  if(!upd||!upd.length){ toast('Alguien más ya la tomó',false); return renderBolsa(); }
+  try{ await ev(id,'asignado',{por:'bolsa',tecnico:EMP}); }catch(_){}
+  toast('¡Jalada! Ya está en tu semana ✅'); renderBolsa();
 };
 window.sinAsignarModal=async()=>{
   const prop=VPROP||PROPID; if(!prop){ toast('Sin propiedad',false); return; }
