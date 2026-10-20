@@ -94,10 +94,20 @@
 
   function normSede(v){ return /pue|chol|atlix|tlax/.test(String(v||'').toLowerCase()) ? 'puebla' : 'cdmx'; }
   var sede = '';
+  /* 0) LO QUE EL HUÉSPED ELIGIÓ A MANO MANDA SOBRE TODO LO DEMÁS.
+     Javi, 20-oct-2026: «¿por qué no mandas a cada cliente a su sede, pero
+     arriba, si le dan al nombre de la ciudad, aparecen todos los destinos?…
+     Así ya tienes dos versiones y no tienes problema si un cliente va de CDMX
+     a Puebla». El que duerme en CDMX y se va el martes a Puebla no quiere la
+     app de CDMX: quiere ver qué hay donde va. Su reserva sigue siendo la
+     suya; lo único que cambia es qué ciudad le enseñamos. */
+  var ELEGIDA = '';
+  try { ELEGIDA = localStorage.getItem('apepe_sede_elegida') || ''; } catch (_) {}
   try {
     var _s = (p && (p.get('ciudad') || p.get('sede'))) || '';
     _s = String(_s).trim().toLowerCase();
-    if (_s) { sede = normSede(_s); localStorage.setItem('apepe_sede', sede); }
+    if (ELEGIDA) { sede = normSede(ELEGIDA); }
+    else if (_s) { sede = normSede(_s); localStorage.setItem('apepe_sede', sede); }
     else { sede = localStorage.getItem('apepe_sede') || ''; }
   } catch (_) {}
 
@@ -124,6 +134,8 @@
       }).catch(function(){});
   }
   function aplicaSede(s, puedeRecargar){
+    /* Si eligió destino a mano, ni la reserva ni el teléfono se lo pisan. */
+    if (ELEGIDA) return;
     if (!s || s === sede) return;
     sede = s;
     try { localStorage.setItem('apepe_sede', s); } catch(_){}
@@ -236,6 +248,19 @@
     token: function () { return vals.resv || ''; },
     sol: function () { return vals.sol || ''; },
     sede: function () { return sede || ''; },
+    /* ¿Lo eligió él, o se lo dedujimos? El header lo dice en una línea. */
+    sedeElegida: function () { return ELEGIDA ? normSede(ELEGIDA) : ''; },
+    /* Cambiar de destino: se guarda y se recarga, porque media app ya se pintó
+       con la ciudad anterior. Pasar '' vuelve a la sede de la reserva. */
+    eligeSede: function (s) {
+      try {
+        if (s) { localStorage.setItem('apepe_sede_elegida', normSede(s));
+                 localStorage.setItem('apepe_sede', normSede(s)); }
+        else   { localStorage.removeItem('apepe_sede_elegida'); }
+        sessionStorage.removeItem('apepe_sede_recarga');
+      } catch (_) {}
+      try { location.reload(); } catch (_) {}
+    },
     /* Lo que hay que pegarle a una liga interna para no perder la identidad. */
     qs: function () {
       if (vals.resv) return '?resv=' + encodeURIComponent(vals.resv);

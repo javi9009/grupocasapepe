@@ -715,6 +715,10 @@
     'Nuestras comunidades': 'Our communities',
     'Ahora tú eres parte de nuestras comunidades': "Now you're part of our communities",
     'CDMX por ti mismo': 'CDMX by yourself',
+    'Puebla por ti mismo': 'Puebla by yourself',
+    'Cambia de destino y se cambia todo: experiencias, talleres, mapa, fiestas y juegos.':
+      'Switch destination and everything switches: experiences, workshops, map, parties and games.',
+    'Cerrar': 'Close',
     'Confirmada': 'Confirmed',
     'gratis': 'free',
     'Bienvenido a Pepe GO!': 'Welcome to Pepe GO!',
