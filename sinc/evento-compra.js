@@ -275,7 +275,20 @@ window.eventoCompra = (function () {
       try{ sessionStorage.removeItem(LLAVE); }catch(_){}
       /* Entrada libre es una reserva de $0: no hay pasarela que abrir, el
          boleto con su QR ya existe. Javi: «mismo procedimiento». */
-      if (r.data.sin_cobro) { location.href = 'evento-boleto.html?f='+encodeURIComponent(r.data.folio); return; }
+      if (r.data.sin_cobro) {
+        /* AVISAR A QUIEN MONTA EL EVENTO. Javi, 20-oct-2026: «le notifican a
+           ella y a ateneo@ aquellos que se inscriban».
+           Una entrada libre no pasa por Stripe, así que no pasa por el webhook,
+           y el webhook era el único que mandaba correos: alguien apartaba su
+           lugar y no se enteraba nadie. Se dispara sin esperar —el boleto no
+           depende de esto— y la función no deja que se avise dos veces. */
+        try{
+          fetch(SB+'/functions/v1/evento-aviso-inscripcion',{
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({folio:r.data.folio}), keepalive:true}).catch(function(){});
+        }catch(_){}
+        location.href = 'evento-boleto.html?f='+encodeURIComponent(r.data.folio); return;
+      }
       /* El lugar queda apartado 1 hora. El cobro cae en el Stripe del productor
          con la comisión del Ateneo, y la confirmación de verdad la da el
          webhook, no el ?pago de la URL. */
