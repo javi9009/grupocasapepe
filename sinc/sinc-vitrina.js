@@ -119,13 +119,18 @@ window.sincVitrina = (function () {
 
   /* ---------- el estilo, inyectado una vez ---------- */
   var CSS = ''
-  + '.sv-lab{font-family:Oswald,sans-serif;text-transform:uppercase;font-size:12px;'
-  +   'letter-spacing:.09em;color:var(--gris);margin:20px 0 2px;display:flex;'
-  +   'align-items:baseline;justify-content:space-between;gap:10px}'
-  + '.sv-lab b{font-weight:600}'
+  /* EL TÍTULO MANDA EN SU SECCIÓN. Javi, 19-oct-2026: «dale más importancia a
+     la sección». Doce píxeles en gris no son un título: son una etiqueta, y
+     dejaban la portada como una lista de cosas sin jerarquía. Ahora el nombre
+     va grande y en tinta —es lo primero que se lee— y lo que lo acompaña baja
+     de peso para que se note quién manda. */
+  + '.sv-lab{font-family:Oswald,sans-serif;text-transform:uppercase;font-size:20px;'
+  +   'letter-spacing:.015em;color:var(--tinta);margin:26px 0 0;display:flex;'
+  +   'align-items:baseline;justify-content:space-between;gap:10px;line-height:1.1}'
+  + '.sv-lab b{font-weight:700}'
   + '.sv-lab a{font-family:Inter,system-ui,sans-serif;text-transform:none;letter-spacing:0;'
   +   'font-size:12.5px;font-weight:600;color:var(--naranja-oscuro);text-decoration:none;white-space:nowrap}'
-  + '.sv-dice{color:var(--gris);font-size:12.5px;line-height:1.45;margin:4px 0 0}'
+  + '.sv-dice{color:var(--gris);font-size:13px;line-height:1.45;margin:5px 0 0}'
   + '.sv-carr{display:flex;gap:10px;margin-top:10px;overflow-x:auto;scroll-snap-type:x proximity;'
   +   '-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}'
   + '.sv-carr::-webkit-scrollbar{display:none}'
