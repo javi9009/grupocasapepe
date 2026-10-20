@@ -123,7 +123,9 @@ async function config(clave: string): Promise<string> {
   } catch { return ""; }
 }
 
-async function ligaCheckin(rid: string, prop: string): Promise<string> {
+/* LA LIGA DE LA RESERVA. El token opaco que demuestra que es él: de aquí
+   cuelgan el check-in y, desde el 20-oct-2026, el cobro con tarjeta. */
+async function tokenReserva(rid: string, prop: string): Promise<string> {
   try {
     const r = await sb(`apepe_reserva_token?reservation_id=eq.${encodeURIComponent(rid)}&select=token&limit=1`);
     const j = await r.json();
@@ -132,8 +134,8 @@ async function ligaCheckin(rid: string, prop: string): Promise<string> {
       tok = crypto.randomUUID();
       await sb("apepe_reserva_token", { method: "POST", body: JSON.stringify({ token: tok, reservation_id: rid, property: prop, nota: "correo" }) });
     }
-    return `${PANEL}/apepe/checkin.html?resv=${encodeURIComponent(tok)}`;
-  } catch { return `${PANEL}/apepe/checkin.html`; }
+    return String(tok || "");
+  } catch { return ""; }
 }
 
 /* EL ANTES Y EL DESPUÉS DEL UPGRADE.
@@ -230,7 +232,15 @@ async function reserva(rid: string, prop: string) {
 async function diccionario(rv: any, rid: string, prop: string, idioma: "es" | "en", clave: string, targetId: string) {
   const casa = CASA[prop] || CASA.cdmx;
   const wifi = await config(`apepe_wifi_${prop}`);
-  const liga = await ligaCheckin(rid, prop);
+  const tok = await tokenReserva(rid, prop);
+  const liga = tok ? `${PANEL}/apepe/checkin.html?resv=${encodeURIComponent(tok)}` : `${PANEL}/apepe/checkin.html`;
+  /* EL COBRO DE VERDAD. Javi, 20-oct-2026: «el link del correo de tu tarjeta
+     debería de ser un link a stripe para hacer el pago». Hasta hoy esto era
+     la portada de la app —la misma que liga_app—, así que el huésped acababa
+     mirando las experiencias de Sincrético en vez de pagando. Ahora va a
+     apepe-pago, que lee el saldo en Cloudbeds y abre Stripe Checkout.
+     Sin token no hay cobro posible: se le deja la app, como antes. */
+  const ligaPago = tok ? `${SB_URL}/functions/v1/apepe-pago?t=${encodeURIComponent(tok)}` : `${PANEL}/apepe/index.html`;
   const red = await config(`wifi_red_${prop}`);
   const clv = await config(`wifi_clave_${prop}`);
   const personas = rv.pax === 1
@@ -253,7 +263,7 @@ async function diccionario(rv: any, rid: string, prop: string, idioma: "es" | "e
     "{{correo}}": rv.correo, "{{telefono}}": rv.telefono, "{{pais}}": rv.pais,
     "{{liga_checkin}}": liga,
     "{{liga_app}}": `${PANEL}/apepe/index.html`,
-    "{{liga_pago}}": `${PANEL}/apepe/index.html`,
+    "{{liga_pago}}": ligaPago,
     "{{liga_upgrade}}": `${PANEL}/apepe/upgrade.html`,
     "{{liga_extender}}": `${PANEL}/apepe/extender.html`,
     "{{liga_resena}}": `${PANEL}/apepe/resena.html`,
