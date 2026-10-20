@@ -366,6 +366,11 @@
       /* Categorías y subtítulos del escaparate (sinc-vitrina). Las que ya están
          en inglés en la base (Tours, Shows) se leen igual; aquí van las demás. */
       'En el Ateneo de Virreyes':'At the Ateneo de Virreyes',
+      /* Javi, 19-oct-2026: «a este apartado llámale Trabajar & ensayar
+         (Work & play)». El nombre del sitio decía dónde, no para qué. */
+      'Trabajar & ensayar':'Work & play',
+      'El Ateneo de Virreyes: coworking por día, salas y estudio de música por horas.':
+        'Ateneo de Virreyes: coworking by the day, rooms and a music studio by the hour.',
       'Ven a componer y crear a Virreyes':'Come compose and create at Virreyes',
       'Lo que se ve desde una butaca: conciertos, funciones, lucha.':
         'What you watch from a seat: concerts, shows, lucha libre.',
