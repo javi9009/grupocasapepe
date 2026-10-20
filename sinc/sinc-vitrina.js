@@ -252,7 +252,12 @@ window.sincVitrina = (function () {
   function fila(cat, items, o) {
     /* El Ateneo va en UN bloque, sin dividir —Javi: «es todo el mismo
        espacio»—, ordenado por lo que tiene fecha y luego los pases. */
-    var ver = (!cat.es_ateneo && o.verTodas)
+    /* LAS FIESTAS NO TIENEN «VER TODAS». El buscador de todas.html sólo mira
+       experiencias, y una fiesta es un evento: el chip se aplicaba y salía
+       «0 de 8». Javi, 19-oct-2026: «¿quién dijo fiesta es un nuevo filtro?».
+       Mientras no haya cartelera de eventos, la fila no manda a ningún sitio
+       vacío: lo que hay es lo que se ve. */
+    var ver = (!cat.es_ateneo && cat.slug !== 'shows' && o.verTodas)
       ? '<a href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">' + esc(T('Ver todas')) + ' &rarr;</a>'
       : '';
     return '<div class="sv-fila" data-cat="' + esc(cat.slug) + '">'

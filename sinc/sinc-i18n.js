@@ -320,6 +320,7 @@
       'Tipología':'Type',
       'Precio por persona':'Price per person',
       'Como las recomendamos':'As we recommend them',
+      'Orden':'Order',
       'Lo que sale antes':'Leaving soonest',
       'Precio: de menor a mayor':'Price: low to high',
       'Precio: de mayor a menor':'Price: high to low',
