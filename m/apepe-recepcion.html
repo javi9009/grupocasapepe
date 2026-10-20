@@ -1917,6 +1917,10 @@ h1{font-size:19px;margin:0;font-weight:700}
       '<div class="f full"><div class="k">Qué correo</div><div class="v">'+
         '<select id="coQue" style="width:100%;padding:9px 11px;border:1.5px solid var(--linea,#E2DCCF);border-radius:10px;font:inherit;font-size:14px">'+ops+'</select>'+
       '</div></div>'+
+      '<div class="f full" id="coUpWrap" style="display:none"><div class="k">¿Qué upgrade?</div><div class="v">'+
+        '<select id="coUp" style="width:100%;padding:9px 11px;border:1.5px solid var(--linea,#E2DCCF);border-radius:10px;font:inherit;font-size:14px"><option value="">Cargando los cuartos…</option></select>'+
+        '<div class="note" id="coUpNota" style="margin-top:4px"></div>'+
+      '</div></div>'+
       '<div class="f full"><div class="k">A</div><div class="v">'+
         '<input id="coA" placeholder="'+esc(r.email||'el correo de la reserva')+'" style="width:100%;padding:9px 11px;border:1.5px solid var(--linea,#E2DCCF);border-radius:10px;font:inherit;font-size:14px">'+
         '<div class="note" style="margin-top:4px">Déjalo vacío para que vaya a quien reservó.</div>'+
@@ -1931,17 +1935,52 @@ h1{font-size:19px;margin:0;font-weight:700}
       s.innerHTML=COR.filter(function(c){ return c.activo!==false; })
         .map(function(c){ return '<option value="'+esc(c.clave)+'">'+esc(c.nombre)+'</option>'; }).join('');
     }); }
+    /* ¿QUÉ UPGRADE? El correo de upgrade anuncia un cambio de cuarto, así que
+       hay que decirle a cuál: las opciones son las que apepe-upgrade considera
+       posibles para esta reserva y estas fechas. Javi, 20-oct-2026. */
+    var sel=$('coQue'), upCargado=false;
+    async function cargaUpgrades(){
+      var w=$('coUpWrap'), u=$('coUp'), n=$('coUpNota'); if(!w||!u) return;
+      if(upCargado) return; upCargado=true;
+      try{
+        var j=await fetch(SB+'/functions/v1/apepe-upgrade',{method:'POST',
+          headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY),'Content-Type':'application/json'},
+          body:JSON.stringify({reservation_id:String(r.reservation_id),prop:String(r.sede||'cdmx').toLowerCase(),accion:'opciones'})
+        }).then(function(x){return x.json();});
+        var ops=(j&&Array.isArray(j.opciones))?j.opciones.filter(function(o){return o&&o.target&&o.target.id;}):[];
+        if(!ops.length){
+          u.innerHTML='<option value="">No hay cuartos a los que subirle</option>';
+          if(n) n.textContent=(j&&j.ya_upgradeada)?'Esta reserva ya tiene su upgrade hecho.':'Cloudbeds no ofrece nada mejor para estas fechas.';
+          return;
+        }
+        u.innerHTML='<option value="">Elige el cuarto…</option>'+ops.map(function(o){
+          return '<option value="'+esc(o.target.id)+'"'+(o.disponible===false?' disabled':'')+'>'+
+            esc(o.target.nombre||o.target.id)+(o.disponible===false?' · sin disponibilidad':'')+'</option>';
+        }).join('');
+        if(n&&j&&j.cuarto_actual&&j.cuarto_actual.nombre) n.textContent='Ahora está en '+j.cuarto_actual.nombre+'.';
+      }catch(e){
+        u.innerHTML='<option value="">No se pudieron cargar</option>';
+        if(n) n.textContent='Revisa tu internet y vuelve a abrir la ficha.';
+      }
+    }
+    if(sel) sel.onchange=function(){
+      var w=$('coUpWrap'); if(!w) return;
+      if(sel.value==='upgrade'){ w.style.display=''; cargaUpgrades(); } else { w.style.display='none'; }
+    };
+
     var b=$('coEnviar'); if(!b) return;
     b.onclick=async function(){
       var clave=($('coQue')||{}).value||'', a=(($('coA')||{}).value||'').trim();
+      var target=(($('coUp')||{}).value||'').trim();
       var av=$('coEnvAviso'); var tok=sessTok();
       if(!clave){ av.textContent='Elige qué correo mandar.'; return; }
+      if(clave==='upgrade'&&!target){ av.textContent='Dime a qué cuarto sube antes de mandárselo.'; return; }
       if(!tok){ av.textContent='Esta pantalla no encuentra tu sesión.'; return; }
       b.disabled=true; av.textContent='Mandando…';
       try{
         var res=await fetch(SB+'/functions/v1/apepe-correo-enviar',{method:'POST',
           headers:{apikey:KEY,Authorization:'Bearer '+tok,'Content-Type':'application/json'},
-          body:JSON.stringify({reservation_id:String(r.reservation_id),prop:String(r.sede||'cdmx').toLowerCase(),clave:clave,a:a||undefined})
+          body:JSON.stringify({reservation_id:String(r.reservation_id),prop:String(r.sede||'cdmx').toLowerCase(),clave:clave,a:a||undefined,target_id:target||undefined})
         }).then(function(x){return x.json();});
         if(res&&res.ok) av.innerHTML='Mandado a <b>'+esc(res.a)+'</b>'+(res.modo==='prueba'?' · <span style="color:#9E3B2E">en modo prueba: al huésped no le llegó</span>':' ✓');
         else av.textContent=(res&&res.error)||'No se pudo mandar.';
