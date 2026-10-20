@@ -152,6 +152,11 @@ const AVISO: Record<string, [number, number]> = { semanal: [3, 1], quincenal: [5
 const DIA = 86400000;
 // Turnos que apoyan pero no se miden con las horas de limpieza del día.
 const SIN_MEDIR = new Set(['front', 'nocturno', 'experiencias']);
+// El equipo de ama de llaves. Javi, 20-oct: en el reparto solo sale este equipo.
+// Front, la noche y los guías no son plantilla de limpieza: aparecían con una caja
+// vacía cada día (en CDMX, cuatro) y ensuciaban la pantalla de la jefa. Si alguno
+// tiene de verdad una tarea ese día, su caja sigue saliendo con la tarea dentro.
+const EQUIPO_HK = new Set(['ama_llaves', 'recamarista', 'areas_publicas']);
 
 // Cuándo vence la profunda de un área y cómo de cerca estamos. Devuelve null si el
 // área no lleva profunda o si todavía queda mucho: en ese caso no se enseña nada.
@@ -612,8 +617,9 @@ async function reparto(propKey: string, fecha: string) {
   const salida: Array<Record<string, unknown>> = [];
   const esPublica = (t: Tarea) => t.tipo === 'zona_comun';
   async function crear(p: Persona | null, tareas: Tarea[], etiqueta?: string, sinAsignar = false) {
-    // Una caja vacía solo tiene sentido para quien puede recibir trabajo a mano.
-    if (!tareas.length && !(p && (p.turno === 'front' || candidatos.has(p.turno)))) return;
+    // Una caja vacía solo tiene sentido para el equipo de limpieza, que es a quien
+    // la jefa le puede arrastrar trabajo a mano.
+    if (!tareas.length && !(p && EQUIPO_HK.has(p.turno))) return;
     tareas.sort((a, b) => (a.tipo === 'operativa' ? 0 : 1) - (b.tipo === 'operativa' ? 0 : 1) || (esPublica(a) ? 1 : 0) - (esPublica(b) ? 1 : 0) || a.piso - b.piso || a.orden - b.orden);
     const pisos = [...new Set(tareas.map((t) => t.piso))].filter((x) => x > 0).sort((a, b) => a - b);
     const total = tareas.reduce((s, t) => s + t.minutos, 0);
@@ -635,15 +641,11 @@ async function reparto(propKey: string, fecha: string) {
     e.tareas.push(...nocturnas); porPersona.set(kp(nocturno), e);
   }
 
-  // La caja de front existe siempre, aunque ese día no haya audit que colocar.
-  if (front && !porPersona.has(kp(front))) porPersona.set(kp(front), { p: front, tareas: [] });
-  // Si una operativa admite varios turnos, TODOS los que estén ese día tienen caja,
-  // aunque hoy no les tocara: es lo que permite pasarles la tarea a mano. Sin caja
-  // no habría a dónde arrastrarla.
-  const candidatos = new Set<string>();
-  for (const t of operativas) for (const k of ((t as Tarea & { turnosPref?: string[] }).turnosPref ?? [])) candidatos.add(k);
+  // Caja vacía para el equipo de limpieza que hoy está y no tiene nada todavía:
+  // es donde la jefa arrastra lo que quiera darle. Front, la noche y los guías ya
+  // no la tienen: si hoy no hacen nada de housekeeping, no pintan en el reparto.
   for (const p of personas) {
-    if (!candidatos.has(p.turno) || porPersona.has(kp(p))) continue;
+    if (!EQUIPO_HK.has(p.turno) || porPersona.has(kp(p))) continue;
     porPersona.set(kp(p), { p, tareas: [] });
   }
   for (const { p, tareas } of porPersona.values()) await crear(p, tareas);
