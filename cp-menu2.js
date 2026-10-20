@@ -214,6 +214,11 @@
         it.title = apg ? (p.tx+' — no tienes acceso') : p.tx;
         it.onclick = function(){
           if (apg) return;
+          /* "Panel" / "Inicio" = la portada del tablero (home). Javi, oct: quiero
+             que al dar a Panel vuelva al inicio, igual que el logo. */
+          var _tx=(p.tx||'').trim().toLowerCase();
+          if((_tx==='panel'||_tx==='inicio')&&window.openHome&&!n.ruta){ try{window.openHome();}catch(_){}
+            estado.vista='cat'; estado.cat=null; estado.rama=null; estado.activa=null; estado.catmin=false; pinta(); return; }
           estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
           estado.catmin = false; estado.vista = 'sub';
           estado.abiertos = {};   // otra área, cajones cerrados
@@ -325,6 +330,9 @@
   }
 
   function elige(n){
+    var _tx=(parte(n).tx||'').trim().toLowerCase();
+    if((_tx==='panel'||_tx==='inicio')&&window.openHome&&!n.ruta){ try{window.openHome();}catch(_){}
+      estado.vista='cat'; estado.cat=null; estado.rama=null; estado.activa=null; pinta(); return; }
     n = atajo(n);
     var conHijos = hijosVisibles(n.codigo);
     /* Lo que tiene dentro se despliega AQUÍ, en su sitio, empujando abajo a las
