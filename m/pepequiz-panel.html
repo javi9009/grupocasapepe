@@ -134,13 +134,14 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 <header class="top">
   <h1>PepeQuiz · Panel</h1>
-  <div class="sub">Incidencias del juego, banco de preguntas, premios de la semana y pepepesos.</div>
+  <div class="sub">Incidencias del juego, banco de preguntas, los premios y sus calendarios, y pepepesos.</div>
   <div class="sesion" id="sesion">Buscando sesión…</div>
 </header>
 
 <nav class="secnav"><div class="wrap" id="tabs">
   <button type="button" data-t="inc" class="on">Incidencias <span class="pill cero" id="pill-inc">0</span></button>
   <button type="button" data-t="banco">Banco</button>
+  <button type="button" data-t="crear">Crear premio</button>
   <button type="button" data-t="premios">Premios</button>
   <button type="button" data-t="dia">Premio del día</button>
   <button type="button" data-t="pesos">Pepepesos</button>
@@ -892,233 +893,504 @@ function nuevaPregunta(){
 }
 
 /* ============================================================
-   3 · PREMIOS
-   ============================================================ */
-var premios = { filas: [], estaSemana: [], ganados: [] };
+   PREMIOS · el catálogo y los dos calendarios
+   ------------------------------------------------------------
+   Javi, 20-oct-2026, pidiendo este módulo entero:
+     «Separa dentro de cada categoría de premios: premios seleccionados, que se
+      seleccionan de los que se crean en crear premio, y calendario de premios.
+      Para los huéspedes es un calendario diario y para los trabajadores uno
+      semanal. Permíteme asignar por semana el premio de los pepes para que no
+      se repita.»
 
-function pintaPremios(){
+   Tres piezas y una sola verdad:
+     · CREAR PREMIO  → premio_catalogo. Qué es el premio: su nombre en los dos
+       idiomas, su letra chica y con qué se entrega. Esto se escribe una vez.
+     · PREMIOS SELECCIONADOS → las mismas fichas, pero mirando cada cuánto
+       puede volver a salir, en qué casa vale, cuántas unidades y si está
+       encendido para los calendarios que vengan. El título y la descripción
+       NO se tocan aquí: vienen de Crear premio.
+     · CALENDARIO → premio_asignacion. Qué se da cada día (huésped) o cada
+       semana (pepes). La propuesta la hace la base; aquí se mira, se cambia lo
+       que haga falta y se guarda. Nada se guarda solo.
+   ============================================================ */
+
+var DIAS_NOM = { 1:"Lunes", 2:"Martes", 3:"Miércoles", 4:"Jueves", 5:"Viernes", 6:"Sábado", 0:"Domingo" };
+var DOW_ORDEN = [1,2,3,4,5,6,0];           /* la semana empieza en lunes */
+
+var PERIODOS = [
+  ["cualquiera", "Sin límite"],
+  ["semanal",    "No antes de 1 semana"],
+  ["quincenal",  "No antes de 2 semanas"],
+  ["mensual",    "No antes de 1 mes"],
+  ["unico",      "Una sola vez"]
+];
+var TIPOS_CAT = [
+  ["vnums",     "Carta de Vnums"],
+  ["cortesia",  "Cortesía"],
+  ["dia_libre", "Día libre"],
+  ["pepepesos", "Pepepesos"],
+  ["otro",      "Otro"]
+];
+var SEDES_CAT = [["", "Las dos casas"], ["cdmx", "CDMX"], ["puebla", "Puebla"]];
+
+var CATP = [];        /* premio_catalogo */
+var CARTAS = [];      /* vnum_premios, para colgar la carta de un premio */
+var CALEND = null;    /* el calendario que se está editando ahora mismo */
+
+function cargaCatalogoPremios(){
+  return Promise.all([
+    get("premio_catalogo?select=*&order=para.asc,orden.asc,nombre.asc"),
+    get("vnum_premios?select=slug,nombre&activo=is.true&order=orden.asc").catch(function(){ return []; })
+  ]).then(function(r){ CATP = r[0] || []; CARTAS = r[1] || []; });
+}
+function premiosDe(para){ return CATP.filter(function(p){ return p.para === para; }); }
+function opciones(pares, val){
+  return pares.map(function(p){
+    return '<option value="' + esc(p[0]) + '"' + (String(val || "") === p[0] ? " selected" : "") + ">" + esc(p[1]) + "</option>";
+  }).join("");
+}
+/* El emoji puede ser un emoji de verdad o la ruta de un sticker. */
+function iconoPremio(p){
+  var e = (p && p.emoji) || "";
+  if(/^\/|^https?:/.test(e)) return '<img src="' + esc(e) + '" alt="" style="width:20px;height:20px;object-fit:contain;vertical-align:-4px">';
+  return esc(e || "🎁");
+}
+function patchCatalogo(id, patch, luego){
+  return req("premio_catalogo?id=eq." + encodeURIComponent(id), {
+    method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(patch)
+  }).then(function(){
+    CATP.forEach(function(p){ if(p.id === id){ for(var k in patch) p[k] = patch[k]; } });
+    ok("Guardado");
+    if(luego) luego();
+  }).catch(function(e){ fallo("guardar el premio", e); });
+}
+
+/* ============================================================
+   PESTAÑA · CREAR PREMIO
+   Aquí se define qué es el premio. Lo que se crea aquí aparece para elegir en
+   los dos calendarios, según sea de huésped o de pepe.
+   ============================================================ */
+function pintaCrearPremio(){
   var v = document.getElementById("vista");
-  v.innerHTML = '<div class="cargando">Cargando premios…</div>';
-  var lunesHoy = lunesDe(new Date());
-  Promise.all([
-    get("pq_premio?select=*&order=ciclo_semana.asc.nullsfirst,orden.asc"),
-    rpc("pq_premio_de_semana", {}).catch(function(e){ fallo("leer el premio de esta semana", e); return []; }),
-    get("pq_premio_ganado?select=*&order=semana_inicio.desc&limit=100").catch(function(){ return []; })
-  ]).then(function(r){
-    premios.filas = r[0] || [];
-    premios.estaSemana = Array.isArray(r[1]) ? r[1] : (r[1] ? [r[1]] : []);
-    premios.ganados = r[2] || [];
-    dibujaPremios(lunesHoy);
-  }).catch(function(e){
-    v.innerHTML = '<div class="card"><div class="vacio">No se pudieron cargar los premios.</div></div>';
-    fallo("cargar los premios", e);
+  v.innerHTML = '<div class="cargando">Cargando los premios…</div>';
+  cargaCatalogoPremios().then(dibujaCrearPremio).catch(function(e){
+    v.innerHTML = '<div class="card"><div class="vacio">No se pudo cargar el catálogo.</div></div>';
+    fallo("cargar el catálogo de premios", e);
   });
 }
 
-function dibujaPremios(lunesHoy){
+function dibujaCrearPremio(){
   var v = document.getElementById("vista");
   v.innerHTML = "";
-  var bp = bannerPermiso("premiador", "No tienes permiso de premios (PAG-PQ-PREMIOS): puedes ver, no guardar ni cerrar la semana.");
+  var bp = bannerPermiso("premiador", "No tienes permiso de premios: puedes ver, no crear ni cambiar.");
   if(bp) v.appendChild(bp);
 
-  /* --- esta semana + cerrar --- */
-  var esta = nodo('<div class="card"></div>');
-  var titulos = premios.estaSemana.length
-    ? premios.estaSemana.map(function(p){ return esc(p.titulo) + (p.pepepesos > 0 ? " · " + p.pepepesos + " pepepesos" : ""); }).join(" · ")
-    : "<span class='muted'>Ningún premio configurado para esta semana</span>";
-  esta.innerHTML =
-    '<div class="row" style="justify-content:space-between;align-items:flex-start">' +
-      '<div class="grow"><div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Esta semana · lunes ' +
-        esc(fechaCorta(lunesHoy)) + "</div>" +
-        '<div style="font-size:16px;font-weight:800;margin-top:3px">' + titulos + "</div></div>" +
-    "</div>" +
-    '<hr class="sep">' +
-    '<div class="row">' +
-      '<div style="width:190px"><label class="f">Semana a cerrar</label><input type="date" id="cs-fecha" value="' + esc(lunesHoy) + '"></div>' +
-      '<div style="align-self:flex-end"><button class="btn oro" id="cs-btn">Cerrar la semana</button></div>' +
-      '<div class="small muted grow" style="align-self:flex-end">Le da el premio al número 1 de esa semana y, si el premio es dinero, le abona los pepepesos.</div>' +
-    "</div>" +
-    '<div id="cs-res"></div>';
-  v.appendChild(esta);
+  var cab = nodo('<div class="card"></div>');
+  cab.innerHTML =
+    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Crear premio</div>' +
+    '<div class="small muted" style="margin-top:4px">Qué es el premio y cómo se lo cuenta al que se lo gana. ' +
+      'De aquí salen los dos calendarios: lo de <b>huésped</b> va a Premio del día y lo de <b>pepe</b> a Premios.</div>' +
+    '<div id="cp-nuevo" style="margin-top:10px"></div>';
+  v.appendChild(cab);
+  var bN = nodo('<button class="btn oro">+ Crear un premio</button>');
+  bN.disabled = (PERM.premiador === false);
+  bN.onclick = function(){ bN.style.display = "none"; formCatalogoPremio(cab.querySelector("#cp-nuevo"), bN); };
+  cab.querySelector("#cp-nuevo").appendChild(bN);
 
-  var inpF = esta.querySelector("#cs-fecha");
-  inpF.onchange = function(){ this.value = lunesDe(this.value); };
-  esta.querySelector("#cs-btn").onclick = function(){
-    var f = lunesDe(inpF.value || lunesHoy);
-    if(!confirm("Cerrar la semana del lunes " + f + ".\n\nSe le asigna el premio al número 1 de esa semana. ¿Seguimos?")) return;
-    var b = this; b.disabled = true;
-    rpc("pq_cerrar_semana", { p_fecha: f }).then(function(d){
-      b.disabled = false;
-      var box = esta.querySelector("#cs-res");
-      var prem = (d && Array.isArray(d.premios)) ? d.premios.map(function(x){ return x.premio; }).join(" · ") : "—";
-      box.innerHTML = '<div class="nota" style="margin-top:10px">' +
-        "<b>Semana " + esc(fechaCorta(d.semana)) + " cerrada.</b><br>" +
-        "Ganador: <b>" + esc(nombreEmp(d.ganador)) + "</b> con <b>" + esc(d.puntos) + "</b> puntos.<br>" +
-        "Premios: " + esc(prem) + "</div>";
-      ok("Semana cerrada");
-      pintaPremios();
-    }).catch(function(e){ b.disabled = false; fallo("cerrar la semana", e); });
-  };
-
-  /* --- las cuatro semanas del ciclo --- */
-  v.appendChild(nodo('<div class="row small muted" style="margin:4px 2px 8px">El ciclo es de cuatro semanas y se repite: la quinta semana vuelve a ser la primera. Un premio con fecha concreta manda sobre el del ciclo esa semana.</div>'));
-
-  var g = nodo('<div class="grid4"></div>');
-  [1,2,3,4].forEach(function(n){
-    var sem = nodo('<div class="semana"><h3>Semana ' + n + " del ciclo</h3></div>");
-    var deEsta = premios.filas.filter(function(p){ return p.semana_iso == null && p.ciclo_semana === n; });
-    if(!deEsta.length) sem.appendChild(nodo('<div class="muted small" style="margin-top:8px">Sin premio.</div>'));
-    deEsta.forEach(function(p){ sem.appendChild(cajaPremio(p)); });
-    var b = nodo('<button class="btn sm" style="margin-top:9px">+ Añadir a esta semana</button>');
-    b.onclick = function(){ formPremio(sem, { ciclo_semana: n, semana_iso: null }); };
-    sem.appendChild(b);
-    g.appendChild(sem);
+  [["huesped", "Premios de huésped", "Se entregan como carta de Vnums en su billetera."],
+   ["equipo",  "Premios de pepe",    "Se entregan a mano, y los de pepepesos se abonan solos."]
+  ].forEach(function(gr){
+    var c = nodo('<div class="card"></div>');
+    c.innerHTML = '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">' +
+      esc(gr[1]) + "</div>" + '<div class="small muted" style="margin-top:3px">' + esc(gr[2]) + "</div>" +
+      '<div class="lista" style="margin-top:8px"></div>';
+    var L = c.querySelector(".lista");
+    var filas = premiosDe(gr[0]);
+    if(!filas.length) L.appendChild(nodo('<div class="vacio">Todavía no hay ninguno.</div>'));
+    filas.forEach(function(p){ L.appendChild(fichaCatalogoPremio(p)); });
+    v.appendChild(c);
   });
-  v.appendChild(g);
-
-  /* --- semanas concretas del calendario --- */
-  var fijos = premios.filas.filter(function(p){ return p.semana_iso != null; })
-                           .sort(function(a,b){ return a.semana_iso < b.semana_iso ? 1 : -1; });
-  var cf = nodo('<div class="card"><div class="row" style="justify-content:space-between"><b>Premios de una semana concreta</b></div>' +
-                '<div class="small muted" style="margin-top:2px">Mandan sobre el premio del ciclo esa semana. Aquí vive el de lanzamiento.</div>' +
-                '<div class="fijos"></div></div>');
-  var cont = cf.querySelector(".fijos");
-  if(!fijos.length) cont.appendChild(nodo('<div class="muted small" style="margin-top:8px">Ninguno.</div>'));
-  fijos.forEach(function(p){ cont.appendChild(cajaPremio(p, true)); });
-  var bF = nodo('<button class="btn sm" style="margin-top:10px">+ Añadir a una semana del calendario</button>');
-  bF.onclick = function(){ formPremio(cont, { ciclo_semana: null, semana_iso: lunesDe(new Date()) }); };
-  cf.appendChild(bF);
-  v.appendChild(cf);
-
-  /* --- historial --- */
-  var hist = nodo('<div class="card"><b>Quién ha ganado</b><div class="tabla-wrap" style="margin-top:8px"></div></div>');
-  var w = hist.querySelector(".tabla-wrap");
-  if(!premios.ganados.length){
-    w.appendChild(nodo('<div class="vacio">Todavía no se ha cerrado ninguna semana.</div>'));
-  }else{
-    var pm = {};
-    premios.filas.forEach(function(p){ pm[p.id] = p; });
-    var t = '<table><thead><tr><th>Semana</th><th>Ganador</th><th>Premio</th><th>Estado</th><th>Entregado</th></tr></thead><tbody>';
-    premios.ganados.forEach(function(g2){
-      var p = pm[g2.premio_id];
-      t += "<tr>" +
-        "<td>" + esc(fechaCorta(g2.semana_inicio)) + "</td>" +
-        "<td>" + esc(nombreEmp(g2.employee_id)) + "</td>" +
-        "<td>" + esc(p ? p.titulo : "(premio borrado)") + (p && p.pepepesos > 0 ? ' <span class="chip oro">' + p.pepepesos + " pp</span>" : "") + "</td>" +
-        '<td><span class="chip ' + (g2.estado === "entregado" ? "verde" : "gris") + '">' + esc(g2.estado) + "</span></td>" +
-        "<td>" + esc(g2.entregado_at ? fechaCorta(g2.entregado_at) : "—") + "</td>" +
-      "</tr>";
-    });
-    t += "</tbody></table>";
-    w.innerHTML = t;
-  }
-  v.appendChild(hist);
 }
 
-function cajaPremio(p, conFecha){
+function fichaCatalogoPremio(p){
   var box = nodo('<div class="premio' + (p.activo ? "" : " off") + '"></div>');
   function ver(){
     box.innerHTML =
-      '<div style="font-weight:700">' + esc(p.titulo) + "</div>" +
-      (p.descripcion ? '<div class="small muted">' + esc(p.descripcion) + "</div>" : "") +
-      '<div class="row small" style="gap:5px;margin-top:6px">' +
-        '<span class="chip">' + esc(p.tipo) + "</span>" +
-        (p.pepepesos > 0 ? '<span class="chip oro">' + p.pepepesos + " pepepesos</span>" : "") +
-        (conFecha && p.semana_iso ? '<span class="chip verde">lunes ' + esc(fechaCorta(p.semana_iso)) + "</span>" : "") +
-        (p.activo ? "" : '<span class="chip rojo">Apagado</span>') +
-      "</div>" +
-      '<div class="acciones"></div>';
+      '<div style="font-weight:700">' + iconoPremio(p) + " " + esc(p.nombre) +
+        (p.activo ? "" : ' <span class="chip rojo">Apagado</span>') + "</div>" +
+      (p.nombre_en ? '<div class="small muted">' + esc(p.nombre_en) + "</div>" : '<div class="small" style="color:var(--rojo,#8a2626)">Sin nombre en inglés</div>') +
+      (p.detalle ? '<div class="small muted" style="margin-top:4px">' + esc(p.detalle) + "</div>" : "") +
+      '<div class="row small" style="gap:5px;margin-top:6px;flex-wrap:wrap">' +
+        '<span class="chip">' + esc(p.tipo || "otro") + "</span>" +
+        (p.vnum_slug ? '<span class="chip verde">carta ' + esc(p.vnum_slug) + "</span>"
+                     : (p.para === "huesped" ? '<span class="chip rojo">sin carta: no se puede calendarizar</span>' : "")) +
+      "</div><div class='acciones'></div>";
     var acc = box.querySelector(".acciones");
     var be = nodo('<button class="btn sm">Editar</button>');
-    be.onclick = function(){ editar(); };
+    be.disabled = (PERM.premiador === false);
+    be.onclick = editar;
     acc.appendChild(be);
     var ba = nodo('<button class="btn sm">' + (p.activo ? "Apagar" : "Encender") + "</button>");
-    ba.onclick = function(){ patchPremio(p.id, { activo: !p.activo }); };
+    ba.disabled = (PERM.premiador === false);
+    ba.onclick = function(){ patchCatalogo(p.id, { activo: !p.activo }, pintaCrearPremio); };
     acc.appendChild(ba);
-    var bb = nodo('<button class="btn sm rojo">Borrar</button>');
-    bb.onclick = function(){
-      if(!confirm("Borrar el premio «" + p.titulo + "»?")) return;
-      req("pq_premio?id=eq." + encodeURIComponent(p.id), { method: "DELETE" })
-        .then(function(){ ok("Premio borrado"); pintaPremios(); })
-        .catch(function(e){ fallo("borrar el premio", e); });
-    };
-    acc.appendChild(bb);
   }
   function editar(){
-    box.innerHTML = camposPremio(p);
+    box.innerHTML = camposCatalogoPremio(p);
     var b = nodo('<div class="acciones"><button class="btn verde s">Guardar</button><button class="btn gh c">Cancelar</button></div>');
     box.appendChild(b);
     b.querySelector(".c").onclick = ver;
     b.querySelector(".s").onclick = function(){
-      var d = leeCamposPremio(box);
+      var d = leeCamposCatalogoPremio(box);
       if(!d) return;
-      patchPremio(p.id, d);
+      patchCatalogo(p.id, d, pintaCrearPremio);
     };
   }
   ver();
   return box;
 }
 
-function camposPremio(p){
+function camposCatalogoPremio(p){
   p = p || {};
   return '' +
-    '<label class="f">Título</label><input type="text" class="p-tit" value="' + esc(p.titulo || "") + '">' +
-    '<label class="f" style="margin-top:8px">Descripción</label><input type="text" class="p-des" value="' + esc(p.descripcion || "") + '">' +
+    '<div class="grid2">' +
+      '<div><label class="f">Nombre</label><input class="c-nom" value="' + esc(p.nombre || "") + '"></div>' +
+      '<div><label class="f">Nombre en inglés</label><input class="c-nomen" value="' + esc(p.nombre_en || "") + '"></div>' +
+    "</div>" +
     '<div class="grid2" style="margin-top:8px">' +
-      '<div><label class="f">Tipo</label><select class="p-tip">' +
-        TIPOS_PREMIO.map(function(t){ return '<option value="' + t + '"' + (p.tipo === t ? " selected" : "") + ">" + t + "</option>"; }).join("") +
-      "</select></div>" +
-      '<div><label class="f">Pepepesos (0 si no es dinero)</label><input type="number" class="p-pp" min="0" step="1" value="' + esc(p.pepepesos || 0) + '"></div>' +
-      '<div><label class="f">Orden</label><input type="number" class="p-ord" step="1" value="' + esc(p.orden || 0) + '"></div>' +
-      '<div><label class="f">Activo</label><select class="p-act"><option value="1"' + (p.activo === false ? "" : " selected") + '>Sí</option><option value="0"' + (p.activo === false ? " selected" : "") + ">No</option></select></div>" +
+      '<div><label class="f">Letra chica</label><input class="c-det" value="' + esc(p.detalle || "") + '"></div>' +
+      '<div><label class="f">Letra chica en inglés</label><input class="c-deten" value="' + esc(p.detalle_en || "") + '"></div>' +
+    "</div>" +
+    '<div class="grid2" style="margin-top:8px">' +
+      '<div><label class="f">Para quién</label><select class="c-para">' +
+        opciones([["huesped", "Huésped"], ["equipo", "Pepe"]], p.para || "huesped") + "</select></div>" +
+      '<div><label class="f">Qué se entrega</label><select class="c-tipo">' + opciones(TIPOS_CAT, p.tipo) + "</select></div>" +
+    "</div>" +
+    '<div class="grid2" style="margin-top:8px">' +
+      '<div><label class="f">Carta de Vnums</label><select class="c-carta"><option value="">— ninguna —</option>' +
+        CARTAS.map(function(x){ return '<option value="' + esc(x.slug) + '"' + (x.slug === p.vnum_slug ? " selected" : "") + ">" + esc(x.nombre) + "</option>"; }).join("") +
+        '</select><div class="small muted" style="margin-top:3px">Sin carta, un premio de huésped no se puede poner en el calendario.</div></div>' +
+      '<div><label class="f">Emoji o sticker</label><input class="c-emo" value="' + esc(p.emoji || "") + '"></div>' +
     "</div>";
 }
-function leeCamposPremio(box){
-  var tit = box.querySelector(".p-tit").value.trim();
-  if(!tit){ aviso("El premio necesita título", "", "err", 6000); return null; }
+function leeCamposCatalogoPremio(box){
+  var nom = box.querySelector(".c-nom").value.trim();
+  if(!nom){ aviso("El premio necesita un nombre", "", "err", 6000); return null; }
   return {
-    titulo: tit,
-    descripcion: box.querySelector(".p-des").value.trim() || null,
-    tipo: box.querySelector(".p-tip").value,
-    pepepesos: Number(box.querySelector(".p-pp").value) || 0,
-    orden: Number(box.querySelector(".p-ord").value) || 0,
-    activo: box.querySelector(".p-act").value === "1"
+    nombre: nom,
+    nombre_en: box.querySelector(".c-nomen").value.trim() || null,
+    detalle: box.querySelector(".c-det").value.trim() || null,
+    detalle_en: box.querySelector(".c-deten").value.trim() || null,
+    para: box.querySelector(".c-para").value,
+    tipo: box.querySelector(".c-tipo").value,
+    vnum_slug: box.querySelector(".c-carta").value || null,
+    emoji: box.querySelector(".c-emo").value.trim() || null
   };
 }
-function patchPremio(id, patch){
-  req("pq_premio?id=eq." + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(patch) })
-    .then(function(){ ok("Premio guardado"); pintaPremios(); })
-    .catch(function(e){ fallo("guardar el premio", e); });
-}
-
-/* alta de premio: base = {ciclo_semana, semana_iso} */
-function formPremio(contenedor, base){
-  var box = nodo('<div class="premio" style="border-color:#e9d68e;background:#fffdf4"></div>');
-  var h = camposPremio({ tipo: "otro", pepepesos: 0, orden: 0, activo: true });
-  if(base.semana_iso != null){
-    h += '<label class="f" style="margin-top:8px">Lunes de la semana</label><input type="date" class="p-sem" value="' + esc(base.semana_iso) + '">';
-  }
-  box.innerHTML = h;
-  if(base.semana_iso != null){
-    var inp = box.querySelector(".p-sem");
-    inp.onchange = function(){ this.value = lunesDe(this.value); };
-  }
-  var acc = nodo('<div class="acciones"><button class="btn verde s">Crear premio</button><button class="btn gh c">Cancelar</button></div>');
-  box.appendChild(acc);
-  acc.querySelector(".c").onclick = function(){ box.remove(); };
-  acc.querySelector(".s").onclick = function(){
-    var d = leeCamposPremio(box);
+function formCatalogoPremio(cont, botonVolver){
+  var box = nodo('<div class="premio"></div>');
+  box.innerHTML = camposCatalogoPremio({});
+  var b = nodo('<div class="acciones"><button class="btn verde s">Crear</button><button class="btn gh c">Cancelar</button></div>');
+  box.appendChild(b);
+  b.querySelector(".c").onclick = function(){ box.remove(); if(botonVolver) botonVolver.style.display = ""; };
+  b.querySelector(".s").onclick = function(){
+    var d = leeCamposCatalogoPremio(box);
     if(!d) return;
-    d.ciclo_semana = base.ciclo_semana;
-    d.semana_iso = base.semana_iso != null ? lunesDe(box.querySelector(".p-sem").value) : null;
-    acc.querySelector(".s").disabled = true;
-    req("pq_premio", { method: "POST", headers: { "Prefer": "return=representation" }, body: JSON.stringify(d) })
-      .then(function(){ ok("Premio creado"); pintaPremios(); })
-      .catch(function(e){ acc.querySelector(".s").disabled = false; fallo("crear el premio", e); });
+    d.slug = (d.para === "huesped" ? "h-" : "e-") + Date.now().toString(36);
+    d.activo = true; d.orden = 500; d.cada_cuanto = "cualquiera"; d.cantidad = 1;
+    b.querySelector(".s").disabled = true;
+    req("premio_catalogo", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(d) })
+      .then(function(){ ok("Premio creado"); pintaCrearPremio(); })
+      .catch(function(e){ b.querySelector(".s").disabled = false; fallo("crear el premio", e); });
   };
-  contenedor.appendChild(box);
+  cont.appendChild(box);
 }
 
+/* ============================================================
+   LAS DOS PESTAÑAS DE CALENDARIO
+   La misma pantalla con distinta cadencia: los huéspedes por día, los pepes
+   por semana. Arriba los premios seleccionados, abajo el calendario.
+   ============================================================ */
+function pintaPremios(){     /* pestaña «Premios» · los pepes */
+  vistaReto({ reto: "quiz_equipo_semana", para: "equipo", cadencia: "semanal",
+    titulo: "Premios de los pepes",
+    bajada: "Uno por semana, para quien más puntos haga. Se lo lleva el número 1 del lunes al domingo." });
+}
+function pintaPremioDia(){   /* pestaña «Premio del día» · los huéspedes */
+  vistaReto({ reto: "quiz_huesped_dia", para: "huesped", cadencia: "diario",
+    titulo: "Premio del día del huésped",
+    bajada: "Uno por día. La carta entra sola en su billetera de Vnums poco después de medianoche, hora de Ciudad de México. Se cierra por sede: uno en CDMX y otro en Puebla." });
+}
+
+function vistaReto(cfg){
+  var v = document.getElementById("vista");
+  v.innerHTML = '<div class="cargando">Cargando…</div>';
+  Promise.all([
+    cargaCatalogoPremios(),
+    rpc("premio_calendario_ver", { p_reto: cfg.reto, p_desde: null, p_semanas: 8 })
+  ]).then(function(r){
+    var c = r[1] || {};
+    if(c.ok === false){ v.innerHTML = '<div class="card"><div class="vacio">' + esc(c.motivo || "No se pudo cargar") + "</div></div>"; return; }
+    CALEND = { cfg: cfg, desde: c.desde, puede: c.puede === true, filas: (c.filas || []).slice() };
+    dibujaReto();
+  }).catch(function(e){
+    v.innerHTML = '<div class="card"><div class="vacio">No se pudo cargar el calendario.</div></div>';
+    fallo("cargar el calendario de premios", e);
+  });
+}
+
+function dibujaReto(){
+  var cfg = CALEND.cfg;
+  var v = document.getElementById("vista");
+  v.innerHTML = "";
+  if(!CALEND.puede){
+    v.appendChild(nodo('<div class="aviso-linea"><b>Sin permiso.</b> Puedes mirar el calendario, no cambiarlo.</div>'));
+  }
+  v.appendChild(seccionSeleccionados(cfg));
+  v.appendChild(seccionCalendario(cfg));
+  if(cfg.para === "equipo") v.appendChild(seccionCerrarSemana());
+  v.appendChild(seccionGanadores(cfg));
+}
+
+/* --- 1. PREMIOS SELECCIONADOS -------------------------------
+   Las mismas fichas de Crear premio, con lo que decide cómo entran al
+   calendario. El título y la descripción no se tocan aquí a propósito: si se
+   pudieran cambiar en dos sitios, acabarían diciendo cosas distintas. */
+function seccionSeleccionados(cfg){
+  var c = nodo('<div class="card"></div>');
+  c.innerHTML =
+    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Premios seleccionados</div>' +
+    '<div class="small muted" style="margin-top:3px">De los que hay en <b>Crear premio</b>, éstos son los que entran en el calendario. ' +
+      'El nombre y la letra chica se cambian allí.</div>' +
+    '<div class="tabla-wrap" style="margin-top:9px"></div>';
+  var w = c.querySelector(".tabla-wrap");
+  var filas = premiosDe(cfg.para);
+  if(!filas.length){ w.appendChild(nodo('<div class="vacio">No hay premios de este tipo. Créalos en «Crear premio».</div>')); return c; }
+
+  var t = nodo('<table><thead><tr>' +
+    "<th>Premio</th><th>Cada cuánto</th><th>Dónde vale</th><th>Unidades</th><th>Qué es</th><th>Encendido</th><th></th>" +
+    "</tr></thead><tbody></tbody></table>");
+  var tb = t.querySelector("tbody");
+  filas.forEach(function(p){
+    var tr = nodo("<tr" + (p.activo ? "" : ' style="opacity:.55"') + "></tr>");
+    tr.innerHTML =
+      "<td><b>" + iconoPremio(p) + " " + esc(p.nombre) + "</b>" +
+        (p.detalle ? '<div class="small muted">' + esc(p.detalle) + "</div>" : "") +
+        (cfg.para === "huesped" && !p.vnum_slug ? '<div class="small" style="color:#8a2626">Sin carta de Vnums: no entra al calendario</div>' : "") +
+      "</td>" +
+      '<td><select class="s-cada">' + opciones(PERIODOS, p.cada_cuanto || "cualquiera") + "</select></td>" +
+      '<td><select class="s-sede">' + opciones(SEDES_CAT, p.sede || "") + "</select></td>" +
+      '<td><input class="s-uni" type="number" min="1" max="99" value="' + (p.cantidad == null ? 1 : p.cantidad) + '" style="width:72px"></td>' +
+      '<td><select class="s-tipo">' + opciones(TIPOS_CAT, p.tipo) + "</select></td>" +
+      '<td><select class="s-act">' + opciones([["si", "Encendido"], ["no", "Apagado"]], p.activo ? "si" : "no") + "</select></td>" +
+      '<td><button class="btn sm oro s-ok">Guardar</button></td>';
+    var b = tr.querySelector(".s-ok");
+    b.disabled = !CALEND.puede;
+    b.onclick = function(){
+      b.disabled = true;
+      patchCatalogo(p.id, {
+        cada_cuanto: tr.querySelector(".s-cada").value,
+        sede: tr.querySelector(".s-sede").value || null,
+        cantidad: Number(tr.querySelector(".s-uni").value || 1),
+        tipo: tr.querySelector(".s-tipo").value,
+        activo: tr.querySelector(".s-act").value === "si"
+      }, function(){ b.disabled = false; });
+    };
+    tb.appendChild(tr);
+  });
+  w.appendChild(t);
+  return c;
+}
+
+/* --- 2. EL CALENDARIO --------------------------------------- */
+function seccionCalendario(cfg){
+  var c = nodo('<div class="card"></div>');
+  c.innerHTML =
+    '<div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">' +
+      "<div>" +
+        '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Calendario de premios · ' +
+          (cfg.cadencia === "diario" ? "día a día" : "semana a semana") + "</div>" +
+        '<div class="small muted" style="margin-top:3px">' + esc(cfg.bajada) + "</div>" +
+      "</div>" +
+      '<div class="row" style="gap:7px">' +
+        '<button class="btn" id="cal-prop">Proponme un calendario</button>' +
+        '<button class="btn oro" id="cal-guardar">Guardar calendario</button>' +
+      "</div>" +
+    "</div>" +
+    '<div class="small muted" id="cal-aviso" style="margin-top:7px"></div>' +
+    '<div id="cal-cuerpo" style="margin-top:10px"></div>';
+
+  var bp = c.querySelector("#cal-prop"), bg = c.querySelector("#cal-guardar");
+  bp.disabled = !CALEND.puede; bg.disabled = !CALEND.puede;
+
+  bp.onclick = function(){
+    bp.disabled = true; bp.textContent = "Pensando…";
+    rpc("premio_calendario_proponer", { p_reto: cfg.reto, p_desde: null, p_semanas: 8 }).then(function(r){
+      bp.disabled = false; bp.textContent = "Proponme un calendario";
+      if(!r || r.ok === false){ fallo("proponer el calendario", new Error((r && r.motivo) || "")); return; }
+      CALEND.filas = (r.filas || []).map(function(f){ return f; });
+      var apretados = CALEND.filas.filter(function(f){ return f.apretado; }).length;
+      dibujaReto();
+      var av = document.getElementById("cal-aviso");
+      if(av) av.innerHTML = apretados
+        ? '<b>Propuesta lista, pero apretada.</b> ' + apretados + ' de ' + CALEND.filas.length +
+          ' huecos repiten antes de lo que pide su periodicidad: hay pocos premios encendidos para tantas semanas. ' +
+          'Enciende alguno más o bájale el «cada cuánto». <b>Todavía no se ha guardado.</b>'
+        : '<b>Propuesta lista.</b> Ninguno se repite antes de tiempo. Cámbiale lo que quieras y dale a guardar. <b>Todavía no se ha guardado.</b>';
+    }).catch(function(e){ bp.disabled = false; bp.textContent = "Proponme un calendario"; fallo("proponer el calendario", e); });
+  };
+
+  bg.onclick = function(){
+    bg.disabled = true; bg.textContent = "Guardando…";
+    rpc("premio_calendario_guardar", { p_reto: cfg.reto, p_filas: CALEND.filas }).then(function(r){
+      bg.disabled = false; bg.textContent = "Guardar calendario";
+      if(!r || r.ok === false){ fallo("guardar el calendario", new Error((r && r.motivo) || "")); return; }
+      ok("Calendario guardado · " + r.puestos + " puestos" + (r.vaciados ? ", " + r.vaciados + " vacíos" : ""));
+      vistaReto(cfg);
+    }).catch(function(e){ bg.disabled = false; bg.textContent = "Guardar calendario"; fallo("guardar el calendario", e); });
+  };
+
+  var cuerpo = c.querySelector("#cal-cuerpo");
+  if(cfg.cadencia === "diario") cuerpo.appendChild(calendarioDiario(cfg));
+  else cuerpo.appendChild(calendarioSemanal(cfg));
+  return c;
+}
+
+function selectPremio(cfg, fila){
+  var elegibles = premiosDe(cfg.para).filter(function(p){
+    if(cfg.para === "huesped" && !p.vnum_slug) return false;
+    return p.activo || p.id === fila.premio_id;     /* el apagado que ya estaba puesto se sigue viendo */
+  });
+  var s = nodo('<select style="width:100%"><option value="">— cae al patrón —</option></select>');
+  elegibles.forEach(function(p){
+    var o = document.createElement("option");
+    o.value = p.id; o.textContent = (p.activo ? "" : "· apagado · ") + p.nombre;
+    if(p.id === fila.premio_id) o.selected = true;
+    s.appendChild(o);
+  });
+  s.disabled = !CALEND.puede;
+  s.onchange = function(){
+    fila.premio_id = s.value || null;
+    var p = CATP.filter(function(x){ return x.id === s.value; })[0];
+    fila.nombre = p ? p.nombre : null;
+    fila.emoji = p ? p.emoji : null;
+  };
+  return s;
+}
+
+function calendarioDiario(cfg){
+  var g = nodo('<div class="grid2"></div>');
+  var porSemana = {};
+  CALEND.filas.forEach(function(f){
+    var k = f.semana || lunesDe(f.fecha);
+    (porSemana[k] = porSemana[k] || []).push(f);
+  });
+  var hoy = isoDia(new Date());
+  Object.keys(porSemana).sort().forEach(function(sem){
+    var card = nodo('<div class="semana"><h3>Semana del ' + esc(fechaCorta(sem)) + "</h3></div>");
+    DOW_ORDEN.forEach(function(dw){
+      var f = porSemana[sem].filter(function(x){ return Number(x.dow) === dw; })[0];
+      if(!f) return;
+      var esHoy = (f.fecha === hoy);
+      var fila = nodo('<div class="row" style="align-items:center;gap:8px;margin-top:7px"></div>');
+      fila.innerHTML = '<div style="width:92px;flex:none;font-size:12.5px' + (esHoy ? ";font-weight:800;color:var(--oro,#C9501A)" : "") + '">' +
+        esc(DIAS_NOM[dw]) + (esHoy ? " · hoy" : "") + "</div>";
+      var hueco = nodo('<div class="grow"></div>');
+      hueco.appendChild(selectPremio(cfg, f));
+      fila.appendChild(hueco);
+      card.appendChild(fila);
+    });
+    g.appendChild(card);
+  });
+  if(!Object.keys(porSemana).length) g.appendChild(nodo('<div class="vacio">Sin calendario. Dale a «Proponme un calendario».</div>'));
+  return g;
+}
+
+function calendarioSemanal(cfg){
+  var cont = nodo("<div></div>");
+  var lunHoy = lunesDe(new Date());
+  if(!CALEND.filas.length){ cont.appendChild(nodo('<div class="vacio">Sin calendario. Dale a «Proponme un calendario».</div>')); return cont; }
+  CALEND.filas.slice().sort(function(a, b){ return a.semana < b.semana ? -1 : 1; }).forEach(function(f){
+    var esta = (f.semana === lunHoy);
+    var fila = nodo('<div class="row" style="align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--linea,#e6dfd6)"></div>');
+    fila.innerHTML = '<div style="width:190px;flex:none;font-size:13px' + (esta ? ";font-weight:800;color:var(--oro,#C9501A)" : "") + '">' +
+      "Lunes " + esc(fechaCorta(f.semana)) + (esta ? " · esta semana" : "") + "</div>";
+    var hueco = nodo('<div class="grow"></div>');
+    hueco.appendChild(selectPremio(cfg, f));
+    fila.appendChild(hueco);
+    cont.appendChild(fila);
+  });
+  return cont;
+}
+
+/* --- 3. CERRAR LA SEMANA (sólo pepes) ----------------------- */
+function seccionCerrarSemana(){
+  var lunesHoy = lunesDe(new Date());
+  var c = nodo('<div class="card"></div>');
+  c.innerHTML =
+    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Cerrar la semana</div>' +
+    '<div class="row" style="margin-top:8px">' +
+      '<div style="width:190px"><label class="f">Semana a cerrar</label><input type="date" id="cs-fecha" value="' + esc(lunesHoy) + '"></div>' +
+      '<div style="align-self:flex-end"><button class="btn oro" id="cs-btn">Cerrar la semana</button></div>' +
+      '<div class="small muted grow" style="align-self:flex-end">Le da el premio al número 1 de esa semana y, si el premio es dinero, le abona los pepepesos.</div>' +
+    "</div><div id=\"cs-res\"></div>";
+  var inpF = c.querySelector("#cs-fecha");
+  inpF.onchange = function(){ this.value = lunesDe(this.value); };
+  var b = c.querySelector("#cs-btn");
+  b.disabled = !CALEND.puede;
+  b.onclick = function(){
+    var f = lunesDe(inpF.value || lunesHoy);
+    if(!confirm("Cerrar la semana del lunes " + f + ".\n\nSe le asigna el premio al número 1 de esa semana. ¿Seguimos?")) return;
+    b.disabled = true;
+    rpc("pq_cerrar_semana", { p_fecha: f }).then(function(d){
+      b.disabled = false;
+      var prem = (d && Array.isArray(d.premios)) ? d.premios.map(function(x){ return x.premio; }).join(" · ") : "—";
+      c.querySelector("#cs-res").innerHTML = '<div class="nota" style="margin-top:10px">' +
+        "<b>Semana " + esc(fechaCorta(d.semana)) + " cerrada.</b><br>" +
+        "Ganador: <b>" + esc(nombreEmp(d.ganador)) + "</b> con <b>" + esc(d.puntos) + "</b> puntos.<br>" +
+        "Premios: " + esc(prem) + "</div>";
+      ok("Semana cerrada");
+    }).catch(function(e){ b.disabled = false; fallo("cerrar la semana", e); });
+  };
+  return c;
+}
+
+/* --- 4. QUIÉN SE LO LLEVÓ ----------------------------------- */
+function seccionGanadores(cfg){
+  var c = nodo('<div class="card"><div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Quién se lo llevó</div><div class="cuerpo" style="margin-top:8px"></div></div>');
+  var w = c.querySelector(".cuerpo");
+  w.innerHTML = '<div class="small muted">Cargando…</div>';
+  if(cfg.para === "huesped"){
+    get("pq_premio_ganado_dia?select=fecha,sede,nombre,pts,slug,nota&order=fecha.desc&limit=30").then(function(g){
+      if(!g || !g.length){ w.innerHTML = '<div class="vacio">Todavía no se ha cerrado ningún día.</div>'; return; }
+      w.innerHTML = g.map(function(x){
+        return '<div class="row" style="justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--linea,#e6dfd6)">' +
+          "<span>" + esc(fechaCorta(x.fecha)) + ' · <span class="muted">' + esc(x.sede) + "</span></span>" +
+          '<span class="grow" style="font-weight:700">' + esc(x.nombre || "—") + "</span>" +
+          "<span>" + (x.pts == null ? "" : x.pts + " pts") +
+          (x.nota ? ' · <span class="muted">' + esc(x.nota) + "</span>" : "") + "</span></div>";
+      }).join("");
+    }).catch(function(){ w.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; });
+  }else{
+    Promise.all([
+      get("pq_premio_ganado?select=*&order=semana_inicio.desc&limit=60").catch(function(){ return []; }),
+      get("pq_premio?select=id,titulo,pepepesos").catch(function(){ return []; })
+    ]).then(function(r){
+      var g = r[0] || [], pm = {};
+      (r[1] || []).forEach(function(p){ pm[p.id] = p; });
+      if(!g.length){ w.innerHTML = '<div class="vacio">Todavía no se ha cerrado ninguna semana.</div>'; return; }
+      var t = '<div class="tabla-wrap"><table><thead><tr><th>Semana</th><th>Ganador</th><th>Premio</th><th>Estado</th></tr></thead><tbody>';
+      g.forEach(function(x){
+        var p = pm[x.premio_id];
+        t += "<tr><td>" + esc(fechaCorta(x.semana_inicio)) + "</td><td>" + esc(nombreEmp(x.employee_id)) + "</td>" +
+          "<td>" + esc(p ? p.titulo : "(premio borrado)") + (p && p.pepepesos > 0 ? ' <span class="chip oro">' + p.pepepesos + " pp</span>" : "") + "</td>" +
+          '<td><span class="chip ' + (x.estado === "entregado" ? "verde" : "gris") + '">' + esc(x.estado) + "</span></td></tr>";
+      });
+      w.innerHTML = t + "</tbody></table></div>";
+    }).catch(function(){ w.innerHTML = '<div class="vacio">No se pudo cargar.</div>'; });
+  }
+  return c;
+}
 /* ============================================================
    4 · PEPEPESOS
    ============================================================ */
@@ -1371,105 +1643,10 @@ function formAjuste(cont){
 }
 
 /* ============================================================
-   PREMIO DEL DÍA · el del huésped (APePe), no el de la semana
-   ------------------------------------------------------------
-   El de la semana premia al colaborador; este premia al huésped que más
-   puntos haga en UN día, y la carta le cae sola en su billetera de Vnums a
-   medianoche. Cada día de la semana tiene su premio y se cambia aquí: si
-   viviera escrito dentro del HTML del quiz habría que desplegar para mover
-   una margarita de día.
-   ============================================================ */
-var DIAS_NOM = { 1:"Lunes", 2:"Martes", 3:"Miércoles", 4:"Jueves", 5:"Viernes", 6:"Sábado", 0:"Domingo" };
-
-function pintaPremioDia(){
-  var v = document.getElementById("vista");
-  v.innerHTML = '<div class="cargando">Cargando el calendario…</div>';
-  rpc("pq_premio_calendario", {}).then(function(c){
-    dibujaPremioDia(c || {});
-  }).catch(function(e){
-    v.innerHTML = '<div class="card"><div class="vacio">No se pudo cargar el calendario.</div></div>';
-    fallo("cargar el calendario de premios", e);
-  });
-}
-
-function dibujaPremioDia(c){
-  var v = document.getElementById("vista");
-  v.innerHTML = "";
-  var puede = c.puede === true;
-  var cartas = c.cartas || [], dias = c.dias || [], gan = c.ganadores || [];
-
-  if(!puede){
-    v.appendChild(nodo('<div class="aviso-linea"><b>Sin permiso.</b> ' +
-      'Puedes ver el calendario, no cambiarlo (PAG-EXP-QUIZ).</div>'));
-  }
-
-  var hoyDow = new Date(String(c.hoy) + "T12:00:00").getDay();
-
-  var caja = nodo('<div class="card"></div>');
-  caja.innerHTML =
-    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">' +
-      'El premio de cada día · se lo lleva quien más puntos haga ese día</div>' +
-    '<div class="small muted" style="margin-top:4px">La carta entra sola en su billetera de Vnums ' +
-      'poco después de medianoche, hora de Ciudad de México. Se cierra por sede: uno en CDMX y otro en Puebla.</div>' +
-    '<hr class="sep"><div id="pd-lista"></div>';
-  v.appendChild(caja);
-
-  var lista = caja.querySelector("#pd-lista");
-  dias.forEach(function(d){
-    var fila = nodo('<div class="row" style="align-items:flex-end;flex-wrap:wrap;gap:10px;padding:10px 0;border-bottom:1px solid var(--linea)"></div>');
-    var opts = cartas.map(function(x){
-      return '<option value="' + esc(x.slug) + '"' + (x.slug === d.slug ? " selected" : "") + ">" + esc(x.nombre) + "</option>";
-    }).join("");
-    fila.innerHTML =
-      '<div style="width:104px"><div style="font-weight:800' + (d.dow === hoyDow ? ";color:var(--oro,#C9501A)" : "") + '">' +
-        esc(DIAS_NOM[d.dow]) + (d.dow === hoyDow ? " · hoy" : "") + "</div></div>" +
-      '<div style="width:58px"><label class="f">Emoji</label><input id="pd-e-' + d.dow + '" maxlength="4" value="' + esc(d.emoji || "") + '"></div>' +
-      '<div style="min-width:220px;flex:1"><label class="f">Carta de Vnums</label><select id="pd-s-' + d.dow + '">' + opts + "</select></div>" +
-      '<div style="min-width:200px;flex:1"><label class="f">Título</label><input id="pd-t-' + d.dow + '" value="' + esc(d.titulo || "") + '"></div>' +
-      '<div style="min-width:240px;flex:2"><label class="f">Letra chica</label><input id="pd-d-' + d.dow + '" value="' + esc(d.detalle || "") + '"></div>' +
-      '<div><button class="btn oro" id="pd-g-' + d.dow + '">Guardar</button></div>';
-    lista.appendChild(fila);
-
-    var b = fila.querySelector("#pd-g-" + d.dow);
-    b.disabled = !puede;
-    b.onclick = function(){
-      b.disabled = true;
-      rpc("pq_premio_dia_guardar", {
-        p_dow: d.dow,
-        p_slug: fila.querySelector("#pd-s-" + d.dow).value,
-        p_titulo: fila.querySelector("#pd-t-" + d.dow).value,
-        p_detalle: fila.querySelector("#pd-d-" + d.dow).value,
-        p_emoji: fila.querySelector("#pd-e-" + d.dow).value,
-        p_activo: true
-      }).then(function(r){
-        b.disabled = false;
-        if(r && r.ok === false){ fallo("guardar el premio", new Error(r.motivo || "")); return; }
-        ok("Premio de " + DIAS_NOM[d.dow] + " guardado");
-      }).catch(function(e){ b.disabled = false; fallo("guardar el premio", e); });
-    };
-  });
-
-  /* --- quién se lo llevó --- */
-  var h = nodo('<div class="card"></div>');
-  h.innerHTML =
-    '<div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.4px">Últimos ganadores</div>' +
-    (gan.length
-      ? '<div style="margin-top:8px">' + gan.map(function(g){
-          return '<div class="row" style="justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--linea)">' +
-            "<span>" + esc(fechaCorta(g.fecha)) + ' · <span class="muted">' + esc(g.sede) + "</span></span>" +
-            '<span class="grow" style="font-weight:700">' + esc(g.nombre || "—") + "</span>" +
-            "<span>" + (g.pts == null ? "" : g.pts + " pts") +
-            (g.nota ? ' · <span class="muted">' + esc(g.nota) + "</span>" : "") + "</span></div>";
-        }).join("") + "</div>"
-      : '<div class="vacio" style="margin-top:8px">Todavía no se ha cerrado ningún día.</div>');
-  v.appendChild(h);
-}
-
-/* ============================================================
    ARRANQUE Y PESTAÑAS
    ============================================================ */
-var PINTORES = { inc: pintaIncidencias, banco: pintaBanco, premios: pintaPremios,
-                 dia: pintaPremioDia, pesos: pintaPepepesos };
+var PINTORES = { inc: pintaIncidencias, banco: pintaBanco, crear: pintaCrearPremio,
+                 premios: pintaPremios, dia: pintaPremioDia, pesos: pintaPepepesos };
 var TAB = "inc";
 
 function irA(t){
@@ -1499,7 +1676,10 @@ document.getElementById("tabs").addEventListener("click", function(ev){
   ses.innerHTML = "Sesión de <b>" + esc(EMAIL || "usuario") + "</b>";
   Promise.all([cargarBase(), cargarPermisos()]).then(function(){
     refrescaPendientes();
-    irA("inc");                      // Incidencias siempre abre primero
+    /* El Generador de premios viejo manda aquí con ?t=crear, y así cualquier
+       liga guardada sigue llevando a donde esperaba. */
+    var pedida = (location.search.match(/[?&]t=([a-z]+)/) || [])[1];
+    irA(PINTORES[pedida] ? pedida : "inc");     // si no, Incidencias primero
   }).catch(function(e){
     fallo("cargar categorías y colaboradores", e);
     irA("inc");
