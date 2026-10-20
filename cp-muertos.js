@@ -127,6 +127,22 @@
   var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
   var COL = null;                      /* lo que devolvió la colección */
 
+  /* LA TEMPORADA TAMBIÉN TIENE CIUDAD. Javi, 20-oct-2026: «y el Día de Muertos
+     de Puebla, no el de CDMX». La colección se pintaba igual en las dos casas,
+     así que en Puebla salía el taller de alebrijes del Centro Histórico.
+     La sede sale de donde la deja apepe/resv.js; lo que el huésped eligió a
+     mano manda, igual que en el resto de la app. */
+  function ciudadDeAqui(){
+    var v = '';
+    try {
+      var p = new URLSearchParams(location.search);
+      v = p.get('ciudad') || p.get('sede') ||
+          localStorage.getItem('apepe_sede_elegida') ||
+          localStorage.getItem('apepe_sede') || '';
+    } catch(_){}
+    return /pue|chol|atlix|tlax/.test(String(v).toLowerCase()) ? 'Puebla' : 'CDMX';
+  }
+
   function esc(t){
     return (t==null?'':String(t)).replace(/[&<>"]/g,function(c){
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; });
@@ -166,8 +182,14 @@
     fetch(SB+'/rest/v1/v_sinc_coleccion?select=*&coleccion=eq.dia-de-muertos&order=orden.asc',
           {headers:{apikey:KEY, Authorization:'Bearer '+KEY}})
       .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-      .then(function(L){ COL = L || []; })
-      .catch(function(){ COL = []; })
+      .then(function(L){
+        var ciu = ciudadDeAqui();
+        COL = (L || []).filter(function(x){ return (x.ciudad || 'CDMX') === ciu; });
+      })
+      /* Si la red falla COL se queda en null, y eso significa «no sé», que no
+         es lo mismo que «aquí no hay nada»: con null se pinta la puerta de
+         siempre; con lista vacía, nada. */
+      .catch(function(){ COL = null; })
       .then(function(){ pintaVitrina(); });
   }
 
@@ -212,8 +234,12 @@
     var s = document.getElementById('dmLlamada'); if(!s) return;
     var en = ingles(), L = ordenada();
 
-    if(!L.length){                      /* la red falló: la puerta de siempre */
-      s.className = '';
+    /* Sin género en ESTA ciudad no se pinta nada: ni vitrina, ni puerta a una
+       colección que es de la otra casa. Javi, 20-oct-2026: «si no hay nada
+       déjalo vacío y mañana lo subimos». */
+    if(!L.length){
+      if(COL !== null){ s.className=''; s.innerHTML=''; return; }
+      s.className = '';                 /* la red falló: la puerta de siempre */
       s.innerHTML = '<a class="dm-llamada" href="/sinc/muertos.html">'+textoLlamada()+'</a>';
       return;
     }
