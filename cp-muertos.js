@@ -99,6 +99,26 @@
       document.body.insertBefore(b, document.body.firstChild);
     }
 
+    /* EL LEMA SUBE A LA CABECERA CUANDO HAY SITIO. Javi, 20-oct-2026: «¿no
+       puedes poner lo de Amor Ir Venimos arriba, para evitar que el header sea
+       tan grande? justo entre el nombre y el idioma».
+       Se mete en el hueco libre de la fila, entre el saludo y lo de la
+       derecha. Pero no se quita la banda: en pantalla estrecha ahí no cabe y
+       partiría la cabecera, que es justo el problema que la banda vino a
+       resolver. Así que van los dos y manda el ancho — el CSS encoge la banda
+       a su tira de papel picado cuando el lema ya está arriba. */
+    try{
+      var fila = cab && (cab.querySelector('.in') || cab.querySelector('.apsh-in'));
+      if(fila && !fila.querySelector('.dm-lema-cab')){
+        var l = document.createElement('span');
+        l.className = 'dm-lema-cab';
+        l.setAttribute('aria-hidden','true');   /* ya se lee en la banda */
+        l.innerHTML = cartelHTML();
+        var ultimo = fila.lastElementChild;
+        if(ultimo) fila.insertBefore(l, ultimo); else fila.appendChild(l);
+      }
+    }catch(_){}
+
     /* EL SALUDO SE ACORTA. Javi: «quita el Casa Pepe de Bienvenido» — el
        logo ya lo dice. Esto sí se puede tocar: es texto, no estructura. */
     var bienv = cab && cab.querySelector('.bienv');
