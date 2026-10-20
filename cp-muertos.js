@@ -88,16 +88,23 @@
   function tira(){
     if(document.getElementById('dmCartel')) return;
     var cab = cabecera();
+    /* En SoyPepe, Javi (20-oct-2026): «quita el banner de Amor Ir Venimos en
+       todas las pantallas de SoyPepe, deja solo el detalle del papel picado
+       naranja». Así que ahí la banda se queda siempre colapsada a su tira de
+       papel picado — sin lema, sin teñir la cabecera. En las demás apps
+       (portada, tienda, Pepe GO!) el lema sigue igual. */
+    var soloPicado = /\/soypepe\//.test(location.pathname);
     var b = document.createElement('div');
-    b.className = 'dm-banda'; b.id = 'dmCartel';
+    b.className = 'dm-banda' + (soloPicado ? ' dm-solo' : ''); b.id = 'dmCartel';
     b.innerHTML = '<span class="dm-lema">' + cartelHTML() + '</span>';
 
     if(cab && cab.parentNode){
-      cab.classList.add('dm-cab-tenida');
+      if(!soloPicado) cab.classList.add('dm-cab-tenida');
       cab.parentNode.insertBefore(b, cab.nextSibling);
     }else{
       document.body.insertBefore(b, document.body.firstChild);
     }
+    if(soloPicado) return;   // solo el papel picado: ni lema arriba ni acortar el saludo
 
     /* EL LEMA SUBE A LA CABECERA CUANDO HAY SITIO. Javi, 20-oct-2026: «¿no
        puedes poner lo de Amor Ir Venimos arriba, para evitar que el header sea
