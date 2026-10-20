@@ -93,6 +93,19 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
 .porcablear{font-size:.82rem;color:var(--muted);background:var(--surface-3);border:1px dashed var(--rule-2);border-radius:10px;padding:11px 12px}
 .foot{font-size:.74rem;color:var(--faint);margin-top:26px;border-top:1px dashed var(--rule);padding-top:12px}
 .na{color:var(--faint);font-style:italic;font-size:.84rem;padding:8px 0}
+/* LA TABLA DEL FORECAST. Javi, 20-oct-2026: «mete la tabla de forecast mensual
+   que ya tenemos». Son nueve columnas de cifras: sin alinearlas a la derecha y
+   sin separar las filas no se comparan, se leen una a una. */
+.pace{width:100%;border-collapse:collapse;font-size:.86rem;margin-top:10px;min-width:620px}
+.pace th{text-align:right;font-weight:600;color:var(--faint);font-size:.76rem;
+  text-transform:uppercase;letter-spacing:.04em;padding:0 0 7px 12px;white-space:nowrap}
+.pace th:first-child,.pace td:first-child{text-align:left;padding-left:0}
+.pace td{text-align:right;padding:9px 0 9px 12px;border-top:1px solid var(--rule);
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.pace td.up{color:var(--ok);font-weight:600}
+.pace td.down{color:var(--bad);font-weight:600}
+.pace td.ok{color:var(--ok)}
+.pace td.na{color:var(--faint);font-style:normal;padding:9px 0 9px 12px}
 .efln{display:flex;align-items:baseline;gap:8px;padding:6px 0;border-top:1px solid var(--rule);font-size:.85rem}
 .efln:first-of-type{border-top:0}
 .efln .k{flex:1;min-width:0}
@@ -290,18 +303,52 @@ function renderDia(hk){
   }).catch(function(){ if(vivo()) porcablear('nr','Non-refundable por cobrar: no se pudo cargar.'); }); });
 
   /* ---------- 3 · VENTAS Y RITMO ---------- */
-  // Ventas vs año pasado (panel_pace: libros al corte de hoy vs mismo punto AA, por mes)
-  $('ventasAA').innerHTML='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ return sb.rpc('panel_pace',{p_sede:H.sede}).then(function(r){ if(!vivo())return;
-    var D=r.data||{}; var fy=D.fy||{}; var ms=(fy.months||[]).filter(function(m){ return (m.plan>0)||(m.libros_hoy>0)||(m.libros_aa>0); }).slice(0,4);
-    if(D.error||!ms.length){ porcablear('ventasAA','Ventas vs AA: '+(D.error||'sin datos de pace')); return; }
-    var html='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'<span class="wh">al corte</span></div>'
-      +'<table class="pace"><thead><tr><th>Mes</th><th>Este año</th><th>Año pasado</th><th>vs AA</th></tr></thead><tbody>';
-    ms.forEach(function(m){ var hoyv=Number(m.libros_hoy||0), aa=Number(m.libros_aa||0); var d=aa>0?(hoyv-aa)/aa:null; var up=d!=null&&d>=0;
-      html+='<tr><td>'+esc(m.month||'')+'</td><td>'+money(hoyv)+'</td><td>'+money(aa)+'</td><td class="'+(d==null?'':(up?'up':'down'))+'">'+(d==null?'—':((up?'▲ ':'▼ ')+Math.abs(Math.round(d*100))+'%'))+'</td></tr>'; });
-    html+='</tbody></table><div class="sub-muted" style="margin-top:8px">Reservas en libros vs el mismo punto del año pasado'+(fy.last_updated?(' · corte '+esc(fy.last_updated)):'')+'.</div>';
-    $('ventasAA').innerHTML=html;
-  }).catch(function(){ if(vivo()) porcablear('ventasAA','Ventas vs AA: no se pudo cargar.'); }); });
+  /* FORECAST A SEIS MESES. Javi, 20-oct-2026: «mete la tabla de forecast
+     mensual que ya tenemos, mejor».
+     El panel enseñaba cuatro meses de libros contra el año pasado y nada más:
+     ni el forecast, ni el plan, ni si se cumple. Todo eso ya estaba calculado
+     en pricing_forecast —la misma tabla que alimenta el tablero de revenue—,
+     sólo que el tablero del día no la miraba. */
+  $('ventasAA').innerHTML='<div class="hd"><h3>Forecast 6 meses · vs año pasado</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){
+    var hoy=new Date(), desde=hoy.getFullYear()*100+(hoy.getMonth()+1);
+    return sb.from('pricing_forecast')
+      .select('anio,mes,dias_cierre,libros_hoy_mxn,pace_yoy_pct,revpar_pct,forecast_mxn,plan_mxn,rev_ly_mxn,rev_ly2_mxn,pct_cump,salud,actualizado')
+      .eq('plaza',H.plaza).order('anio').order('mes').then(function(r){ if(!vivo())return;
+      var rows=(Array.isArray(r.data)?r.data:[])
+        .filter(function(m){ return (Number(m.anio)*100+Number(m.mes))>=desde; }).slice(0,6);
+      if(!rows.length){ porcablear('ventasAA','Forecast: sin datos de pace para '+H.plaza+'.'); return; }
+      var MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      /* El dato que no existe se dice con una raya, no con un cero: un cero es
+         una cifra y se lee como tal. */
+      var pct=function(v){ if(v==null||v==='') return '<td class="na">—</td>';
+        var n=Number(v), up=n>=0;
+        return '<td class="'+(up?'up':'down')+'">'+(up?'+':'−')+Math.abs(Math.round(n))+'%</td>'; };
+      var mny=function(v){ return (v==null||v==='')?'<td class="na">—</td>':'<td>'+money(Number(v))+'</td>'; };
+      var SAL={'Sobre plan':'up','En línea':'ok','Bajo plan':'down'};
+      var html='<div class="hd"><h3>Forecast 6 meses · vs año pasado</h3>'+bdg('ok')
+        +'<span class="wh">'+esc(H.plaza)+'</span></div>'
+        +'<div style="overflow-x:auto"><table class="pace"><thead><tr>'
+        +'<th>Mes</th><th>Libros hoy</th><th>Δ pace</th><th>Δ RevPAR</th><th>Forecast</th>'
+        +'<th>Plan</th><th>Año pasado</th><th>% cump</th><th>Salud</th>'
+        +'</tr></thead><tbody>';
+      rows.forEach(function(m){
+        var dc=Number(m.dias_cierre||0);
+        html+='<tr><td><b>'+esc(MES[Number(m.mes)-1]||'')+' '+esc(m.anio)+'</b>'
+            +(dc>0?'<div class="sub-muted" style="margin:0;font-size:11px">'+dc+' d al cierre</div>':'')+'</td>'
+          +mny(m.libros_hoy_mxn)+pct(m.pace_yoy_pct)+pct(m.revpar_pct)
+          +mny(m.forecast_mxn)+mny(m.plan_mxn)+mny(m.rev_ly_mxn)
+          +(m.pct_cump==null?'<td class="na">—</td>'
+            :'<td class="'+(Number(m.pct_cump)>=100?'up':'down')+'">'+Math.round(Number(m.pct_cump))+'%</td>')
+          +(m.salud?'<td class="'+(SAL[m.salud]||'')+'">'+esc(m.salud)+'</td>':'<td class="na">—</td>')
+          +'</tr>';
+      });
+      var act=rows[0]&&rows[0].actualizado?String(rows[0].actualizado).slice(0,10):'';
+      html+='</tbody></table></div><div class="sub-muted" style="margin-top:8px">'
+        +'Forecast = lo que cerró el año pasado menos lo que llevaba a esta misma altura, más lo que hay hoy en libros.'
+        +(act?(' · corte '+esc(act)):'')+'</div>';
+      $('ventasAA').innerHTML=html;
+    }).catch(function(){ if(vivo()) porcablear('ventasAA','Forecast: no se pudo cargar.'); }); });
 
   // Valoraciones (reputación por fuente) — de panel_incidencias_rh_fase2
   $('valoraciones').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
