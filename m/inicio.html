@@ -259,16 +259,7 @@ function renderAsisCard(){
       +'<div class="chip bad"><div class="v">'+fa+'</div><div class="l">Faltas</div></div></div>';
     if(lista.length){ html+='<div class="sub-muted" style="margin-top:10px;font-weight:700;color:var(--ink-2)">Retrasos y validaciones</div>'
       +lista.map(function(x){ var dot=(x.tipo==='retraso'&&x.min>=60)?'bad':((x.pend||x.tipo==='por validar'||x.tipo==='por_validar')?'acc':'warn');
-        /* UN RETRASO TAMBIÉN SE VALIDA. Javi, 20-oct-2026: «en retrasos pon el
-           botón de validar o rechazar los retrasos».
-           Los botones ya estaban, pero sólo salían si `pend` venía en true, y
-           la base lo calcula como `est not in ('aprobada','aprobado')`: con
-           `est` nulo —que es el caso de casi todos los retrasos, los que marca
-           el reloj y nadie ha tocado— eso da NULL, no true. Así que el retraso
-           corriente, el que más falta hace resolver, salía sin botones.
-           Sin estado = sin resolver. */
-        var pend = (x.pend===true) || !x.est;
-        var acts=(pend && x.id)
+        var acts=(x.pend && x.id)
           ? '<button class="vb ok" data-res="'+esc(x.id)+'" data-acc="hora" title="Justificar: no cuenta en nómina">✓</button>'
             +'<button class="vb mid" data-res="'+esc(x.id)+'" data-acc="retardo" title="Aceptar como retardo (sí cuenta)">⏱</button>'
             +'<button class="vb no" data-res="'+esc(x.id)+'" data-acc="falta" title="Rechazar / marcar falta">✕</button>'
@@ -436,13 +427,17 @@ function renderDia(hk, off){
     var esFoto = (fecha === hoyISO());
     var pide = esFoto
       ? sb.from('pricing_forecast')
-          .select('anio,mes,dias_cierre,libros_hoy_mxn,pace_yoy_pct,revpar_pct,forecast_mxn,plan_mxn,rev_ly_mxn,rev_ly2_mxn,pct_cump,salud,actualizado')
+          .select('anio,mes,dias_cierre,libros_hoy_mxn,pace_yoy_pct,plan_mxn,rev_ly_mxn,pct_cump,actualizado')
           .eq('plaza',H.plaza)
       : sb.from('pricing_forecast_hist')
-          .select('anio,mes,dias_cierre,libros_hoy_mxn,pace_yoy_pct,revpar_pct,forecast_mxn,plan_mxn,rev_ly_mxn,rev_ly2_mxn,pct_cump,salud,guardado_at')
+          .select('anio,mes,dias_cierre,libros_hoy_mxn,pace_yoy_pct,plan_mxn,rev_ly_mxn,pct_cump,guardado_at')
           .eq('plaza',H.plaza).eq('corte',fecha);
+    // Foto de AYER (del día que se mira) para la diferencia vs ayer.
     var ref=new Date(fecha+'T12:00:00'), desde=ref.getFullYear()*100+(ref.getMonth()+1);
-    return pide.order('anio').order('mes').then(function(r){ if(!vivo())return;
+    var ad=new Date(ref); ad.setDate(ad.getDate()-1); var ayer=iso(ad);
+    var pideAyer=sb.from('pricing_forecast_hist').select('anio,mes,libros_hoy_mxn,pace_yoy_pct').eq('plaza',H.plaza).eq('corte',ayer);
+    return Promise.all([ pide.order('anio').order('mes'), pideAyer ]).then(function(aa){ if(!vivo())return;
+      var r=aa[0], ra=aa[1];
       var rows=(Array.isArray(r.data)?r.data:[])
         .filter(function(m){ return (Number(m.anio)*100+Number(m.mes))>=desde; }).slice(0,6);
       if(!rows.length){
@@ -450,32 +445,36 @@ function renderDia(hk, off){
           ? ('Forecast: sin datos de pace para '+H.plaza+'.')
           : 'Forecast: de ese día no hay foto guardada. La copia diaria empezó el 20-oct-2026; antes de esa fecha sólo existe el corte de hoy.');
         return; }
+      var aMap={}; (Array.isArray(ra.data)?ra.data:[]).forEach(function(m){ aMap[Number(m.anio)*100+Number(m.mes)]={lib:(m.libros_hoy_mxn==null?null:Number(m.libros_hoy_mxn)),pace:(m.pace_yoy_pct==null?null:Number(m.pace_yoy_pct))}; });
+      var hayAyer=false;
       var MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
       var pct=function(v){ if(v==null||v==='') return '<td class="na">—</td>';
         var n=Number(v), up=n>=0;
         return '<td class="'+(up?'up':'down')+'">'+(up?'+':'−')+Math.abs(Math.round(n))+'%</td>'; };
       var mny=function(v){ return (v==null||v==='')?'<td class="na">—</td>':'<td>'+money(Number(v))+'</td>'; };
-      var SAL={'Sobre plan':'up','En línea':'ok','Bajo plan':'down'};
+      // Δ libros vs ayer (en $) y Δ pace vs ayer (en puntos), de la foto diaria.
+      var dLib=function(m){ var p=aMap[Number(m.anio)*100+Number(m.mes)]; if(!p||p.lib==null||m.libros_hoy_mxn==null) return '<td class="na">—</td>'; hayAyer=true; var d=Number(m.libros_hoy_mxn)-p.lib; if(Math.round(d)===0) return '<td class="na">=</td>'; var up=d>=0; return '<td class="'+(up?'up':'down')+'">'+(up?'+':'−')+money(Math.abs(d))+'</td>'; };
+      var dPace=function(m){ var p=aMap[Number(m.anio)*100+Number(m.mes)]; if(!p||p.pace==null||m.pace_yoy_pct==null) return '<td class="na">—</td>'; hayAyer=true; var d=Number(m.pace_yoy_pct)-p.pace; if(Math.round(d)===0) return '<td class="na">=</td>'; var up=d>=0; return '<td class="'+(up?'up':'down')+'">'+(up?'+':'−')+Math.abs(Math.round(d))+' pp</td>'; };
       var html='<div class="hd"><h3>Forecast 6 meses · vs año pasado</h3>'+bdg('ok')
         +'<span class="wh">'+esc(H.plaza)+(esFoto?'':' · '+esc(etiqueta))+'</span></div>'
         +'<div style="overflow-x:auto"><table class="pace"><thead><tr>'
-        +'<th>Mes</th><th>Libros hoy</th><th>Δ pace</th><th>Δ RevPAR</th><th>Forecast</th>'
-        +'<th>Plan</th><th>Año pasado</th><th>% cump</th><th>Salud</th>'
+        +'<th>Mes</th><th>Libros hoy</th><th>Δ vs ayer</th><th>Δ pace</th><th>Δ pace ayer</th>'
+        +'<th>Plan</th><th>Año pasado</th><th>% cump</th>'
         +'</tr></thead><tbody>';
       rows.forEach(function(m){
         var dc=Number(m.dias_cierre||0);
         html+='<tr><td><b>'+esc(MES[Number(m.mes)-1]||'')+' '+esc(m.anio)+'</b>'
             +(dc>0?'<div class="sub-muted" style="margin:0;font-size:11px">'+dc+' d al cierre</div>':'')+'</td>'
-          +mny(m.libros_hoy_mxn)+pct(m.pace_yoy_pct)+pct(m.revpar_pct)
-          +mny(m.forecast_mxn)+mny(m.plan_mxn)+mny(m.rev_ly_mxn)
+          +mny(m.libros_hoy_mxn)+dLib(m)+pct(m.pace_yoy_pct)+dPace(m)
+          +mny(m.plan_mxn)+mny(m.rev_ly_mxn)
           +(m.pct_cump==null?'<td class="na">—</td>'
             :'<td class="'+(Number(m.pct_cump)>=100?'up':'down')+'">'+Math.round(Number(m.pct_cump))+'%</td>')
-          +(m.salud?'<td class="'+(SAL[m.salud]||'')+'">'+esc(m.salud)+'</td>':'<td class="na">—</td>')
           +'</tr>';
       });
       var act=rows[0]?String(rows[0].actualizado||rows[0].guardado_at||'').slice(0,10):'';
       html+='</tbody></table></div><div class="sub-muted" style="margin-top:8px">'
-        +'Forecast = lo que cerró el año pasado menos lo que llevaba a esta misma altura, más lo que hay hoy en libros.'
+        +'Δ vs ayer = contra la foto del día anterior ('+esc(ayer)+').'
+        +(hayAyer?'':' Hoy sale «—» porque la foto diaria empezó el 20-oct-2026; desde mañana ya compara.')
         +(act?(' · corte '+esc(act)):'')+'</div>';
       $('ventasAA').innerHTML=html;
     }).catch(function(){ if(vivo()) porcablear('ventasAA','Forecast: no se pudo cargar.'); }); });
