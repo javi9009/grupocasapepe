@@ -63,10 +63,20 @@
   pon('link',{rel:'stylesheet',
     href:'https://fonts.googleapis.com/css2?family=Rye&display=swap'});
 
-  /* UNA SOLA CABECERA. El lema se mete DENTRO de la que la app ya tiene,
-     en medio, entre el saludo y el conmutador de idioma; la cabecera se
-     tiñe de cempasúchil y el papel picado cuelga de su filo de abajo, una
-     sola vez. Si la app no tiene cabecera, el lema va suelto arriba. */
+  /* UNA BANDA, SIEMPRE IGUAL, DEBAJO DE LA CABECERA.
+     Javi, 19-oct-2026: «¿por qué no diseñas un detalle de Muertos con el mismo
+     tamaño para no tener el problema de header y footer?».
+
+     Lo que había antes metía el lema y el papel picado DENTRO de la cabecera
+     de cada pantalla. Pero cada pantalla tiene la suya —la portada no se
+     parece a la de la tienda ni a la del Pepe GO!— y en cuanto una no encajaba,
+     el título se partía en tres líneas y la greca se iba a un lado. Arreglarlo
+     pantalla por pantalla es no acabar nunca.
+
+     Así que la temporada deja de meterse en casa ajena: se pone su propia
+     banda, de alto fijo, justo debajo de la cabecera. No toca su estructura,
+     no compite por el ancho y mide lo mismo en todas partes. Lo único que
+     sigue cambiando de la cabecera es el color, que no mueve nada de sitio. */
   function cabecera(){
     return document.querySelector('header.top') ||
            document.querySelector('header') ||
@@ -78,46 +88,25 @@
   function tira(){
     if(document.getElementById('dmCartel')) return;
     var cab = cabecera();
-    var c = document.createElement('div');
-    c.className = 'dm-cartel'; c.id = 'dmCartel';
-    c.innerHTML = cartelHTML();
+    var b = document.createElement('div');
+    b.className = 'dm-banda'; b.id = 'dmCartel';
+    b.innerHTML = '<span class="dm-lema">' + cartelHTML() + '</span>';
 
-    if(!cab){
-      c.style.background = 'var(--dm-cempa-hondo)';
-      c.style.padding = '10px 14px';
-      document.body.insertBefore(c, document.body.firstChild);
-      return;
+    if(cab && cab.parentNode){
+      cab.classList.add('dm-cab-tenida');
+      cab.parentNode.insertBefore(b, cab.nextSibling);
+    }else{
+      document.body.insertBefore(b, document.body.firstChild);
     }
 
-    cab.classList.add('dm-cab-tenida');
-
-    /* en medio: detrás del bloque del saludo y delante de lo que haya a la
-       derecha (campanita, ES/EN). Si la fila no existe, al final de la
-       cabecera, que sigue siendo dentro y no encima. */
-    /* La fila es .in cuando la cabecera la tiene; cuando no —la tienda, por
-       ejemplo, es un flex pelado de avatar + texto— la fila ES la cabecera.
-       Antes se cogía su primer hijo como fila y el lema acababa DENTRO del
-       círculo del avatar, estrujando el título en una palabra por línea.
-       Javi, 19-oct-2026: «se ve mal el header». */
-    var fila = cab.querySelector('.in') || cab;
-    fila.classList.add('dm-fila');
-    var izq = fila.querySelector('.izq') || fila.firstElementChild;
-    if(izq && izq.parentNode === fila) fila.insertBefore(c, izq.nextSibling);
-    else fila.appendChild(c);
-
     /* EL SALUDO SE ACORTA. Javi: «quita el Casa Pepe de Bienvenido» — el
-       logo ya lo dice, y en temporada ese sitio lo necesita el lema. */
-    var bienv = cab.querySelector('.bienv');
+       logo ya lo dice. Esto sí se puede tocar: es texto, no estructura. */
+    var bienv = cab && cab.querySelector('.bienv');
     if(bienv){
       var t = bienv.textContent.replace(/\s+a\s+casa\s+pepe\s*$/i,'')
                                .replace(/\s+to\s+casa\s+pepe\s*$/i,'');
       if(t.trim()) bienv.textContent = t.trim();
     }
-
-    var picado = document.createElement('div');
-    picado.className = 'dm-picado dm-filo';
-    picado.setAttribute('aria-hidden','true');
-    cab.appendChild(picado);
   }
 
   /* ---------- LA VITRINA DE LA COLECCIÓN ----------
