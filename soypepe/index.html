@@ -2137,18 +2137,31 @@ function repPct(id,n){ if(n===null||n===undefined||isNaN(n)){ return; } repSet(i
 
 let REP_PROP = null;        // property_id del usuario (se resuelve una vez)
 let REP_PROP_OK = false;
+let REP_PROP_VUELO = null;  // llamada en curso, para no preguntar lo mismo dos veces
 
+// Antes esto marcaba la casa como "ya resuelta" aunque la consulta hubiera
+// fallado: ese null se quedaba pegado toda la sesión y cada pantalla que hace
+// "|| CDMX" le enseñaba a Puebla la casa de CDMX hasta que cerraba la app y
+// volvía a abrirla. Por eso el cruce de desayunos salía a ratos y sin patrón:
+// dependía de si la petición de arranque salió bien esa mañana.
+// Ahora, si no hay casa, no se cachea nada y se vuelve a intentar.
 async function resolverProp(){
   if(REP_PROP_OK) return REP_PROP;
-  if(EMP){
-    try{
-      const { data } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
-      if(data && data.property_id) REP_PROP = data.property_id;
-    }catch(e){ /* sin propiedad: la función usa CDMX por default */ }
-  }
-  { var _vp=(window.cpViewProp?window.cpViewProp():null); if(_vp) REP_PROP=_vp; }
-  REP_PROP_OK = true;
-  return REP_PROP;
+  if(REP_PROP_VUELO) return REP_PROP_VUELO;
+  REP_PROP_VUELO = (async ()=>{
+    if(EMP){
+      try{
+        const { data, error } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
+        if(error) throw error;
+        if(data && data.property_id) REP_PROP = data.property_id;
+      }catch(e){ /* no se pudo: se reintenta en la siguiente llamada */ }
+    }
+    { var _vp=(window.cpViewProp?window.cpViewProp():null); if(_vp) REP_PROP=_vp; }
+    REP_PROP_OK = !!REP_PROP;
+    REP_PROP_VUELO = null;
+    return REP_PROP;
+  })();
+  return REP_PROP_VUELO;
 }
 
 // "hace 3 min", "ahora mismo", etc.
@@ -2474,7 +2487,10 @@ function ymdMX(){ const d=mxToday(); return d.getFullYear()+'-'+String(d.getMont
 function dqEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function cargarDesayunos(){
-  const prop=(await resolverProp())||CDMX_PROP;
+  // Sin casa resuelta no se pide nada: más vale no enseñar lista que enseñar la
+  // de la otra casa. Es lo que le pasaba a Lupita en Puebla con los de CDMX.
+  const prop=await resolverProp();
+  if(!prop){ DESAY_D={ error:'sin_casa' }; DESAY_N=null; return DESAY_D; }
   const fecha=ymdMX();
   const { data, error } = await sb.rpc('aud_desayunos_dia',{ p_property:prop, p_fecha:fecha });
   if(error) throw error;
@@ -2490,7 +2506,9 @@ function pintarDesayunos(){
   const wrap=$('desayList'); if(!wrap) return;
   const D=DESAY_D;
   if(!D || D.error){
-    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">No se pudo cargar la lista.</div></div>';
+    wrap.innerHTML = (D && D.error==='sin_casa')
+      ? '<div class="ph"><div class="ico">🏨</div><div class="d">No pudimos confirmar en qué casa estás, así que no te enseñamos una lista que podría no ser la tuya. Cierra y vuelve a abrir la app; si sigue igual, avísanos.</div></div>'
+      : '<div class="ph"><div class="ico">🍳</div><div class="d">No se pudo cargar la lista.</div></div>';
     return;
   }
   const L = Array.isArray(D.lista) ? D.lista : [];
@@ -2541,8 +2559,14 @@ $('desaySheet').onclick=(e)=>{ if(e.target.id==='desaySheet') $('desaySheet').cl
 $('desayList').addEventListener('click', async (e)=>{
   const b=e.target.closest('[data-sub]'); if(!b) return;
   const nuevo = b.dataset.on!=='1';
-  const prop=(await resolverProp())||CDMX_PROP;
   const msg=$('desayMsg');
+  // Marcar en la casa equivocada sería peor que no marcar: se para aquí.
+  const prop=await resolverProp();
+  if(!prop){
+    if(msg){ msg.style.display='block'; msg.style.color='#b03434';
+      msg.textContent='No pudimos confirmar tu casa. Cierra y vuelve a abrir la app antes de tachar.'; }
+    return;
+  }
   b.disabled=true;
   try{
     const { data, error } = await sb.rpc('aud_desayuno_marcar',{
