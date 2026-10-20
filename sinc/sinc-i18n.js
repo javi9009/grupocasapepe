@@ -1478,6 +1478,58 @@
       'Zona arqueológica':'Archaeological site',
       'evento':'event',
 
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Aquí van a aparecer los boletos de las experiencias que reserves, con su QR para enseñarlo el día del tour.':'This is where the tickets for the experiences you book will show up, with the QR code to show on the day of the tour.',
+      'Cajeros automáticos':'ATMs',
+      'Escondida entre las azoteas del Centro Histórico, La Cósmica te espera al atardecer. Cocteles, cerveza artesanal, eventos y una trajinera.':'Hidden among the rooftops of the Centro Histórico, La Cósmica awaits you at sunset. Cocktails, craft beer, events and a trajinera.',
+      'Huevos a la cacerola':'Eggs in the pan',
+      'Ikuri “la casa del maíz”':'Ikuri “the house of maize”',
+      'Live Día de Muertos':'Live Día de Muertos',
+      'Lo dulce':'Something sweet',
+      'Lo fit':'The healthy stuff',
+      'Los clásicos':'The classics',
+      'Mapa CPP 2026 · Casa Pepe. Los horarios y precios cambian: si vas de lejos, confirma antes.':'CPP Map 2026 · Casa Pepe. Opening hours and prices change: if you\'re going far, check first.',
+      'Si ya reservaste, abre el enlace que te llegó por correo: tu boleto vive en esa dirección.':'If you already booked, open the link we emailed you: your ticket lives at that address.',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Bebida':'Drinks',
+      'Bebidas':'Drinks',
+      'Cena':'Dinner',
+      'Cervezas':'Beers',
+      'Cocteles':'Cocktails',
+      'Comida':'Lunch',
+      'Desayuno':'Breakfast',
+      'Entradas':'Starters',
+      'Huevos al gusto':'Eggs your way',
+      'Mezcales':'Mezcales',
+      'Máscaras':'Masks',
+      'Para compartir':'To share',
+      'Para llevar':'To take away',
+      'Postres':'Desserts',
+      'Sin alcohol':'Non-alcoholic',
+      'Vinos':'Wines',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      '📅 Por un día':'📅 For a day',
+      '📅 Por una semana':'📅 For a week',
+      '📷 Subir o tomar foto':'📷 Upload or take a photo',
+      '📸 Capturar':'📸 Capture',
+      '📸 Tomar con la cámara':'📸 Use the camera',
+      '🔗 Copiar link':'🔗 Copy link',
+      '🔦 Luz':'🔦 Light',
+
     }
   };
 
