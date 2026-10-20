@@ -30,6 +30,25 @@
   var p, cambio = false, vals = {};
   try { p = new URLSearchParams(location.search); } catch (_) { p = null; }
 
+  /* LA LIGA DEL CORREO TRAE A OTRA PERSONA.
+     Aranza, 19-oct-2026: abrió el check-in desde el correo de prueba y le salió
+     la reserva de Gloria, de una prueba vieja; a Javi le había salido la de
+     Nicolás. El token se guarda en el aparato y se reponía en la URL aunque
+     quien entrara fuera otro, así que el segundo veía los datos del primero.
+     Cuando la liga viene identificando una reserva por su número —?q=, ?cb=,
+     ?reserva=, que es como la manda el correo— el que entra NO es el de antes:
+     se borra lo guardado y se empieza de cero. Esto son datos de otra persona,
+     no una preferencia de la app. */
+  var ligaDeOtro = false;
+  try {
+    ligaDeOtro = !!(p && (p.get('q') || p.get('cb') || p.get('reserva')) && !bueno(p.get('resv')));
+  } catch (_) {}
+  if (ligaDeOtro) {
+    ['apepe_resv','apepe_sol','apepe_resv_hasta','apepe_resv_visto','apepe_sede_token'].forEach(function (x) {
+      try { localStorage.removeItem(x); } catch (_) {}
+    });
+  }
+
   Object.keys(CLAVES).forEach(function (nom) {
     var k = CLAVES[nom];
     var deLaUrl = p ? bueno(p.get(nom)) : '';
@@ -42,7 +61,7 @@
       }
       guarda(k, deLaUrl); vals[nom] = deLaUrl; return;
     }
-    var guardado = lee(k);
+    var guardado = ligaDeOtro ? '' : lee(k);
     if (guardado && p) { p.set(nom, guardado); cambio = true; }
     vals[nom] = guardado;
   });
@@ -75,10 +94,20 @@
 
   function normSede(v){ return /pue|chol|atlix|tlax/.test(String(v||'').toLowerCase()) ? 'puebla' : 'cdmx'; }
   var sede = '';
+  /* 0) LO QUE EL HUÉSPED ELIGIÓ A MANO MANDA SOBRE TODO LO DEMÁS.
+     Javi, 20-oct-2026: «¿por qué no mandas a cada cliente a su sede, pero
+     arriba, si le dan al nombre de la ciudad, aparecen todos los destinos?…
+     Así ya tienes dos versiones y no tienes problema si un cliente va de CDMX
+     a Puebla». El que duerme en CDMX y se va el martes a Puebla no quiere la
+     app de CDMX: quiere ver qué hay donde va. Su reserva sigue siendo la
+     suya; lo único que cambia es qué ciudad le enseñamos. */
+  var ELEGIDA = '';
+  try { ELEGIDA = localStorage.getItem('apepe_sede_elegida') || ''; } catch (_) {}
   try {
     var _s = (p && (p.get('ciudad') || p.get('sede'))) || '';
     _s = String(_s).trim().toLowerCase();
-    if (_s) { sede = normSede(_s); localStorage.setItem('apepe_sede', sede); }
+    if (ELEGIDA) { sede = normSede(ELEGIDA); }
+    else if (_s) { sede = normSede(_s); localStorage.setItem('apepe_sede', sede); }
     else { sede = localStorage.getItem('apepe_sede') || ''; }
   } catch (_) {}
 
@@ -105,6 +134,8 @@
       }).catch(function(){});
   }
   function aplicaSede(s, puedeRecargar){
+    /* Si eligió destino a mano, ni la reserva ni el teléfono se lo pisan. */
+    if (ELEGIDA) return;
     if (!s || s === sede) return;
     sede = s;
     try { localStorage.setItem('apepe_sede', s); } catch(_){}
@@ -217,6 +248,19 @@
     token: function () { return vals.resv || ''; },
     sol: function () { return vals.sol || ''; },
     sede: function () { return sede || ''; },
+    /* ¿Lo eligió él, o se lo dedujimos? El header lo dice en una línea. */
+    sedeElegida: function () { return ELEGIDA ? normSede(ELEGIDA) : ''; },
+    /* Cambiar de destino: se guarda y se recarga, porque media app ya se pintó
+       con la ciudad anterior. Pasar '' vuelve a la sede de la reserva. */
+    eligeSede: function (s) {
+      try {
+        if (s) { localStorage.setItem('apepe_sede_elegida', normSede(s));
+                 localStorage.setItem('apepe_sede', normSede(s)); }
+        else   { localStorage.removeItem('apepe_sede_elegida'); }
+        sessionStorage.removeItem('apepe_sede_recarga');
+      } catch (_) {}
+      try { location.reload(); } catch (_) {}
+    },
     /* Lo que hay que pegarle a una liga interna para no perder la identidad. */
     qs: function () {
       if (vals.resv) return '?resv=' + encodeURIComponent(vals.resv);

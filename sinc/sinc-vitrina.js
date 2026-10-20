@@ -119,13 +119,18 @@ window.sincVitrina = (function () {
 
   /* ---------- el estilo, inyectado una vez ---------- */
   var CSS = ''
-  + '.sv-lab{font-family:Oswald,sans-serif;text-transform:uppercase;font-size:12px;'
-  +   'letter-spacing:.09em;color:var(--gris);margin:20px 0 2px;display:flex;'
-  +   'align-items:baseline;justify-content:space-between;gap:10px}'
-  + '.sv-lab b{font-weight:600}'
+  /* EL TÍTULO MANDA EN SU SECCIÓN. Javi, 19-oct-2026: «dale más importancia a
+     la sección». Doce píxeles en gris no son un título: son una etiqueta, y
+     dejaban la portada como una lista de cosas sin jerarquía. Ahora el nombre
+     va grande y en tinta —es lo primero que se lee— y lo que lo acompaña baja
+     de peso para que se note quién manda. */
+  + '.sv-lab{font-family:Oswald,sans-serif;text-transform:uppercase;font-size:20px;'
+  +   'letter-spacing:.015em;color:var(--tinta);margin:26px 0 0;display:flex;'
+  +   'align-items:baseline;justify-content:space-between;gap:10px;line-height:1.1}'
+  + '.sv-lab b{font-weight:700}'
   + '.sv-lab a{font-family:Inter,system-ui,sans-serif;text-transform:none;letter-spacing:0;'
   +   'font-size:12.5px;font-weight:600;color:var(--naranja-oscuro);text-decoration:none;white-space:nowrap}'
-  + '.sv-dice{color:var(--gris);font-size:12.5px;line-height:1.45;margin:4px 0 0}'
+  + '.sv-dice{color:var(--gris);font-size:13px;line-height:1.45;margin:5px 0 0}'
   + '.sv-carr{display:flex;gap:10px;margin-top:10px;overflow-x:auto;scroll-snap-type:x proximity;'
   +   '-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}'
   + '.sv-carr::-webkit-scrollbar{display:none}'
@@ -133,6 +138,24 @@ window.sincVitrina = (function () {
   +   'border:1px solid var(--linea);border-radius:14px;overflow:hidden;text-decoration:none;'
   +   'color:var(--tinta);box-shadow:var(--sombra);display:flex;flex-direction:column}'
   + '.sv-f:active{transform:scale(.99)}'
+  /* LA FILA DE FIESTA. Javi, 19-oct-2026: «pon la tarjeta de estas fiestas al
+     doble de grande y pura foto y fecha y hora».
+     Un cartel de concierto ya trae dentro el nombre, el grupo y la noche: la
+     ficha de debajo repetía con peor letra lo que la imagen dice mejor. Así
+     que aquí la tarjeta es el cartel entero, al doble, y encima sólo la
+     fecha. */
+  + '.sv-fila[data-cat="shows"] .sv-f{flex:0 0 72%;max-width:340px}'
+  + '.sv-fila[data-cat="shows"] .sv-f .im{aspect-ratio:4/5}'
+  /* Javi, 20-oct-2026: «el apartado de fiesta no tiene título ni fecha» —
+     «fecha sí». Se fue el nombre con la ficha, y una foto de neón sin nombre
+     no se busca ni se cuenta a nadie. Vuelve el nombre, solo: el precio, los
+     cupos y los ODS siguen fuera, que para eso está la ficha. */
+  + '.sv-fila[data-cat="shows"] .sv-f .cu{padding:10px 12px 12px;gap:0}'
+  + '.sv-fila[data-cat="shows"] .sv-f .nm{font-size:15px}'
+  + '.sv-fila[data-cat="shows"] .sv-f .datos,'
+  + '.sv-fila[data-cat="shows"] .sv-f .sv-ods,'
+  + '.sv-fila[data-cat="shows"] .sv-f .pie{display:none}'
+  + '.sv-fila[data-cat="shows"] .sv-f .hora{left:auto;right:9px;bottom:9px;font-size:13px;padding:5px 11px}'
   + '.sv-f .im{position:relative;aspect-ratio:4/3;background:var(--hueso);overflow:hidden}'
   + '.sv-f .im img{width:100%;height:100%;object-fit:cover;display:block}'
   + '.sv-f .im .ini{position:absolute;inset:0;display:flex;align-items:center;'
@@ -242,7 +265,12 @@ window.sincVitrina = (function () {
   function fila(cat, items, o) {
     /* El Ateneo va en UN bloque, sin dividir —Javi: «es todo el mismo
        espacio»—, ordenado por lo que tiene fecha y luego los pases. */
-    var ver = (!cat.es_ateneo && o.verTodas)
+    /* LAS FIESTAS NO TIENEN «VER TODAS». El buscador de todas.html sólo mira
+       experiencias, y una fiesta es un evento: el chip se aplicaba y salía
+       «0 de 8». Javi, 19-oct-2026: «¿quién dijo fiesta es un nuevo filtro?».
+       Mientras no haya cartelera de eventos, la fila no manda a ningún sitio
+       vacío: lo que hay es lo que se ve. */
+    var ver = (!cat.es_ateneo && cat.slug !== 'shows' && o.verTodas)
       ? '<a href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">' + esc(T('Ver todas')) + ' &rarr;</a>'
       : '';
     return '<div class="sv-fila" data-cat="' + esc(cat.slug) + '">'

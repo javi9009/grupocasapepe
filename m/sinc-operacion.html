@@ -383,6 +383,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
         '<div class="fld"><label>Hora</label><select id="mvHora"></select></div>'+
       '</div>'+
       '<label class="mini" style="display:block;margin-top:8px"><input type="checkbox" id="mvAvisa" checked> Avisarle al cliente por correo (se le reenvía su boleto con la fecha nueva)</label>'+
+      '<div class="mini" style="margin-top:4px;opacity:.85">Al guía y al operador se les avisa siempre: son los que se presentan en el punto de encuentro.</div>'+
       '<div style="margin-top:10px"><button class="btn ghost" id="mvGo">Mover la reserva</button></div>'+
 
       '<div class="sec">Cancelar</div>'+
@@ -401,20 +402,45 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       var r=await fetch(SB+'/rest/v1/rpc/sinc_disponibilidad',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_op_exp:x.op_experiencia_id,p_desde:hoy(),p_hasta:addD(hoy(),90)})});
       var d=r.ok?await r.json():[];
-      DISP=(d||[]).filter(function(s){ return s.estado!=='cerrada'&&s.estado!=='cancelada'&&Number(s.libres)>=Number(x.pax||1); });
+      /* SOLO LOS DÍAS QUE DE VERDAD ADMITEN A ESTA GENTE. Javi, 19-oct-2026:
+         «mover la reserva tiene que ser a un día que haya disponibilidad».
+         El filtro de antes dejaba pasar dos cosas que no se pueden vender:
+
+         · las salidas BLOQUEADAS por el calendario del operador (iCal). Solo
+           se excluían 'cerrada' y 'cancelada', así que una bloqueada con
+           lugares libres aparecía como si nada y se podía mover gente
+           encima de un día que el operador había apartado.
+         · y al revés: las salidas SIN TOPE de cupo se caían de la lista.
+           Cuando no hay tope, libres viene en null, Number(null) es 0, y
+           0 >= 1 es falso: un tour sin límite decía «no hay sitio».
+
+         Ahora se pide estado 'libre' —que es lo que calcula la base mirando
+         cupo, antelación, iCal y cancelaciones— y el sin tope entra. */
+      var pax=Number(x.pax||1);
+      DISP=(d||[]).filter(function(s){
+        if(s.estado!=='libre') return false;
+        if(s.libres==null) return true;            /* sin tope: siempre cabe */
+        return Number(s.libres) >= pax;
+      });
     }catch(e){ DISP=[]; }
     if(ABIERTA!==x) return;
     var dias=[]; DISP.forEach(function(s){ if(dias.indexOf(String(s.fecha))<0) dias.push(String(s.fecha)); });
     $('mvFecha').innerHTML = dias.length
-      ? dias.map(function(f){return '<option value="'+f+'">'+fd(f,{weekday:'long',day:'numeric',month:'long'})+'</option>';}).join('')
-      : '<option value="">No hay otra salida con lugar en 90 días</option>';
+      ? dias.map(function(f){
+          var n=DISP.filter(function(s){return String(s.fecha)===f;}).length;
+          return '<option value="'+f+'">'+fd(f,{weekday:'long',day:'numeric',month:'long'})+
+                 (n>1?' \u00b7 '+n+' horarios':'')+'</option>';}).join('')
+      : '<option value="">No hay ninguna salida con sitio para '+pax+
+        (pax>1?' personas':' persona')+' en los pr\u00f3ximos 90 d\u00edas</option>';
     pintaHoras();
   }
   function pintaHoras(){
     var f=$('mvFecha').value;
     var hs=(DISP||[]).filter(function(s){ return String(s.fecha)===f; });
-    $('mvHora').innerHTML = hs.map(function(s){return '<option value="'+s.hora+'">'+hm(s.hora)+' · '+s.libres+' libres</option>';}).join('')
-      || '<option value="">—</option>';
+    $('mvHora').innerHTML = hs.map(function(s){
+      return '<option value="'+s.hora+'">'+hm(s.hora)+' \u00b7 '+
+             (s.libres==null?'sin tope':s.libres+' libres')+'</option>';}).join('')
+      || '<option value="">\u2014</option>';
   }
 
   async function rpc(fn,body){

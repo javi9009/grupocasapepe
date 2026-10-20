@@ -231,6 +231,13 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   <section class="screen" id="s2">
     <h1 data-i18n="s2h">Tu reserva</h1>
     <p class="mini" style="margin:4px 0 0" data-i18n="s2p">Esto es lo que tenemos. Si algo no cuadra, lo ajustamos con recepción.</p>
+    <!-- ¿NO ERES TÚ? Aranza y Javi, 19-oct-2026: cada uno abrió el check-in y
+         le salió la reserva de otra persona —Gloria, Nicolás— porque el aparato
+         guardaba la de una prueba anterior. La liga del correo ya limpia sola;
+         esto es para el teléfono o la tablet donde ya entró alguien antes. -->
+    <p class="mini" style="margin:8px 0 0">
+      <a href="#" id="noSoyYo" style="color:var(--naranja,#C9501A);text-decoration:underline">¿No eres tú? Empieza de cero</a>
+    </p>
     <div class="card resv">
       <div class="g">
         <div><div class="k" data-i18n="kReserva">Reserva</div><div class="v" id="rId">—</div></div>
@@ -527,6 +534,14 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   var $=function(i){return document.getElementById(i);};
   var SOL=new URLSearchParams(location.search).get('sol')||'';
   var RESV=new URLSearchParams(location.search).get('resv')||'';   // token opaco de reserva de Cloudbeds
+  /* "TENGO OTRA RESERVA A MI NOMBRE". Javi, 19-oct-2026: Deisy le hizo una
+     reserva en Puebla y pregunta si le aparecera sola en su app. No: la app
+     reconoce al huesped por la liga de UNA reserva, que resv.js guarda en el
+     aparato y repone en la barra. Con una liga ya guardada, entrar aqui abria
+     siempre la reserva vieja y no habia manera de pedir otra. Con ?otra=1 se
+     ignora la guardada y sale el buscador; al elegir, la liga nueva pisa a la
+     vieja y la app entera (mapa, Pepe GO!, experiencias) se muda con ella. */
+  try{ if(/[?&]otra=1\b/.test(location.search)){ RESV=''; SOL=''; } }catch(_){}
   var TARIFA=150, RES={}, STEP=1, CAP=['Bienvenida','Tu reserva','Identificación','Contrato','Listo'];
 
   /* LOS PREFIJOS. Cada uno trae la nacionalidad que le corresponde, porque de
@@ -675,6 +690,9 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   window.go=function(n){
     document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('on');});
     $('s'+n).classList.add('on'); STEP=n; paint(); window.scrollTo(0,0);
+    /* Al llegar al documento, si ya le conocemos se le ofrece el suyo antes de
+       pedirle que saque el pasaporte del bolsillo. */
+    if(n===3){ try{ pintaConocido(); }catch(_){} }
   };
   window.transTlaloc=function(){
     $('transImg').src='/img/apepe/stickers/tlaloc.webp';
@@ -728,12 +746,37 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
     try{ var v=String(new URLSearchParams(location.search).get('ciudad')||'').toLowerCase().trim();
          return (v==='puebla'||v==='cdmx')?v:''; }catch(_){ return ''; }
   })();
+  /* EL LINK QUE VA EN LOS CORREOS. Javi, 19-oct-2026: «ya ninguno es en Akia
+     (…) toda la comunicación que tenga el cliente sea a través de nuestra
+     plataforma y que reciba el link de check-in».
+     Cloudbeds no puede firmar nuestro token opaco, pero en sus plantillas sí
+     tiene el número de reserva y el apellido. Con eso la pantalla se busca
+     sola y el huésped no escribe nada:
+       /apepe/checkin.html?q=[reservation_number]&a=[guest_last_name]
+     El apellido es el candado: si no cuadra con ninguna reserva no se abre
+     nada y se queda el buscador, que es justo lo que debe pasar cuando alguien
+     reenvía el correo a otra persona. */
+  var APELL=(function(){ try{ return String(new URLSearchParams(location.search).get('a')||'').trim().toLowerCase(); }catch(_){ return ''; } })();
+  /* Olvidar al anterior: borra el token guardado y vuelve al buscador. */
+  (function(){
+    var a=document.getElementById('noSoyYo'); if(!a) return;
+    a.onclick=function(e){
+      e.preventDefault();
+      ['apepe_resv','apepe_sol','apepe_resv_hasta','apepe_resv_visto','apepe_sede_token'].forEach(function(k){
+        try{ localStorage.removeItem(k); }catch(_){}
+      });
+      location.replace('/apepe/checkin.html');
+    };
+  })();
   function montaBuscador(){
     go(0);
     $('bGo').onclick=buscar;
     var el=$('bDato');
     if(el){ el.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
             try{ el.focus(); }catch(_){} }
+    var pre=''; try{ var u=new URLSearchParams(location.search);
+      pre=String(u.get('q')||u.get('cb')||u.get('reserva')||'').trim(); }catch(_){}
+    if(pre && el){ el.value=pre; buscar(); }
   }
   function abreReserva(x){
     var q='?resv='+encodeURIComponent(x.token);
@@ -758,6 +801,13 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
         b.disabled=false; b.textContent=t('s0btn');
         if(!d||!d.ok){ av.className='aviso err'; av.textContent=(d&&d.error)||t('s0error'); return; }
         var l=d.reservas||[];
+        /* El candado del correo: con el apellido en la liga, sólo pasa la
+           reserva de esa persona. Sin coincidencia, no se abre nada. */
+        if(APELL && l.length){
+          var f=l.filter(function(x){ return String(x.nombre||'').toLowerCase().indexOf(APELL)>=0; });
+          if(!f.length){ av.className='aviso err'; av.textContent=t('s0nada'); return; }
+          l=f;
+        }
         if(!l.length){ av.className='aviso err'; av.textContent=t('s0nada'); return; }
         if(l.length===1){ abreReserva(l[0]); return; }
         /* Más de una: casi siempre el mismo huésped con dos estancias. Se le
@@ -805,6 +855,12 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
             email:v.email, telefono:v.telefono, nacimiento:v.nacimiento, doc_tipo:v.doc_tipo, doc_numero:v.doc_numero,
             reserva:v.reservation_id, habitacion:v.habitacion, pax:v.pax, desayuno:v.desayuno,
             fuente:v.fuente, fecha_reserva:v.fecha_reserva, pago:v.pago }; window.YA_CK=jj.ya_checkin||null; }
+        /* YA TE CONOCEMOS. Javi, 19-oct-2026: "guarda los ids de los que ya
+           hicieron un check-in y deja la info guardada". Quien ya se registro
+           con nosotros no tiene por que volver a fotografiar su pasaporte.
+           Lo busca el servidor por el correo QUE TRAE LA RESERVA -nunca por
+           uno escrito aqui- y manda el numero, jamas la foto. */
+        window.CONOCIDO = (jj && jj.conocido) || null;
       }catch(e){}
     } else if(SOL){
       try{
@@ -947,6 +1003,57 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
       acs.forEach(function(a){ html+='<div class="ac"><span>'+escapeHtml(a.nombre)+'</span><span class="mini">'+escapeHtml(a.email||a.tel||'')+'</span></div>'; });
     }
     $('contrato').innerHTML=html;
+  }
+
+  /* YA TE CONOCEMOS: la tarjeta que se salta la foto.
+     No se da por hecho que su documento sigue siendo el mismo -un pasaporte
+     caduca, una INE se renueva-: se le ensenan los ultimos cuatro digitos y se
+     le pregunta. Si dice que si, se reusa y se anota de que check-in viene; si
+     dice que no, sube la foto como siempre. */
+  function pintaConocido(){
+    var c=window.CONOCIDO; if(!c || !c.doc_numero) return;
+    var z=$('docZone'); if(!z || document.getElementById('conocido')) return;
+    var cuando=''; try{ cuando=fdate(String(c.fecha).slice(0,10)); }catch(_){}
+    var en=(LANG==='en');
+    var d=document.createElement('div');
+    d.id='conocido';
+    d.style.cssText='border:1.5px solid var(--linea,#E6DFD6);background:#FBF8F1;border-radius:12px;padding:13px;margin-bottom:12px;text-align:left';
+    d.innerHTML='<b style="font-size:15px">'+(en?'We already have your ID':'Ya tenemos tu identificación')+'</b>'+
+      '<div style="font-size:13.5px;color:#3C3630;margin-top:4px">'+
+        esc(c.doc_tipo||(en?'Document':'Documento'))+' <b>'+esc(c.doc_pista||'')+'</b>'+
+        (cuando?(' · '+(en?'saved on ':'guardada el ')+esc(cuando)):'')+'</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:11px">'+
+        '<button class="btn sm" type="button" id="cnSi">'+(en?'Yes, same one':'Sí, es el mismo')+'</button>'+
+        '<button class="btn sec sm" type="button" id="cnNo">'+(en?'Upload another':'Subir otro')+'</button>'+
+      '</div>';
+    z.parentNode.insertBefore(d, z);
+    document.getElementById('cnNo').onclick=function(){ d.parentNode.removeChild(d); };
+    document.getElementById('cnSi').onclick=function(){
+      $('cNombre').value = ($('cNombre').value||'').trim() || c.nombre || RES.nombre || '';
+      if(c.nacionalidad && PAISES.indexOf(c.nacionalidad)>=0) $('cNac').value=c.nacionalidad;
+      else if(RES.nacionalidad && PAISES.indexOf(RES.nacionalidad)>=0) $('cNac').value=RES.nacionalidad;
+      if(['Pasaporte','INE','Identificación oficial','Cédula profesional'].indexOf(c.doc_tipo)>=0) $('cTipo').value=c.doc_tipo;
+      $('cNum').value=c.doc_numero||'';
+      if(c.nacimiento && /^\d{4}-\d{2}-\d{2}$/.test(c.nacimiento)) $('cNacim').value=c.nacimiento;
+      $('docCampos').style.display='block';
+      z.style.display='none';
+      /* Se pasa el paso sin foto nueva, y queda escrito de donde sale el
+         documento: la imagen sigue viviendo en su check-in de antes, no se
+         copia a ningun sitio. */
+      window._docSubido=true; window._docOK=true; window._docFoto='';
+      window._docData={ reusa_de:c.checkin_id, reusa_fecha:c.fecha, manual:false };
+      avisoDoc('ok', en ? 'We will use the ID we already had. Check your details below.'
+                        : 'Usamos la identificación que ya teníamos. Revisa abajo que tus datos sigan bien.');
+      d.innerHTML='<b style="font-size:15px">'+(en?'Using the ID we had ✓':'Usamos la que ya teníamos ✓')+'</b>'+
+        '<div style="font-size:13px;color:#6E665C;margin-top:3px">'+
+        (en?'Tap below if you would rather upload a new one.':'Si prefieres subir una nueva, toca aquí abajo.')+'</div>'+
+        '<button class="btn sec sm" type="button" id="cnOtra" style="margin-top:9px">'+
+        (en?'Upload another':'Subir otra')+'</button>';
+      document.getElementById('cnOtra').onclick=function(){
+        window._docSubido=false; window._docOK=false; window._docData=null;
+        z.style.display=''; d.parentNode.removeChild(d);
+      };
+    };
   }
 
   /* lector documento */
@@ -1269,6 +1376,18 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
        llega nada de verdad al huesped y ademas caduca cuando pasa la estancia.
        Asi que ni se precarga ni se acepta: lo tiene que escribir el. Javi, 29-sep. */
     if(!$('r4Email').value && RES.email && !esCorreoDeOTA(RES.email)) $('r4Email').value=RES.email;
+    /* Y si ya se registro con nosotros, su telefono y su nacimiento tampoco se
+       vuelven a pedir en blanco. */
+    try{ var _c=window.CONOCIDO;
+      if(_c){
+        if(!$('r4Nacim').value && /^\d{4}-\d{2}-\d{2}$/.test(_c.nacimiento||'')) $('r4Nacim').value=_c.nacimiento;
+        if(!$('r4Pref').value && _c.tel_prefijo) $('r4Pref').value=_c.tel_prefijo;
+        if(!$('r4Tel').value && _c.tel){
+          var _t=String(_c.tel).replace(String(_c.tel_prefijo||''),'').trim();
+          if(_t) $('r4Tel').value=_t;
+        }
+      }
+    }catch(_){}
     $('r4Desde').textContent=fdate(RES.desde); $('r4Hasta').textContent=fdate(RES.hasta);
     $('r4Noches').textContent=noches();
     $('r4Pax').textContent=RES.pax||'—'; $('r4Hb').textContent=RES.habitacion||'—';

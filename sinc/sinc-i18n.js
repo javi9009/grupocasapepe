@@ -320,6 +320,7 @@
       'Tipología':'Type',
       'Precio por persona':'Price per person',
       'Como las recomendamos':'As we recommend them',
+      'Orden':'Order',
       'Lo que sale antes':'Leaving soonest',
       'Precio: de menor a mayor':'Price: low to high',
       'Precio: de mayor a menor':'Price: high to low',
@@ -365,9 +366,20 @@
       /* Categorías y subtítulos del escaparate (sinc-vitrina). Las que ya están
          en inglés en la base (Tours, Shows) se leen igual; aquí van las demás. */
       'En el Ateneo de Virreyes':'At the Ateneo de Virreyes',
+      /* Javi, 19-oct-2026: «a este apartado llámale Trabajar & ensayar
+         (Work & play)». El nombre del sitio decía dónde, no para qué. */
+      'Trabajar & ensayar':'Work & play',
+      'El Ateneo de Virreyes: coworking por día, salas y estudio de música por horas.':
+        'Ateneo de Virreyes: coworking by the day, rooms and a music studio by the hour.',
       'Ven a componer y crear a Virreyes':'Come compose and create at Virreyes',
       'Lo que se ve desde una butaca: conciertos, funciones, lucha.':
         'What you watch from a seat: concerts, shows, lucha libre.',
+      /* Javi, 19-oct-2026: «donde pone Shows cámbialo por ¿Quién dijo Fiesta?».
+         «Fiesta» se queda en español también en inglés: es la palabra que el
+         huésped ya trae aprendida. */
+      '¿Quién dijo Fiesta?':'Who said Fiesta?',
+      'Conciertos, funciones, lucha y lo que se arma en la terraza.':
+        'Concerts, shows, lucha libre and whatever kicks off on the terrace.',
       'Salir a la calle con alguien que la conoce: a pie, en bici o un día entero fuera.':
         'Hit the streets with someone who knows them: on foot, by bike, or a full day out.',
       'Por horas':'By the hour',

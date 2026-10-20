@@ -63,10 +63,20 @@
   pon('link',{rel:'stylesheet',
     href:'https://fonts.googleapis.com/css2?family=Rye&display=swap'});
 
-  /* UNA SOLA CABECERA. El lema se mete DENTRO de la que la app ya tiene,
-     en medio, entre el saludo y el conmutador de idioma; la cabecera se
-     tiñe de cempasúchil y el papel picado cuelga de su filo de abajo, una
-     sola vez. Si la app no tiene cabecera, el lema va suelto arriba. */
+  /* UNA BANDA, SIEMPRE IGUAL, DEBAJO DE LA CABECERA.
+     Javi, 19-oct-2026: «¿por qué no diseñas un detalle de Muertos con el mismo
+     tamaño para no tener el problema de header y footer?».
+
+     Lo que había antes metía el lema y el papel picado DENTRO de la cabecera
+     de cada pantalla. Pero cada pantalla tiene la suya —la portada no se
+     parece a la de la tienda ni a la del Pepe GO!— y en cuanto una no encajaba,
+     el título se partía en tres líneas y la greca se iba a un lado. Arreglarlo
+     pantalla por pantalla es no acabar nunca.
+
+     Así que la temporada deja de meterse en casa ajena: se pone su propia
+     banda, de alto fijo, justo debajo de la cabecera. No toca su estructura,
+     no compite por el ancho y mide lo mismo en todas partes. Lo único que
+     sigue cambiando de la cabecera es el color, que no mueve nada de sitio. */
   function cabecera(){
     return document.querySelector('header.top') ||
            document.querySelector('header') ||
@@ -78,66 +88,180 @@
   function tira(){
     if(document.getElementById('dmCartel')) return;
     var cab = cabecera();
-    var c = document.createElement('div');
-    c.className = 'dm-cartel'; c.id = 'dmCartel';
-    c.innerHTML = cartelHTML();
+    var b = document.createElement('div');
+    b.className = 'dm-banda'; b.id = 'dmCartel';
+    b.innerHTML = '<span class="dm-lema">' + cartelHTML() + '</span>';
 
-    if(!cab){
-      c.style.background = 'var(--dm-cempa-hondo)';
-      c.style.padding = '10px 14px';
-      document.body.insertBefore(c, document.body.firstChild);
-      return;
+    if(cab && cab.parentNode){
+      cab.classList.add('dm-cab-tenida');
+      cab.parentNode.insertBefore(b, cab.nextSibling);
+    }else{
+      document.body.insertBefore(b, document.body.firstChild);
     }
 
-    cab.classList.add('dm-cab-tenida');
-
-    /* en medio: detrás del bloque del saludo y delante de lo que haya a la
-       derecha (campanita, ES/EN). Si la fila no existe, al final de la
-       cabecera, que sigue siendo dentro y no encima. */
-    var fila = cab.querySelector('.in') || cab.firstElementChild;
-    if(fila) fila.classList.add('dm-fila');
-    var izq  = fila && (fila.querySelector('.izq') || fila.children[0]);
-    if(izq && izq.parentNode) izq.parentNode.insertBefore(c, izq.nextSibling);
-    else (fila || cab).appendChild(c);
-
     /* EL SALUDO SE ACORTA. Javi: «quita el Casa Pepe de Bienvenido» — el
-       logo ya lo dice, y en temporada ese sitio lo necesita el lema. */
-    var bienv = cab.querySelector('.bienv');
+       logo ya lo dice. Esto sí se puede tocar: es texto, no estructura. */
+    var bienv = cab && cab.querySelector('.bienv');
     if(bienv){
       var t = bienv.textContent.replace(/\s+a\s+casa\s+pepe\s*$/i,'')
                                .replace(/\s+to\s+casa\s+pepe\s*$/i,'');
       if(t.trim()) bienv.textContent = t.trim();
     }
-
-    var picado = document.createElement('div');
-    picado.className = 'dm-picado dm-filo';
-    picado.setAttribute('aria-hidden','true');
-    cab.appendChild(picado);
   }
 
-  /* La puerta a la colección. La app dice dónde con <div id="dmColeccion">;
-     si no lo dice, cae debajo de la primera fila de atajos. */
+  /* ---------- LA VITRINA DE LA COLECCIÓN ----------
+     Javi, 19-oct-2026: «en vez del botón pon un carrusel con las tarjetas de
+     los tours que van en la colección, y un detalle alrededor del carrusel
+     que se sienta especial». El botón mandaba a otra página a ver qué hay;
+     la vitrina ya enseña qué hay, con foto, fecha y precio, y el que quiere
+     todo sigue teniendo su puerta al final del riel.
+
+     El detalle de alrededor es el mantel de papel de una ofrenda: la franja
+     de cempasúchil con el filo calado en arcos arriba y abajo. NO es el
+     banderín de la cabecera —es otro papel, otro corte— así que no se
+     repite el mismo motivo dos veces en la misma pantalla.
+
+     Si la base no contesta o la colección viene vacía, cae sola a la
+     tarjeta-botón de antes: una vitrina sin género es peor que una puerta. */
+  var SB  = 'https://rehophywchakfapivsbh.supabase.co';
+  var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+  var COL = null;                      /* lo que devolvió la colección */
+
+  /* LA TEMPORADA TAMBIÉN TIENE CIUDAD. Javi, 20-oct-2026: «y el Día de Muertos
+     de Puebla, no el de CDMX». La colección se pintaba igual en las dos casas,
+     así que en Puebla salía el taller de alebrijes del Centro Histórico.
+     La sede sale de donde la deja apepe/resv.js; lo que el huésped eligió a
+     mano manda, igual que en el resto de la app. */
+  function ciudadDeAqui(){
+    var v = '';
+    try {
+      var p = new URLSearchParams(location.search);
+      v = p.get('ciudad') || p.get('sede') ||
+          localStorage.getItem('apepe_sede_elegida') ||
+          localStorage.getItem('apepe_sede') || '';
+    } catch(_){}
+    return /pue|chol|atlix|tlax/.test(String(v).toLowerCase()) ? 'Puebla' : 'CDMX';
+  }
+
+  function esc(t){
+    return (t==null?'':String(t)).replace(/[&<>"]/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; });
+  }
+  function money(n){
+    return (n==null||n==='') ? null : '$'+Math.round(Number(n)).toLocaleString('es-MX');
+  }
+  var MESES = {
+    es:['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+        'septiembre','octubre','noviembre','diciembre'],
+    en:['January','February','March','April','May','June','July','August',
+        'September','October','November','December']
+  };
+  function dia(f){
+    if(!f) return '';
+    var p = String(f).split('-');
+    return ingles() ? MESES.en[+p[1]-1]+' '+(+p[2]) : (+p[2])+' de '+MESES.es[+p[1]-1];
+  }
+
+  function donde(){
+    var h = document.getElementById('dmColeccion');
+    if(h) return h;
+    var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
+    if(!ref) return null;
+    h = document.createElement('div');
+    ref.parentNode.insertBefore(h, ref.nextSibling);
+    return h;
+  }
+
   function llamada(){
     if(modo !== 'completa') return;
     if(document.getElementById('dmLlamada')) return;
-    var hueco = document.getElementById('dmColeccion');
-    if(!hueco){
-      var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
-      if(!ref) return;
-      hueco = document.createElement('div');
-      ref.parentNode.insertBefore(hueco, ref.nextSibling);
+    var h = donde(); if(!h) return;
+    var s = document.createElement('section');
+    s.id = 'dmLlamada'; s.className = 'dm-vitrina dm-vit-cargando';
+    h.appendChild(s);
+    fetch(SB+'/rest/v1/v_sinc_coleccion?select=*&coleccion=eq.dia-de-muertos&order=orden.asc',
+          {headers:{apikey:KEY, Authorization:'Bearer '+KEY}})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(L){
+        var ciu = ciudadDeAqui();
+        COL = (L || []).filter(function(x){ return (x.ciudad || 'CDMX') === ciu; });
+      })
+      /* Si la red falla COL se queda en null, y eso significa «no sé», que no
+         es lo mismo que «aquí no hay nada»: con null se pinta la puerta de
+         siempre; con lista vacía, nada. */
+      .catch(function(){ COL = null; })
+      .then(function(){ pintaVitrina(); });
+  }
+
+  /* MISMO ORDEN QUE LA GALERÍA: lo que viene primero, de lo más próximo a
+     lo más lejano; luego lo que aún no tiene fecha; al final lo vivido. */
+  function ordenada(){
+    var hoy = hoyCDMX(), prox=[], sin=[], pas=[];
+    (COL||[]).forEach(function(x){
+      if(x.proxima)                        prox.push(x);
+      else if(x.ultima && x.ultima < hoy)  pas.push(x);
+      else                                 sin.push(x);
+    });
+    prox.sort(function(a,b){ return a.proxima < b.proxima ? -1 : a.proxima > b.proxima ? 1 : 0; });
+    pas .sort(function(a,b){ return a.ultima  > b.ultima  ? -1 : a.ultima  < b.ultima  ? 1 : 0; });
+    return prox.concat(sin, pas);
+  }
+
+  function cuando(x){
+    var hoy = hoyCDMX(), en = ingles();
+    if(x.proxima) return dia(x.proxima);
+    if(x.ultima && x.ultima < hoy) return (en?'Was on ':'Fue el ')+dia(x.ultima);
+    return en ? 'Date to be confirmed' : 'Fecha por confirmar';
+  }
+  function tarjeta(x){
+    var hoy = hoyCDMX();
+    var ida = !!(x.ultima && x.ultima < hoy && !x.proxima);
+    var pr  = money(x.precio);
+    return '<a class="dm-tarj'+(ida?' pasada':'')+'" href="'+esc(x.liga||'/sinc/muertos.html')+'">'+
+      '<span class="dm-tfoto"'+(x.foto?' style="background-image:url(&quot;'+esc(x.foto)+'&quot;)"':'')+'></span>'+
+      '<span class="dm-tcuerpo">'+
+        '<span class="dm-tcuando">'+esc(cuando(x))+'</span>'+
+        '<h4>'+esc(x.nombre)+'</h4>'+
+        /* SIN PRECIO NO SE DICE \u00abentrada libre\u00bb. Cinco de las seis piezas
+           vienen sin precio en la base y no todas son gratis: inventarlo le
+           miente al hu\u00e9sped. Mientras no tengan precio, la tarjeta invita a
+           abrir la ficha, que s\u00ed sabe. */
+        '<span class="dm-tpie">'+(pr?esc(pr):(ingles()?'See details':'Ver la ficha'))+'</span>'+
+      '</span></a>';
+  }
+
+  function pintaVitrina(){
+    var s = document.getElementById('dmLlamada'); if(!s) return;
+    var en = ingles(), L = ordenada();
+
+    /* Sin género en ESTA ciudad no se pinta nada: ni vitrina, ni puerta a una
+       colección que es de la otra casa. Javi, 20-oct-2026: «si no hay nada
+       déjalo vacío y mañana lo subimos». */
+    if(!L.length){
+      if(COL !== null){ s.className=''; s.innerHTML=''; return; }
+      s.className = '';                 /* la red falló: la puerta de siempre */
+      s.innerHTML = '<a class="dm-llamada" href="/sinc/muertos.html">'+textoLlamada()+'</a>';
+      return;
     }
-    var a = document.createElement('a');
-    a.className = 'dm-llamada'; a.id = 'dmLlamada';
-    a.href = '/sinc/muertos.html';
-    a.innerHTML = textoLlamada();
-    hueco.appendChild(a);
+    var flor = '<span class="dm-flor" aria-hidden="true">&#10048;</span>';
+    s.className = 'dm-vitrina';
+    s.innerHTML =
+      '<div class="dm-vit-cab">'+
+        '<b>'+flor+' '+(en?'Live D\u00eda de Muertos':'Vive el D\u00eda de Muertos')+' '+flor+'</b>'+
+        '<a class="dm-vit-todo" href="/sinc/muertos.html">'+(en?'See all':'Ver todo')+'</a>'+
+      '</div>'+
+      '<div class="dm-riel">'+
+        L.slice(0,8).map(tarjeta).join('')+
+        '<a class="dm-tarj dm-tarj-fin" href="/sinc/muertos.html"><span>'+
+          (en?'See the whole collection':'Ver la colecci\u00f3n completa')+
+        '</span></a>'+
+      '</div>';
   }
 
   /* LO QUE YO ESCRIBO TAMBIÉN HABLA INGLÉS. La app del huésped se conmuta
      entre ES y EN, y mis textos entraban siempre en español: un huésped en
      inglés veía la app traducida y mi tarjeta no. El nombre de la campaña no
-     se traduce — Amor ir venimos es el nombre, no una frase. */
+     se traduce — AMOR IR VENIMOS es el nombre, no una frase. */
   function ingles(){
     var l = (document.documentElement.getAttribute('lang') || '').slice(0,2).toLowerCase();
     return l === 'en';
@@ -151,12 +275,11 @@
         '<small>Desfiles, catrinas y alebrijes.</small></span>'+
         '<span class="dm-boton">Ver colecci\u00f3n</span>';
   }
-  /* y se reescribe sola cuando el huésped cambia de idioma */
+  /* y se repinta sola cuando el huésped cambia de idioma */
   function vigilaIdioma(){
     if(!window.MutationObserver) return;
     new MutationObserver(function(){
-      var a = document.getElementById('dmLlamada');
-      if(a) a.innerHTML = textoLlamada();
+      if(COL !== null) pintaVitrina();
     }).observe(document.documentElement, {attributes:true, attributeFilter:['lang']});
   }
 
@@ -287,7 +410,11 @@
     }).observe(document.body, {childList:true, subtree:true});
   }
 
-  function arranca(){ tira(); llamada(); vigilaIdioma(); cartas(); vigilaCartas(); }
+  /* En las apps del equipo (guiño) NO se pintan cartas sobre los iconos: el
+     guiño vive solo en la cabecera (tira). Las cartas y su observador quedan
+     para las pantallas de huésped (completa), donde sí es la ambientación.
+     Javi, 19-oct: "muertos sí, pero la vista del equipo sin calaveras". */
+  function arranca(){ tira(); llamada(); vigilaIdioma(); if(modo === 'completa'){ cartas(); vigilaCartas(); } }
 
   if(document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', arranca);

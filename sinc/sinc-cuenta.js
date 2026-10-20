@@ -247,7 +247,25 @@ window.sincCuenta = (function () {
        quedaran, el siguiente que entrara en el mismo teléfono -el de recepción,
        el de una compañera- heredaría su tope. */
     try { localStorage.removeItem('sinc_resv_pax'); } catch (_) {}
-    try { await cli().auth.signOut(); } catch (_) {}
+    /* SALIR TIENE QUE SALIR AUNQUE EL SERVIDOR DIGA QUE NO.
+       Javi, 19-oct-2026: \u00abcomo est\u00e1 dado de alta ese Marceau no me deja
+       darme de alta a m\u00ed\u00bb. En su compu hab\u00eda quedado la sesi\u00f3n de un
+       hu\u00e9sped, le daba a \u00abEntra con tu cuenta\u00bb\u2026 y volv\u00eda el mismo.
+       Por qu\u00e9: signOut() habla con el servidor, y con un refresh token
+       caducado o sin red devuelve error. Ese error se tragaba aqu\u00ed y la
+       llave de la sesi\u00f3n se quedaba en el navegador: al recargar, el SDK
+       la le\u00eda otra vez y resucitaba al hu\u00e9sped anterior.
+       Ahora se sale primero en local \u2014que no depende de nadie\u2014 y adem\u00e1s
+       se barre a mano cualquier llave de esta sesi\u00f3n, pase lo que pase. */
+    try { await cli().auth.signOut({ scope: 'local' }); } catch (_) {}
+    try {
+      var fuera = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf('sinc-huesped-auth') === 0) fuera.push(k);
+      }
+      fuera.forEach(function (k) { localStorage.removeItem(k); });
+    } catch (_) {}
   }
 
   /* Cuántas personas duermen en la reserva de quien está entrado, si entró por

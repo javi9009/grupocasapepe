@@ -92,6 +92,33 @@ Deno.serve(async (req)=>{
 
   if(!q.equipo) return noAutorizado();
 
+  /* REPONER LA FOTO DEL DOCUMENTO. Javi, 19-oct-2026: «reponer foto, y que
+     desde la tablet puedas sacar la foto y la subes y ya, queda guardado (…)
+     esa información se sube a Cloudbeds». La anterior NO se borra: se guarda
+     en paths.id_previos con su fecha. Una foto de un documento de identidad no
+     desaparece en silencio porque alguien le dio a un botón. */
+  if(accion==="reponer"){
+    const img=String(body.imagen||"");
+    if(img.indexOf("data:image")!==0) return J({ ok:false, error:"falta la foto" },400);
+    try{
+      const { bytes, mime } = dataUrlBytes(img);
+      if(bytes.length > 8*1024*1024) return J({ ok:false, error:"la foto pesa más de 8 MB" },400);
+      const paths:any = dd.paths || {};
+      const sello=new Date().toISOString().replace(/[^0-9]/g,"").slice(0,14);
+      const nueva=await subir(`${id}/id-principal-${sello}.${ext(mime)}`, bytes, mime);
+      const previos=Array.isArray(paths.id_previos)?paths.id_previos:[];
+      if(paths.id_principal) previos.push({ path:paths.id_principal, hasta:new Date().toISOString() });
+      paths.id_principal=nueva; paths.id_previos=previos;
+      const ddNew:any={ ...dd, paths, archivado:true,
+        id_repuesto_por:String(body.por||""), id_repuesto_at:new Date().toISOString() };
+      delete ddNew.id_foto;          // si aún vivía en base64, deja de valer
+      delete ddNew.cb_subido;        // para que vuelva a subir la buena a Cloudbeds
+      await patch(id, ddNew, undefined, undefined);
+      let cloudbeds=null; if(ddNew.reserva_id) cloudbeds=await llamar("apepe-cb-subir", { checkin_id:id });
+      return J({ ok:true, id_principal_url: await firmar(nueva), cloudbeds });
+    }catch(e){ return J({ ok:false, error:"no se pudo guardar la foto" },500); }
+  }
+
   if(dd.archivado && dd.paths){
     const p=dd.paths;
     const [firma_url,id_url,contrato_url]=await Promise.all([

@@ -79,6 +79,11 @@
     '.apnIt .ti{font-weight:700;font-size:14.5px;color:var(--tinta,#1E1A16)}',
     '.apnIt .cu{font-size:13px;color:var(--tinta-2,#3C3630);margin-top:2px;line-height:1.45}',
     '.apnIt .cd{font-size:11.5px;color:var(--tenue,#A9A096);margin-top:4px}',
+    '.apnIt .apnBt{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}',
+    '.apnIt .apnBt a{font-size:12.5px;font-weight:600;text-decoration:none;'+
+      'color:var(--naranja-oscuro,#C9501A);border:1.5px solid var(--naranja-oscuro,#C9501A);'+
+      'border-radius:999px;padding:5px 11px;line-height:1.2}',
+    '.apnIt .apnBt a:hover{background:var(--naranja-oscuro,#C9501A);color:#fff}',
     '.apnVacio{text-align:center;color:var(--tenue,#A9A096);font-size:13px;padding:24px 8px}',
     '.apnPie{display:flex;gap:10px;margin-top:6px}',
     '.apnPie button{flex:1;border:1px solid var(--linea,#E6DFD6);background:#fff;color:var(--tinta,#1E1A16);',
@@ -121,10 +126,23 @@
             var cu = en && n.cuerpo_en ? n.cuerpo_en : (n.cuerpo || '');
             var tag = n.url ? 'a' : 'div';
             var href = n.url ? (' href="' + esc(n.url) + '"') : '';
+            /* LOS BOTONES DEL AVISO. Javi, 19-oct-2026: un aviso que pregunta
+               \u00absi quieres m\u00e1s tiempo en tu cuarto\u00bb y no deja responder obliga a
+               bajar a recepci\u00f3n, que es justo lo que se quer\u00eda evitar.
+               Si el aviso lleva botones, la tarjeta deja de ser un enlace entero
+               -un <a> dentro de otro <a> no es HTML v\u00e1lido y el navegador lo
+               deshace- y los botones son los que llevan a alg\u00fan sitio. */
+            var acc = (n.acciones && n.acciones.length) ? n.acciones : null;
+            if (acc) { tag = 'div'; href = ''; }
+            var bot = acc ? ('<div class="apnBt">' + acc.map(function (a) {
+              var t = (en && a.t_en) ? a.t_en : a.t;
+              return '<a href="' + esc(a.u || '#') + '">' + esc(t || '') + '</a>';
+            }).join('') + '</div>') : '';
             return '<' + tag + href + ' class="apnIt' + (n.leida ? '' : ' nueva') + '">' +
               '<span class="em">' + esc(n.icono || '🔔') + '</span><span>' +
               '<span class="ti">' + esc(ti) + '</span>' +
               (cu ? '<div class="cu">' + esc(cu) + '</div>' : '') +
+              bot +
               '<div class="cd">' + esc(cuando(n.creada, en)) + '</div>' +
               '</span></' + tag + '>';
           }).join('')

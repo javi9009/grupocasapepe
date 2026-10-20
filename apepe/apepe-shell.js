@@ -49,14 +49,27 @@
     var css = ''
       + '.apsh-top{position:sticky;top:0;z-index:1200;background:#1E1A16;color:#fff}'
       + '.apsh-in{max-width:720px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}'
-      + '.apsh-back{color:#fff;text-decoration:none;font-size:22px;line-height:1;opacity:.9;flex:0 0 auto}'
       + '.apsh-marcafila{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px}'
       + '.apsh-marca{height:34px;width:auto;display:block}'
       + '.apsh-txt{flex:1;min-width:0;line-height:1.15}'
       + '.apsh-nom{font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.02em;font-size:17px;'
       +   'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
       + '.apsh-lema{font-family:"Lobster Two",cursive;color:#F8BBCB;font-size:14px}'
-      + '.apsh-sede{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.08em;color:#8DC8EA;text-transform:uppercase}'
+      + '.apsh-sede{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.08em;color:#8DC8EA;text-transform:uppercase;cursor:pointer}'
+      /* La hoja de destinos, igual que en el Inicio: desde cualquier pantalla
+         se puede cambiar de ciudad. Javi, 20-oct-2026. */
+      + '#apshHoja{position:fixed;inset:0;z-index:2000;display:flex;align-items:flex-end;justify-content:center}'
+      + '#apshHoja .v{position:absolute;inset:0;background:rgba(20,17,14,.5)}'
+      + '#apshHoja .c{position:relative;width:100%;max-width:480px;background:#fff;color:#1E1A16;'
+      +   'border-radius:20px 20px 0 0;padding:20px 18px calc(22px + env(safe-area-inset-bottom,0px));'
+      +   'display:flex;flex-direction:column;gap:9px;box-shadow:0 -10px 40px rgba(0,0,0,.25)}'
+      + '#apshHoja b{font-family:Oswald,sans-serif;text-transform:uppercase;font-size:17px}'
+      + '#apshHoja button{border:1px solid #E6DFD6;background:#FBF7F2;color:#1E1A16;border-radius:14px;'
+      +   'padding:14px 16px;font-family:Oswald,sans-serif;font-size:16px;text-transform:uppercase;'
+      +   'cursor:pointer;text-align:left}'
+      + '#apshHoja button.on{background:#F2682A;border-color:#F2682A;color:#fff}'
+      + '#apshHoja button.no{background:transparent;border:0;text-align:center;color:#6E665C;'
+      +   'font-family:Inter,system-ui,sans-serif;text-transform:none;font-size:13px;padding:10px 0 0}'
       + '.apsh-franja{height:8px;display:flex}.apsh-franja i{flex:1}'
       + '.apsh-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:1200;background:#FBF7F2;'
       +   'border-top:1px solid #E6DFD6;display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom));'
@@ -90,11 +103,13 @@
     hdr.className = 'apsh-top';
     hdr.innerHTML =
       '<div class="apsh-in">'
-      +  '<a class="apsh-back" href="'+liga('/apepe/index.html')+'" aria-label="Volver">\u2190</a>'
+      /* Sin flecha: esta cabecera ya monta la barra de pestanas de APePe ahi
+         abajo, asi que la flecha era un segundo camino a casa, mas pequeno y
+         peor. Javi, 19-oct-2026. */
       +  '<div class="apsh-marcafila">'
       +    '<img class="apsh-marca" src="/img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
       +      'onerror="this.style.display=\'none\'">'
-      +    '<div class="apsh-sede">'+sede+'</div>'
+      +    '<div class="apsh-sede" role="button" tabindex="0">'+sede+' <span aria-hidden="true" style="opacity:.75">▾</span></div>'
       +  '</div>'
       +  '<div class="apsh-txt"><div class="apsh-nom">'+escapa(nombre)+'</div>'
       +    '<div class="apsh-lema">How to be a Mexican?</div></div>'
@@ -102,6 +117,40 @@
       + '<div class="apsh-franja"><i style="background:#F2682A"></i><i style="background:#E2188E"></i>'
       +   '<i style="background:#F8BBCB"></i><i style="background:#8DC8EA"></i></div>';
     document.body.insertBefore(hdr, document.body.firstChild);
+
+    /* --- cambiar de destino desde cualquier pantalla --- */
+    try {
+      var bSede = hdr.querySelector('.apsh-sede');
+      var TT = function(t){ try{ return window.apepeT ? window.apepeT(t) : t; }catch(_){ return t; } };
+      var abreHoja = function(){
+        if (document.getElementById('apshHoja')) return;
+        var h = document.createElement('div'); h.id = 'apshHoja';
+        var D = [['cdmx','CDMX'],['puebla','Puebla']], act = (sede === 'PUEBLA' ? 'puebla' : 'cdmx');
+        h.innerHTML = '<div class="v"></div><div class="c" role="dialog" aria-modal="true">'
+          + '<b>' + TT('¿Dónde andas?') + '</b>'
+          + D.map(function(d){ return '<button type="button" data-s="'+d[0]+'"'
+              + (d[0]===act?' class="on"':'') + '>' + d[1] + (d[0]===act?' ✓':'') + '</button>'; }).join('')
+          + '<button type="button" class="no">' + TT('Cerrar') + '</button></div>';
+        document.body.appendChild(h);
+        var cierra = function(){ try{ h.remove(); }catch(_){} };
+        h.querySelector('.v').onclick = cierra;
+        h.querySelector('.no').onclick = cierra;
+        Array.prototype.forEach.call(h.querySelectorAll('[data-s]'), function(x){
+          x.onclick = function(){
+            var s = x.getAttribute('data-s');
+            if (s === act) { cierra(); return; }
+            try { window.apepeResv.eligeSede(s); }
+            catch(_){ try{ localStorage.setItem('apepe_sede_elegida', s);
+                            localStorage.setItem('apepe_sede', s); }catch(__){}
+                      location.reload(); }
+          };
+        });
+      };
+      if (bSede) {
+        bSede.onclick = abreHoja;
+        bSede.onkeydown = function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); abreHoja(); } };
+      }
+    } catch (_) {}
 
     /* Y cuando el título cambie, el header se entera. */
     try {
