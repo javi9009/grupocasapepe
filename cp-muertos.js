@@ -94,11 +94,16 @@
     /* en medio: detrás del bloque del saludo y delante de lo que haya a la
        derecha (campanita, ES/EN). Si la fila no existe, al final de la
        cabecera, que sigue siendo dentro y no encima. */
-    var fila = cab.querySelector('.in') || cab.firstElementChild;
-    if(fila) fila.classList.add('dm-fila');
-    var izq  = fila && (fila.querySelector('.izq') || fila.children[0]);
-    if(izq && izq.parentNode) izq.parentNode.insertBefore(c, izq.nextSibling);
-    else (fila || cab).appendChild(c);
+    /* La fila es .in cuando la cabecera la tiene; cuando no —la tienda, por
+       ejemplo, es un flex pelado de avatar + texto— la fila ES la cabecera.
+       Antes se cogía su primer hijo como fila y el lema acababa DENTRO del
+       círculo del avatar, estrujando el título en una palabra por línea.
+       Javi, 19-oct-2026: «se ve mal el header». */
+    var fila = cab.querySelector('.in') || cab;
+    fila.classList.add('dm-fila');
+    var izq = fila.querySelector('.izq') || fila.firstElementChild;
+    if(izq && izq.parentNode === fila) fila.insertBefore(c, izq.nextSibling);
+    else fila.appendChild(c);
 
     /* EL SALUDO SE ACORTA. Javi: «quita el Casa Pepe de Bienvenido» — el
        logo ya lo dice, y en temporada ese sitio lo necesita el lema. */
