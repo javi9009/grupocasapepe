@@ -631,6 +631,7 @@
     '{n} piezas': '{n} pieces',
     'Tu teléfono tiene bloqueada la ubicación. Enciende la Ubicación del teléfono y, si lo abriste desde WhatsApp, ábrelo en Chrome (⋮ ▸ Abrir en Chrome) y permite el acceso; luego toca aquí.': 'Your phone has location blocked. Turn on your phone’s Location and, if you opened this from WhatsApp, open it in Chrome (⋮ ▸ Open in Chrome) and allow access; then tap here.',
     'Mis pedidos': 'My orders',
+    'Pídelo ahora, recíbelo en tu cuarto.': 'Order now, we bring it to your room.',
     'lo que te espera en recepción': 'waiting for you at the front desk',
     'Cargando tus pedidos…': 'Loading your orders…',
     'hoy': 'today',

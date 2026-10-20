@@ -133,6 +133,16 @@ window.sincVitrina = (function () {
   +   'border:1px solid var(--linea);border-radius:14px;overflow:hidden;text-decoration:none;'
   +   'color:var(--tinta);box-shadow:var(--sombra);display:flex;flex-direction:column}'
   + '.sv-f:active{transform:scale(.99)}'
+  /* LA FILA DE FIESTA. Javi, 19-oct-2026: «pon la tarjeta de estas fiestas al
+     doble de grande y pura foto y fecha y hora».
+     Un cartel de concierto ya trae dentro el nombre, el grupo y la noche: la
+     ficha de debajo repetía con peor letra lo que la imagen dice mejor. Así
+     que aquí la tarjeta es el cartel entero, al doble, y encima sólo la
+     fecha. */
+  + '.sv-fila[data-cat="shows"] .sv-f{flex:0 0 72%;max-width:340px}'
+  + '.sv-fila[data-cat="shows"] .sv-f .im{aspect-ratio:4/5}'
+  + '.sv-fila[data-cat="shows"] .sv-f .cu{display:none}'
+  + '.sv-fila[data-cat="shows"] .sv-f .hora{left:auto;right:9px;bottom:9px;font-size:13px;padding:5px 11px}'
   + '.sv-f .im{position:relative;aspect-ratio:4/3;background:var(--hueso);overflow:hidden}'
   + '.sv-f .im img{width:100%;height:100%;object-fit:cover;display:block}'
   + '.sv-f .im .ini{position:absolute;inset:0;display:flex;align-items:center;'

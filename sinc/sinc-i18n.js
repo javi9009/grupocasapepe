@@ -368,6 +368,12 @@
       'Ven a componer y crear a Virreyes':'Come compose and create at Virreyes',
       'Lo que se ve desde una butaca: conciertos, funciones, lucha.':
         'What you watch from a seat: concerts, shows, lucha libre.',
+      /* Javi, 19-oct-2026: «donde pone Shows cámbialo por ¿Quién dijo Fiesta?».
+         «Fiesta» se queda en español también en inglés: es la palabra que el
+         huésped ya trae aprendida. */
+      '¿Quién dijo Fiesta?':'Who said Fiesta?',
+      'Conciertos, funciones, lucha y lo que se arma en la terraza.':
+        'Concerts, shows, lucha libre and whatever kicks off on the terrace.',
       'Salir a la calle con alguien que la conoce: a pie, en bici o un día entero fuera.':
         'Hit the streets with someone who knows them: on foot, by bike, or a full day out.',
       'Por horas':'By the hour',
