@@ -400,15 +400,37 @@ h1{font-size:19px;margin:0;font-weight:700}
   }
 
   /* --- la ficha --- */
-  var COR=[];
-  function cargaCorreos(){
-    if(COR.length) return Promise.resolve(COR);
-    return fetch(SB+'/rest/v1/apepe_correos?select=clave,nombre,activo&order=n',
-      {headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY)}})
+  /* LOS CORREOS SE LEEN POR RPC, NO POR SELECT.
+     apepe_correos tiene RLS puesta, así que un select directo contesta vacío
+     sin dar error: el desplegable decía «No hay correos configurados» y
+     parecía que faltaba configurarlos, cuando lo que faltaba era permiso.
+     apepe_correos_lista(p_sede) es la puerta buena, la misma que usa la
+     pantalla de Editar correos. */
+  var COR={};   /* por sede, que el texto cambia de una casa a otra */
+  function cargaCorreos(sede){
+    sede=String(sede||'cdmx').toLowerCase();
+    if(COR[sede]) return Promise.resolve(COR[sede]);
+    return fetch(SB+'/rest/v1/rpc/apepe_correos_lista',{method:'POST',
+      headers:{apikey:KEY,Authorization:'Bearer '+(sessTok()||KEY),'Content-Type':'application/json'},
+      body:JSON.stringify({p_sede:sede})})
       .then(function(r){ return r.ok?r.json():[]; })
-      .then(function(j){ var vis={}; COR=(j||[]).filter(function(c){
-        if(c.activo===false||vis[c.clave]) return false; vis[c.clave]=1; return true; }); return COR; })
+      .then(function(j){ COR[sede]=Array.isArray(j)?j:[]; return COR[sede]; })
       .catch(function(){ return []; });
+  }
+  /* QUÉ CORREO TIENE SENTIDO EN CADA MOMENTO. Javi, 20-oct-2026: «revisa los
+     correos que ameriten». En post-booking el huésped todavía no ha llegado:
+     darle a mandar un «gracias por venir» desde aquí sólo sirve para
+     equivocarse. El de upgrade vive en Pre-check-in, que es donde se elige a
+     qué cuarto sube. */
+  var CORREOS_VISTA={
+    postbooking:['confirmacion','pendiente','tarjeta','llegas','documento','cancelacion'],
+    estancia:   ['noche_mas','documento','tarjeta','gracias']
+  };
+  function correosDe(sede){
+    var ok=CORREOS_VISTA[VISTA]||[];
+    return (COR[String(sede||'cdmx').toLowerCase()]||[])
+      .filter(function(c){ return c && c.activo!==false && ok.indexOf(c.clave)>=0; })
+      .sort(function(a,b){ return ok.indexOf(a.clave)-ok.indexOf(b.clave); });
   }
   function campo(k,v,full){ return '<div class="f'+(full?' full':'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
 
@@ -495,18 +517,18 @@ h1{font-size:19px;margin:0;font-weight:700}
 
     B.innerHTML=h;
 
-    cargaCorreos().then(function(lista){
-      var s=$('coQue'); if(!s) return;
-      s.innerHTML=lista.length
+    cargaCorreos(r.sede).then(function(){
+      var sel=$('coQue'); if(!sel) return;
+      var lista=correosDe(r.sede);
+      sel.innerHTML=lista.length
         ? lista.map(function(c){ return '<option value="'+esc(c.clave)+'">'+esc(c.nombre)+'</option>'; }).join('')
-        : '<option value="">No hay correos configurados</option>';
+        : '<option value="">No pude leer los correos'+(sessTok()?'':' · esta pantalla no encuentra tu sesión')+'</option>';
     });
     var b=$('coEnviar');
     if(b) b.onclick=async function(){
       var clave=($('coQue')||{}).value||'', a=(($('coA')||{}).value||'').trim(), av=$('coAviso'), tok=sessTok();
       if(!clave){ av.textContent='Elige qué correo mandar.'; return; }
       if(!tok){ av.textContent='Esta pantalla no encuentra tu sesión.'; return; }
-      if(clave==='upgrade'){ av.textContent='El de upgrade se manda desde Pre-check-in, que es donde se elige el cuarto.'; return; }
       b.disabled=true; av.textContent='Mandando…';
       try{
         var res=await fetch(SB+'/functions/v1/apepe-correo-enviar',{method:'POST',
