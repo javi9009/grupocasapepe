@@ -716,6 +716,7 @@
     'Ahora tú eres parte de nuestras comunidades': "Now you're part of our communities",
     'CDMX por ti mismo': 'CDMX by yourself',
     'Puebla por ti mismo': 'Puebla by yourself',
+    'Todavía no tenemos recomendaciones aquí.': "We don't have recommendations here yet.",
     'Cambia de destino y se cambia todo: experiencias, talleres, mapa, fiestas y juegos.':
       'Switch destination and everything switches: experiences, workshops, map, parties and games.',
     'Cerrar': 'Close',
