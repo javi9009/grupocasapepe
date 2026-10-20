@@ -1290,6 +1290,246 @@
       'Falta aceptar el consentimiento.':'You need to accept the consent.',
       'Falta tu firma.':'Your signature is missing.',
       '¡Listo! Tu check-in quedó registrado.':'Done! Your check-in is registered.',
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Antes de venir':'Before you come',
+      'Aquí van a aparecer los boletos de las experiencias que reserves, ':'This is where the tickets for the experiences you book will show up, ',
+      'Cómo funciona':'How it works',
+      'Estamos en ello.':'We\'re on it.',
+      'Este es tu pase. Enséñalo en la puerta.':'This is your pass. Show it at the door.',
+      'Están subidas todas las experiencias de la base, también ':'Every experience in the database is loaded, including ',
+      'Hola, soy':'Hi, I\'m',
+      'Horario de la sala: ':'Room hours: ',
+      'La opera':'Operated by',
+      'Nuestros tours alineados con la Agenda 2030 de la ONU.':'Our tours aligned with the UN 2030 Agenda.',
+      'Qué hay en ':'What\'s in ',
+      'Si ya reservaste, abre el enlace que te llegó por correo: ':'If you already booked, open the link we emailed you: ',
+      'Solicitar una aclaración':'Ask about a charge',
+      'Te mandamos copia a':'We sent a copy to',
+      'Tengo una duda sobre mi reserva':'I have a question about my booking',
+      'Todavía no tenemos recomendaciones cargadas en ':'We don\'t have recommendations loaded yet for ',
+      'Todavía no tienes boletos':'No tickets yet',
+      'Tu experiencia':'Your experience',
+      'Tu lugar está apartado. Ya eres parte de esta salida.':'Your spot is held. You\'re part of this departure.',
+      'Tu pago se procesó sin problema. Ya tienes tu lugar.':'Your payment went through. Your spot is yours.',
+      'Ver experiencias':'See experiences',
+      'Ver mis boletos':'See my tickets',
+      'boletos, uno por persona.':'tickets, one per person.',
+      'hasta ':'up to ',
+      'la sala':'the room',
+      '¡Felicidades!':'Congratulations!',
+      '¡Felicidades, ':'Congratulations, ',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Abrir la biblioteca':'Open the library',
+      'Cine':'Screening',
+      'Con las manos':'Hands on',
+      'Concierto':'Concert',
+      'Congresos y corporativos':'Conferences & corporate',
+      'Congresos, encuentros de negocios y las salas por horas.':'Conferences, business meetups and the rooms by the hour.',
+      'Coworking':'Coworking',
+      'Cultura y Arte':'Culture & Art',
+      'DJ set':'DJ set',
+      'Day tour':'Day tour',
+      'El teatro, la galeria, el cine y el estudio del artesano.':'Theatre, the gallery, the cinema and the artisan\'s studio.',
+      'El teatro, la galería, el cine y el estudio del artesano.':'Theatre, the gallery, the cinema and the artisan\'s studio.',
+      'Encuentros & Meetings':'Meetups & Meetings',
+      'Estudio Taller':'Artisan Studio',
+      'Exposicion':'Exhibition',
+      'Exposición':'Exhibition',
+      'Lucha libre':'Lucha libre',
+      'Mexican Challenge':'Mexican Challenge',
+      'MidDay tour':'MidDay tour',
+      'Por un día':'For a day',
+      'Por una semana':'For a week',
+      'Pub crawl':'Pub crawl',
+      'Renta del teatro':'Theatre rental',
+      'Sala de ensayo':'Rehearsal room',
+      'Sala de podcast':'Podcast studio',
+      'Sentarse con alguien de aquí sin salir de la casa.':'Sitting down with a local without leaving the house.',
+      'Teatro':'Theatre',
+      'Un DJ, un toquin, una fiesta. Ir a pasarla bien.':'A DJ, a gig, a party. Going out to have a good time.',
+      'Un DJ, un toquín, una fiesta. Ir a pasarla bien.':'A DJ, a gig, a party. Going out to have a good time.',
+      'Upgrade de cuarto':'Room upgrade',
+      'Ver todas →':'See all →',
+      'Versión beta · la estamos afinando':'Beta version · we\'re still tuning it',
+      'Walking tour':'Walking tour',
+      'Work & Play':'Work & Play',
+      'máx':'max',
+      '¿Te olvidaste el libro? No te preocupes: aquí te prestamos uno. Cinco lecturas para entender México.':'Forgot your book? Don\'t worry — we\'ll lend you one. Five reads to understand Mexico.',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Bienvenido a Pepe GO!':'Welcome to Pepe GO!',
+      'Check-in':'Check-in',
+      'Colección Día de Muertos':'Día de Muertos Collection',
+      'Condiciones de reserva':'Booking conditions',
+      'Experiencias':'Experiences',
+      'Hola Pepe':'Hola Pepe',
+      'Hola, Pepe Huésped':'Hi, Pepe Guest',
+      'La Cósmica':'La Cósmica',
+      'La gente ya no lee':'La gente ya no lee',
+      'Lo tuyo':'Your stuff',
+      'Mejora tu estancia':'Upgrade your stay',
+      'Mis pedidos':'My orders',
+      'Pepe GO!':'Pepe GO!',
+      'Promos':'Deals',
+      'Quédate más':'Stay longer',
+      'Recepción':'Reception',
+      'Room Shop Service':'Room Shop Service',
+      'boletos':'tickets',
+      'el evento':'the event',
+      'espacios creativos':'creative spaces',
+      'experiencias en la Ciudad de México':'experiences in Mexico City',
+      'la experiencia':'the experience',
+      'pagar':'pay',
+      '¿Cuándo vuelves?':'When are you coming back?',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      ' al ':' to ',
+      ' fechas hasta el ':' dates through ',
+      ' y ':' and ',
+      'Acompañante':'Companion',
+      'Alemania':'Germany',
+      'Aparta tu lugar':'Hold your spot',
+      'Argentina':'Argentina',
+      'Australia':'Australia',
+      'Austria':'Austria',
+      'Bolivia':'Bolivia',
+      'Brasil':'Brazil',
+      'Buscar mi reserva':'Find my booking',
+      'Bélgica':'Belgium',
+      'Cabinas de teléfono ilimitadas':'Unlimited phone booths',
+      'Canadá':'Canada',
+      'Chile':'Chile',
+      'China':'China',
+      'Colombia':'Colombia',
+      'Corea del Sur':'South Korea',
+      'Costa Rica':'Costa Rica',
+      'Cuba':'Cuba',
+      'De venta en Front Desk':'Sold at the front desk',
+      'Decoración':'Decor',
+      'Del ':'From ',
+      'Dinamarca':'Denmark',
+      'Ecuador':'Ecuador',
+      'El Salvador':'El Salvador',
+      'España':'Spain',
+      'Estados Unidos':'United States',
+      'Fecha por confirmar':'Date to be confirmed',
+      'Francia':'France',
+      'Fue el ':'It was on ',
+      'Grecia':'Greece',
+      'Guatemala':'Guatemala',
+      'Honduras':'Honduras',
+      'India':'India',
+      'Internet de alta velocidad':'High-speed internet',
+      'Irlanda':'Ireland',
+      'Israel':'Israel',
+      'Italia':'Italy',
+      'Japón':'Japan',
+      'Lo que la ciudad hace cuando vuelven: los desfiles, las catrinas, los alebrijes y una noche que no se parece a ninguna otra del año.':'What the city does when they come back: the parades, the catrinas, the alebrijes and a night like no other in the year.',
+      'Lo que viene':'What\'s coming',
+      'Museos':'Museums',
+      'Museos y otros':'Museums and more',
+      'Máscara':'Mask',
+      'Nicaragua':'Nicaragua',
+      'No pudimos abrir la colección. Inténtalo en un momento.':'We couldn\'t open the collection. Try again in a moment.',
+      'Noruega':'Norway',
+      'Nueva Zelanda':'New Zealand',
+      'Panamá':'Panama',
+      'Paraguay':'Paraguay',
+      'País':'Country',
+      'Países Bajos':'Netherlands',
+      'Perú':'Peru',
+      'Polonia':'Poland',
+      'Portugal':'Portugal',
+      'Puerto Rico':'Puerto Rico',
+      'Recintos y cultura':'Venues and culture',
+      'República Dominicana':'Dominican Republic',
+      'Rumanía':'Romania',
+      'Rusia':'Russia',
+      'Según disponibilidad, y para una estancia que aún no empieza.':'Subject to availability, and for a stay that hasn\'t started yet.',
+      'Sin fecha todavía':'No date yet',
+      'Sudáfrica':'South Africa',
+      'Suecia':'Sweden',
+      'Suiza':'Switzerland',
+      'Todavía no hay nada publicado en esta colección.':'Nothing published in this collection yet.',
+      'Turquia':'Turkey',
+      'Turquía':'Turkey',
+      'Uruguay':'Uruguay',
+      'Venezuela':'Venezuela',
+      'Ver la ficha':'See the page',
+      'Ver todas las experiencias':'See all the experiences',
+      'Ya pasaron':'Already happened',
+      'Zona arqueológica':'Archaeological site',
+      'evento':'event',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Aquí van a aparecer los boletos de las experiencias que reserves, con su QR para enseñarlo el día del tour.':'This is where the tickets for the experiences you book will show up, with the QR code to show on the day of the tour.',
+      'Cajeros automáticos':'ATMs',
+      'Escondida entre las azoteas del Centro Histórico, La Cósmica te espera al atardecer. Cocteles, cerveza artesanal, eventos y una trajinera.':'Hidden among the rooftops of the Centro Histórico, La Cósmica awaits you at sunset. Cocktails, craft beer, events and a trajinera.',
+      'Huevos a la cacerola':'Eggs in the pan',
+      'Ikuri “la casa del maíz”':'Ikuri “the house of maize”',
+      'Live Día de Muertos':'Live Día de Muertos',
+      'Lo dulce':'Something sweet',
+      'Lo fit':'The healthy stuff',
+      'Los clásicos':'The classics',
+      'Mapa CPP 2026 · Casa Pepe. Los horarios y precios cambian: si vas de lejos, confirma antes.':'CPP Map 2026 · Casa Pepe. Opening hours and prices change: if you\'re going far, check first.',
+      'Si ya reservaste, abre el enlace que te llegó por correo: tu boleto vive en esa dirección.':'If you already booked, open the link we emailed you: your ticket lives at that address.',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      'Bebida':'Drinks',
+      'Bebidas':'Drinks',
+      'Cena':'Dinner',
+      'Cervezas':'Beers',
+      'Cocteles':'Cocktails',
+      'Comida':'Lunch',
+      'Desayuno':'Breakfast',
+      'Entradas':'Starters',
+      'Huevos al gusto':'Eggs your way',
+      'Mezcales':'Mezcales',
+      'Máscaras':'Masks',
+      'Para compartir':'To share',
+      'Para llevar':'To take away',
+      'Postres':'Desserts',
+      'Sin alcohol':'Non-alcoholic',
+      'Vinos':'Wines',
+
+
+      /* ---- 20-oct-2026 · lo que el huesped veia en espanol ----
+         Javi: «cualquier app o pantalla que vea el huesped en ingles
+         este traducida». Los fragmentos conservan el espacio de los
+         bordes a proposito: se concatenan con un numero o un nombre. */
+      '📅 Por un día':'📅 For a day',
+      '📅 Por una semana':'📅 For a week',
+      '📷 Subir o tomar foto':'📷 Upload or take a photo',
+      '📸 Capturar':'📸 Capture',
+      '📸 Tomar con la cámara':'📸 Use the camera',
+      '🔗 Copiar link':'🔗 Copy link',
+      '🔦 Luz':'🔦 Light',
+
     }
   };
 
@@ -1307,6 +1547,21 @@
        <button data-i18n-aria="Limpiar">           aria-label
      En data-i18n la llave es el propio texto del elemento, asi que no hay que
      escribirlo dos veces ni mantenerlo sincronizado. */
+  /* El titulo de la pestana, que tampoco pasaba por ningun sitio. */
+  function titulo(){
+    if(resuelve()==='es') return;
+    try{
+      var d=document.title; if(!d) return;
+      var v=t(d);
+      if(v!==d){ document.title=v; return; }
+      var pz=d.split(' · ');
+      if(pz.length>1){
+        var r=pz.map(function(x){ return t(x); }).join(' · ');
+        if(r!==d) document.title=r;
+      }
+    }catch(_){}
+  }
+
   function barre(raiz){
     var r = raiz || document;
     if(resuelve()==='es') return;
@@ -1325,6 +1580,7 @@
       r.querySelectorAll('[data-i18n-html]').forEach(function(el){
         var k = el.getAttribute('data-i18n-html'); el.innerHTML = t(k);
       });
+      titulo();
     }catch(_){}
   }
 
@@ -1417,9 +1673,16 @@
     apunta: apunta,
     t: t,
     barre: barre,
+    titulo: titulo,
     fechas: fechas,
     /* Para que el <html lang> diga la verdad desde el primer pintado. */
     marca: function(){ try{ document.documentElement.lang = resuelve(); }catch(_){} }
   };
   window.sincI18n.marca();
+  /* El titulo se traduce al cargar y otra vez cuando el DOM esta listo: hay
+     pantallas que lo reescriben con el nombre de la experiencia. */
+  try{ titulo(); }catch(_){}
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', function(){ try{ titulo(); }catch(_){} });
+  }
 })();
