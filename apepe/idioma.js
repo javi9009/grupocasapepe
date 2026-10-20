@@ -539,7 +539,7 @@
     'No se pudo activar en este teléfono. Los verás en la campanita de arriba.': 'We could not turn it on for this phone. You will see them in the bell up top.',
     'Pídele la contraseña del WiFi a recepción; en un momento la tendrás aquí.': 'Ask reception for the WiFi password — it will show up here soon.',
     'Abre esta pantalla desde la liga de tu reserva para configurar tus avisos.': 'Open this screen from your booking link to set up your notifications.',
-    'Aquí van a aparecer tus cartas. La primera llega cuando hagas el check-in.': 'Your cards will show up here. The first one arrives when you check in.',
+    'Aquí van a aparecer tus cartas. La primera te la damos en recepción, cuando llegues a la casa.': 'Your cards will show up here. The first one is yours at the front desk, once you arrive.',
     'Revísala y fírmala para aceptarla. En cuanto firmes, la habitación es tuya.': 'Check it and sign to accept. As soon as you sign, the room is yours.',
     'Todavía no hay nada firmado. Aparecerá aquí en cuanto termines el check-in.': 'Nothing signed yet. It shows up here as soon as you finish check-in.',
     'Por ahora no hay upgrades disponibles para tu reserva. ¡Ya estás muy bien! 🧡': 'No upgrades available for your booking right now. You are already in a good spot! 🧡',
