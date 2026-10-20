@@ -191,6 +191,15 @@ function diaTablero(uuid,fecha){
     body:JSON.stringify({prop:uuid,fecha:fecha})})
    .then(function(r){ clearTimeout(to); return r.ok?r.json():Promise.reject(r.status); });
 }
+/* Equipo de ama de llaves (recamarista / ama_llaves / áreas públicas). Las vistas
+   de HK traen apoyos de otras áreas; aquí nos quedamos solo con el equipo. */
+/* Mismo técnico escrito de dos formas: "Manu" y "Manuel" son la misma persona. */
+function canonTec(s){ s=String(s==null?'':s).trim(); if(!s) return 'Sin asignar'; var k=s.toLowerCase(); if(k==='manu'||k==='manuel') return 'Manuel'; return s; }
+var _equipoHK=null;
+function equipoHK(){ if(_equipoHK) return _equipoHK;
+  _equipoHK = sb.rpc('hk_equipo_ids').then(function(r){ var a=Array.isArray(r.data)?r.data:[]; if(!a.length) return null; var s={}; a.forEach(function(id){ if(id) s[id]=1; }); return s; }).catch(function(){ return null; });
+  return _equipoHK;
+}
 
 /* saludo */
 guard(function(){
@@ -331,17 +340,9 @@ function renderDia(hk, off){
 
   /* ---------- 3 · VENTAS Y RITMO ---------- */
   // Ventas vs año pasado (panel_pace: libros al corte de hoy vs mismo punto AA, por mes)
-  $('ventasAA').innerHTML='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ return sb.rpc('panel_pace',{p_sede:H.sede}).then(function(r){ if(!vivo())return;
-    var D=r.data||{}; var fy=D.fy||{}; var ms=(fy.months||[]).filter(function(m){ return (m.plan>0)||(m.libros_hoy>0)||(m.libros_aa>0); }).slice(0,4);
-    if(D.error||!ms.length){ porcablear('ventasAA','Ventas vs AA: '+(D.error||'sin datos de pace')); return; }
-    var html='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'<span class="wh">al corte</span></div>'
-      +'<table class="pace"><thead><tr><th>Mes</th><th>Este año</th><th>Año pasado</th><th>vs AA</th></tr></thead><tbody>';
-    ms.forEach(function(m){ var hoyv=Number(m.libros_hoy||0), aa=Number(m.libros_aa||0); var d=aa>0?(hoyv-aa)/aa:null; var up=d!=null&&d>=0;
-      html+='<tr><td>'+esc(m.month||'')+'</td><td>'+money(hoyv)+'</td><td>'+money(aa)+'</td><td class="'+(d==null?'':(up?'up':'down'))+'">'+(d==null?'—':((up?'▲ ':'▼ ')+Math.abs(Math.round(d*100))+'%'))+'</td></tr>'; });
-    html+='</tbody></table><div class="sub-muted" style="margin-top:8px">Reservas en libros vs el mismo punto del año pasado'+(fy.last_updated?(' · corte '+esc(fy.last_updated)):'')+'.</div>';
-    $('ventasAA').innerHTML=html;
-  }).catch(function(){ if(vivo()) porcablear('ventasAA','Ventas vs AA: no se pudo cargar.'); }); });
+  $('ventasAA').innerHTML='<div class="hd"><h3>Ventas del día vs año pasado</h3>'+bdg('cab')+'</div>'
+    +'<div class="porcablear">Lo que se reservó <b>hoy</b> para esta semana, la que viene y la siguiente, contra lo que se reservó el mismo día del año pasado para esas semanas.<br><br>'
+    +'Falta cablear: hoy la base solo tiene reservas desde jun-2025 (sin histórico fiable del año pasado) y sin el importe por reserva. Para esto necesito bajar de Cloudbeds la <b>fecha de reserva</b> y el <b>ingreso por noche</b> de cada reserva, de este año y del pasado. Es una función nueva de Cloudbeds; cuando esté, esta tarjeta muestra el pickup del día real.</div>';
 
   // Valoraciones: PepeFeliz (sin responder) + nota por fuente + reseñas del día (texto)
   $('valoraciones').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
@@ -355,10 +356,10 @@ function renderDia(hk, off){
         +'<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
         +fs.map(function(x){ return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div><div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div><div class="s">'+esc(x.nota100)+'/100 · '+(x.resenas||0)+'</div></div>'; }).join('')
         +'</div>';
-      var muestra=(hoyC.length?hoyC:cs).slice(0,4);
-      if(muestra.length){ html+='<div class="sub-muted" style="margin-top:11px;font-weight:700;color:var(--ink-2)">'+(hoyC.length?('Reseñas · '+esc(etiqueta)):'Últimas reseñas')+'</div>'
+      var muestra=hoyC.slice(0,6);
+      if(muestra.length){ html+='<div class="sub-muted" style="margin-top:11px;font-weight:700;color:var(--ink-2)">Reseñas que entraron · '+esc(etiqueta)+'</div>'
         +muestra.map(function(x){ return '<div class="row"><span class="dot acc"></span><div class="bd"><div class="t" style="font-weight:500;line-height:1.4">'+esc(x.texto||'(sin texto)')+'</div><div class="d">'+esc(x.plataforma||'')+(x.rating!=null?(' · '+esc(x.rating)):'')+(x.fecha?(' · '+esc(String(x.fecha).slice(0,10))):'')+'</div></div></div>'; }).join(''); }
-      else html+='<div class="sub-muted" style="margin-top:8px">Sin reseñas nuevas.</div>';
+      else html+='<div class="sub-muted" style="margin-top:8px">Sin reseñas nuevas '+esc(etiqueta.toLowerCase())+'. (Las reseñas entran con la captura semanal.)</div>';
       $('valoraciones').innerHTML=html;
     });
   }).catch(function(){ if(vivo()) porcablear('valoraciones','Valoraciones: no se pudo cargar.'); });
@@ -399,8 +400,8 @@ function renderDia(hk, off){
   /* ---------- 4 · EQUIPO ---------- */
   // Pila HK: hk_v_productividad_dia
   $('pilaHK').innerHTML='<div class="hd"><h3>Pila de productividad · Ama de llaves</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ return sb.from('hk_v_productividad_dia').select('colaborador,tareas_asignadas,tareas_terminadas,min_estimados,min_est_hechas,eficiencia_pct,estado').eq('property_id',H.uuid).eq('fecha',fecha)
-    .then(function(r){ if(!vivo())return; var rows=(Array.isArray(r.data)?r.data:[]).filter(function(x){ return Number(x.tareas_asignadas||0)>0 || Number(x.tareas_terminadas||0)>0 || Number(x.min_estimados||0)>0 || Number(x.min_est_hechas||0)>0; }); var html='<div class="hd"><h3>Pila de productividad · Ama de llaves</h3>'+bdg('ok')+'</div>';
+  guard(function(){ return Promise.all([ equipoHK(), sb.from('hk_v_productividad_dia').select('employee_id,colaborador,tareas_asignadas,tareas_terminadas,min_estimados,min_est_hechas,eficiencia_pct,estado').eq('property_id',H.uuid).eq('fecha',fecha) ])
+    .then(function(a){ if(!vivo())return; var eq=a[0], r=a[1]; var rows=(Array.isArray(r.data)?r.data:[]).filter(function(x){ var trabajo=Number(x.tareas_asignadas||0)>0 || Number(x.tareas_terminadas||0)>0 || Number(x.min_estimados||0)>0 || Number(x.min_est_hechas||0)>0; var esHK=!eq||eq[x.employee_id]; return trabajo && esHK; }); var html='<div class="hd"><h3>Pila de productividad · Ama de llaves</h3>'+bdg('ok')+'</div>';
       if(!rows.length){ html+='<div class="empty">Ninguna recamarista trabajó ese día.</div>'; }
       else { html+=rows.map(function(x){ var as=Number(x.tareas_asignadas||0), he=Number(x.tareas_terminadas||0);
           var av = x.min_estimados>0 ? Math.round(Number(x.min_est_hechas||0)/Number(x.min_estimados)*100) : (as>0?Math.round(he/as*100):0);
@@ -417,8 +418,8 @@ function renderDia(hk, off){
     sb.from('mtto_tickets').select('asignado_nombre,minutos_reales,resuelto_at').eq('property_id',H.uuid).gte('resuelto_at',fecha+'T00:00:00').lt('resuelto_at',finDia+'T00:00:00').then(function(r){return Array.isArray(r.data)?r.data:[];}).catch(function(){return [];}),
     sb.from('mtto_tickets').select('asignado_nombre,estado').eq('property_id',H.uuid).not('estado','in','(resuelto,cerrado,cancelado)').then(function(r){return Array.isArray(r.data)?r.data:[];}).catch(function(){return [];})
   ]).then(function(a){ if(!vivo())return; var res=a[0], pend=a[1];
-    var porT={}; res.forEach(function(x){ var k=x.asignado_nombre||'Sin asignar'; porT[k]=porT[k]||{res:0,min:0,pend:0}; porT[k].res++; porT[k].min+=Number(x.minutos_reales||0); });
-    pend.forEach(function(x){ var k=x.asignado_nombre||'Sin asignar'; porT[k]=porT[k]||{res:0,min:0,pend:0}; porT[k].pend++; });
+    var porT={}; res.forEach(function(x){ var k=canonTec(x.asignado_nombre); porT[k]=porT[k]||{res:0,min:0,pend:0}; porT[k].res++; porT[k].min+=Number(x.minutos_reales||0); });
+    pend.forEach(function(x){ var k=canonTec(x.asignado_nombre); porT[k]=porT[k]||{res:0,min:0,pend:0}; porT[k].pend++; });
     var tecs=Object.keys(porT).filter(function(k){ return porT[k].res>0 || porT[k].pend>0; });
     var totMin=res.reduce(function(s,x){return s+Number(x.minutos_reales||0);},0);
     var html='<div class="hd"><h3>Trabajos de mantenimiento</h3>'+bdg('ok')+'<span class="wh">'+esc(etiqueta)+'</span></div>'
@@ -529,7 +530,7 @@ function renderSemana(hk){
 
   // eficiencia recamaristas (desempeño semana)
   $('swRecam').innerHTML='<div class="hd"><h3>Recamaristas · semana</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ return sb.from('hk_v_desempeno_semana').select('colaborador,cobertura_pct,eficiencia_pct,desempeno_pct,califica').eq('property_id',H.uuid).then(function(r){ if(!vivo())return; var rows=Array.isArray(r.data)?r.data:[]; var cal=rows.filter(function(x){return x.califica;});
+  guard(function(){ return Promise.all([ equipoHK(), sb.from('hk_v_desempeno_semana').select('employee_id,colaborador,tareas_asig,cobertura_pct,eficiencia_pct,desempeno_pct,califica').eq('property_id',H.uuid) ]).then(function(aa){ if(!vivo())return; var eq=aa[0], r=aa[1]; var rows=(Array.isArray(r.data)?r.data:[]).filter(function(x){ var esHK=!eq||eq[x.employee_id]; return esHK && Number(x.tareas_asig||0)>0; }); var cal=rows.filter(function(x){return x.califica;});
     var prom=cal.length?Math.round(cal.reduce(function(s,x){return s+Number(x.desempeno_pct||0);},0)/cal.length):null;
     var html='<div class="hd"><h3>Recamaristas · semana</h3>'+bdg('ok')+'</div>'
       +'<div class="estado"><span class="big">'+(prom!=null?prom+'%':'—')+'</span><span class="sub-muted" style="margin:0">desempeño promedio</span></div>';
@@ -552,10 +553,15 @@ function renderSemana(hk){
   // valoraciones (reputación por fuente)
   $('swVal').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
   guard(function(){ return sb.rpc('panel_incidencias_rh_fase2',{p_sede:H.sede}).then(function(r){ if(!vivo())return; var rep=((r.data||{}).reputacion)||{}; if(!rep.aplica){ porcablear('swVal','Sin valoraciones para este hotel.'); return; }
-    var fs=rep.fuentes||[]; var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
-    $('swVal').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+(rep.coment_10d||0)+' reseñas · 10d</span></div>'
+    var fs=rep.fuentes||[]; var cs=rep.comentarios||[]; var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
+    var semC=cs.filter(function(x){ var f=String(x.fecha||'').slice(0,10); return f>=desde && f<=hasta; });
+    var html='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+semC.length+' reseñas · semana</span></div>'
       +'<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
       +fs.map(function(x){ return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div><div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div><div class="s">'+esc(x.nota100)+'/100 · '+(x.resenas||0)+'</div></div>'; }).join('')+'</div>';
+    if(semC.length){ html+='<div class="sub-muted" style="margin-top:11px;font-weight:700;color:var(--ink-2)">Reseñas de la semana</div>'
+      +semC.slice(0,6).map(function(x){ return '<div class="row"><span class="dot acc"></span><div class="bd"><div class="t" style="font-weight:500;line-height:1.4">'+esc(x.texto||'(sin texto)')+'</div><div class="d">'+esc(x.plataforma||'')+(x.rating!=null?(' · '+esc(x.rating)):'')+(x.fecha?(' · '+esc(String(x.fecha).slice(0,10))):'')+'</div></div></div>'; }).join(''); }
+    else html+='<div class="sub-muted" style="margin-top:8px">Sin reseñas nuevas esta semana.</div>';
+    $('swVal').innerHTML=html;
   }).catch(function(){ if(vivo()) porcablear('swVal','No se pudo cargar.'); }); });
 }
 })();
