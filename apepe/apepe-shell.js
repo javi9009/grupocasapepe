@@ -139,10 +139,23 @@
           x.onclick = function(){
             var s = x.getAttribute('data-s');
             if (s === act) { cierra(); return; }
-            try { window.apepeResv.eligeSede(s); }
-            catch(_){ try{ localStorage.setItem('apepe_sede_elegida', s);
-                            localStorage.setItem('apepe_sede', s); }catch(__){}
-                      location.reload(); }
+            /* resv.js sólo vive en /apepe/: en las pantallas de Sincrético
+               hay que hacerlo aquí, y reescribir ?ciudad= de la liga, que es
+               lo que leen el mapa y el catálogo. Javi, 20-oct-2026: «le doy a
+               Puebla y me regresa». */
+            try { window.apepeResv.eligeSede(s); return; } catch(_){}
+            try{ localStorage.setItem('apepe_sede_elegida', s);
+                 localStorage.setItem('apepe_sede', s);
+                 sessionStorage.removeItem('apepe_sede_recarga');
+                 sessionStorage.removeItem('sinc_mapa_mudanza'); }catch(__){}
+            try{
+              var u=new URL(location.href), q=u.searchParams,
+                  v=(s==='puebla')?'Puebla':'CDMX';
+              if(q.has('ciudad')) q.set('ciudad', v);
+              if(q.has('sede'))   q.set('sede', v);
+              q.delete('aqui');
+              location.replace(u.toString());
+            }catch(__){ location.reload(); }
           };
         });
       };

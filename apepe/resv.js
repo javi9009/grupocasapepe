@@ -253,11 +253,29 @@
     /* Cambiar de destino: se guarda y se recarga, porque media app ya se pintó
        con la ciudad anterior. Pasar '' vuelve a la sede de la reserva. */
     eligeSede: function (s) {
+      var n = s ? normSede(s) : '';
       try {
-        if (s) { localStorage.setItem('apepe_sede_elegida', normSede(s));
-                 localStorage.setItem('apepe_sede', normSede(s)); }
+        if (n) { localStorage.setItem('apepe_sede_elegida', n);
+                 localStorage.setItem('apepe_sede', n); }
         else   { localStorage.removeItem('apepe_sede_elegida'); }
         sessionStorage.removeItem('apepe_sede_recarga');
+        sessionStorage.removeItem('sinc_mapa_mudanza');
+      } catch (_) {}
+      /* LA LIGA MANDA SOBRE LO GUARDADO, así que si la pantalla llegó con
+         ?ciudad= hay que reescribirlo: si no, se guarda Puebla, se recarga y
+         el parámetro de la liga lo devuelve a CDMX en el acto.
+         Javi, 20-oct-2026: «le doy a Puebla y me regresa». */
+      try {
+        var u = new URL(location.href);
+        var q = u.searchParams;
+        if (n && (q.has('ciudad') || q.has('sede'))) {
+          var v = (n === 'puebla') ? 'Puebla' : 'CDMX';
+          if (q.has('ciudad')) q.set('ciudad', v);
+          if (q.has('sede'))   q.set('sede', v);
+          location.replace(u.toString());
+          return;
+        }
+        if (!n) { q.delete('ciudad'); q.delete('sede'); location.replace(u.toString()); return; }
       } catch (_) {}
       try { location.reload(); } catch (_) {}
     },
