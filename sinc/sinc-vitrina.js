@@ -146,7 +146,15 @@ window.sincVitrina = (function () {
      fecha. */
   + '.sv-fila[data-cat="shows"] .sv-f{flex:0 0 72%;max-width:340px}'
   + '.sv-fila[data-cat="shows"] .sv-f .im{aspect-ratio:4/5}'
-  + '.sv-fila[data-cat="shows"] .sv-f .cu{display:none}'
+  /* Javi, 20-oct-2026: «el apartado de fiesta no tiene título ni fecha» —
+     «fecha sí». Se fue el nombre con la ficha, y una foto de neón sin nombre
+     no se busca ni se cuenta a nadie. Vuelve el nombre, solo: el precio, los
+     cupos y los ODS siguen fuera, que para eso está la ficha. */
+  + '.sv-fila[data-cat="shows"] .sv-f .cu{padding:10px 12px 12px;gap:0}'
+  + '.sv-fila[data-cat="shows"] .sv-f .nm{font-size:15px}'
+  + '.sv-fila[data-cat="shows"] .sv-f .datos,'
+  + '.sv-fila[data-cat="shows"] .sv-f .sv-ods,'
+  + '.sv-fila[data-cat="shows"] .sv-f .pie{display:none}'
   + '.sv-fila[data-cat="shows"] .sv-f .hora{left:auto;right:9px;bottom:9px;font-size:13px;padding:5px 11px}'
   + '.sv-f .im{position:relative;aspect-ratio:4/3;background:var(--hueso);overflow:hidden}'
   + '.sv-f .im img{width:100%;height:100%;object-fit:cover;display:block}'
