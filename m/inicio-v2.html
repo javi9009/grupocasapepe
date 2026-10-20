@@ -107,19 +107,25 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
     <div class="saludo"><h1 id="saludo">Hola</h1><div class="meta" id="meta">Cargando…</div></div>
     <div style="text-align:right">
       <div class="hotelsel" id="hotelsel"></div>
-      <div class="selhint">El selector manda: toda la página es de este hotel.</div>
+      <div class="hotelsel" id="modosel" style="margin-top:7px">
+        <button data-m="dia" class="on">Día</button>
+        <button data-m="semana">Semana</button>
+      </div>
+      <div class="selhint">El hotel y el modo mandan toda la página.</div>
     </div>
   </div>
   <div id="gate"></div>
+  <div id="semana" style="display:none"></div>
   <div id="tablero" style="display:none">
     <section class="sec"><div class="sec-h"><span class="n">1</span><h2 class="t">Pulso del día</h2><span class="hint">hoy</span></div>
       <div class="kpis" id="pulso"></div><div id="pulsoNota"></div></section>
     <section class="sec"><div class="sec-h"><span class="n">2</span><h2 class="t">Cierre del día anterior</h2><span class="hint" id="cierreFecha">—</span></div>
       <div class="grid2"><div class="card" id="efectivo"></div><div class="card" id="auditoria"></div></div>
       <div class="card" id="nr" style="margin-top:14px"></div></section>
-    <section class="sec"><div class="sec-h"><span class="n">3</span><h2 class="t">Ventas y ritmo</h2></div>
-      <div class="grid2"><div class="card" id="ritmo"></div><div class="card" id="toursDia"></div></div>
-      <div class="grid2" style="margin-top:14px"><div class="card" id="ayb"></div><div class="card" id="pedidos"></div></div></section>
+    <section class="sec"><div class="sec-h"><span class="n">3</span><h2 class="t">Ventas y valoraciones</h2></div>
+      <div class="grid2"><div class="card" id="toursDia"></div><div class="card" id="pedidos"></div></div>
+      <div class="grid2" style="margin-top:14px"><div class="card" id="ventasAA"></div><div class="card" id="valoraciones"></div></div>
+      <div class="card" id="ayb" style="margin-top:14px"></div></section>
     <section class="sec"><div class="sec-h"><span class="n">4</span><h2 class="t">Equipo</h2></div>
       <div class="grid2"><div class="card" id="pilaHK"></div><div class="card" id="pilaMtto"></div></div>
       <div class="grid2" style="margin-top:14px"><div class="card" id="asistencias"></div><div class="card" id="nuevosMtto"></div></div></section>
@@ -138,8 +144,7 @@ var sb = window.supabase ? supabase.createClient(SB_URL, SB_KEY) : null;
 
 var HOTELES={
   cdmx:{sede:'cdmx', nombre:'Ciudad de México', uuid:'45e69775-d877-4507-a9e1-a45bd3400dc5', plaza:'CDMX', cloudbeds:true},
-  puebla:{sede:'puebla', nombre:'Puebla', uuid:'febfbef6-7fd1-4b45-84d9-13533e8dcb72', plaza:'Puebla', cloudbeds:true},
-  virreyes:{sede:'virreyes', nombre:'Virreyes (Izazaga 8)', uuid:'3e10a9ea-4913-4f7c-86ef-0c829caa851d', plaza:'CDMX', cloudbeds:false}
+  puebla:{sede:'puebla', nombre:'Puebla', uuid:'febfbef6-7fd1-4b45-84d9-13533e8dcb72', plaza:'Puebla', cloudbeds:true}
 };
 
 function $(id){return document.getElementById(id);}
@@ -182,18 +187,25 @@ Promise.all([DIRp, (window.cpAcceso&&cpAcceso.ubicaciones?cpAcceso.ubicaciones()
   $('hotelsel').innerHTML=permitidos.map(function(k,i){ return '<button data-h="'+k+'"'+(i===0?' class="on"':'')+'>'+esc(HOTELES[k].nombre)+'</button>'; }).join('');
   $('hotelsel').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b) return;
     Array.prototype.forEach.call(this.querySelectorAll('button'),function(x){ x.classList.toggle('on',x===b); });
-    render(b.getAttribute('data-h')); });
-  $('tablero').style.display='';
-  render(permitidos[0]);
+    CUR=b.getAttribute('data-h'); dispatch(); });
+  $('modosel').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll('button'),function(x){ x.classList.toggle('on',x===b); });
+    MODO=b.getAttribute('data-m'); dispatch(); });
+  CUR=permitidos[0]; dispatch();
 });
 
-var PEDIDO=0;
-function render(hk){
+var PEDIDO=0, CUR=null, MODO='dia';
+function dispatch(){
+  if(MODO==='semana'){ $('tablero').style.display='none'; $('semana').style.display=''; renderSemana(CUR); }
+  else { $('semana').style.display='none'; $('tablero').style.display=''; renderDia(CUR); }
+}
+function renderDia(hk){
   var H=HOTELES[hk]; if(!H) return;
   var mi=++PEDIDO, hoy=hoyISO(), ayer=ayerISO();
   $('meta').textContent=H.nombre+' · '+bonita(hoy);
   $('cierreFecha').textContent=bonita(ayer);
   var vivo=function(){ return mi===PEDIDO; };
+  var F2=sb.rpc('panel_incidencias_rh_fase2',{p_sede:H.sede}).then(function(r){return r.data||{};}).catch(function(){return {__err:true};});
 
   /* ---------- 1 · PULSO ---------- */
   $('pulso').innerHTML=['Ocupación','ADR privadas','ADR dorm','Hospedaje del día','Llegadas pendientes','Salidas del día','Check-ins online','PepeFeliz sin responder']
@@ -226,8 +238,8 @@ function render(hk){
     }).catch(function(){ if(vivo()) setKpi(5,'—'); }); });
   } else setKpi(5,'—','por cablear');
 
-  // check-ins online: fuente por confirmar
-  setKpi(6,'—','por cablear · área huéspedes');
+  // check-ins (total del día): fuente = módulo Check-in de huéspedes (por confirmar scope por hotel)
+  setKpi(6,'—','total · por cablear');
 
   // PepeFeliz sin responder (por plaza)
   guard(function(){ return sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true}).eq('plaza',H.plaza).eq('contestable',true).lte('dias_esperando',14)
@@ -265,9 +277,30 @@ function render(hk){
   $('nr').innerHTML='<div class="hd"><h3>Non-refundable por cobrar</h3>'+bdg('cab')+'<span class="wh">histórico</span></div>'+$('nr').innerHTML;
 
   /* ---------- 3 · VENTAS Y RITMO ---------- */
-  // Ritmo semanal: aún no existe (el pace guardado es mensual y viejo)
-  $('ritmo').innerHTML='<div class="hd"><h3>Ritmo de ventas</h3>'+bdg('cab')+'</div>'
-    +'<div class="porcablear">Lo vendido hoy para las próximas 3 semanas vs el mismo día del año pasado. Falta construir el <b>pace semanal</b> (el guardado hoy es mensual y de sep-12). Es el siguiente que armo.</div>';
+  // Ventas vs año pasado (panel_pace: libros al corte de hoy vs mismo punto AA, por mes)
+  $('ventasAA').innerHTML='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return sb.rpc('panel_pace',{p_sede:H.sede}).then(function(r){ if(!vivo())return;
+    var D=r.data||{}; var fy=D.fy||{}; var ms=(fy.months||[]).filter(function(m){ return (m.plan>0)||(m.libros_hoy>0)||(m.libros_aa>0); }).slice(0,4);
+    if(D.error||!ms.length){ porcablear('ventasAA','Ventas vs AA: '+(D.error||'sin datos de pace')); return; }
+    var html='<div class="hd"><h3>Ventas vs año pasado</h3>'+bdg('ok')+'<span class="wh">al corte</span></div>'
+      +'<table class="pace"><thead><tr><th>Mes</th><th>Este año</th><th>Año pasado</th><th>vs AA</th></tr></thead><tbody>';
+    ms.forEach(function(m){ var hoyv=Number(m.libros_hoy||0), aa=Number(m.libros_aa||0); var d=aa>0?(hoyv-aa)/aa:null; var up=d!=null&&d>=0;
+      html+='<tr><td>'+esc(m.month||'')+'</td><td>'+money(hoyv)+'</td><td>'+money(aa)+'</td><td class="'+(d==null?'':(up?'up':'down'))+'">'+(d==null?'—':((up?'▲ ':'▼ ')+Math.abs(Math.round(d*100))+'%'))+'</td></tr>'; });
+    html+='</tbody></table><div class="sub-muted" style="margin-top:8px">Reservas en libros vs el mismo punto del año pasado'+(fy.last_updated?(' · corte '+esc(fy.last_updated)):'')+'.</div>';
+    $('ventasAA').innerHTML=html;
+  }).catch(function(){ if(vivo()) porcablear('ventasAA','Ventas vs AA: no se pudo cargar.'); }); });
+
+  // Valoraciones (reputación por fuente) — de panel_incidencias_rh_fase2
+  $('valoraciones').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return F2.then(function(f){ if(!vivo())return; var rep=(f&&f.reputacion)||{};
+    if(f.__err||!rep.aplica){ porcablear('valoraciones','Valoraciones: sin datos para este hotel.'); return; }
+    var fs=rep.fuentes||[]; var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
+    var html='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+(rep.coment_10d||0)+' reseñas · 10d</span></div>'
+      +'<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
+      +fs.map(function(x){ return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div><div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div><div class="s">'+esc(x.nota100)+'/100 · '+(x.resenas||0)+'</div></div>'; }).join('')
+      +'</div>';
+    $('valoraciones').innerHTML=html;
+  }).catch(function(){ if(vivo()) porcablear('valoraciones','Valoraciones: no se pudo cargar.'); }); });
 
   // Tours del día: v_salidas_ocupacion (por hotel)
   $('toursDia').innerHTML='<div class="hd"><h3>Salidas de tours del día</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
@@ -319,9 +352,9 @@ function render(hk){
 
   // Pila mantenimiento: panel_incidencias_rh_fase2 -> mantenimiento (semana, por técnico)
   $('pilaMtto').innerHTML='<div class="hd"><h3>Pila del técnico de mantenimiento</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ return sb.rpc('panel_incidencias_rh_fase2',{p_sede:H.sede}).then(function(r){ if(!vivo())return;
-    var f=r.data||{}; var m=f.mantenimiento||{};
-    if(f.error){ porcablear('pilaMtto','Mantenimiento: '+f.error); return; }
+  guard(function(){ return F2.then(function(f){ if(!vivo())return;
+    var m=(f&&f.mantenimiento)||{};
+    if(f.__err){ porcablear('pilaMtto','Mantenimiento: no se pudo cargar.'); return; }
     if(!m.aplica){ porcablear('pilaMtto','Mantenimiento: sin datos de la semana para este hotel.'); return; }
     var html='<div class="hd"><h3>Pila del técnico de mantenimiento</h3>'+bdg('ok')+'<span class="wh">semana</span></div>'
       +'<div class="asis" style="margin-bottom:10px"><div class="chip ok"><div class="v">'+(m.resueltos_sem||0)+'</div><div class="l">Resueltos</div></div>'
@@ -364,6 +397,83 @@ function render(hk){
         return '<div class="row"><span class="dot '+dot+'"></span><div class="bd"><div class="t">'+esc(x.titulo||'Ticket')+'</div><div class="d">'+esc(x.tipo||'')+'</div></div></div>'; }).join('');
       $('nuevosMtto').innerHTML=html;
     }).catch(function(){ if(vivo()) porcablear('nuevosMtto','Nuevos mantenimientos: no se pudo cargar.'); }); });
+}
+
+/* ================= VISTA SEMANA (lo acumulado: promedios y totales) ================= */
+function lunesISO(){ var d=mxNow(); d.setHours(12,0,0,0); var wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd); return d; }
+function semanaDias(){ var dias=[], d=lunesISO(), hoy=mxNow(); hoy.setHours(12,0,0,0); var n=0; while(d<=hoy && n<7){ dias.push(iso(new Date(d))); d.setDate(d.getDate()+1); n++; } return dias; }
+function renderSemana(hk){
+  var H=HOTELES[hk]; if(!H) return; var mi=++PEDIDO; var vivo=function(){ return mi===PEDIDO; };
+  var dias=semanaDias(), desde=dias[0], hasta=dias[dias.length-1];
+  $('meta').textContent=H.nombre+' · semana en curso';
+  $('semana').innerHTML=
+    '<section class="sec"><div class="sec-h"><span class="n">S</span><h2 class="t">Resumen de la semana</h2><span class="hint">'+bonita(desde)+' → '+bonita(hasta)+' · '+dias.length+' días</span></div>'
+    +'<div class="kpis" id="swK"></div></section>'
+    +'<section class="sec"><div class="grid2"><div class="card" id="swMtto"></div><div class="card" id="swRecam"></div></div>'
+    +'<div class="grid2" style="margin-top:14px"><div class="card" id="swAsis"></div><div class="card" id="swVal"></div></div></section>';
+  $('swK').innerHTML=['Occ promedio','ADR promedio','Hospedaje (total)','Tours (pax)','Pedidos'].map(function(l,i){ return '<div class="kpi'+(i===2?' star':'')+'"><div class="l">'+l+'</div><div class="v sk">··</div><div class="s sk">····</div></div>'; }).join('');
+  function setK(i,v,s){ var c=$('swK').children; if(!c[i])return; var vn=c[i].querySelector('.v'),sn=c[i].querySelector('.s'); vn.classList.remove('sk');vn.innerHTML=v; sn.classList.remove('sk');sn.innerHTML=s||''; }
+  var avg=function(a){ return a.length?Math.round(a.reduce(function(s,x){return s+x;},0)/a.length):null; };
+
+  // occ prom / adr prom / hospedaje total — recorriendo dia-tablero de la semana
+  guard(function(){ return Promise.all(dias.map(function(f){ return diaTablero(H.uuid,f).catch(function(){return null;}); })).then(function(arr){ if(!vivo())return;
+    var occs=[],adrs=[],hosp=0,n=0;
+    arr.forEach(function(P){ if(!P||P.ok===false)return; n++; var o=(P.occ||{}),a=(P.adr||{}); if(o.general!=null)occs.push(Number(o.general)); if(a.casa!=null)adrs.push(Number(a.casa)); hosp+=Number((P.ventas||{}).hospedaje||0); });
+    setK(0, occs.length?avg(occs)+'<small>%</small>':'—', 'promedio · '+n+' días');
+    setK(1, adrs.length?money(avg(adrs)):'—', 'promedio de la casa');
+    setK(2, money(hosp), 'suma de la semana');
+  }).catch(function(){ if(vivo()){ setK(0,'—');setK(1,'—');setK(2,'—'); } }); });
+
+  // tours pax total
+  guard(function(){ return sb.from('v_salidas_ocupacion').select('cupo_tomado,reservas,punto_encuentro,property_id,estado,fecha').gte('fecha',desde).lte('fecha',hasta).then(function(r){ if(!vivo())return;
+    var rows=(r.data||[]).filter(function(x){ if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0)return false; if(H.sede==='puebla')return /puebla/i.test(x.punto_encuentro||'')||x.property_id===H.uuid; return /cdmx|casa pepe/i.test(x.punto_encuentro||'')&&!/virrey|ateneo|izazaga|puebla/i.test(x.punto_encuentro||''); });
+    var pax=rows.reduce(function(s,x){return s+Number(x.cupo_tomado||x.reservas||0);},0);
+    setK(3, pax, rows.length+' salidas');
+  }).catch(function(){ if(vivo()) setK(3,'—'); }); });
+
+  // pedidos total
+  guard(function(){ return sb.from('cmp_pedidos').select('id',{count:'exact',head:true}).eq('property_id',H.uuid).gte('created_at',desde+'T00:00:00').then(function(r){ if(!vivo())return; setK(4, r.count!=null?r.count:'—','de Compras'); }).catch(function(){ if(vivo()) setK(4,'—'); }); });
+
+  // mantenimiento (ya es semanal)
+  $('swMtto').innerHTML='<div class="hd"><h3>Mantenimiento · semana</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return sb.rpc('panel_incidencias_rh_fase2',{p_sede:H.sede}).then(function(r){ if(!vivo())return; var m=((r.data||{}).mantenimiento)||{}; if(!m.aplica){ porcablear('swMtto','Sin datos de la semana.'); return; }
+    $('swMtto').innerHTML='<div class="hd"><h3>Mantenimiento · semana</h3>'+bdg('ok')+'</div>'
+      +'<div class="asis"><div class="chip ok"><div class="v">'+(m.resueltos_sem||0)+'</div><div class="l">Resueltos</div></div>'
+      +'<div class="chip"><div class="v">'+(m.horas_sem!=null?m.horas_sem:'—')+'</div><div class="l">Horas</div></div>'
+      +'<div class="chip '+((m.pendientes||0)>0?'warn':'')+'"><div class="v">'+(m.pendientes||0)+'</div><div class="l">Pendientes</div></div></div>'
+      +'<div class="sub-muted">capacidad '+(m.capacidad_h!=null?m.capacidad_h+'h':'—')+' · '+((m.por_tecnico||[]).length)+' técnicos</div>';
+  }).catch(function(){ if(vivo()) porcablear('swMtto','No se pudo cargar.'); }); });
+
+  // eficiencia recamaristas (desempeño semana)
+  $('swRecam').innerHTML='<div class="hd"><h3>Recamaristas · semana</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return sb.from('hk_v_desempeno_semana').select('colaborador,cobertura_pct,eficiencia_pct,desempeno_pct,califica').eq('property_id',H.uuid).then(function(r){ if(!vivo())return; var rows=Array.isArray(r.data)?r.data:[]; var cal=rows.filter(function(x){return x.califica;});
+    var prom=cal.length?Math.round(cal.reduce(function(s,x){return s+Number(x.desempeno_pct||0);},0)/cal.length):null;
+    var html='<div class="hd"><h3>Recamaristas · semana</h3>'+bdg('ok')+'</div>'
+      +'<div class="estado"><span class="big">'+(prom!=null?prom+'%':'—')+'</span><span class="sub-muted" style="margin:0">desempeño promedio</span></div>';
+    if(rows.length) html+=rows.map(function(x){ var d=x.desempeno_pct!=null?Math.round(x.desempeno_pct):null; var cls=d>=100?'over':(d<80?'low':'');
+      return '<div class="hkrow"><div class="top"><span class="nm">'+esc(x.colaborador||'—')+'</span><span class="cnt">'+(d!=null?d+'%':'—')+'</span></div><div class="bar"><span class="'+cls+'" style="width:'+Math.min(100,d||0)+'%"></span></div><div class="mini">cobertura '+(x.cobertura_pct!=null?Math.round(x.cobertura_pct)+'%':'—')+' · ef '+(x.eficiencia_pct!=null?Math.round(x.eficiencia_pct)+'%':'—')+(x.califica?'':' · aún no califica')+'</div></div>'; }).join('');
+    else html+='<div class="empty">Sin jornadas esta semana.</div>';
+    $('swRecam').innerHTML=html;
+  }).catch(function(){ if(vivo()) porcablear('swRecam','No se pudo cargar.'); }); });
+
+  // asistencias semana
+  $('swAsis').innerHTML='<div class="hd"><h3>Asistencias · semana</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return sb.rpc('panel_asistencia',{p_sede:H.sede,p_periodo:'semana'}).then(function(r){ if(!vivo())return; var D=r.data||{}; if(D.error){ porcablear('swAsis','Asistencias: '+D.error); return; } var L=D.llegadas||{}; var at=Number(L.a_tiempo||0),re=Number(L.retrasos||0),fa=Number(L.faltas||0);
+    $('swAsis').innerHTML='<div class="hd"><h3>Asistencias · semana</h3>'+bdg('ok')+'</div>'
+      +'<div class="asis"><div class="chip ok"><div class="v">'+at+'</div><div class="l">A tiempo</div></div>'
+      +'<div class="chip warn"><div class="v">'+re+'</div><div class="l">Retrasos</div></div>'
+      +'<div class="chip bad"><div class="v">'+fa+'</div><div class="l">Faltas</div></div></div>'
+      +'<div class="sub-muted">'+(at+re+fa)+' llegadas en la semana</div>';
+  }).catch(function(){ if(vivo()) porcablear('swAsis','No se pudo cargar.'); }); });
+
+  // valoraciones (reputación por fuente)
+  $('swVal').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  guard(function(){ return sb.rpc('panel_incidencias_rh_fase2',{p_sede:H.sede}).then(function(r){ if(!vivo())return; var rep=((r.data||{}).reputacion)||{}; if(!rep.aplica){ porcablear('swVal','Sin valoraciones para este hotel.'); return; }
+    var fs=rep.fuentes||[]; var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
+    $('swVal').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+(rep.coment_10d||0)+' reseñas · 10d</span></div>'
+      +'<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
+      +fs.map(function(x){ return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div><div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div><div class="s">'+esc(x.nota100)+'/100 · '+(x.resenas||0)+'</div></div>'; }).join('')+'</div>';
+  }).catch(function(){ if(vivo()) porcablear('swVal','No se pudo cargar.'); }); });
 }
 })();
 </script>
