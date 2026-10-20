@@ -49,7 +49,6 @@
     var css = ''
       + '.apsh-top{position:sticky;top:0;z-index:1200;background:#1E1A16;color:#fff}'
       + '.apsh-in{max-width:720px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}'
-      + '.apsh-back{color:#fff;text-decoration:none;font-size:22px;line-height:1;opacity:.9;flex:0 0 auto}'
       + '.apsh-marcafila{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px}'
       + '.apsh-marca{height:34px;width:auto;display:block}'
       + '.apsh-txt{flex:1;min-width:0;line-height:1.15}'
@@ -90,7 +89,9 @@
     hdr.className = 'apsh-top';
     hdr.innerHTML =
       '<div class="apsh-in">'
-      +  '<a class="apsh-back" href="'+liga('/apepe/index.html')+'" aria-label="Volver">\u2190</a>'
+      /* Sin flecha: esta cabecera ya monta la barra de pestanas de APePe ahi
+         abajo, asi que la flecha era un segundo camino a casa, mas pequeno y
+         peor. Javi, 19-oct-2026. */
       +  '<div class="apsh-marcafila">'
       +    '<img class="apsh-marca" src="/img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
       +      'onerror="this.style.display=\'none\'">'
