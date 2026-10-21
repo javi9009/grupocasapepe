@@ -774,6 +774,9 @@
             <button class="circle" data-href="/soypepe/cambio-cuarto.html" data-perm="PAG-SP-CAMBIOCUARTO"><span class="b">🔀</span><span class="t">Early check-in</span><span class="eq eq-F">F</span></button>
             <button class="circle" data-href="/soypepe/tanfos.html" data-perm="PAG-SP-TANFOS"><span class="b">🧳</span><span class="t">Los Olvidados</span></button>
             <button class="circle" data-href="/m/vnum-cobrar.html" data-perm="PAG-SERV-VNUM"><span class="b">🪙</span><span class="t">Cobrar</span><span class="eq eq-F">F</span></button>
+            <!-- Lector de QR de boletos (cine/evento) y de margaritas (tour). Sin
+                 data-perm: lo ve y lo usa todo el equipo; detecta solo de qué es. -->
+            <button class="circle" data-href="/m/lector-boletos.html"><span class="b">🎫</span><span class="t">Lector de boletos</span></button>
             <button class="circle" data-href="/soypepe/extension.html" data-sub="¿Se queda más?" data-perm="PAG-SP-EXTENSION"><span class="b" style="font-size:21px;font-weight:800;letter-spacing:-1px">+1</span><span class="t">Extensión</span><span class="eq eq-F">F</span></button>
             <button class="circle" data-soon="Valoraciones"><span class="b">⭐</span><span class="t">Valoraciones</span></button>
             <button class="circle" data-perm="PAG-SP-PROC" id="cirPreguntale" hidden data-href="/soypepe/procedimientos.html"><span class="b">🤔</span><span class="t">Pregúntale a Pepe</span></button>
@@ -809,6 +812,8 @@
           <div class="circles">
             <button class="circle" data-href="/soypepe/mis-guias.html" data-perm="PAG-SP-GUIAS"><span class="b">📖</span><span class="t">La guía del guía</span></button>
             <button class="circle" data-href="/soypepe/salidas-dia.html" data-perm="PAG-SP-SALIDAS"><span class="b">🚅</span><span class="t">Salidas del día</span></button>
+            <!-- El mismo lector, para que el guía valide las margaritas del tour. -->
+            <button class="circle" data-href="/m/lector-boletos.html"><span class="b">🎫</span><span class="t">Lector de boletos</span></button>
           </div>
         </section>
 
@@ -2137,31 +2142,18 @@ function repPct(id,n){ if(n===null||n===undefined||isNaN(n)){ return; } repSet(i
 
 let REP_PROP = null;        // property_id del usuario (se resuelve una vez)
 let REP_PROP_OK = false;
-let REP_PROP_VUELO = null;  // llamada en curso, para no preguntar lo mismo dos veces
 
-// Antes esto marcaba la casa como "ya resuelta" aunque la consulta hubiera
-// fallado: ese null se quedaba pegado toda la sesión y cada pantalla que hace
-// "|| CDMX" le enseñaba a Puebla la casa de CDMX hasta que cerraba la app y
-// volvía a abrirla. Por eso el cruce de desayunos salía a ratos y sin patrón:
-// dependía de si la petición de arranque salió bien esa mañana.
-// Ahora, si no hay casa, no se cachea nada y se vuelve a intentar.
 async function resolverProp(){
   if(REP_PROP_OK) return REP_PROP;
-  if(REP_PROP_VUELO) return REP_PROP_VUELO;
-  REP_PROP_VUELO = (async ()=>{
-    if(EMP){
-      try{
-        const { data, error } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
-        if(error) throw error;
-        if(data && data.property_id) REP_PROP = data.property_id;
-      }catch(e){ /* no se pudo: se reintenta en la siguiente llamada */ }
-    }
-    { var _vp=(window.cpViewProp?window.cpViewProp():null); if(_vp) REP_PROP=_vp; }
-    REP_PROP_OK = !!REP_PROP;
-    REP_PROP_VUELO = null;
-    return REP_PROP;
-  })();
-  return REP_PROP_VUELO;
+  if(EMP){
+    try{
+      const { data } = await sb.from('v_empleados_publico').select('property_id').eq('id',EMP).maybeSingle();
+      if(data && data.property_id) REP_PROP = data.property_id;
+    }catch(e){ /* sin propiedad: la función usa CDMX por default */ }
+  }
+  { var _vp=(window.cpViewProp?window.cpViewProp():null); if(_vp) REP_PROP=_vp; }
+  REP_PROP_OK = true;
+  return REP_PROP;
 }
 
 // "hace 3 min", "ahora mismo", etc.
@@ -2487,10 +2479,7 @@ function ymdMX(){ const d=mxToday(); return d.getFullYear()+'-'+String(d.getMont
 function dqEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function cargarDesayunos(){
-  // Sin casa resuelta no se pide nada: más vale no enseñar lista que enseñar la
-  // de la otra casa. Es lo que le pasaba a Lupita en Puebla con los de CDMX.
-  const prop=await resolverProp();
-  if(!prop){ DESAY_D={ error:'sin_casa' }; DESAY_N=null; return DESAY_D; }
+  const prop=(await resolverProp())||CDMX_PROP;
   const fecha=ymdMX();
   const { data, error } = await sb.rpc('aud_desayunos_dia',{ p_property:prop, p_fecha:fecha });
   if(error) throw error;
@@ -2506,9 +2495,7 @@ function pintarDesayunos(){
   const wrap=$('desayList'); if(!wrap) return;
   const D=DESAY_D;
   if(!D || D.error){
-    wrap.innerHTML = (D && D.error==='sin_casa')
-      ? '<div class="ph"><div class="ico">🏨</div><div class="d">No pudimos confirmar en qué casa estás, así que no te enseñamos una lista que podría no ser la tuya. Cierra y vuelve a abrir la app; si sigue igual, avísanos.</div></div>'
-      : '<div class="ph"><div class="ico">🍳</div><div class="d">No se pudo cargar la lista.</div></div>';
+    wrap.innerHTML='<div class="ph"><div class="ico">🍳</div><div class="d">No se pudo cargar la lista.</div></div>';
     return;
   }
   const L = Array.isArray(D.lista) ? D.lista : [];
@@ -2559,14 +2546,8 @@ $('desaySheet').onclick=(e)=>{ if(e.target.id==='desaySheet') $('desaySheet').cl
 $('desayList').addEventListener('click', async (e)=>{
   const b=e.target.closest('[data-sub]'); if(!b) return;
   const nuevo = b.dataset.on!=='1';
+  const prop=(await resolverProp())||CDMX_PROP;
   const msg=$('desayMsg');
-  // Marcar en la casa equivocada sería peor que no marcar: se para aquí.
-  const prop=await resolverProp();
-  if(!prop){
-    if(msg){ msg.style.display='block'; msg.style.color='#b03434';
-      msg.textContent='No pudimos confirmar tu casa. Cierra y vuelve a abrir la app antes de tachar.'; }
-    return;
-  }
   b.disabled=true;
   try{
     const { data, error } = await sb.rpc('aud_desayuno_marcar',{
@@ -3892,29 +3873,15 @@ function sizeEmbed(){
   var ab=document.querySelector('.appbar'); var nav=document.querySelector('.nav');
   var top = ab ? Math.max(0, ab.getBoundingClientRect().bottom) : 54;
   var navH = nav ? nav.offsetHeight : 64;
-  var vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight;
-  var h = Math.max(320, Math.round(vh - top - navH));
+  var h = Math.max(320, Math.round((window.innerHeight||document.documentElement.clientHeight) - top - navH));
   f.style.height = h + 'px';
 }
 window.addEventListener('resize', function(){ try{ sizeEmbed(); }catch(e){} });
-if(window.visualViewport){ try{ window.visualViewport.addEventListener('resize', function(){ try{ sizeEmbed(); }catch(e){} }); }catch(e){} }
-/* El banner "Amor Ir Venimos" entra async y agranda el header. En vez de
-   adivinar tiempos, observamos el header: cuando cambia de alto, el iframe se
-   re-ajusta solo y el compositor de la página hija nunca queda tapado. */
-(function(){
-  try{
-    if(!window.ResizeObserver) return;
-    var ro=new ResizeObserver(function(){ try{ sizeEmbed(); }catch(e){} });
-    var attach=function(){ var ab=document.querySelector('.appbar'); if(ab){ ro.observe(ab); return true; } return false; };
-    if(!attach()){ var mo=new MutationObserver(function(){ if(attach()) mo.disconnect(); }); mo.observe(document.documentElement,{childList:true,subtree:true}); }
-  }catch(e){}
-})();
 function openEmbed(url, title, sub){
   if(!url) return;
   $('tabs').style.display='none';
   document.querySelectorAll('#bottomNav button').forEach(b=>b.classList.remove('active'));
   var f=$('emb-frame');
-  try{ f.onload=function(){ try{ sizeEmbed(); }catch(e){} }; }catch(e){}
   // ?embed=1: la página hija oculta su botón de volver y su nav inferior
   f.src = url + (url.indexOf('?')>-1 ? '&' : '?') + 'embed=1';
   showView('embed');
@@ -3922,7 +3889,6 @@ function openEmbed(url, title, sub){
   try{ sizeEmbed(); }catch(e){}
   setTimeout(function(){ try{ sizeEmbed(); }catch(e){} }, 350);
   setTimeout(function(){ try{ sizeEmbed(); }catch(e){} }, 900);
-  setTimeout(function(){ try{ sizeEmbed(); }catch(e){} }, 1800);
   // Recordamos el embed abierto: si iOS recarga la app al abrir la cámara
   // (bug de WKWebView con <input capture>), al re-arrancar volvemos aquí en
   // vez de tirar al usuario a Inicio y perder su lugar.
