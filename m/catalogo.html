@@ -215,7 +215,7 @@ function irTab(k){TAB=k;pintaTabs();render();}
 async function recargar(){
   $("view").innerHTML='<div class="center">Cargando…</div>';
   const [pro,cap,prov,bod,cue,cfg,stk,cts,alt,inc,pvt,bdt,cos,pat,varp,pas]=await Promise.all([
-    sb.from("cmp_productos").select("*").eq("property_id",SEDE).order("nombre"),
+    cargaProductos(),
     sb.from("cmp_v_captura_pendiente").select("producto_id").eq("property_id",SEDE),
     sb.from("cmp_v_proveedores_sede").select("*").eq("property_id",SEDE).order("proveedor"),
     sb.from("cmp_v_bodegas").select("id,nombre,ruta,padre_id,nivel,area,raiz").eq("property_id",SEDE).eq("activo",true).order("ruta"),
@@ -238,7 +238,7 @@ async function recargar(){
     // El arbol de pasillos y subpasillos (anaqueles) es del Grupo, no de la sede.
     sb.from("cmp_v_pasillos").select("id,nombre,padre_id,nivel,ruta,orden_ruta,raiz,productos").order("orden_ruta")
   ]);
-  PRODS=pro.data||[]; PROVS=prov.data||[]; BODEGAS=(bod.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre,hoja:b.nombre})); CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=(bdt.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre}));
+  PRODS=Array.isArray(pro)?pro:(pro.data||[]); PROVS=prov.data||[]; BODEGAS=(bod.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre,hoja:b.nombre})); CUENTAS=cue.data||[]; CONFIG=cfg.data||[]; STOCK=stk.data||[]; CONTEOS=cts.data||[]; ALTAS=alt.data||[]; INCOM=(inc||[]).filter(x=>(x.faltantes||[]).length||(x.por_revisar||[]).length); PROV_TODOS=pvt.data||[]; BOD_TODAS=(bdt.data||[]).map(b=>Object.assign({},b,{nombre:b.ruta||b.nombre}));
   const sinPrecio=new Set((cap.data||[]).map(x=>x.producto_id));
   COSTO={}; (cos.data||[]).forEach(c=>COSTO[c.producto_id]=c);
   VARP={}; (varp.data||[]).forEach(v=>VARP[v.producto_id]=v);
@@ -445,7 +445,7 @@ async function guardaProducto(id){
     notas:$("pNotas").value.trim()||null,activo:$("pAct").checked};
   const r=id? await sb.from("cmp_productos").update(rec).eq("id",id).select("id").single()
             : await sb.from("cmp_productos").insert(rec).select("id").single();
-  if(r.error) return toast(r.error.message);
+  if(r.error) return toast(await explicaError(r.error, rec.nombre));
   const prodId=id||(r.data&&r.data.id);
 
   // Proveedores y precios: se sincronizan con las presentaciones del producto.
@@ -472,13 +472,46 @@ async function guardaProducto(id){
   toast("Guardado"); closeModal(); await recargar();
 }
 
-/* Supabase corta en 1000 filas por consulta: se pide por páginas hasta agotar,
-   porque son ~2.500 productos con algún hueco. */
+/* "duplicate key value violates unique constraint" no le dice nada a nadie.
+   Cuando el nombre ya existe se va a buscar cuál es y se dice en castellano,
+   incluido el caso que más confunde: el producto existe pero está dado de baja,
+   así que no sale en la lista y parece que no está. */
+async function explicaError(err, nombre){
+  const m=(err&&err.message)||"error";
+  if(!/duplicate key|unique constraint|_uk/i.test(m)) return m;
+  const {data}=await sb.from("cmp_productos").select("id,nombre,estado,bodega_id")
+    .eq("property_id",SEDE).ilike("nombre",(nombre||"").trim()).limit(1);
+  const y=data&&data[0];
+  if(!y) return "Ya existe un producto con ese nombre en esta sede. Búscalo en la lista antes de crearlo otra vez.";
+  if(y.estado!=="activo")
+    return `«${y.nombre}» ya existe pero está dado de ${y.estado}, por eso no lo ves en la lista. Reactívalo en vez de crearlo de nuevo.`;
+  return `«${y.nombre}» ya existe en esta sede. Ábrelo y edítalo en vez de crear otro.`;
+}
+
+/* Supabase corta en 1000 filas por consulta: se pide por páginas hasta agotar.
+   El tope era 6 páginas y el catálogo ya pasa de 7.000 productos: con 6 se
+   quedaban 1.300 fuera de la lista y nadie los veía. */
 async function cargaIncompletos(){
   const out=[]; const paso=1000;
-  for(let i=0;i<6;i++){
+  for(let i=0;i<30;i++){
     const {data,error}=await sb.from("cmp_v_productos_incompletos").select("*")
       .order("veces_recibido",{ascending:false}).order("id")
+      .range(i*paso,(i+1)*paso-1);
+    if(error||!data||!data.length) break;
+    out.push(...data);
+    if(data.length<paso) break;
+  }
+  return out;
+}
+
+/* Lo mismo con el catálogo: la consulta se cortaba en 1.000 y en CDMX hay más
+   de 3.000 productos, así que dos terceras partes del catálogo no se veían
+   en ninguna pantalla. Se pide por páginas hasta agotar. */
+async function cargaProductos(){
+  const out=[]; const paso=1000;
+  for(let i=0;i<30;i++){
+    const {data,error}=await sb.from("cmp_productos").select("*")
+      .eq("property_id",SEDE).order("nombre").order("id")
       .range(i*paso,(i+1)*paso-1);
     if(error||!data||!data.length) break;
     out.push(...data);
@@ -491,17 +524,24 @@ async function cargaIncompletos(){
    (las veces que el insumo se recibió en Poster) para que se empiece por lo que
    de verdad se compra, no por orden alfabético. */
 const FALTA_L={proveedor:"proveedor",precio:"precio",cantidad:"cantidad",minimo:"mínimo",cuenta:"cuenta",bodega:"bodega",pasillo:"pasillo"};
+/* La vista separa dos cosas distintas:
+     faltantes   -> sin esto NO se puede comprar (proveedor, cuenta, bodega, pasillo)
+     por_revisar -> se puede comprar igual (precio, mínimo, contenido). El precio
+                    entra con la factura al recibir, así que no es un bloqueo.
+   Las dos salen en la lista; solo las primeras cuentan en el numerito de la pestaña. */
+const huecos=x=>[].concat(x.faltantes||[],x.por_revisar||[]);
 function incFiltrados(){
   let l=INCOM.slice();
   if(FI.ubic)  l=l.filter(x=>x.property_id===FI.ubic);
   if(FI.area)  l=l.filter(x=>(x.cuenta_grupo||"(sin cuenta)")===FI.area);
   if(FI.prov==="__sin") l=l.filter(x=>!(x.proveedores||[]).length);
   else if(FI.prov)      l=l.filter(x=>(x.proveedores||[]).includes(FI.prov));
-  if(FI.falta==="__huerfano") l=l.filter(x=>x.huerfano);
-  else if(FI.falta)           l=l.filter(x=>(x.faltantes||[]).includes(FI.falta));
+  if(FI.falta==="__huerfano")      l=l.filter(x=>x.huerfano);
+  else if(FI.falta==="__norevisar")l=l.filter(x=>(x.faltantes||[]).length);
+  else if(FI.falta)                l=l.filter(x=>huecos(x).includes(FI.falta));
   if(FI.q){ const q=sinTilde(FI.q); l=l.filter(x=>sinTilde(x.nombre).includes(q)); }
   if(FI.orden==="nombre")     l.sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  else if(FI.orden==="huecos")l.sort((a,b)=>(b.faltantes||[]).length-(a.faltantes||[]).length||b.veces_recibido-a.veces_recibido);
+  else if(FI.orden==="huecos")l.sort((a,b)=>huecos(b).length-huecos(a).length||b.veces_recibido-a.veces_recibido);
   else l.sort((a,b)=>b.veces_recibido-a.veces_recibido||a.nombre.localeCompare(b.nombre));
   return l;
 }
@@ -517,13 +557,16 @@ function vIncompletos(){
       <h2>🧩 Productos a los que les falta información</h2>
       <p class="muted small">Lo que hace falta para <b>comprar</b> y <b>recibir</b>, una columna por dato.
         Lo que está en firme sale en texto; lo que falta o solo está sugerido sale en una pastilla —
-        tócala y lo eliges ahí mismo. Primero los que más se compran de verdad, según lo recibido en Poster.</p>
+        tócala y lo eliges ahí mismo. Primero los que más se compran de verdad, según lo recibido en Poster.<br>
+        El <b>precio</b>, el <b>mínimo</b> y el <b>contenido</b> no impiden comprar: el precio se captura
+        con la factura al recibir. Para ver solo lo que de verdad bloquea un pedido, usa
+        <i>«Solo lo que impide comprar»</i>.</p>
       <div class="filtros">
         <select onchange="setFI('ubic',this.value)">${opt("","Todas las casas",FI.ubic)}${PROPS.map(p=>opt(p.id,p.nombre,FI.ubic)).join("")}</select>
         <select onchange="setFI('orden',this.value)">${opt("uso","Los más usados primero",FI.orden)}${opt("huecos","Los que más les falta",FI.orden)}${opt("nombre","Por nombre",FI.orden)}</select>
         <select onchange="setFI('area',this.value)">${opt("","Toda el área (por cuenta)",FI.area)}${areas.map(a=>opt(a,a,FI.area)).join("")}</select>
         <select onchange="setFI('prov',this.value)">${opt("","Cualquier proveedor",FI.prov)}${opt("__sin","— sin proveedor —",FI.prov)}${provs.map(a=>opt(a,a,FI.prov)).join("")}</select>
-        <select onchange="setFI('falta',this.value)">${opt("","Le falta cualquier cosa",FI.falta)}${opt("__huerfano","Huérfanos (solo el nombre)",FI.falta)}${Object.keys(FALTA_L).map(k=>opt(k,"Sin "+FALTA_L[k],FI.falta)).join("")}</select>
+        <select onchange="setFI('falta',this.value)">${opt("","Le falta cualquier cosa",FI.falta)}${opt("__norevisar","Solo lo que impide comprar",FI.falta)}${opt("__huerfano","Huérfanos (solo el nombre)",FI.falta)}${Object.keys(FALTA_L).map(k=>opt(k,"Sin "+FALTA_L[k],FI.falta)).join("")}</select>
         <input placeholder="Buscar…" value="${esc(FI.q)}" oninput="FI.q=this.value;clearTimeout(window._ti);window._ti=setTimeout(vIncompletos,250)">
       </div>
       <div class="small muted" style="margin-top:8px">${l.length} productos · ${conUso} con historial de compra</div>
