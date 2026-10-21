@@ -137,7 +137,7 @@ const ETAPAS=[
 function placeIdx(sig){for(let i=1;i<ETAPAS.length;i++){if(!ETAPAS[i].sig(sig))return i-1;}return ETAPAS.length-1;}
 /* Quién la tiene atorada: el actor de la etapa que sigue. Integrado = nadie. */
 function blocker(sig){ if(sig.integrado) return 'ok'; return ETAPAS[curIdx(sig)].por; }
-let DATA=[], CAP={global:false,props:[],edita_delic:false}, ROLES=[], OPEN=null;
+let DATA=[], CAP={global:false,props:[],edita_delic:false}, ROLES=[], BONOS=[], OPEN=null;
 
 function status(t,c){const s=$('status');s.textContent=t||'';s.className='status'+(c?' '+c:'');}
 async function rpc(fn,body){const r=await fetch(SB+'/rpc/'+fn,{method:'POST',headers:H(),body:JSON.stringify(body||{})});if(!r.ok)throw new Error(await r.text());const t=await r.text();return t?JSON.parse(t):null;}
@@ -154,6 +154,7 @@ async function load(){
    CAP={global:!!d.global,props:d.props||[],edita_delic:!!d.edita_delic};DATA=d.rows||[];
    rpc('funnel_imss_sync',{}).catch(()=>{});
    if(!ROLES.length){try{ROLES=(await rest('/roles_catalogo?select=rol&order=rol')).map(x=>x.rol).filter(Boolean);}catch(e){}}
+   if(!BONOS.length){try{BONOS=(await rest('/bonos_config?select=id,area,nombre,tipo,monto_mensual,monto_trimestral,monto_anual,tramos,sedes,activo&order=area,orden'));}catch(e){}}
    render();status('✓','ok');
  }catch(e){status('⚠ error','err');$('tablero').innerHTML='<div class="empty">No se pudo cargar. '+esc((e.message||'').slice(0,120))+'</div>';}
 }
@@ -201,6 +202,33 @@ function inp(id,val,type){return `<input id="${id}" type="${type||'text'}" value
 function roi(val,type){return `<input type="${type||'text'}" value="${esc(val||'')}" readonly tabindex="-1">`;}
 function rinp(id,val,type){return `<input id="${id}" type="${type||'text'}" value="${esc(val||'')}" readonly tabindex="-1">`;}
 function fld(label,inner,cls){return `<div class="fld ${cls||''}"><label>${label}</label>${inner}</div>`;}
+/* Mismo mapeo que RH · Bonos (bonoAreaDe/bonoElegible): el área del empleado decide qué bonos del catálogo le tocan. */
+function bonoAreaDe(e){
+ const p=(((e&&e.puesto)||'')+' '+((e&&e.area)||'')).toLowerCase();
+ if(/ama de llaves/.test(p))return 'Ama de Llaves';
+ if(/recamarista|camarista|areas comunes|áreas comunes|areas publicas|áreas públicas|limpieza|housekeeping/.test(p))return 'Recamaristas y Áreas Comunes';
+ if(/chef|cocin/.test(p))return 'Chef';
+ if(/compras/.test(p))return 'Jefe de Compras';
+ if(/recursos humanos|rrhh/.test(p))return 'Recursos Humanos';
+ if(/revenue|pricing/.test(p))return 'Revenue Management';
+ if(/front desk|recepci/.test(p))return 'Equipo Front Desk';
+ if(/manteni/.test(p))return 'Mantenimiento';
+ if(/gerente operativ|sub ?gerente/.test(p))return 'Sub Gerente Operativo';
+ if(/guest|experien|tour|sincr/.test(p))return 'Equipo Guest Experience';
+ if(/contab|finanz|tesorer/.test(p))return 'Contabilidad';
+ if(/dirección general|director general/.test(p))return 'Dirección General';
+ if(/gerente administrativo|dirección|admin/.test(p))return 'Dirección Admin';
+ if(/azotea|a&b|barra|mesero|bartender|animaci/.test(p))return 'Gerencia Hotel';
+ if(/gerente|gerencia/.test(p))return 'Gerencia Hotel';
+ return '';
+}
+function bonoElegible(x,e){
+ if(x.activo===false)return false;
+ const csv=s=>String(s||'').toLowerCase().split(/[,;/]+/).map(v=>v.trim()).filter(Boolean);
+ const tr=csv(x.tramos); if(tr.length){const mio=((e&&e.tramo)||'').toLowerCase(); if(!mio||!tr.some(v=>mio.includes(v)||v.includes(mio)))return false;}
+ const sd=csv(x.sedes); if(sd.length){const mia=((e&&e.sede)||'').toLowerCase(); if(!mia||!sd.some(v=>mia.includes(v)||v.includes(mia)))return false;}
+ return true;
+}
 
 async function openPanel(id){
  OPEN=id;$('panel').classList.add('on');$('velo').classList.add('on');
@@ -273,16 +301,20 @@ function drawerHtml(f,nom,s,ci){
      ${fld('Cobra desde (= inicio de labores)','<input id="fx_salario_desde" type="date" value="'+esc(nom.salario_desde||f.fecha_inicio_labores||'')+'" readonly tabindex="-1">','ro')}
      <div class="fld ${esq==='fijo'?'':'oculto'}" id="wrap_neto"><label>Neto fijo${SE?'':' 🔒'}</label>${SE?inp('fx_neto_fijo',nom.neto_fijo,'number'):roi(nom.neto_fijo,'number')}</div>
    </div><p class="hint">El sueldo base y el salario diario se calculan solos del bruto. El neto fijo solo aplica con esquema “fijo”.</p></div>`;
-   const bl=(nom.bonos||[]).map(b=>`<div class="bono"><span>${esc(b.nombre)} · ${esc(b.periodicidad)}</span><b>$${esc(b.monto)}</b></div>`).join('')||'<div class="hint">Sin bonos.</div>';
+   const bl=(nom.bonos||[]).map(b=>`<div class="bono"><span>${esc(b.nombre)} · ${esc(b.periodicidad)}</span><b>$${esc(b.monto)}</b></div>`).join('')||'<div class="hint">Sin bonos individuales.</div>';
+   const bArea=bonoAreaDe(f);
+   const elig=(BONOS||[]).filter(x=>x.area===bArea && bonoElegible(x,f));
+   const bopts=elig.map(x=>{const mm=x.monto_mensual||x.monto_trimestral||x.monto_anual||0;const per=x.monto_mensual?'mensual':(x.monto_trimestral?'trimestral':(x.monto_anual?'anual':'mensual'));return `<option value="${esc(x.id)}" data-nom="${esc(x.nombre)}" data-monto="${esc(mm)}" data-per="${per}">${esc(x.nombre)}${mm?(' · $'+esc(mm)+'/'+per):''}</option>`;}).join('');
    h+=`<div class="bloque"><h3>Bonos y objetivos</h3>
      <div class="fields">
        ${SE?fld('Bono de puntualidad','<select id="fx_bono_puntualidad">'+opt('false',String(!!nom.bono_puntualidad),'No')+opt('true',String(!!nom.bono_puntualidad),'Sí')+'</select>'):fld('Bono de puntualidad 🔒',inp('x',nom.bono_puntualidad?'Sí':'No'),'ro')}
        ${SE?fld('Monto bono puntualidad','<input id="fx_bono_puntualidad_monto" type="number" value="'+esc(nom.bono_puntualidad_monto||'')+'">'):fld('Monto bono puntualidad 🔒',inp('x',nom.bono_puntualidad_monto),'ro')}
      </div>
      <div class="bonos" style="margin-top:10px">${bl}</div>
-     ${SE?`<div class="fields">${fld('Nuevo bono',inp('fb_nombre',''))}${fld('Monto',inp('fb_monto','','number'))}${fld('Tipo',inp('fb_tipo','bono'))}${fld('Periodicidad','<select id="fb_periodicidad">'+opt('mensual','mensual')+opt('quincenal','')+opt('unico','','único')+'</select>')}</div>
-     <div class="acts" style="margin-top:8px"><button class="btn mini" id="fb_add">+ Agregar bono</button><span class="msg" id="fb_msg"></span></div>
-     <p class="hint">⚠ Solo asígnale bonos de su rol/área. El catálogo filtrado por puesto está pendiente de cablear (falta el mapa de áreas).</p>`:''}
+     ${SE?(bArea?`<div class="fields">${fld('Asignar bono de su área ('+esc(bArea)+')', elig.length?('<select id="fb_sel">'+bopts+'</select>'):'<span class="hint">No hay bonos configurados para su área todavía.</span>')}</div>
+     <div class="acts" style="margin-top:8px"><button class="btn mini" id="fb_add"${elig.length?'':' disabled'}>+ Asignar bono</button><span class="msg" id="fb_msg"></span></div>
+     <p class="hint">Solo salen los bonos de su área (<b>${esc(bArea)}</b>), filtrados por su nivel y propiedad. El catálogo se edita en RH · Bonos.</p>`
+     :'<p class="hint">Define su rol/puesto para ver los bonos que le tocan por área.</p>'):''}
      <p class="hint">Los objetivos del periodo de prueba se crean solos al lanzar el plan.</p></div>`;
  }
  if(!s.contrato_firmado){
@@ -342,7 +374,7 @@ function wire(id,f,nom){
  const esel=$('fx_esquema_pago');if(esel)esel.addEventListener('change',()=>{const w=$('wrap_neto');if(w)w.classList.toggle('oculto',esel.value!=='fijo');});
  /* Cobra desde = su primer día de labores */
  const ini=$('fx_fecha_inicio_labores');if(ini)ini.addEventListener('change',()=>{const sd=$('fx_salario_desde');if(sd)sd.value=ini.value;});
- const add=$('fb_add');if(add)add.onclick=async function(){const m=$('fb_msg');const nm=val('fb_nombre'),mo=val('fb_monto');if(!nm||!mo){m.textContent='Pon nombre y monto';return;}add.disabled=true;m.textContent='…';try{const r=await rpc('funnel_add_bono',{p_id:id,p_nombre:nm,p_tipo:val('fb_tipo')||'bono',p_monto:Number(mo),p_periodicidad:val('fb_periodicidad'),p_desde:null});if(r&&r.ok){openPanel(id);}else{m.textContent='⚠ '+((r&&r.error)||'');add.disabled=false;}}catch(e){m.textContent='⚠ '+(e.message||'').slice(0,50);add.disabled=false;}};
+ const add=$('fb_add');if(add)add.onclick=async function(){const m=$('fb_msg');const sel=$('fb_sel');if(!sel||!sel.value){m.textContent='Elige un bono de su área';return;}const o=sel.options[sel.selectedIndex];const nm=o.getAttribute('data-nom');const mo=o.getAttribute('data-monto');const per=o.getAttribute('data-per')||'mensual';add.disabled=true;m.textContent='…';try{const r=await rpc('funnel_add_bono',{p_id:id,p_nombre:nm,p_tipo:'bono',p_monto:Number(mo)||0,p_periodicidad:per,p_desde:null});if(r&&r.ok){openPanel(id);}else{m.textContent='⚠ '+((r&&r.error)||'');add.disabled=false;}}catch(e){m.textContent='⚠ '+(e.message||'').slice(0,50);add.disabled=false;}};
 }
 async function accion(act,id,btn){
  if(act==='autorizar'){
