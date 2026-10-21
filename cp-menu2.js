@@ -217,8 +217,18 @@
           /* "Panel" / "Inicio" = la portada del tablero (home). Javi, oct: quiero
              que al dar a Panel vuelva al inicio, igual que el logo. */
           var _tx=(p.tx||'').trim().toLowerCase();
+          /* Abre la portada en el centro Y DEJA SU SUBMENÚ A LA VISTA.
+             Javi, 20-oct-2026: «mantén que aparezca el panel en la imagen
+             central pero que se abra la info del panel y también el submenú».
+             Antes devolvía el menú a la lista de categorías, así que lo que
+             cuelga de Panel —Incidencias, Ligas, Contenido— desaparecía justo
+             al entrar.
+             (El mismo atajo existe abajo, en elige(), para cuando se llega por
+             la columna; hay que tocar los dos o sólo se arregla la mitad.) */
           if((_tx==='panel'||_tx==='inicio')&&window.openHome&&!n.ruta){ try{window.openHome();}catch(_){}
-            estado.vista='cat'; estado.cat=null; estado.rama=null; estado.activa=null; estado.catmin=false; pinta(); return; }
+            estado.cat=n.codigo; estado.rama=n.codigo; estado.vista='sub';
+            estado.submin=false; estado.catmin=false; estado.activa=null;
+            estado.abiertos={}; pinta(); return; }
           estado.cat = n.codigo; estado.rama = n.codigo; estado.submin = false;
           estado.catmin = false; estado.vista = 'sub';
           estado.abiertos = {};   // otra área, cajones cerrados
