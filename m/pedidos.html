@@ -1303,15 +1303,35 @@ function tarjeta(x){
           <input type="hidden" id="op-${k}" value="">
           <div class="small muted">Se pide igual; administración le pone proveedor.</div>`}
     <div class="padd">
-      <input class="mini" id="qt-${k}" type="number" min="1" step="1" value="${sug||1}">
+      <input class="mini" id="qt-${k}" type="number" min="0.001" step="any" value="${sug||1}"
+             oninput="cpAvisa('${p.id}','${k}')">
+      <span class="small" style="color:var(--muted);font-weight:700">${esc(unidadDe(p))}</span>
       <button class="btn sm" onclick="cpAdd('${p.id}','${k}')">Agregar</button>
-    </div></div>`;
+    </div>
+    <div class="small" id="av-${k}" style="color:var(--bad);margin-top:4px"></div></div>`;
+}
+/* La unidad del producto, dicha donde se pide. El 250 de epazote nacía aquí: la
+   casilla no decía que el producto estaba en kilos, y nadie podía adivinarlo. */
+const unidadDe=p=>{const u=String((p&&p.unidad_base)||"").toLowerCase(); return UNID[u]||u;};
+function cpAvisa(prodId,k){
+  const av=$("av-"+k); if(!av) return;
+  const p=PRODS.find(x=>x.id===prodId);
+  const c=($("op-"+k)||{}).value||"";
+  const pre=c?(CATPROV.find(x=>x.presentacion_id===c)||{}).precio:null;
+  const a=avisaCantidad(p,parseFloat(($("qt-"+k)||{}).value),+pre||0);
+  av.innerHTML=a?("⚠ "+a.texto+" "+esc(a.sugerencia)):"";
 }
 function cpAdd(prodId,key){
   const p=PRODS.find(x=>x.id===prodId); if(!p) return;
   const k=key||prodId;
   const presId=($("op-"+k)||{}).value||"";
   const cant=parseFloat(($("qt-"+k)||{}).value)||1;
+  /* Aquí es donde se corrige, no tres pantallas después: quien pide sabe si quería
+     250 gramos o 250 kilos; quien aprueba, dos días más tarde, ya no. */
+  const av=avisaCantidad(p,cant,0);
+  if(av && !confirm(`${p.nombre} se pide en ${av.unidad}.\n\n`
+       +`Estás pidiendo ${av.cant} ${String(p.unidad_base||"").toLowerCase()}. ${av.sugerencia}\n\n`
+       +`¿Lo dejo en ${av.cant}?`)) return;
   const c=presId?CATPROV.find(x=>x.presentacion_id===presId):null;
   const clave=presId||("np-"+prodId);
   const ya=CART.find(x=>x.clave===clave);
@@ -1325,7 +1345,15 @@ function cpAdd(prodId,key){
 function cpQuita(i){ CART.splice(i,1); cpPintaCart(); }
 /* Ajuste de cantidad en el carrito con + / − (o tecleando). Fija la cantidad,
    no la suma, para que "pido 5" sea 5. El mínimo es 1; para quitar, la ✕. */
-function cpSetCant(i,v){ let n=parseFloat(v); if(!(n>0)) n=1; CART[i].cant=n; cpPintaCart(); }
+function cpSetCant(i,v){
+  let n=parseFloat(v); if(!(n>0)) n=1;
+  const p=PRODS.find(y=>y.id===CART[i].producto_id);
+  const a=avisaCantidad(p,n,+CART[i].precio||0);
+  if(a && !confirm(`${CART[i].producto} se pide en ${a.unidad}.\n\n`
+       +`Estás poniendo ${a.cant} ${String((p&&p.unidad_base)||"").toLowerCase()}. ${a.sugerencia}\n\n`
+       +`¿Lo dejo en ${a.cant}?`)) { cpPintaCart(); return; }
+  CART[i].cant=n; cpPintaCart();
+}
 function cpInc(i){ cpSetCant(i,(+CART[i].cant||0)+1); }
 function cpDec(i){ cpSetCant(i,(+CART[i].cant||0)-1); }
 function cpTotales(){
@@ -1334,13 +1362,24 @@ function cpTotales(){
   const iva=CART.reduce((a,x)=>a+x.cant*(+x.precio||0)*(x.tasa/100),0);
   return {sub,iva,total:sub+iva,sinPrecio};
 }
+/* El mismo aviso en el carrito: si alguien cambió la cantidad con los +/− o
+   tecleándola, se vuelve a mirar antes de que el pedido salga. */
+function cpAvisosCarrito(){
+  const l=CART.map(x=>{
+    const p=PRODS.find(y=>y.id===x.producto_id);
+    const a=avisaCantidad(p,+x.cant,+x.precio||0);
+    return a?`<div style="margin-top:6px">${a.texto} ${esc(a.sugerencia)}</div>`:"";
+  }).filter(Boolean);
+  return l.length?`<div class="avisos" style="border-color:var(--bad);background:var(--bad-bg);color:var(--bad)">
+    <b>Revisa estas cantidades antes de pedir:</b>${l.join("")}</div>`:"";
+}
 function cpPintaCart(){
   const box=$("cpCart"); if(!box) return;
   const t=cpTotales();
   $("cpCrear").disabled=!CART.length; $("cpGuardar").disabled=!CART.length;
   if(!CART.length){ box.innerHTML=`<div class="small muted" style="margin-top:10px">Tu carrito está vacío.</div>`; return; }
   const provs=[...new Set(CART.map(x=>x.proveedor))];
-  box.innerHTML=`${t.sinPrecio?`<div class="avisos">${t.sinPrecio} producto(s) sin precio: el pedido saldrá marcado como <b>info pendiente</b> para que administración le ponga proveedor y costo.</div>`:""}
+  box.innerHTML=`${cpAvisosCarrito()}${t.sinPrecio?`<div class="avisos">${t.sinPrecio} producto(s) sin precio: el pedido saldrá marcado como <b>info pendiente</b> para que administración le ponga proveedor y costo.</div>`:""}
     <div class="card"><h3>🛒 Carrito · ${CART.length} producto(s) · ${provs.length} proveedor(es)</h3>
     <div class="scroll"><table><tbody>
       ${CART.map((x,i)=>`<tr><td>${esc(x.producto)}<div class="small muted">${esc(x.proveedor)} · IVA ${num(x.tasa)}%</div></td>
