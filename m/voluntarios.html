@@ -157,6 +157,7 @@ input,textarea,select{font:inherit;font-size:14px;border:1.5px solid var(--line)
 </style>
 <link rel="icon" type="image/png" href="/dash-192.png">
 <link rel="apple-touch-icon" href="/dash-192.png">
+<script src="/cp-acceso.js"></script>
 <script src="/tel.js" defer></script>
 </head>
 <body>
@@ -362,7 +363,7 @@ function tarjeta(r){
 
   return '<div class="cand" onclick="ficha(\''+r.id+'\')" title="'+esc(r.email||'')+'">'+
     '<b>'+esc(r.nombre||'(sin nombre)')+' '+bandera(r)+'</b>'+
-    vacChip(r)+
+    vacChip(r)+chipSede(r)+
     (cuando?'<div class="meta">'+cuando+'</div>':'')+
     (nota?'<div class="meta">'+esc(nota)+'</div>':'')+
     via+
@@ -383,6 +384,45 @@ function casa(r){
 
 function pinta(){ if(TODO_EMB) dibuja(TODO_EMB); }
 let TODO_EMB=null;
+
+/* LA CIUDAD. Desde el 21-oct-2026 el voluntariado tambien es de Puebla, asi que
+   cada solicitud nace con su sede y esta pantalla se mira por ciudad. Quien solo
+   tiene una ciudad en su cascada de ubicacion -Ale, en Puebla- ni siquiera ve el
+   selector: ve lo suyo y punto. Lo de antes de esa fecha es de CDMX. Javi. */
+const SEDES=[['cdmx','Ciudad de M\u00e9xico'],['puebla','Puebla']];
+const SEDE_NOM={cdmx:'CDMX',puebla:'Puebla'};
+let SEDE=null;              // null = todas las que pueda ver
+let SEDES_VISTA=['cdmx','puebla'];   // las que su cascada le permite
+
+async function cargaSedes(){
+  try{
+    const u = window.cpAcceso ? await cpAcceso.ubicaciones() : null;
+    if(!u){ SEDES_VISTA=['cdmx','puebla']; return; }
+    /* Virreyes y Sincretico son la casa de CDMX: quien tiene cualquiera de
+       las tres ve a los voluntarios de la Ciudad de Mexico. */
+    const v=[];
+    if(u.indexOf('cdmx')>=0||u.indexOf('virreyes')>=0||u.indexOf('sincretico')>=0) v.push('cdmx');
+    if(u.indexOf('puebla')>=0) v.push('puebla');
+    SEDES_VISTA = v.length ? v : ['cdmx','puebla'];
+  }catch(e){ SEDES_VISTA=['cdmx','puebla']; }
+  if(SEDES_VISTA.length===1) SEDE=SEDES_VISTA[0];
+}
+function sedeDe(r){ const x=String((r&&r.sede)||'cdmx').toLowerCase(); return x==='puebla'?'puebla':'cdmx'; }
+function enSede(r){ const x=sedeDe(r);
+  if(SEDES_VISTA.indexOf(x)<0) return false;
+  return !SEDE || SEDE===x; }
+function chipSede(r){
+  if(SEDES_VISTA.length<2) return '';
+  const x=sedeDe(r);
+  return ' <span class="vx" style="--c:#8a6420;--cbg:#8a642016;--cln:#8a642040">'+SEDE_NOM[x]+'</span>';
+}
+function verSede(k){ SEDE = (k==='todas') ? null : k;
+  pinta();
+  /* El calendario es de camas, y las camas de cada ciudad son otras: se vuelve
+     a pedir al servidor en vez de filtrar lo ya pintado. */
+  if(CAL_D!==null) calendario();
+}
+
 
 /* Sacar a alguien de Descartado. */
 /* El correo puede venir de la solicitud o del plan de redes, que es donde los
@@ -467,6 +507,7 @@ async function recuperar(id){
 async function bandeja(){
   const c=document.getElementById('bandeja');
   try{
+    await cargaSedes();
     const todo=await rpc('vol_embudo');
     TODO_EMB=todo;
     if(!todo.length){c.innerHTML='<p class="vacio">Todavía no hay candidatos con correo.</p>';return;}
@@ -482,7 +523,7 @@ function dibuja(todo){
        aparte «por contactar tú», porque no entran a la app y no tenían con qué
        avanzar; ahora sí lo tienen —el plan de redes ellos, sus fechas los de
        yoga— y recorren las mismas siete etapas hasta el check-in. Javi, 4-oct. */
-    const d=todo;
+    const d=todo.filter(enSede);
     const mex=a=>{const n=a??0;return '<span style="font-weight:700;color:'+
       (n>=7?'var(--green)':n>=5?'#8a6420':'#8f3d2a')+'">México '+n+'/10</span>';};
 
@@ -498,7 +539,7 @@ function dibuja(todo){
       : (r.plan_modalidad           ? '<span class="chk">empezó</span>'
       : (r.plan_estado              ? '<span class="chk">liga mandada, sin abrir</span>'
                                     : '<span class="chk">— sin liga</span>')));
-    const pend = todo.filter(r=>r.plan_estado==='entregado');
+    const pend = todo.filter(enSede).filter(r=>r.plan_estado==='entregado');
     const rank = r => r.plan_estado==='entregado' ? 0 : (r.plan_estado==='ajustes' ? 1 : (r.plan_piezas>0?2:3));
 
     let h='';
@@ -513,6 +554,16 @@ function dibuja(todo){
          '</div>';
     }
     if(!d.length){c.innerHTML=h+'<p class="vacio">Todavía no hay nadie en el embudo.</p>';return;}
+
+    /* El selector de ciudad, antes que nada: lo que no es de tu ciudad no
+       deberia ni distraerte. Si solo tienes una, no hay nada que elegir. */
+    if(SEDES_VISTA.length>1){
+      const cu=k=>k==='todas'?d.length:d.filter(r=>sedeDe(r)===k).length;
+      h+='<div class="grupos" style="margin:0 0 12px">'+
+         [['todas','Todas']].concat(SEDES.filter(x=>SEDES_VISTA.indexOf(x[0])>=0))
+           .map(g=>'<button class="'+((SEDE||'todas')===g[0]?'on':'')+'" onclick="verSede(\''+g[0]+'\')">'+
+                   g[1]+' <b>'+cu(g[0])+'</b></button>').join('')+'</div>';
+    }
 
     const vivos=d.filter(r=>r.etapa!=='descartado').length;
     h+='<p class="sub" style="margin:0 0 10px">'+vivos+' candidato'+(vivos===1?'':'s')+' en el embudo · '+
@@ -564,6 +615,9 @@ function cierraFicha(){ const o=document.getElementById('fichaOv');
   if(o){ o.classList.remove('on'); document.body.classList.remove('ficha-open'); document.body.style.overflow=''; } }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') cierraFicha(); });
 window.addEventListener('DOMContentLoaded',()=>{
+  /* La cascada primero: si se pinta antes de saber que ciudades ve, a Ale le
+     aparecen los de CDMX medio segundo y luego desaparecen. */
+  cargaSedes().then(function(){ if(TODO_EMB) pinta(); });
   const o=document.getElementById('fichaOv'), x=document.getElementById('fichaX');
   if(x) x.onclick=cierraFicha;
   if(o) o.addEventListener('click',e=>{ if(e.target===o) cierraFicha(); });
@@ -705,6 +759,18 @@ async function ficha(id){
         -contrato, fechas, plan-, pero hay casos que no ve: alguien que ya llego
         y firmo pero no entra a la app. Aqui se le mueve a mano, queda dicho
         quien y cuando, y se puede devolver al calculo automatico. Javi, 16-oct. */
+     /* En que ciudad hace el voluntariado. Se puede mover: alguien se apunta a
+        Puebla y luego resulta que quiere CDMX, y cambiarlo a mano en la base no
+        es forma. Javi, 21-oct-2026. */
+     '<div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">'+
+       '<p class="sub" style="margin:0 0 8px"><b>Ciudad</b> \u00b7 hace su voluntariado en <b>'+
+         esc(SEDE_NOM[sedeDe(fr)])+'</b></p>'+
+       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+         '<select id="sd-sel">'+SEDES.map(function(k){
+           return '<option value="'+k[0]+'"'+(sedeDe(fr)===k[0]?' selected':'')+'>'+k[1]+'</option>'; }).join('')+
+         '</select>'+
+         '<button class="btn" onclick="moverSede(\''+id+'\')">Cambiarlo de ciudad</button>'+
+       '</div></div>'+
      '<div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">'+
        '<p class="sub" style="margin:0 0 8px"><b>Etapa en el funnel</b> · ahora está en <b>'+
          esc(ETAPA_NOM[fr.etapa]||fr.etapa||'—')+'</b>'+
@@ -1184,6 +1250,21 @@ async function aceptarCarta(id){
       '. Mándalo a mano desde Cartas enviadas.';
   }
 }
+async function moverSede(id){
+  const sel=document.getElementById('sd-sel'); const m=document.getElementById('f-msg');
+  if(!sel) return;
+  const v=sel.value;
+  if(m){ m.className='msg'; m.textContent='Cambi\u00e1ndolo de ciudad\u2026'; }
+  let r=null;
+  try{ r=await rpc('vol_sol_sede',{p_id:id,p_sede:v}); }catch(e){ r=null; }
+  if(!r||r.error){ if(m){ m.className='msg e'; m.textContent=(r&&r.error)||'No se pudo.'; } return; }
+  await bandeja(); await ficha(id);
+  const m2=document.getElementById('f-msg');
+  if(m2){ m2.className='msg k';
+    m2.textContent='Ahora su voluntariado es de '+(SEDE_NOM[r.sede]||r.sede)+
+      '. Lo ver\u00e1 quien lleve esa ciudad.'; }
+}
+
 /* El boton de extender. Hace tres cosas de un tiron porque las tres van
    juntas: guarda la extension, alarga la cama y manda el contrato nuevo. Si el
    correo no sale lo dice claro, igual que en Aceptar: lo peor es creer que
@@ -1260,7 +1341,7 @@ const GRUPOS=[['todos','Todos'],['contenido','Contenido'],
 let CAL_D=null, CAL_G='todos';
 
 async function calendario(){
-  CAL_D=await rpc('vol_calendario',{});
+  CAL_D=await rpc('vol_calendario', SEDE?{p_sede:SEDE}:{});
   pintaGrupos(); pintaCal();
 }
 
