@@ -199,11 +199,20 @@ async function verContratoFirmado(id){
    const rows=await rest('/contratos?employee_id=eq.'+id+'&order=created_at.desc&limit=1&select=contrato_html,firma_acuse,estatus,numero,total_contratos');
    const c=rows&&rows[0];
    if(!c){alert('Todavía no hay contrato generado.');return;}
-   let firma='';
-   const sp=c.firma_acuse&&c.firma_acuse.sig_path;
-   if(sp){try{const r=await fetch(SBU+'/storage/v1/object/sign/'+encodeURI(sp),{method:'POST',headers:H(),body:JSON.stringify({expiresIn:3600})});const j=await r.json();if(j&&j.signedURL)firma='<div style="margin-top:24px;border-top:2px solid #ccc;padding-top:12px"><b>Firma del colaborador</b><br><img src="'+SBU+'/storage/v1'+j.signedURL+'" style="height:100px;display:block;margin:6px 0"><div style="font-size:12px;color:#555">'+esc(c.firma_acuse.firmado_por||'')+' · '+esc(String(c.firma_acuse.at||'').slice(0,16).replace('T',' '))+(c.firma_acuse.lat?(' · '+esc(c.firma_acuse.lat)+', '+esc(c.firma_acuse.lng)):'')+'</div></div>';}catch(e){}}
+   let ac=c.firma_acuse; try{if(typeof ac==='string')ac=JSON.parse(ac);}catch(e){} ac=ac||{};
+   // La firma puede venir embebida (data URI en ac.firma) o como archivo en storage (ac.sig_path)
+   let img=ac.firma||'';
+   if(!img && ac.sig_path){try{const p=(''+ac.sig_path).replace(/^empleados\//,'');const r=await fetch(SBU+'/storage/v1/object/sign/empleados/'+encodeURI(p),{method:'POST',headers:H(),body:JSON.stringify({expiresIn:3600})});const j=await r.json();if(j&&j.signedURL)img=SBU+'/storage/v1'+j.signedURL;}catch(e){}}
+   let html=c.contrato_html||'<p>Contrato sin contenido.</p>';
+   // Pone su firma manual en la línea de EL EMPLEADO
+   if(img && html.indexOf('EL EMPLEADO<br>')>=0){html=html.replace('EL EMPLEADO<br>','EL EMPLEADO<br><img src="'+img+'" alt="firma" style="height:74px;display:block;margin:4px auto 2px">');}
+   const meta=[];
+   if(ac.at){meta.push('Firmado: '+esc(String(ac.at).slice(0,16).replace('T',' ')));}
+   if(ac.firmado_por)meta.push('Por: '+esc(ac.firmado_por));
+   if(ac.lat!=null&&ac.lng!=null)meta.push('Ubicación: '+esc(ac.lat)+', '+esc(ac.lng));
+   const acuse=(c.estatus==='firmado')?('<div style="margin-top:28px;border-top:2px solid #1d9e75;padding-top:10px;font-size:12px;color:#555"><b style="color:#1d9e75">ACUSE DE FIRMA ELECTRÓNICA</b><br>'+(img?('<img src="'+img+'" alt="firma" style="height:90px;border:1px solid #ddd;border-radius:6px;background:#fff;margin:8px 0;display:block">'):'<i>Firma registrada (imagen no disponible).</i><br>')+meta.join(' · ')+'</div>'):'';
    const w=window.open('','_blank');
-   if(w){w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Contrato firmado</title></head><body style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 18px;color:#1f1b16">'+(c.contrato_html||'<p>Contrato sin contenido.</p>')+firma+'</body></html>');w.document.close();}
+   if(w){w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Contrato firmado</title></head><body style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 18px;color:#1f1b16">'+html+acuse+'</body></html>');w.document.close();}
    else alert('Permite las ventanas emergentes para ver el contrato.');
  }catch(e){alert('No se pudo abrir: '+(e.message||'error').slice(0,90));}
 }
@@ -263,8 +272,9 @@ function siguienteHtml(f,s,ci){
  else if(!s.datos_ok){body=`<p class="quetoca">Esperando que suba su información</p><p class="quien">Le llegó la liga a su correo para crear su contraseña y llenar RFC, CURP, NSS y subir sus documentos. ¿No le llegó? Reenvíasela.</p><div class="acts"><button class="btn" data-act="reenviar">Reenviar correo de acceso ✉️</button></div>`;}
  else if(!s.validado_ok){body=`<p class="quetoca">Validar y capturar sus datos</p><p class="quien">Ya mandó su información. Revisa abajo y completa rol, puesto, categoría, salario, propiedad y equipo para poder continuar al contrato.</p>`;}
  else if(!s.contrato_firmado){
-   if(s.contrato_solo && !s.docs_ok){body=`<p class="quetoca">Ya firmó el contrato ✓ — le faltan sus documentos</p><p class="quien">Le quedan <b>${s.docs_pend||''}</b> documento(s) de inducción por firmar (Políticas Internas y Código de Ética). Los firma en SoyPepe, igual que el contrato.</p><div class="acts"><button class="btn gold" data-act="contrato">Ver contrato firmado ↗</button><button class="btn go" data-act="aviso-contrato">Recordarle que firme ✉️</button></div>`;}
-   else{body=`<p class="quetoca">${s.contrato_enviado?'Esperando su firma del contrato y sus documentos':'Generar el contrato y avisarle'}</p><p class="quien">${s.contrato_enviado?'El contrato y sus documentos de inducción ya están en su buzón de SoyPepe para firmar.':'Genera el contrato desde el machote (cae en su buzón de SoyPepe, junto con Políticas y Código de Ética) y mándale el correo para que entre y firme.'}</p><div class="acts"><button class="btn gold" data-act="contrato">Abrir Contratos ↗</button><button class="btn go" data-act="aviso-contrato">Avisar que ya puede firmar ✉️</button></div>`;}
+   if(s.contrato_solo && !s.docs_ok){body=`<p class="quetoca">Ya firmó el contrato ✓ — le faltan sus documentos</p><p class="quien">Le quedan <b>${s.docs_pend||''}</b> documento(s) de inducción por firmar (Políticas Internas y Código de Ética). Los firma en SoyPepe, igual que el contrato.</p><div class="acts"><button class="btn gold" data-act="vercontrato">👁 Ver contrato firmado</button><button class="btn go" data-act="aviso-contrato">Recordarle que firme ✉️</button></div>`;}
+   else if(s.contrato_enviado){body=`<p class="quetoca">Esperando su firma del contrato y sus documentos</p><p class="quien">El contrato y sus documentos de inducción ya están en su buzón de SoyPepe para firmar.</p><div class="acts"><button class="btn gold" data-act="contrato">Ver / reenviar en Contratos ↗</button><button class="btn go" data-act="aviso-contrato">Recordarle que firme ✉️</button></div>`;}
+   else{body=`<p class="quetoca">Generar y enviar el contrato</p><p class="quien">Se genera desde el machote (cae en su buzón de SoyPepe, junto con Políticas y Código de Ética). Ahí mismo lo revisas y se lo mandas para firmar.</p><div class="acts"><button class="btn go" data-act="contrato">Generar y enviar contrato ↗</button></div>`;}
  }
  else if(!s.imss_ok){body=`<p class="quetoca">Darlo de alta en el IMSS</p><p class="quien">Captura la fecha de alta; se quita de los pendientes de Roberto/Claudia.</p><div class="acts"><input id="imssFast" type="date" style="padding:8px;border:1px solid var(--rule);border-radius:8px"> <button class="btn go mini" data-act="imss">Marcar alta IMSS</button></div>`;}
  else if(!s.horario_ok){body=`<p class="quetoca">Lanzar su horario</p><p class="quien">Lo lanza el jefe directo${f.jefe?(' ('+esc(f.jefe.nombre)+')'):''}: arma la rotación y le pone los días desde Horario.</p><div class="acts"><button class="btn go" data-act="horario">Abrir horario ↗</button></div>`;}
@@ -356,6 +366,7 @@ function drawerHtml(f,nom,s,ci){
  h+=`<div class="bloque"><h3>Incorporación y horario</h3>${plan?`<p class="hint">Plan <b>${esc(plan.estado)}</b> · ${esc(plan.semanas)} semanas · ${esc(plan.hitos)} objetivos.</p>`:'<p class="hint">El jefe directo le arma la rotación y los días desde Horario.</p>'}
    <div class="acts" style="margin-top:6px"><button class="btn mini" data-act="horario">Abrir horario ↗</button></div></div>`;
  h+=`<div class="savebar"><button class="btn go" id="fx_save">Guardar ficha</button><span class="msg" id="fx_msg"></span></div>`;
+ h+=`<div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--rule);text-align:center"><button class="btn mini" data-act="baja" style="color:#b03434;border-color:#e0b4b4;background:transparent">Dar de baja (no pasó el proceso)</button></div>`;
  return h;
 }
 
@@ -376,9 +387,11 @@ function wire(id,f,nom){
      if(nom&&nom.ve){[['salario_bruto','fx_salario_bruto'],['sueldo_base','fx_sueldo_base'],['salario_diario','fx_salario_diario'],['neto_fijo','fx_neto_fijo'],['esquema_pago','fx_esquema_pago'],['bono_puntualidad','fx_bono_puntualidad'],['bono_puntualidad_monto','fx_bono_puntualidad_monto']].forEach(p=>{const v=val(p[1]);if(v!==undefined)patch[p[0]]=v;});
        /* Cobra desde = su primer día de labores, no después. */
        const ini=val('fx_fecha_inicio_labores');if(ini)patch.salario_desde=ini;}}
-   try{const r=await rpc('funnel_guardar',{p_id:id,p_patch:patch});if(r&&r.ok){msg.textContent='✓ Guardado · puedes seguir editando';sv.disabled=false;await load();}else{msg.textContent='⚠ '+((r&&r.error)||'no se pudo');sv.disabled=false;}}
+   try{const r=await rpc('funnel_guardar',{p_id:id,p_patch:patch});if(r&&r.ok){msg.textContent='✓ Guardado · puedes seguir editando';sv.disabled=false;await load();refrescarSiguiente();}else{msg.textContent='⚠ '+((r&&r.error)||'no se pudo');sv.disabled=false;}}
    catch(e){msg.textContent='⚠ '+(e.message||'error').slice(0,70);sv.disabled=false;}
  };
+ /* Tras guardar, actualiza el bloque "Lo que sigue" para que el flujo avance sin recargar toda la ficha */
+ function refrescarSiguiente(){try{const row2=DATA.find(x=>x.id===id)||{};const s2=row2.sig||{};const ci2=curIdx(s2);const old=pc.querySelector('.bloque.sig');if(old){const tmp=document.createElement('div');tmp.innerHTML=siguienteHtml(f,s2,ci2);const nv=tmp.firstElementChild;if(nv){old.replaceWith(nv);nv.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>accion(b.dataset.act,id,b));}}}catch(e){}}
  /* ---- Precargas automáticas: salario/área/categoría salen del tabulador por rol+nivel+propiedad ---- */
  function setV(id,v){const el=$(id);if(el&&v!=null&&v!=='')el.value=v;}
  async function tabuFill(){
@@ -432,7 +445,7 @@ async function accion(act,id,btn){
    catch(e){status('⚠ error','err');alert('No se pudo autorizar: '+(e.message||'').slice(0,140));btn.disabled=false;}
    return;
  }
- if(act==='contrato'){openUrl('/m/contratos.html');return;}
+ if(act==='contrato'){openUrl('/m/contratos.html?emp='+id);return;}
  if(act==='vercontrato'){verContratoFirmado(id);return;}
  if(act==='reenviar'){ if(!confirm('¿Reenviar el correo de acceso (crear contraseña + llenar sus datos)?'))return; btn.disabled=true;status('reenviando…');
    try{const r=await edge('funnel-autorizar',{employee_id:id}); if(r&&r.ok){status(r.mail_enviado?'✓ Correo reenviado':'✓ hecho (sin correo)','ok');}else{status('⚠ '+((r&&r.error)||''),'err');alert((r&&r.error)||'No se pudo.');btn.disabled=false;}}
@@ -444,6 +457,19 @@ async function accion(act,id,btn){
  if(act==='imss'){const fe=val('imssFast');if(!fe){alert('Elige la fecha de alta.');return;}btn.disabled=true;try{const r=await rpc('funnel_guardar',{p_id:id,p_patch:{imss_alta_fecha:fe}});if(r&&r.ok){await load();openPanel(id);}else{alert('No se pudo: '+((r&&r.error)||''));btn.disabled=false;}}catch(e){alert('No se pudo: '+e.message);btn.disabled=false;}return;}
  if(act==='lanzar'){if(!confirm('¿Lanzar el plan de incorporación? Arma la rotación de turnos y los objetivos del periodo de prueba según su rol.'))return;btn.disabled=true;try{const r=await rpc('funnel_lanzar_horario',{p_id:id,p_inicio:val('fx_fecha_inicio_labores')||null});if(r&&r.ok){alert('Plan listo: '+r.semanas+' semanas y '+r.hitos+' objetivos. Ahora ponle los días en Horario.');await load();openPanel(id);}else{alert('No se pudo: '+((r&&r.error)||''));btn.disabled=false;}}catch(e){alert('No se pudo: '+e.message);btn.disabled=false;}return;}
  if(act==='integrar'){if(!confirm('¿Marcar como integrado? Queda activo y termina el funnel.'))return;btn.disabled=true;try{await rpc('funnel_integrar',{p_id:id});await load();closePanel();}catch(e){alert('No se pudo: '+e.message);btn.disabled=false;}return;}
+ if(act==='baja'){
+   const row=DATA.find(x=>x.id===id)||{};const nombre=row.nombre||'la persona';
+   const motivo=prompt('Dar de baja a '+nombre+' durante la incorporación.\n\nMotivo (por qué no pasó el proceso):');
+   if(motivo===null)return;
+   btn.disabled=true;status('dando de baja…');
+   try{await rpc('dar_de_baja',{p_id:id,p_motivo:motivo||'Baja en incorporación'});
+     try{const nr=await rest('/employees?select=id&email=in.(contabilidad@casapepe.mx,pagos@casapepe.mx)&estatus=neq.baja');
+       for(const n of (nr||[])){await rpc('crear_notificacion',{p_employee_id:n.id,p_titulo:'Baja en incorporación: '+nombre,p_cuerpo:'Se dio de baja a '+nombre+' durante la incorporación'+(motivo?(' — motivo: '+motivo):'')+'. Favor de registrar la baja en nómina.',p_icono:'🚪'});}
+     }catch(_){}
+     status('✓ baja registrada','ok');await load();closePanel();alert('Baja registrada. Se avisó a nómina y se apagó su acceso.');}
+   catch(e){status('⚠ error','err');alert('No se pudo dar de baja: '+(e.message||'').slice(0,120));btn.disabled=false;}
+   return;
+ }
 }
 
 try{var pg=(localStorage.getItem('cpp_proyecto')||'').toLowerCase();if(['cdmx','puebla','virreyes','corp'].includes(pg))$('fUbic').value=pg;}catch(e){}
