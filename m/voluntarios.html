@@ -814,10 +814,71 @@ async function ficha(id){
        'Si dejas la cama en blanco se queda en la suya; si esa cama ya est\u00e1 ocupada en esas fechas, te lo dice y no hace nada.</p>'+
        '<p class="msg" id="ex-msg"></p></div>';
   }
+  h+='<div class="card" id="camaCard"><h2>Su cama</h2><p class="vacio">Cargando\u2026</p></div>';
   h+='<div class="card" id="expCard"><h2>Expediente</h2><p class="vacio">Cargando…</p></div>';
   c.innerHTML=h; abreFicha();
   if(document.getElementById('planCard')) planPanel(id);
+  camaPanel(id);
   expediente(id);
+}
+
+/* LA CAMA. En CDMX duerme en Residencias de Virreyes y la cama se aparta en el
+   calendario de Residencias, a mano. En Puebla es una reserva de verdad en el
+   PMS -dormitorio mixto de 8-, se crea sola al firmar el contrato, recepcion le
+   hace el check-in como a cualquier huesped y a el le llega su confirmacion de
+   Cloudbeds. Aqui se ve cual de las dos le toca, y si algo fallo se puede
+   repetir a mano. Javi, 21-oct. */
+async function camaPanel(id){
+  const c=document.getElementById('camaCard'); if(!c) return;
+  let d=null;
+  try{ d=await rpc('vol_cama_estado',{p_id:id}); }
+  catch(e){ c.innerHTML='<h2>Su cama</h2><p class="msg e">No se pudo cargar. '+
+    '<button class="btn" onclick="camaPanel(\''+id+'\')">Reintentar</button></p>'; return; }
+  if(!d || d.error){ c.innerHTML='<h2>Su cama</h2><p class="msg e">'+esc((d&&d.error)||'No se pudo cargar.')+'</p>'; return; }
+
+  let h='<h2>Su cama</h2>';
+  if(d.motor==='residencias'){
+    h+='<p class="sub">Duerme en <b>'+esc(d.cuarto||'Residencias de Virreyes')+'</b>. '+
+       'Esa cama se aparta en el calendario de Residencias, no desde aqu\u00ed.</p>';
+  } else if(d.reserva_id){
+    h+='<p class="msg k">\u2713 Tiene su reserva en el PMS de '+esc(SEDE_NOM[d.sede]||d.sede)+
+       ' \u00b7 <b>'+esc(d.reserva_id)+'</b>'+(d.cuarto?' \u00b7 '+esc(d.cuarto):'')+'</p>'+
+       '<p class="chk">Naci\u00f3 con la tarifa p\u00fablica y lleva una nota diciendo en cu\u00e1nto dejar el folio'+
+       (d.precio_noche?' ($'+d.precio_noche+'/noche)':'')+': la tarifa de voluntarios es privada y el PMS no deja '+
+       'reservar con ella desde fuera. Recepci\u00f3n lo ajusta al hacerle el check-in.</p>';
+  } else if(d.puede){
+    h+='<p class="sub" style="margin-bottom:10px">Firm\u00f3 su contrato del <b>'+f(d.desde)+'</b> al <b>'+f(d.hasta)+
+       '</b> y todav\u00eda no tiene cama. Se le crea una reserva en el PMS de '+esc(SEDE_NOM[d.sede]||d.sede)+
+       ' ('+esc(d.cuarto||'dormitorio')+'), le llega su confirmaci\u00f3n como a cualquier hu\u00e9sped y recepci\u00f3n le hace el check-in normal.</p>'+
+       '<button class="btn g" onclick="apartaCama(\''+id+'\')">\u{1F6CF} Apartarle la cama</button>';
+  } else {
+    h+='<p class="sub">Todav\u00eda no se le puede apartar: '+esc(d.por_que||'\u2014')+'.</p>';
+  }
+  c.innerHTML=h+'<p class="msg" id="cama-msg"></p>';
+}
+
+async function apartaCama(id){
+  const m=document.getElementById('cama-msg'); if(!m) return;
+  if(!confirm('\u00bfCrearle la reserva en el PMS? Es inventario de verdad: ocupa una cama y le manda su confirmaci\u00f3n.')) return;
+  m.className='msg'; m.textContent='Apart\u00e1ndole la cama\u2026';
+  let j=null;
+  try{
+    const r=await fetch(SBU+'/functions/v1/vol-cama',{method:'POST',
+      headers:{'Content-Type':'application/json','apikey':SBK,'Authorization':'Bearer '+(T||SBK)},
+      body:JSON.stringify({solicitud_id:id})});
+    j=await r.json().catch(()=>({}));
+  }catch(e){ j={error:e.message}; }
+  if(!j || j.error || j.ok===false){
+    m.className='msg e'; m.textContent='No se pudo: '+((j&&j.error)||'error desconocido');
+    return;
+  }
+  await camaPanel(id);
+  const m2=document.getElementById('cama-msg');
+  if(m2){
+    if(j.reserva_creada){ m2.className='msg k';
+      m2.textContent='\u2713 Reserva '+(j.reservation_id||'')+' creada. Ya le lleg\u00f3 su confirmaci\u00f3n.'; }
+    else { m2.className='msg'; m2.textContent=j.motivo||'No hac\u00eda falta.'; }
+  }
 }
 
 /* El expediente: todo lo que le hemos mandado y todo lo que ha firmado, en un
