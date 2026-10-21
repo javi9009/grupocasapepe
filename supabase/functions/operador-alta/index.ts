@@ -8,12 +8,10 @@ const FROM = Deno.env.get("SINCRETICO_FROM") || "Sincrético <javi@casapepe.mx>"
 // a dónde contesta quien reciba el correo. Por omisión, al mismo de siempre.
 const REPLY = Deno.env.get("SINCRETICO_REPLY_TO") || "javi@casapepe.mx";
 const BASE = Deno.env.get("SINCRETICO_BASE_URL") || "https://grupocasapepe.netlify.app";
-const AVISO = "experience.cdmx@casapepe.mx";  /* avisos de experiencias, 16-oct-2026 */
-/* El alta de Puebla la atiende Ale, no la recepción de CDMX. Va por variable y
-   no escrito aquí porque su correo lo pone Javi; mientras no esté, el aviso
-   sigue llegando al de siempre y nadie se queda sin enterarse.
+const AVISO = Deno.env.get("SINCRETICO_AVISO_CDMX") || "experience.cdmx@casapepe.mx";  /* avisos de experiencias, 16-oct-2026 */
+/* El alta de Puebla la atiende Ale, no la recepción de CDMX.
    Javi, 20-oct-2026, al abrir la plataforma de Puebla. */
-const AVISO_PUEBLA = Deno.env.get("SINCRETICO_AVISO_PUEBLA") || AVISO;
+const AVISO_PUEBLA = Deno.env.get("SINCRETICO_AVISO_PUEBLA") || "experience.puebla@casapepe.mx";
 
 const SEDES: Record<string, { nombre: string; donde: string }> = {
   cdmx:   { nombre: "Ciudad de México", donde: "de la Ciudad de México" },
