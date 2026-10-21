@@ -194,6 +194,19 @@ let UP={id:null,campo:null};
 async function verDoc(v){ if(!v)return; if(/^https?:\/\//.test(v)){openUrl(v);return;} try{const r=await fetch(SBU+'/storage/v1/object/sign/empleados/'+encodeURI(v),{method:'POST',headers:H(),body:JSON.stringify({expiresIn:3600})});const j=await r.json(); if(j&&j.signedURL){openUrl(SBU+'/storage/v1'+j.signedURL);} else alert('No se pudo abrir el archivo.'); }catch(e){alert('No se pudo abrir el archivo.');} }
 function subirDoc(id,campo){ UP={id:id,campo:campo}; const fi=$('docFile'); fi.value=''; fi.click(); }
 $('docFile').onchange=async function(){ const f=this.files[0]; if(!f||!UP.id||!UP.campo)return; const ext=(f.name.split('.').pop()||'pdf').toLowerCase(); const path='expediente/'+UP.id+'/'+UP.campo+'_'+Date.now()+'.'+ext; status('subiendo archivo…'); try{ const rr=await fetch(SBU+'/storage/v1/object/empleados/'+encodeURI(path),{method:'POST',headers:{Authorization:H().Authorization,apikey:KEY,'x-upsert':'true'},body:f}); if(!rr.ok)throw new Error(await rr.text()); const r=await rpc('funnel_doc',{p_id:UP.id,p_campo:UP.campo,p_url:path}); if(r&&r.ok){ status('✓ archivo subido','ok'); openPanel(UP.id); } else { status('⚠ '+((r&&r.error)||'no se pudo'),'err'); alert((r&&r.error)||'No se pudo guardar el archivo.'); } }catch(e){ status('⚠ no se pudo subir','err'); alert('No se pudo subir: '+(e.message||'error').slice(0,120)); } };
+async function verContratoFirmado(id){
+ try{
+   const rows=await rest('/contratos?employee_id=eq.'+id+'&order=created_at.desc&limit=1&select=contrato_html,firma_acuse,estatus,numero,total_contratos');
+   const c=rows&&rows[0];
+   if(!c){alert('Todavía no hay contrato generado.');return;}
+   let firma='';
+   const sp=c.firma_acuse&&c.firma_acuse.sig_path;
+   if(sp){try{const r=await fetch(SBU+'/storage/v1/object/sign/'+encodeURI(sp),{method:'POST',headers:H(),body:JSON.stringify({expiresIn:3600})});const j=await r.json();if(j&&j.signedURL)firma='<div style="margin-top:24px;border-top:2px solid #ccc;padding-top:12px"><b>Firma del colaborador</b><br><img src="'+SBU+'/storage/v1'+j.signedURL+'" style="height:100px;display:block;margin:6px 0"><div style="font-size:12px;color:#555">'+esc(c.firma_acuse.firmado_por||'')+' · '+esc(String(c.firma_acuse.at||'').slice(0,16).replace('T',' '))+(c.firma_acuse.lat?(' · '+esc(c.firma_acuse.lat)+', '+esc(c.firma_acuse.lng)):'')+'</div></div>';}catch(e){}}
+   const w=window.open('','_blank');
+   if(w){w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Contrato firmado</title></head><body style="font-family:ui-sans-serif,system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 18px;color:#1f1b16">'+(c.contrato_html||'<p>Contrato sin contenido.</p>')+firma+'</body></html>');w.document.close();}
+   else alert('Permite las ventanas emergentes para ver el contrato.');
+ }catch(e){alert('No se pudo abrir: '+(e.message||'error').slice(0,90));}
+}
 function closePanel(){$('panel').classList.remove('on');$('velo').classList.remove('on');OPEN=null;}
 $('pCerrar').onclick=closePanel;$('velo').onclick=closePanel;
 
@@ -249,7 +262,10 @@ function siguienteHtml(f,s,ci){
  if(!s.autorizado){body=`<p class="quetoca">Autorizar el alta</p><p class="quien">Tú confirmas que entra a trabajar; se le crea su usuario y se le manda su contraseña.</p><div class="acts"><button class="btn go" data-act="autorizar">Autorizar alta →</button></div>`;}
  else if(!s.datos_ok){body=`<p class="quetoca">Esperando que suba su información</p><p class="quien">Le llegó la liga a su correo para crear su contraseña y llenar RFC, CURP, NSS y subir sus documentos. ¿No le llegó? Reenvíasela.</p><div class="acts"><button class="btn" data-act="reenviar">Reenviar correo de acceso ✉️</button></div>`;}
  else if(!s.validado_ok){body=`<p class="quetoca">Validar y capturar sus datos</p><p class="quien">Ya mandó su información. Revisa abajo y completa rol, puesto, categoría, salario, propiedad y equipo para poder continuar al contrato.</p>`;}
- else if(!s.contrato_firmado){body=`<p class="quetoca">${s.contrato_enviado?'Esperando su firma del contrato':'Generar el contrato y avisarle'}</p><p class="quien">${s.contrato_enviado?'El contrato ya está en su buzón de SoyPepe para firmar.':'Genera el contrato desde el machote (cae en su buzón de SoyPepe) y mándale el correo para que entre y firme.'}</p><div class="acts"><button class="btn gold" data-act="contrato">Abrir Contratos ↗</button><button class="btn go" data-act="aviso-contrato">Avisar que ya puede firmar ✉️</button></div>`;}
+ else if(!s.contrato_firmado){
+   if(s.contrato_solo && !s.docs_ok){body=`<p class="quetoca">Ya firmó el contrato ✓ — le faltan sus documentos</p><p class="quien">Le quedan <b>${s.docs_pend||''}</b> documento(s) de inducción por firmar (Políticas Internas y Código de Ética). Los firma en SoyPepe, igual que el contrato.</p><div class="acts"><button class="btn gold" data-act="contrato">Ver contrato firmado ↗</button><button class="btn go" data-act="aviso-contrato">Recordarle que firme ✉️</button></div>`;}
+   else{body=`<p class="quetoca">${s.contrato_enviado?'Esperando su firma del contrato y sus documentos':'Generar el contrato y avisarle'}</p><p class="quien">${s.contrato_enviado?'El contrato y sus documentos de inducción ya están en su buzón de SoyPepe para firmar.':'Genera el contrato desde el machote (cae en su buzón de SoyPepe, junto con Políticas y Código de Ética) y mándale el correo para que entre y firme.'}</p><div class="acts"><button class="btn gold" data-act="contrato">Abrir Contratos ↗</button><button class="btn go" data-act="aviso-contrato">Avisar que ya puede firmar ✉️</button></div>`;}
+ }
  else if(!s.imss_ok){body=`<p class="quetoca">Darlo de alta en el IMSS</p><p class="quien">Captura la fecha de alta; se quita de los pendientes de Roberto/Claudia.</p><div class="acts"><input id="imssFast" type="date" style="padding:8px;border:1px solid var(--rule);border-radius:8px"> <button class="btn go mini" data-act="imss">Marcar alta IMSS</button></div>`;}
  else if(!s.horario_ok){body=`<p class="quetoca">Lanzar su horario</p><p class="quien">Lo lanza el jefe directo${f.jefe?(' ('+esc(f.jefe.nombre)+')'):''}: arma la rotación y le pone los días desde Horario.</p><div class="acts"><button class="btn go" data-act="horario">Abrir horario ↗</button></div>`;}
  else{body=`<p class="quetoca">Todo listo</p><p class="quien">Expediente, contrato, IMSS y horario completos.</p><div class="acts"><button class="btn go" data-act="integrar">Marcar integrado ✓</button></div>`;}
@@ -323,8 +339,11 @@ function drawerHtml(f,nom,s,ci){
      :'<p class="hint">Define su rol/puesto para ver los bonos que le tocan por área.</p>'):''}
      <p class="hint">Los objetivos del periodo de prueba se crean solos al lanzar el plan.</p></div>`;
  }
+ h+=`<div class="bloque"><h3>Firmas de ingreso</h3>
+   <p class="hint" style="font-size:13px;color:var(--ink-2)">Contrato: ${s.contrato_solo?'<b style="color:var(--accent)">firmado ✓</b>':'<b style="color:var(--warn)">pendiente</b>'} · Documentos de inducción (Políticas + Código de Ética): ${s.docs_ok?'<b style="color:var(--accent)">firmados ✓</b>':('<b style="color:var(--warn)">'+(s.docs_pend||0)+' pendiente(s)</b>')}</p>
+   ${s.contrato_solo?'<div class="acts" style="margin-top:6px"><button class="btn gold mini" data-act="vercontrato">👁 Ver contrato firmado (con su firma)</button></div>':''}</div>`;
  if(!s.contrato_firmado){
-   h+=`<div class="bloque"><h3>Alta IMSS 🔒</h3><p class="hint">Se habilita en su etapa, cuando el contrato esté firmado. Entonces Roberto/Claudia capturan la fecha de alta y suben la cédula.</p></div>`;
+   h+=`<div class="bloque"><h3>Alta IMSS 🔒</h3><p class="hint">Se habilita en su etapa, cuando el contrato y sus documentos estén firmados. Entonces Roberto/Claudia capturan la fecha de alta y suben la cédula.</p></div>`;
  } else {
    h+=`<div class="bloque"><h3>Alta IMSS</h3><div class="fields">${fld('Fecha de alta IMSS',inp('fx_imss_alta_fecha',f.imss_alta_fecha,'date'))}</div>
    <div class="docrow" style="margin-top:9px">
@@ -414,6 +433,7 @@ async function accion(act,id,btn){
    return;
  }
  if(act==='contrato'){openUrl('/m/contratos.html');return;}
+ if(act==='vercontrato'){verContratoFirmado(id);return;}
  if(act==='reenviar'){ if(!confirm('¿Reenviar el correo de acceso (crear contraseña + llenar sus datos)?'))return; btn.disabled=true;status('reenviando…');
    try{const r=await edge('funnel-autorizar',{employee_id:id}); if(r&&r.ok){status(r.mail_enviado?'✓ Correo reenviado':'✓ hecho (sin correo)','ok');}else{status('⚠ '+((r&&r.error)||''),'err');alert((r&&r.error)||'No se pudo.');btn.disabled=false;}}
    catch(e){status('⚠ error','err');alert('No se pudo: '+(e.message||'').slice(0,120));btn.disabled=false;} return; }
