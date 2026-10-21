@@ -112,6 +112,9 @@ canvas.pad{width:100%;height:132px;background:#fff;border:1px dashed var(--rule)
 /* ---------- tablero vertical por etapa (mismo lenguaje que el funnel de altas) ----------
    Tres columnas anchas, no seis estrechas: la tarjeta del pedido lleva proveedor,
    quién lo pidió y el importe, y eso no cabe en 244px sin partirse en dos filas. */
+.filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:4px 2px 12px}
+.filtros input,.filtros select{font:inherit;font-size:13.5px;padding:7px 9px;border:1px solid var(--rule);border-radius:9px;background:var(--surface);color:var(--ink)}
+.filtros #fTxt{flex:1 1 230px;max-width:320px}
 .tablero{display:flex;gap:14px;overflow-x:auto;padding:4px 2px 30px;align-items:flex-start}
 .col{flex:1 1 0;min-width:300px;max-width:520px;background:var(--surface-3);border:1px solid var(--rule);border-radius:12px;display:flex;flex-direction:column;max-height:calc(100vh - 230px)}
 .col .cab{padding:11px 14px 9px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--surface-3);border-radius:12px 12px 0 0;z-index:1}
@@ -123,6 +126,9 @@ canvas.pad{width:100%;height:132px;background:#fff;border:1px dashed var(--rule)
 .col .nada{color:var(--faint);font-size:12px;text-align:center;padding:16px 6px}
 .tj{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:11px 12px;cursor:pointer;box-shadow:var(--shadow)}
 .tj:hover{border-color:var(--accent)}
+.tj[draggable="true"]{cursor:grab}
+.tj.arrastrando{opacity:.4;cursor:grabbing}
+.cuerpo.encima{background:var(--accent-soft);outline:2px dashed var(--accent);outline-offset:-5px;border-radius:9px}
 .tj .t1{display:flex;align-items:baseline;gap:8px}
 .tj .t1 b{font-size:13.5px;font-weight:800}
 .tj .t1 .imp{margin-left:auto;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
@@ -377,10 +383,14 @@ function vFunnel(){
       <button class="btn" style="margin-top:12px" onclick="irTab('sugeridos')">Ver qué hay bajo mínimo</button></div></div>`;
     return;
   }
-  const cols=ETAPA.map(e=>PEDIDOS.filter(p=>e.est.includes(p.estado))
+  /* Los filtros se aplican ANTES de repartir por columnas, para que los números de
+     las cabeceras y los KPIs cuenten lo que se está viendo y no el total de la sede:
+     un contador que dice 30 sobre una columna con 4 tarjetas no sirve de nada. */
+  const VIS=PEDIDOS.filter(pasaFiltro);
+  const cols=ETAPA.map(e=>VIS.filter(p=>e.est.includes(p.estado))
                               .sort((a,b)=>new Date(e.ts(b)||0)-new Date(e.ts(a)||0)));
 
-  const enCurso=PEDIDOS.filter(p=>["borrador","solicitado","aprobado","enviado","recibido_parcial"].includes(p.estado));
+  const enCurso=VIS.filter(p=>["borrador","solicitado","aprobado","enviado","recibido_parcial"].includes(p.estado));
   const comprometido=cols[1].reduce((a,p)=>a+(+p.total||0),0);
   const atorados=enCurso.filter(p=>{const e=etapaDe(p.estado);const d=dias(e&&e.ts(p));return d!=null&&d>7;}).length;
   const cerrados=cols[2];
@@ -397,16 +407,70 @@ function vFunnel(){
       <div class="kpi"><div class="n">${cicloProm!=null?cicloProm+" d":"—"}</div><div class="l">de solicitud a recepción</div></div>
       <div class="kpi"><div class="n" style="color:${conDif?"var(--warn)":"var(--muted)"}">${conDif}</div><div class="l">recibidos con diferencia de precio</div></div>
     </div>
+    ${barraFiltros()}
     <div class="tablero">${ETAPA.map((e,i)=>`
       <div class="col ${i===2?"fin":""}">
         <div class="cab">
           <div class="cuenta">${cols[i].length}</div>
           <h2>${esc(e.l)}</h2><div class="dd">${esc(e.d)}</div>
         </div>
-        <div class="cuerpo">${cols[i].length?cols[i].map(p=>tjPedido(p,e)).join(""):'<div class="nada">Vacía</div>'}</div>
+        <div class="cuerpo" data-etapa="${e.k}">${cols[i].length?cols[i].map(p=>tjPedido(p,e)).join(""):'<div class="nada">Vacía</div>'}</div>
       </div>`).join("")}</div>
-    <div class="small muted" style="padding:0 2px 10px">Toca un pedido para abrirlo, revisarlo y mandárselo al proveedor.</div>`;
+    <div class="small muted" style="padding:0 2px 10px">Toca un pedido para abrirlo, revisarlo y mandárselo al proveedor.${
+      PUEDE_APROBAR?" Arrástralo a <b>Pendiente de recibir</b> y queda aprobado; arrástralo de vuelta para deshacerlo.":""}</div>`;
   $("view").querySelectorAll(".tj").forEach(c=>c.onclick=()=>verPedido(c.dataset.id));
+  enganchaArrastre();
+}
+
+/* ─────────── Filtros del tablero ───────────
+   Tres preguntas que uno se hace mirando el tablero: de qué área es esto, a quién se
+   le compra, y qué lleva parado demasiado. Más un buscador para cuando ya sabes el
+   folio o el producto. Los filtros no viven en la URL ni se guardan: son para mirar
+   un momento y soltar. */
+let FIL={area:"",prov:"",edad:"",txt:""};
+function pasaFiltro(p){
+  if(FIL.area && (p.area||"")!==FIL.area) return false;
+  if(FIL.prov && String(p.proveedor_id||"")!==FIL.prov) return false;
+  if(FIL.edad){
+    const e=etapaDe(p.estado); const d=dias(e&&e.ts(p));
+    if(d==null) return false;
+    if(FIL.edad==="hoy"   && d!==0)  return false;
+    if(FIL.edad==="s7"    && d>7)    return false;
+    if(FIL.edad==="v7"    && d<=7)   return false;
+    if(FIL.edad==="v15"   && d<=15)  return false;
+    if(FIL.edad==="v30"   && d<=30)  return false;
+  }
+  if(FIL.txt){
+    const prov=PROVS.find(x=>x.proveedor_id===p.proveedor_id);
+    const saco=[p.folio, p.area, p.solicitado_por_nombre, p.notas, prov&&prov.proveedor]
+      .concat((p.items||[]).map(i=>i.prod?i.prod.nombre:i.descripcion))
+      .join(" ").toLowerCase();
+    if(!saco.includes(FIL.txt.toLowerCase())) return false;
+  }
+  return true;
+}
+function ponFiltro(k,v){ FIL[k]=v; render(); }
+function limpiaFiltros(){ FIL={area:"",prov:"",edad:"",txt:""}; render(); }
+function barraFiltros(){
+  const vivos=PEDIDOS.filter(p=>!["cancelado","rechazado"].includes(p.estado));
+  const areas=[...new Set(vivos.map(p=>p.area).filter(Boolean))].sort();
+  const provs=[...new Set(vivos.map(p=>p.proveedor_id).filter(Boolean))]
+    .map(id=>[id,(PROVS.find(x=>x.proveedor_id===id)||{}).proveedor||"—"])
+    .sort((a,b)=>a[1].localeCompare(b[1],"es"));
+  const op=(v,l,cur)=>`<option value="${esc(v)}"${String(cur)===String(v)?" selected":""}>${esc(l)}</option>`;
+  const n=PEDIDOS.filter(pasaFiltro).length, hay=FIL.area||FIL.prov||FIL.edad||FIL.txt;
+  return `<div class="filtros">
+    <input id="fTxt" placeholder="Buscar folio, producto, quién pidió…" value="${esc(FIL.txt)}"
+           oninput="FIL.txt=this.value;clearTimeout(window.__ft);window.__ft=setTimeout(render,250)">
+    <select onchange="ponFiltro('area',this.value)">
+      ${op("","Todas las áreas",FIL.area)}${areas.map(a=>op(a,a,FIL.area)).join("")}</select>
+    <select onchange="ponFiltro('prov',this.value)">
+      ${op("","Todos los proveedores",FIL.prov)}${provs.map(x=>op(x[0],x[1],FIL.prov)).join("")}</select>
+    <select onchange="ponFiltro('edad',this.value)">
+      ${op("","Cualquier antigüedad",FIL.edad)}${op("hoy","De hoy",FIL.edad)}${op("s7","De la última semana",FIL.edad)}
+      ${op("v7","Parados +7 días",FIL.edad)}${op("v15","Parados +15 días",FIL.edad)}${op("v30","Parados +30 días",FIL.edad)}</select>
+    ${hay?`<button class="btn ghost sm" onclick="limpiaFiltros()">Quitar filtros · ${n} pedido${n===1?"":"s"}</button>`:""}
+  </div>`;
 }
 
 /* La tarjeta dice lo que hace falta para decidir sin abrirla: de quién es, a quién
@@ -427,13 +491,72 @@ function tjPedido(p,e){
   if(!p.proveedor_id) faltan.push("falta el proveedor");
   if(!n)              faltan.push("no tiene ni una línea");
   if(sinPrecio&&n)    faltan.push("hay líneas sin precio");
-  return `<div class="tj" data-id="${p.id}">
+  const mover=PUEDE_APROBAR&&e.k!=="recibido";
+  return `<div class="tj" data-id="${p.id}" data-etapa="${e.k}"${mover?' draggable="true"':''}>
     <div class="t1"><b>${esc(p.folio)}</b><span class="imp">${money(p.total)}</span></div>
     <div class="prov">${esc(prov?prov.proveedor:"— sin proveedor —")}</div>
     <div class="don">${esc(p.area||"")}${quien?" · lo pidió "+esc(quien):""} · ${n} línea${n===1?"":"s"}</div>
     <div class="datos">${etqs.join("")}</div>
     ${faltan.length?`<div class="falta">⚠ ${esc(faltan.join(" · "))}</div>`:""}
   </div>`;
+}
+/* ─────────── Arrastrar un pedido de una columna a otra ───────────
+   Soltarlo en "Pendiente de recibir" ES aprobarlo: el gesto y la decisión son la
+   misma cosa, y así no hay que abrir el pedido para darle a un botón. Arrastrar
+   hacia atrás lo devuelve a Solicitado, que es como se deshace una aprobación
+   dada por error. Lo de llevarlo a "Recibido" no se hace arrastrando: ahí hay que
+   contar lo que llegó y decir quién lo recibe, así que abre la recepción.
+   Solo arrastra quien puede aprobar; para los demás las tarjetas no son arrastrables.
+   En el móvil esto no existe —el dedo no dispara drag&drop—, por eso el botón del
+   detalle sigue estando: son dos caminos a lo mismo, no uno en lugar del otro. */
+let ARRASTRA=null;
+function enganchaArrastre(){
+  const v=$("view"); if(!v) return;
+  v.querySelectorAll('.tj[draggable="true"]').forEach(c=>{
+    c.addEventListener("dragstart",e=>{
+      ARRASTRA={id:c.dataset.id, de:c.dataset.etapa};
+      c.classList.add("arrastrando");
+      try{ e.dataTransfer.setData("text/plain",c.dataset.id);
+           e.dataTransfer.effectAllowed="move"; }catch(_){}
+    });
+    c.addEventListener("dragend",()=>{ c.classList.remove("arrastrando"); ARRASTRA=null;
+      v.querySelectorAll(".cuerpo.encima").forEach(x=>x.classList.remove("encima")); });
+  });
+  v.querySelectorAll(".cuerpo[data-etapa]").forEach(z=>{
+    z.addEventListener("dragover",e=>{
+      if(!ARRASTRA||!destinoValido(ARRASTRA.de,z.dataset.etapa)) return;
+      e.preventDefault(); e.dataTransfer.dropEffect="move"; z.classList.add("encima");
+    });
+    z.addEventListener("dragleave",()=>z.classList.remove("encima"));
+    z.addEventListener("drop",e=>{
+      e.preventDefault(); z.classList.remove("encima");
+      if(!ARRASTRA) return;
+      const de=ARRASTRA.de, a=z.dataset.etapa, id=ARRASTRA.id; ARRASTRA=null;
+      if(de===a||!destinoValido(de,a)) return;
+      sueltaPedido(id,de,a);
+    });
+  });
+}
+const destinoValido=(de,a)=>
+  (de==="solicitado"&&a==="pendiente") ||
+  (de==="pendiente"&&a==="solicitado") ||
+  (de==="pendiente"&&a==="recibido");
+
+async function sueltaPedido(id,de,a){
+  const p=PEDIDOS.find(x=>x.id===id); if(!p) return;
+  if(de==="solicitado"&&a==="pendiente") return aprobar(id);
+  if(de==="pendiente"&&a==="recibido")   return abrirRecepcion(id);
+  if(de==="pendiente"&&a==="solicitado"){
+    if(!confirm(`${p.folio} vuelve a Solicitado.\n\nDeja de estar aprobado y no se puede recibir hasta que lo apruebes otra vez. ¿Lo devuelvo?`)) return;
+    const {error}=await sb.from("cmp_pedidos")
+      .update({estado:"solicitado", aprobado_at:null, aprobado_por:null, aprobado_por_nombre:null})
+      .eq("id",id);
+    if(error) return toast(error.message);
+    await sb.from("cmp_pedido_eventos").insert({pedido_id:id, evento:"devuelto",
+      estado_nuevo:"solicitado", actor_id:USER.id, actor_nombre:EMAIL,
+      detalle:"Devuelto a Solicitado desde el tablero"});
+    toast("Devuelto a Solicitado"); await recargar();
+  }
 }
 const fechaCorta=f=>f?new Date(f+"T12:00:00").toLocaleDateString("es-MX",{day:"numeric",month:"short"}):"";
 
@@ -610,9 +733,11 @@ function pintaEnvio(id){
   const tel =telWhats((($("enTel")||{}).value)||"");
   const mail=((($("enMail")||{}).value)||"").trim();
   const ok=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail);
+  /* Sin target="_blank": whatsapp:// no es una página, se lo pasa al sistema. Con
+     _blank dejaría una pestaña en blanco abierta cada vez. */
   const wa=tel
     ? `<a class="btn" style="text-decoration:none;display:inline-flex;align-items:center;gap:8px"
-          target="_blank" rel="noopener" href="${urlWhats(tel,txt)}" onclick="guardaContacto('${id}')">
+          href="${urlWhats(tel,txt)}" onclick="guardaContacto('${id}')">
          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2Zm5.6 14.1c-.2.6-1.2 1.2-1.7 1.2-.4 0-1 .1-3.2-.8-2.7-1.1-4.4-3.9-4.5-4-.1-.2-1-1.4-1-2.7 0-1.2.7-1.8.9-2.1.2-.3.5-.3.6-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.3 0 .5l-.4.5c-.1.2-.3.3-.1.6.1.3.6 1.1 1.4 1.8 1 .9 1.8 1.1 2 1.3.3.1.4.1.6-.1l.8-.9c.2-.2.4-.2.6-.1l1.8.9c.2.1.4.2.5.3 0 .1 0 .6-.2 1.1Z"/></svg>
          Mandar por WhatsApp</a>`
     : `<span class="small muted">Escribe el WhatsApp a 10 dígitos y aparece el botón.</span>`;
@@ -623,7 +748,10 @@ function pintaEnvio(id){
     : "";
   const marca=(tel||ok)&&p.estado!=="enviado"
     ? `<button class="btn ghost sm" onclick="marcarEnviado('${id}')">Ya se lo mandé</button>` : "";
-  box.innerHTML=wa+em+marca+(tel?`<span class="small muted" style="flex-basis:100%">Se abre tu WhatsApp Web con el mensaje escrito al +${esc(tel)}. Revísalo antes de darle enviar.</span>`:"");
+  box.innerHTML=wa+em+marca+(tel?`<span class="small muted" style="flex-basis:100%">
+      Se abre tu WhatsApp con el mensaje ya escrito al +${esc(tel)}. Revísalo antes de darle enviar.
+      · <a href="${urlWhatsWeb(tel,txt)}" target="_blank" rel="noopener" onclick="guardaContacto('${id}')">¿No se abre? Usar WhatsApp Web</a>
+    </span>`:"");
 }
 /* Si corrigieron el teléfono o el correo aquí, que queden en la ficha y no haya
    que volver a escribirlos el mes que viene. */
@@ -1599,10 +1727,14 @@ function telWhats(t){
   if(d.length>10) d=d.slice(-10);                             // último recurso
   return d.length===10 ? "52"+d : "";
 }
-/* Javi trabaja con WhatsApp abierto en la computadora, así que el enlace va a
-   WhatsApp Web y no a wa.me, que en escritorio da un rodeo por una página de
-   descarga antes de llegar al chat. */
-const urlWhats=(tel,txt)=>"https://web.whatsapp.com/send?phone="+tel+"&text="+encodeURIComponent(txt);
+/* Javi usa la APLICACIÓN de WhatsApp de Windows, no la web: web.whatsapp.com le
+   pedía escanear el QR cada vez, porque ahí no tiene sesión. El esquema whatsapp://
+   se lo entrega a la app que ya está abierta y con la sesión puesta.
+   wa.me tampoco sirve en escritorio: da un rodeo por una página de descarga.
+   Se deja el enlace a la web como salida de emergencia, pequeño y debajo, por si
+   alguien abre el panel en una computadora sin la app instalada. */
+const urlWhats   =(tel,txt)=>"whatsapp://send?phone="+tel+"&text="+encodeURIComponent(txt);
+const urlWhatsWeb=(tel,txt)=>"https://web.whatsapp.com/send?phone="+tel+"&text="+encodeURIComponent(txt);
 
 function copiar(){ const t=$("enCuerpo"); t.select(); document.execCommand("copy"); toast("Texto copiado"); }
 async function marcarEnviado(id){
