@@ -95,7 +95,7 @@
     /* Una subcategoría con cosas dentro ya no se lleva la columna entera: se
        abre aquí mismo y empuja hacia abajo a sus hermanas, para que todo se
        alcance sin perder de vista dónde estás. Javi, 3-oct. */
-    '.m2-sub .it .fl{margin-left:auto;opacity:.45;font-size:11px;transition:transform .15s ease}',
+    '.m2-sub .it .fl{margin-left:auto;opacity:.45;font-size:11px;transition:transform .15s ease;padding:2px 4px;margin-right:-4px}',
     '.m2-sub .it.abierto{color:var(--m2fuerte);font-weight:600}',
     '.m2-sub .it.abierto .fl{transform:rotate(90deg);opacity:.85}',
     '.m2-sub .nido{margin:1px 0 5px 15px;padding-left:9px;',
@@ -284,6 +284,21 @@
               +(dentro.length?'<span class="fl">\u203A</span>':''));
             if (apg) it.title = p.tx+' — no tienes acceso';
             if (!pend && !apg) it.onclick = function(){ elige(n0); };
+            /* La flechita pliega y despliega, y nada más: en un renglón que
+               tiene pantalla propia el clic ya se lo lleva abrir la pantalla,
+               así que sin esto no habría forma de cerrar el cajón. */
+            if (dentro.length){
+              var fl = it.querySelector('.fl');
+              if (fl){
+                fl.title = abierto ? 'Plegar' : 'Desplegar';
+                fl.style.cursor = 'pointer';
+                fl.onclick = function(ev){
+                  ev.stopPropagation();
+                  estado.abiertos[d.codigo] = !estado.abiertos[d.codigo];
+                  pinta();
+                };
+              }
+            }
             host.appendChild(it);
             if (dentro.length && abierto){
               var nido = el('div','nido');
@@ -331,8 +346,16 @@
 
   function elige(n){
     var _tx=(parte(n).tx||'').trim().toLowerCase();
+    /* PANEL ABRE LA PORTADA Y DEJA SU SUBMENÚ A LA VISTA.
+       Javi, 20-oct-2026: «mantén que aparezca el panel en la imagen central
+       pero que se abra la info del panel y también el submenú». Antes este
+       atajo abría la portada y de paso devolvía el menú a la lista de
+       categorías, así que el submenú de Panel —Incidencias, Ligas, Contenido,
+       Siguientes módulos— desaparecía justo al entrar. */
     if((_tx==='panel'||_tx==='inicio')&&window.openHome&&!n.ruta){ try{window.openHome();}catch(_){}
-      estado.vista='cat'; estado.cat=null; estado.rama=null; estado.activa=null; pinta(); return; }
+      estado.cat = n.codigo; estado.rama = n.codigo; estado.vista = 'sub';
+      estado.submin = false; estado.catmin = false; estado.activa = null;
+      pinta(); return; }
     n = atajo(n);
     var conHijos = hijosVisibles(n.codigo);
     /* Lo que tiene dentro se despliega AQUÍ, en su sitio, empujando abajo a las
@@ -340,14 +363,32 @@
        resto. Y el centro enseña el tablero de ese cajón, para que desde la
        misma pantalla se alcance todo. Javi, 3-oct. */
     if (conHijos.length) {
+      /* UN RENGLÓN QUE TIENE PÁGINA SIEMPRE ABRE SU PÁGINA.
+         Javi, 20-oct-2026: «se ocultó el submenú de incidencias cuando le doy,
+         ya no abre (…) mantén que aparezca el panel en la imagen central pero
+         que se abra la info del panel y también el submenú».
+         Incidencias tiene pantalla Y lleva cosas dentro. Antes el clic era un
+         interruptor: el segundo clic plegaba el cajón y no abría nada, así que
+         desde fuera parecía que la pantalla se había roto. Ahora, si el
+         renglón tiene ruta, el clic hace las dos cosas —abre su pantalla en el
+         centro y deja el cajón abierto— y plegarlo se hace con la flechita.
+         Sólo los cajones SIN pantalla propia siguen siendo interruptor, porque
+         ahí abrir y plegar es lo único que pueden hacer. */
+      if (n.ruta) {
+        estado.abiertos[n.codigo] = true;
+        estado.activa = n.codigo;
+        D.abrir(n.ruta, parte(n).tx, migaja(n));
+        pinta();
+        return;
+      }
       var yaEstaba = !!estado.abiertos[n.codigo];
       estado.abiertos[n.codigo] = !yaEstaba;
       if (!yaEstaba) {
-        /* Al abrirlo se enseña lo suyo: su pantalla si la tiene, y si no el
-           tablero con lo que lleva dentro. Al cerrarlo no se toca el centro:
-           plegar un cajón no debería sacarte de donde estás leyendo. */
-        if (n.ruta) { estado.activa = n.codigo; D.abrir(n.ruta, parte(n).tx, migaja(n)); }
-        else { estado.activa = null; D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n)); }
+        /* Al abrirlo se enseña el tablero con lo que lleva dentro. Al cerrarlo
+           no se toca el centro: plegar un cajón no debería sacarte de donde
+           estás leyendo. */
+        estado.activa = null;
+        D.abrir('/m/hub.html?nodo=' + encodeURIComponent(n.codigo), parte(n).tx, migaja(n));
       }
       pinta();
       return;
