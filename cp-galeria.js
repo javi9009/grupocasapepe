@@ -261,6 +261,13 @@
       COLA = COLA.filter(function (c) { return !c.subido; });
       b.disabled = false;
       pintaCola(); pinta(); parte();
+      /* Y QUE SE VEA. Javi, 23-oct-2026: «no me dejó verla subida». Sí la
+         dejó —la foto estaba arriba— pero «Ya subidos» queda debajo de la
+         cola, y en un teléfono eso es un scroll que nadie adivina. Subir algo
+         y no verlo aparecer se lee como que falló. */
+      if (ult.ok) {
+        try { q('.cpg-subidos').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
+      }
     }
 
     function parte() {
