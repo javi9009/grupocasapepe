@@ -794,9 +794,11 @@ gmp-place-autocomplete,.gmpac{
         <h3>Fotos y video</h3>
         <div class="hint">Tres fotos como mínimo. Al subir cada una la acomodas, y se guardan dos versiones: vertical para las tarjetas y horizontal para la portada. Con <b>⤢</b> la vuelves a acomodar cuando quieras.
           <br><b>Principal</b> es la que se ve en el recuadro grande de la experiencia; <b>Header</b> es la que sale en la galería de la portada. Las demás acompañan.</div>
+        <div class="mini" id="queSubir" style="margin:10px 0;padding:10px 12px;border-left:3px solid var(--naranja);background:var(--hueso);border-radius:0 8px 8px 0;line-height:1.55"></div>
         <div class="zona" id="zona">
-          <b>Arrastra tus fotos aquí</b> o haz clic para elegirlas<div class="mini" style="margin-top:4px">JPG, PNG, WEBP o MP4 (también .mov del iPhone) · los videos los comprimimos aquí antes de subirlos · puedes soltar varias a la vez</div>
+          <b>Arrastra tus fotos y videos aquí</b> o haz clic para elegirlos<div class="mini" style="margin-top:4px">JPG, PNG, WEBP o MP4 (también .mov del iPhone) · puedes soltar varios a la vez</div>
         </div>
+        <div id="malSubida"></div>
         <input type="file" id="file" multiple accept="image/*,video/mp4,video/quicktime,video/webm" style="display:none">
         <div class="fgrid" style="margin-top:12px">
           <div class="fld ancho"><label>…o pega ligas de Drive o de la web</label><textarea id="ligas" rows="2" placeholder="Una liga por renglón"></textarea><div class="ay">Las descargamos y las guardamos nosotros. Si son de Drive, tienen que estar compartidas con «cualquiera con el enlace».</div></div>
@@ -3499,8 +3501,19 @@ gmp-place-autocomplete,.gmpac{
     });
   }
 
+  /* QUÉ SUBIR, ESCRITO DONDE SE SUBE. Javi, 23-oct-2026, de parte de las
+     productoras: la orientación, el tipo y el tamaño. El texto vive en
+     cp-video.js para que diga lo mismo en las cuatro pantallas. */
+  (function(){
+    var q=document.getElementById('queSubir');
+    if(q && window.cpVideo) q.innerHTML=cpVideo.queSubir('experiencia');
+  })();
+
   async function sube(files){
     if(!files||!files.length)return;
+    var fallos=[];
+    var cajaMal=document.getElementById('malSubida');
+    if(cajaMal) cajaMal.innerHTML='';
     files=Array.prototype.slice.call(files);
     var videos=files.filter(function(f){return (f.type||'').indexOf('video')===0;});
     var fotos =files.filter(function(f){return (f.type||'').indexOf('video')!==0;});
@@ -3523,14 +3536,16 @@ gmp-place-autocomplete,.gmpac{
           if(rv.aviso) toast(rv.aviso,!rv.comprimido);
           if(rv.comprimido) toast('Comprimido: de '+cpVideo.mb(rv.antes)+' MB a '+cpVideo.mb(rv.despues)+' MB'); }
       }
-      if(cuerpo.size>200*1024*1024){mal++;continue;}
+      if(cuerpo.size>200*1024*1024){
+        mal++; fallos.push({nombre:f.name,motivo:'pesa '+cpVideo.mb(cuerpo.size)+' MB y el tope son 200'}); continue; }
       toast('Subiendo video… '+(i+1)+' de '+videos.length);
       var ext=(String(nom).split('.').pop()||'mp4').toLowerCase();
       var ruta=carpetaMedia()+'/'+Date.now()+'-'+i+'.'+ext;
       var r=await fetch(SB+'/storage/v1/object/sincretico/'+ruta,{
         method:'POST',headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),
         'Content-Type':cuerpo.type||f.type||'application/octet-stream'},body:cuerpo});
-      if(!r.ok){mal++;continue;}
+      if(!r.ok){
+        mal++; fallos.push({nombre:nom,motivo:'el almacén lo rechazó ('+r.status+')'}); continue; }
       await post('sinc_media',{operador_id:E.operador_id||null,experiencia_id:ID,
         tipo:'video',url:SB+'/storage/v1/object/public/sincretico/'+ruta,storage_path:ruta,
         etiqueta:'general',bytes:cuerpo.size,origen:'subida',orden:n++});
@@ -3539,9 +3554,11 @@ gmp-place-autocomplete,.gmpac{
 
     for(var j=0;j<fotos.length;j++){
       var g=fotos[j];
-      if(g.size>25*1024*1024){mal++;continue;}
+      if(g.size>25*1024*1024){
+        mal++; fallos.push({nombre:g.name,motivo:'pesa '+cpVideo.mb(g.size)+' MB y el tope de una foto son 25'}); continue; }
       var cr=await recorta(g, fotos.length>1?('Foto '+(j+1)+' de '+fotos.length):'Acomoda la foto');
-      if(!cr||!cr.vUrl){mal++;continue;}
+      if(!cr||!cr.vUrl){
+        mal++; fallos.push({nombre:g.name,motivo:'cerraste el recortador, o el navegador no supo abrir esa imagen'}); continue; }
       await post('sinc_media',{operador_id:E.operador_id||null,experiencia_id:ID,
         tipo:'foto',url:cr.vUrl,storage_path:cr.vPath,
         url_h:cr.hUrl||null,storage_path_h:cr.hPath||null,
@@ -3550,8 +3567,12 @@ gmp-place-autocomplete,.gmpac{
     }
 
     await recargaMedia();
-    if(ok||mal)toast(ok+' archivo'+(ok===1?'':'s')+' arriba'+
-      (mal?' · '+mal+' no entraron (máx 25 MB, o cancelaste el recorte)':''),mal>0);
+    if(ok) toast(ok+' archivo'+(ok===1?'':'s')+' arriba');
+    /* EL PARTE DE LOS QUE NO ENTRARON. Antes era un «3 no entraron (máx 25 MB,
+       o cancelaste el recorte)»: un número y dos sospechas. Ahora cada uno con
+       su nombre y su motivo, y a dónde ir a arreglarlo. Javi, 23-oct. */
+    if(cajaMal && window.cpVideo) cajaMal.innerHTML=cpVideo.noEntraron(fallos);
+    if(mal && !cajaMal) toast(mal+' no entraron',true);
   }
 
   /* Volver a acomodar una foto ya subida, sin tener que resubirla. */

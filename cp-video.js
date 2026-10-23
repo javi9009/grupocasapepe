@@ -180,5 +180,67 @@
 
   function mb(n) { return (Number(n || 0) / 1048576).toFixed(1); }
 
-  window.cpVideo = { comprime: comprime, mb: mb };
+  /* ---------- QUÉ SUBIR, Y QUÉ HACER CUANDO NO SE PUDO ----------
+     Javi, 23-oct-2026, de parte de las productoras: «que pongas la
+     orientación, qué tipo de video o foto subir y tamaño, y reportar cuando
+     no la puedas subir y proponerle una web en link para que la pueda
+     editar».
+     Las tres cosas viven aquí para que digan lo mismo en las cuatro pantallas
+     donde se sube algo: la ficha de la experiencia, la galería del
+     touroperador, el portal de la productora y la ficha del evento del panel.
+
+     El primer consejo no es una web: es el teléfono. Recortar y girar un
+     video se hace en Fotos o en la Galería, sin instalar ni registrarse, y
+     es lo que esa persona ya tiene en la mano. La web es el plan B. */
+  var LIGAS = [
+    ['En tu teléfono', 'Fotos (iPhone) o Galería (Android): recortar, girar y acortar sin instalar nada', ''],
+    ['Fotos', 'photopea.com', 'https://www.photopea.com'],
+    ['Video', 'online-video-cutter.com', 'https://online-video-cutter.com/es/']
+  ];
+
+  function ligasHTML() {
+    return LIGAS.map(function (l) {
+      return '<li><b>' + l[0] + '</b> — ' +
+        (l[2] ? '<a href="' + l[2] + '" target="_blank" rel="noopener">' + l[1] + '</a>' : l[1]) +
+        '</li>';
+    }).join('');
+  }
+
+  /* Qué subir, según dónde va. `donde` es 'evento' o 'experiencia'. */
+  function queSubir(donde) {
+    if (donde === 'evento') {
+      return '<b>El cartel, en vertical.</b> Así sale en la app: 3:4 o 9:16, como lo ves en el teléfono. ' +
+             'Si lo mandas horizontal entra recortadísimo y se pierde la mitad.<br>' +
+             '<b>Foto:</b> JPG o PNG, al menos 1200 px de alto. La recortamos aquí al subirla.<br>' +
+             '<b>Video:</b> vertical, de 10 a 20 segundos. Lo comprimimos aquí, no te preocupes por el peso.';
+    }
+    return '<b>Principal</b> es el recuadro grande: va <b>vertical</b> (9:16), y un video de 10 a 20 segundos funciona mejor que una foto.<br>' +
+           '<b>Header</b> es la tarjeta del escaparate: va <b>horizontal</b> (16:9).<br>' +
+           '<b>Fotos:</b> JPG, PNG o WEBP, al menos 1200 px del lado corto. Al subirlas las acomodas y se guardan las dos versiones.<br>' +
+           '<b>Video:</b> MP4 o el .mov del iPhone. Lo comprimimos aquí antes de subirlo.';
+  }
+
+  /* El parte de los que no entraron: cada uno con su nombre y su motivo, y
+     a dónde ir a arreglarlo. Un «3 no entraron» no se puede accionar. */
+  function noEntraron(fallos) {
+    if (!fallos || !fallos.length) return '';
+    return '<div class="cpv-mal" style="margin-top:10px;border:1.5px solid #9E3B2E;background:#F6E1DD;' +
+           'color:#1E1A16;border-radius:10px;padding:11px 13px;font-size:13px;line-height:1.5">' +
+           '<b>' + fallos.length + (fallos.length === 1 ? ' no se pudo subir' : ' no se pudieron subir') + ':</b>' +
+           '<ul style="margin:6px 0 0;padding-left:18px">' +
+           fallos.map(function (f) {
+             return '<li>' + esc(f.nombre || 'un archivo') + ' — ' + esc(f.motivo || 'no se pudo') + '</li>';
+           }).join('') +
+           '</ul><div style="margin-top:9px">Arréglalo y vuelve a intentarlo:</div>' +
+           '<ul style="margin:4px 0 0;padding-left:18px">' + ligasHTML() + '</ul></div>';
+  }
+
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  window.cpVideo = { comprime: comprime, mb: mb,
+                     queSubir: queSubir, noEntraron: noEntraron, ligasHTML: ligasHTML };
 })();
