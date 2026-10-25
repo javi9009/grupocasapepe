@@ -278,6 +278,42 @@ window.sincCuenta = (function () {
     return v && v > 0 ? v : null;
   }
 
+  /* CUÁNTA GENTE PUEDE APARTAR DE UNA SENTADA.
+     Javi, 25-oct-2026, para tours, boletos, eventos y cualquier producto.
+
+     Lo normal son 15: es autoservicio, y quien trae un grupo mayor se habla
+     con nosotros. Por encima de eso ya no es una reserva, es una venta.
+
+     Los TOURS GRATUITOS son la excepción, y por un motivo concreto: un lugar
+     que se aparta y nadie ocupa es un lugar que se le quitó a otro, y sin
+     cobro no hay nada que lo desanime. Así que en un tour gratuito sólo se
+     aparta para los que duermen en la casa — si no, acaban reservando para los
+     amigos de otro hostal. El número sale de su reserva, por la liga del
+     hotel; si entró con su correo o con Google no sabemos cuál es y no se
+     inventa: se le deja el tope normal, que antes dejarle de más que cerrarle
+     la puerta por una cuenta que no supimos leer.
+
+     Los SHOWS Y LAS FIESTAS gratuitas NO llevan ese tope, aunque no cobren.
+     Javi: «como el cliente va a consumir en el evento, sí pueden reservar para
+     más de 1». Ahí el lugar no se desperdicia: se llena la casa y se vende en
+     la barra. Por eso la regla mira la categoría y no sólo el precio. */
+  var TOPE_AUTOSERVICIO = 15;
+  function topePax(opts) {
+    opts = opts || {};
+    var esTour = String(opts.categoria || '').toLowerCase() === 'tours';
+    if (opts.gratis && esTour) return paxReserva() || TOPE_AUTOSERVICIO;
+    return TOPE_AUTOSERVICIO;
+  }
+  /* Por qué ese tope, para poder decírselo en pantalla en vez de que el botón
+     deje de responder sin explicación. */
+  function motivoTope(opts) {
+    opts = opts || {};
+    var esTour = String(opts.categoria || '').toLowerCase() === 'tours';
+    if (opts.gratis && esTour && paxReserva())
+      return 'En los tours gratuitos apartas para los que vienen en tu reserva.';
+    return 'Para más de ' + TOPE_AUTOSERVICIO + ' personas, escríbenos y lo armamos contigo.';
+  }
+
   async function fn(nombre, cuerpo, conSesion) {
     var h = conSesion ? await hdr()
                       : { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json' };
@@ -657,6 +693,7 @@ window.sincCuenta = (function () {
     miPerfil: miPerfil, comoHuesped: comoHuesped, yoDeEstaLiga: yoDeEstaLiga, recoge: recoge,
     lista: lista,
     conSesionAbierta: conSesionAbierta, paxReserva: paxReserva,
+    topePax: topePax, motivoTope: motivoTope, TOPE_AUTOSERVICIO: TOPE_AUTOSERVICIO,
   };
 })();
 
