@@ -218,6 +218,37 @@ window.sincCuenta = (function () {
     };
   }
 
+  /* Una llamada a la base, con la sesión que haya. */
+  async function rpc(nombre, cuerpo) {
+    var h = await hdr();
+    var r = await fetch(SB + '/rest/v1/rpc/' + nombre, {
+      method: 'POST', headers: h, body: JSON.stringify(cuerpo || {}),
+    });
+    var t = await r.text(), j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
+    if (!r.ok) throw new Error((j && (j.message || j.hint)) || ('Respondió ' + r.status));
+    return j;
+  }
+
+  /* ¿ES HUÉSPED EL QUE ESTÁ DELANTE?
+     Javi, 25-oct-2026: «cuando un cliente entra por la app de check-in le toca
+     el tour gratuito porque es huésped; cuando entra con su mail le aparecen
+     los 50$». O sea: el precio depende de quién pregunta.
+     Quien contesta es la base, no el navegador; aquí sólo se guarda la
+     respuesta para no preguntarla en cada pintada. Y lo que de verdad cobra
+     -sinc_reservar- vuelve a preguntárselo a la misma función, así que tocar
+     esta variable desde la consola no regala ningún tour: sólo cambia lo que
+     se ve, y al reservar saldría el precio. */
+  var HUESPED = null;
+  async function soyHuesped() {
+    if (HUESPED !== null) return HUESPED;
+    try { HUESPED = !!(await rpc('sinc_soy_huesped', {})); }
+    catch (_) { HUESPED = false; }
+    return HUESPED;
+  }
+  /* Lo ya sabido, para pintar sin esperar. null = todavía no se ha preguntado. */
+  function huespedYa() { return HUESPED; }
+  function olvidaHuesped() { HUESPED = null; }
+
   /* La ficha del cliente. La crea la base la primera vez que entra. */
   async function fichaje(extra) {
     var h = await hdr();
@@ -247,6 +278,9 @@ window.sincCuenta = (function () {
        quedaran, el siguiente que entrara en el mismo teléfono -el de recepción,
        el de una compañera- heredaría su tope. */
     try { localStorage.removeItem('sinc_resv_pax'); } catch (_) {}
+    /* Y deja de ser huésped para esta pantalla: el siguiente que entre en el
+       mismo teléfono no hereda su cortesía. */
+    HUESPED = null;
     /* SALIR TIENE QUE SALIR AUNQUE EL SERVIDOR DIGA QUE NO.
        Javi, 19-oct-2026: \u00abcomo est\u00e1 dado de alta ese Marceau no me deja
        darme de alta a m\u00ed\u00bb. En su compu hab\u00eda quedado la sesi\u00f3n de un
@@ -578,6 +612,13 @@ window.sincCuenta = (function () {
         if (j && Number(j.pax) > 0) localStorage.setItem('sinc_resv_pax', String(Number(j.pax)));
         else localStorage.removeItem('sinc_resv_pax');
       } catch (_) {}
+      /* Y SE LE ANOTA LA ESTANCIA, que es lo que le da la cortesía del tour
+         por propina. El apunte lo hace la base con el token de la liga -no con
+         lo que diga esta pantalla-, y queda a nombre del correo de la sesión
+         que se acaba de abrir. Si falla, entra igual: lo único que pierde es
+         ver el tour en cortesía, y eso se arregla en el mostrador. */
+      try { HUESPED = !!(await rpc('sinc_marca_estancia', { p_token: t })); }
+      catch (_) { HUESPED = null; }
       return ficha;
     } catch (x) {
       /* Que no lo vuelva a intentar en cada pantalla de la sesión. */
@@ -694,6 +735,8 @@ window.sincCuenta = (function () {
     lista: lista,
     conSesionAbierta: conSesionAbierta, paxReserva: paxReserva,
     topePax: topePax, motivoTope: motivoTope, TOPE_AUTOSERVICIO: TOPE_AUTOSERVICIO,
+    rpc: rpc,
+    soyHuesped: soyHuesped, huespedYa: huespedYa, olvidaHuesped: olvidaHuesped,
   };
 })();
 

@@ -723,7 +723,7 @@ gmp-place-autocomplete,.gmpac{
           <label>¿Cómo se cobra este tour?</label>
           <select data-c="apepe_gratuito" id="cobroModo">
             <option value="false">Con cobro al cliente</option>
-            <option value="true">Gratuito · va por propina</option>
+            <option value="true">Gratuito o por propina · para huéspedes</option>
           </select>
           <div class="ay" id="cobroAy"></div>
         </div>
@@ -2351,7 +2351,9 @@ gmp-place-autocomplete,.gmpac{
     if(!c)return;
     c.innerHTML='<option value="">—</option>'+TAXC.map(function(x){
       return '<option value="'+esc(x.slug)+'">'+esc(x.nombre)+'</option>';}).join('');
-    c.onchange=function(){ taxTipos(); try{ pintaDonde(); }catch(_){} };
+    /* La categoría decide si hay mínimo y si un gratuito lleva precio: al
+       cambiarla hay que volver a pintar la parte del cobro. */
+    c.onchange=function(){ taxTipos(); try{ pintaDonde(); }catch(_){} try{ pintaCobroModo(); }catch(_){} };
     taxTipos();
   }
 
@@ -2395,6 +2397,23 @@ gmp-place-autocomplete,.gmpac{
   }
   function esPropia(){ return !(E&&E.operador_id); }
   function esEvento(){ return (E&&E.formato)==='evento'; }
+
+  /* EL MÍNIMO DE LOS TOURS. Javi, 25-oct-2026: «el precio mínimo de cualquier
+     experiencia de tours (no de eventos) es de 50$».
+     Y va junto con lo otro que pidió el mismo día: el gratuito deja de ser
+     «gratis para todo el mundo» y pasa a ser «por propina PARA HUÉSPEDES».
+     Entonces el tour tiene que tener precio igual, porque el que llega de la
+     calle lo paga; lo que hace el botón de gratuito es que al huésped no se le
+     cobre y no haga falta Stripe. Un tour sin tarifa no es un tour de propina:
+     es un tour que nadie de fuera puede comprar.
+     Los EVENTOS se quedan como estaban: un show o una fiesta gratis es gratis
+     para todos, porque el cliente consume en el evento. */
+  var MINIMO_TOUR=50;
+  function esTour(){
+    if(esEvento())return false;
+    var c=document.querySelector('[data-c="categoria_slug"]');
+    return String((c&&c.value)||(E&&E.categoria_slug)||'').toLowerCase()==='tours';
+  }
 
   /* Un evento no sale ni regresa: se apaga todo lo que supone movimiento, y la
      Ruta se convierte en la agenda. No son dos editores, es uno que enciende y
@@ -2704,7 +2723,9 @@ gmp-place-autocomplete,.gmpac{
         var falta=[];
         /* A un tour de propina no se le pide precio: no es que le falte, es
            que no lleva. Javi, 25-oct-2026. */
-        if(E.neto_adulto==null && !esEvento() && !E.apepe_gratuito)falta.push('el precio');
+        /* Un tour por propina para huéspedes también necesita precio: es el
+           que paga quien llega de la calle. Javi, 25-oct-2026. */
+        if(!(Number(E.neto_adulto)>0) && !esEvento() && (esTour() || !E.apepe_gratuito))falta.push('el precio');
         if(!(E.horas||[]).length)falta.push('la hora');
         if(falta.length){
           toast('Para publicarla falta '+falta.join(' y ')+'.',true);
@@ -3115,13 +3136,24 @@ gmp-place-autocomplete,.gmpac{
   function pintaCobroModo(){
     var sel=$('cobroModo'); if(!sel) return;
     var gratis = sel.value==='true';
+    /* EN UN TOUR, GRATUITO NO QUIERE DECIR SIN PRECIO. El precio se le sigue
+       pidiendo —es lo que paga quien llega de la calle— y lo que cambia es que
+       al huésped no se le cobra. En un evento sí: gratis es gratis para todos
+       y no hay precio que poner. Javi, 25-oct-2026. */
+    var conPrecio = !gratis || esTour();
     ['fldNetoAd','fldNetoMe'].forEach(function(id){
-      var el=$(id); if(el) el.style.display = gratis ? 'none' : '';
+      var el=$(id); if(el) el.style.display = conPrecio ? '' : 'none';
     });
+    /* El suelo del campo, para que el navegador avise antes que nosotros. */
+    var _na=$('netoAd'); if(_na) _na.min = esTour() ? String(MINIMO_TOUR) : '1';
     $('cobroAy').innerHTML = gratis
-      ? 'No se le pide tarjeta. Aparta su lugar y le llega el boleto con su QR al correo: el QR sigue haciendo falta, es lo que le deja entrar y lo que nos dice cuánta gente viene.'
-      : 'El cliente paga con tarjeta al reservar. El precio no puede quedarse en cero: si no se cobra, es gratuito por propina.';
-    if(gratis){
+      ? (esTour()
+        ? 'Para el <b>huésped</b> este tour es por propina: no se le pide tarjeta, aparta su lugar y le llega el boleto con su QR. Para quien <b>llega de la calle</b> sigue teniendo precio, y ése es el que se pone abajo: mínimo $'+MINIMO_TOUR+'.'
+        : 'No se le pide tarjeta. Aparta su lugar y le llega el boleto con su QR al correo: el QR sigue haciendo falta, es lo que le deja entrar y lo que nos dice cuánta gente viene.')
+      : (esTour()
+        ? 'El cliente paga con tarjeta al reservar. En tours el precio empieza en $'+MINIMO_TOUR+'.'
+        : 'El cliente paga con tarjeta al reservar. El precio no puede quedarse en cero: si no se cobra, es gratuito por propina.');
+    if(gratis&&!conPrecio){
       var a=$('netoAd'); if(a) a.value='';
       var m=document.querySelector('[data-c="neto_menor"]'); if(m) m.value='';
       $('recoPrecio').innerHTML='';
@@ -3129,11 +3161,16 @@ gmp-place-autocomplete,.gmpac{
       $('porquePrecio').innerHTML='Este tour <b>no se cobra</b>. Reserva, boleto con QR, y la propina la deja quien quiera al final.';
     }else{
       pintaPrecio(); recoPrecio();
+      if(gratis){
+        $('porquePrecio').innerHTML='Este tour tiene <b>dos caras</b>: al <b>huésped</b> le sale por propina —no paga nada— y a quien <b>llega de la calle</b> se le cobra el precio de abajo. Pon ese precio como si fuera un tour normal: es el que se vende.';
+      }
     }
   }
 
   function pintaPrecio(){
-    if($('cobroModo') && $('cobroModo').value==='true') return;
+    /* Un tour gratuito SÍ tiene precio: el del que llega de la calle. Sólo los
+       eventos gratuitos se quedan sin cuenta que hacer. */
+    if($('cobroModo') && $('cobroModo').value==='true' && !esTour()) return;
     var neto=Number($('netoAd').value||0);
     var com=comisionPct();
     var netoFinal=neto?Math.round(neto/(1-com/100)):0;
@@ -5415,12 +5452,28 @@ gmp-place-autocomplete,.gmpac{
        Bloquea, como bloqueaba antes: un tour «con cobro» a cero se vendería
        gratis sin que nadie se diera cuenta. La diferencia es que ahora las dos
        salidas están aquí mismo. */
-    if(!pv && b.apepe_gratuito!==true){
+    /* Y desde el 25-oct-2026 hay suelo: «el precio mínimo de cualquier
+       experiencia de tours (no de eventos) es de 50$». Se mide en lo que PAGA
+       el cliente, no en el neto: $50 es la cifra que él ve. Lo que se propone,
+       en cambio, es el neto —que es el campo que el operador llena—, calculado
+       hacia atrás con su comisión para que el precio público caiga justo en el
+       mínimo. */
+    var _tour=esTour();
+    var _netoMin=Math.max(1,Math.round(MINIMO_TOUR*(1-comisionPct()/100)));
+    var _malPrecio = _tour ? !(pv>=MINIMO_TOUR) : (!pv && b.apepe_gratuito!==true);
+    if(_malPrecio){
       h.push({clave:'precio', bloquea:true,
-        titulo:'El tour cobra al cliente, pero no tiene precio',
-        dice:'Está marcado como «con cobro al cliente» y el neto está vacío o en cero, así que el boleto saldría en $0 y se vendería gratis.',
-        propuesta:'Si va por propina, márcalo como experiencia gratuita. Si no, escribe el neto por adulto —lo que tú cobras— y el precio al público se calcula solo con tu comisión.',
-        precio:true
+        titulo: _tour
+          ? (pv ? 'El tour se vendería por debajo del mínimo' : 'El tour no tiene precio')
+          : 'El tour cobra al cliente, pero no tiene precio',
+        dice: _tour
+          ? (pv ? 'Al cliente le saldría en '+money(pv)+' y el mínimo de un tour son '+money(MINIMO_TOUR)+'.'
+                : 'El neto está vacío o en cero, así que el boleto saldría en $0 y se vendería gratis a cualquiera, no sólo a los huéspedes.')
+          : 'Está marcado como «con cobro al cliente» y el neto está vacío o en cero, así que el boleto saldría en $0 y se vendería gratis.',
+        propuesta: _tour
+          ? 'Pon el neto en '+money(_netoMin)+' o más: con tu comisión, al cliente le sale en '+money(MINIMO_TOUR)+'. Si lo que quieres es que el huésped de la casa no pague, marca «por propina para huéspedes»: el precio se le sigue cobrando a quien llega de la calle.'
+          : 'Si va por propina, márcalo como experiencia gratuita. Si no, escribe el neto por adulto —lo que tú cobras— y el precio al público se calcula solo con tu comisión.',
+        precio:true, tour:_tour, netoMin:_netoMin
       });
     }
 
@@ -5514,13 +5567,20 @@ gmp-place-autocomplete,.gmpac{
               '</select></label>';
           }).join('')+'<div class="revtot" data-revtot></div></div>';
         } else if(x.precio){
-          /* Las dos salidas, una debajo de la otra. Marcar gratuita apaga el
-             precio: no tiene sentido pedir una cifra de algo que no se cobra. */
-          dentro='<div class="revcampo" data-revprecio>'+
+          /* Las dos salidas, una debajo de la otra. En un EVENTO, marcar
+             gratuita apaga el precio: no hay cifra que pedir de algo que no se
+             cobra a nadie. En un TOUR no lo apaga, porque el gratuito es sólo
+             para el huésped y el de la calle paga: ahí hacen falta las dos
+             cosas a la vez. Javi, 25-oct-2026. */
+          dentro='<div class="revcampo" data-revprecio'+
+            (x.tour?' data-tour="1" data-min="'+(x.netoMin||1)+'"':'')+'>'+
             '<label class="revchk"><input type="checkbox" data-gratis> '+
-              'Es una experiencia <b>gratuita</b>, va por propina</label>'+
+              (x.tour
+                ? 'Va <b>por propina para huéspedes</b> (a quien llega de la calle se le cobra)'
+                : 'Es una experiencia <b>gratuita</b>, va por propina')+'</label>'+
             '<label style="display:block;margin-top:8px">Neto por adulto '+
-              '<input type="number" min="1" step="10" data-precio value="">'+
+              '<input type="number" min="'+(x.tour?(x.netoMin||1):1)+'" step="10" data-precio value="'+
+              (x.tour?esc(String(x.netoMin||'')):'')+'">'+
               ' <span class="mini">MXN · lo que tú cobras</span></label>'+
             '<div class="revtot" data-preciotot></div></div>';
         } else if(x.campo){
@@ -5587,15 +5647,27 @@ gmp-place-autocomplete,.gmpac{
       var cajaP=v.querySelector('[data-revprecio]');
       function recalcPrecio(){
         if(!cajaP)return true;
+        var esT=cajaP.getAttribute('data-tour')==='1';
+        var minN=Number(cajaP.getAttribute('data-min')||1);
         var gr=cajaP.querySelector('[data-gratis]').checked;
         var inp=cajaP.querySelector('[data-precio]');
-        inp.disabled=gr; if(gr)inp.value='';
+        /* En un tour el precio nunca se apaga: el gratuito es del huésped, no
+           del producto. En un evento sí, como siempre. */
+        inp.disabled=gr&&!esT; if(gr&&!esT)inp.value='';
         var n=Number(inp.value||0);
-        var ok=gr||n>0;
-        cajaP.querySelector('[data-preciotot]').innerHTML = gr
-          ? 'Se guardará como <b>gratuita</b>: sin precio y sin pasar por Stripe.'
-          : (n>0 ? 'El cliente pagaría <b>'+money(Math.round(n/(1-comisionPct()/100)))+'</b> por persona.'
-                 : '<span style="color:var(--error,#9E3B2E)">Elige una de las dos.</span>');
+        var pvn=n?Math.round(n/(1-comisionPct()/100)):0;
+        var ok=esT ? (pvn>=MINIMO_TOUR) : (gr||n>0);
+        cajaP.querySelector('[data-preciotot]').innerHTML = esT
+          ? (pvn>=MINIMO_TOUR
+              ? (gr
+                  ? 'Al <b>huésped</b> no se le cobra nada. A quien llega de la calle, <b>'+money(pvn)+'</b> por persona.'
+                  : 'El cliente pagaría <b>'+money(pvn)+'</b> por persona.')
+              : '<span style="color:var(--error,#9E3B2E)">Con ese neto el tour se vendería en '+money(pvn)+
+                ', y el mínimo son '+money(MINIMO_TOUR)+'. Pon '+money(minN)+' o más.</span>')
+          : (gr
+              ? 'Se guardará como <b>gratuita</b>: sin precio y sin pasar por Stripe.'
+              : (n>0 ? 'El cliente pagaría <b>'+money(pvn)+'</b> por persona.'
+                     : '<span style="color:var(--error,#9E3B2E)">Elige una de las dos.</span>'));
         return ok;
       }
       function revisaBotones(){
@@ -5622,11 +5694,14 @@ gmp-place-autocomplete,.gmpac{
               x.impacto.lineas[+s.getAttribute('data-lin')].base=s.value;
             });
           } else if(x.precio && cajaP){
+            var esT=cajaP.getAttribute('data-tour')==='1';
             var gr=cajaP.querySelector('[data-gratis]').checked;
             var cm=$('cobroModo');
-            if(gr){
-              if(cm){ cm.value='true'; cm.dispatchEvent(new Event('change',{bubbles:true})); }
-            }else{
+            /* En un tour van las dos cosas: el modo de cobro Y el precio. El
+               orden importa —primero el modo, que es el que decide si el campo
+               del precio está a la vista—. */
+            if(cm){ cm.value=gr?'true':'false'; cm.dispatchEvent(new Event('change',{bubbles:true})); }
+            if(esT||!gr){
               var n=Number(cajaP.querySelector('[data-precio]').value||0);
               if(n>0){ var na=$('netoAd'); if(na){ na.value=String(n); na.dispatchEvent(new Event('input',{bubbles:true})); } }
             }
@@ -5677,8 +5752,12 @@ gmp-place-autocomplete,.gmpac{
     /* El precio ya no rebota aquí: lo pregunta la revisión de antes de
        guardar, que ofrece las dos salidas —ponerle tarifa o marcarlo como
        gratuito— sin sacar al operador de donde está. Javi, 25-oct-2026.
-       Esto se queda sólo como normalización: gratuito es no tener precio. */
-    if(b.apepe_gratuito===true){ b.neto_adulto=0; b.neto_menor=null; }
+       Esto se queda sólo como normalización: gratuito es no tener precio.
+       Y desde el 25-oct-2026, sólo en los EVENTOS. En un tour, gratuito quiere
+       decir «gratis para el huésped», y el precio se guarda porque es el que
+       paga quien llega de la calle: borrarlo aquí era regalar el tour a todo
+       el mundo. */
+    if(b.apepe_gratuito===true && !esTour()){ b.neto_adulto=0; b.neto_menor=null; }
     /* `categoria` (texto heredado) se mantiene al dia con el nombre de la
        categoria elegida: hay pantallas viejas que todavia lo leen. Y la ficha
        deja de estar marcada como siembra en cuanto alguien la firma aqui. */
@@ -5733,7 +5812,7 @@ gmp-place-autocomplete,.gmpac{
          escribieron en sus campos; hay que releerlos para que viajen al
          servidor, porque el cuerpo `b` se armó antes de abrir el pop-up. */
       var _cm=$('cobroModo'); if(_cm) b.apepe_gratuito=(_cm.value==='true');
-      if(b.apepe_gratuito===true){ b.neto_adulto=0; b.neto_menor=null; }
+      if(b.apepe_gratuito===true && !esTour()){ b.neto_adulto=0; b.neto_menor=null; }
       else { var _na=$('netoAd'); if(_na && _na.value!=='') b.neto_adulto=Number(_na.value); }
       var _gp=$('grupoProm'); if(_gp && _gp.value!=='') b.grupo_promedio=Number(_gp.value);
       var _cn=document.querySelector('[data-c="cupo_min"]'); if(_cn) b.cupo_min=_cn.value===''?null:Number(_cn.value);
@@ -5742,8 +5821,17 @@ gmp-place-autocomplete,.gmpac{
     /* Red de seguridad: si por lo que sea llegó aquí un tour que cobra y sigue
        sin precio, no se guarda. Vender a cero por un descuido no se arregla
        después. */
-    if(b.apepe_gratuito!==true && !(Number(b.neto_adulto)>0)){
-      toast('Si el tour cobra al cliente, el precio tiene que ser de 1 peso para arriba. Si no se cobra, márcalo como gratuito por propina.',true);
+    /* En un tour el suelo son los 50 pesos del cliente, se cobre al huésped o
+       no: el que llega de la calle los paga igual. En lo demás, basta con que
+       quien cobra tenga precio. */
+    var _netoSuelo=Math.max(1,Math.round(MINIMO_TOUR*(1-comisionPct()/100)));
+    var _bajo = esTour()
+      ? !(Number(b.neto_adulto)>=_netoSuelo)
+      : (b.apepe_gratuito!==true && !(Number(b.neto_adulto)>0));
+    if(_bajo){
+      toast(esTour()
+        ? ('El precio mínimo de un tour son '+MINIMO_TOUR+' pesos para el cliente: pon el neto en '+_netoSuelo+' o más. Si el huésped no tiene que pagar, márcalo como por propina para huéspedes, pero el precio se queda.')
+        : 'Si el tour cobra al cliente, el precio tiene que ser de 1 peso para arriba. Si no se cobra, márcalo como gratuito por propina.',true);
       for(var _k=0;_k<PASOS.length;_k++){ if(PASOS[_k].s===4){ step=_k; pinta(); window.scrollTo(0,0); break; } }
       var _n=$('netoAd'); if(_n) _n.focus();
       return;
