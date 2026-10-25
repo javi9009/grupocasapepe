@@ -5408,17 +5408,19 @@ gmp-place-autocomplete,.gmpac{
   function revisaFicha(b, imp, tp, pv){
     var h=[], g=grupoProm();
 
-    /* 1 · Un tour sin precio. Se guarda igual —hay fichas que nacen sin
-       tarifa— pero nadie puede comprarlo y conviene decirlo en voz alta. */
-    if(!pv){
-      h.push({clave:'precio', bloquea:false,
-        titulo:'El tour no tiene precio',
-        dice:'El neto está vacío o en cero, así que el boleto sale en $0 y nadie puede comprarlo.',
-        propuesta:'Escribe aquí el neto por adulto, lo que tú cobras. El precio al público se calcula solo con tu comisión.',
-        campo:{tipo:'numero', etiqueta:'Neto por adulto', valor:'', sufijo:'MXN',
-               aplica:function(v){ var n=Number(v||0); if(!(n>0))return false;
-                 var el=$('netoAd'); if(el){ el.value=String(n); el.dispatchEvent(new Event('input',{bubbles:true})); }
-                 return true; }}
+    /* 1 · Un tour que cobra, pero sin precio. Son dos cosas distintas y hay
+       que preguntarlas juntas: o le falta poner la tarifa, o el tour es de los
+       que van por propina y nunca tuvo precio. Javi, 25-oct-2026: «si pone
+       tour sin precio, pone el check para seleccionar experiencia gratuita».
+       Bloquea, como bloqueaba antes: un tour «con cobro» a cero se vendería
+       gratis sin que nadie se diera cuenta. La diferencia es que ahora las dos
+       salidas están aquí mismo. */
+    if(!pv && b.apepe_gratuito!==true){
+      h.push({clave:'precio', bloquea:true,
+        titulo:'El tour cobra al cliente, pero no tiene precio',
+        dice:'Está marcado como «con cobro al cliente» y el neto está vacío o en cero, así que el boleto saldría en $0 y se vendería gratis.',
+        propuesta:'Si va por propina, márcalo como experiencia gratuita. Si no, escribe el neto por adulto —lo que tú cobras— y el precio al público se calcula solo con tu comisión.',
+        precio:true
       });
     }
 
@@ -5511,6 +5513,16 @@ gmp-place-autocomplete,.gmpac{
                 '<option value="grupo"'+(l.base==='grupo'?' selected':'')+'>por salida'+(g>0?' (÷'+g+')':'')+'</option>'+
               '</select></label>';
           }).join('')+'<div class="revtot" data-revtot></div></div>';
+        } else if(x.precio){
+          /* Las dos salidas, una debajo de la otra. Marcar gratuita apaga el
+             precio: no tiene sentido pedir una cifra de algo que no se cobra. */
+          dentro='<div class="revcampo" data-revprecio>'+
+            '<label class="revchk"><input type="checkbox" data-gratis> '+
+              'Es una experiencia <b>gratuita</b>, va por propina</label>'+
+            '<label style="display:block;margin-top:8px">Neto por adulto '+
+              '<input type="number" min="1" step="10" data-precio value="">'+
+              ' <span class="mini">MXN · lo que tú cobras</span></label>'+
+            '<div class="revtot" data-preciotot></div></div>';
         } else if(x.campo){
           dentro='<div class="revcampo"><label>'+esc(x.campo.etiqueta)+
                  ' <input type="number" min="0" step="1" data-campo="'+i+'" value="'+esc(x.campo.valor)+'">'+
@@ -5570,6 +5582,36 @@ gmp-place-autocomplete,.gmpac{
         recalcula();
       }
 
+      /* El precio: o gratuita, o una cifra. Mientras no haya ninguna de las
+         dos, no se puede aplicar. */
+      var cajaP=v.querySelector('[data-revprecio]');
+      function recalcPrecio(){
+        if(!cajaP)return true;
+        var gr=cajaP.querySelector('[data-gratis]').checked;
+        var inp=cajaP.querySelector('[data-precio]');
+        inp.disabled=gr; if(gr)inp.value='';
+        var n=Number(inp.value||0);
+        var ok=gr||n>0;
+        cajaP.querySelector('[data-preciotot]').innerHTML = gr
+          ? 'Se guardará como <b>gratuita</b>: sin precio y sin pasar por Stripe.'
+          : (n>0 ? 'El cliente pagaría <b>'+money(Math.round(n/(1-comisionPct()/100)))+'</b> por persona.'
+                 : '<span style="color:var(--error,#9E3B2E)">Elige una de las dos.</span>');
+        return ok;
+      }
+      function revisaBotones(){
+        var okImp=true, okPre=true;
+        if(caja){ var bc0=v.querySelector('[data-con]'); okImp=!bc0||!bc0.disabled; }
+        okPre=recalcPrecio();
+        var bc=v.querySelector('[data-con]');
+        if(bc) bc.disabled = !(okImp&&okPre);
+      }
+      if(cajaP){
+        cajaP.addEventListener('change',revisaBotones);
+        cajaP.addEventListener('input',revisaBotones);
+        recalcPrecio();
+        var bc1=v.querySelector('[data-con]'); if(bc1) bc1.disabled=!recalcPrecio();
+      }
+
       function cosecha(aplicando){
         /* Devuelve el impacto ya corregido y aplica los cambios de pantalla. */
         var salida=imp;
@@ -5579,6 +5621,15 @@ gmp-place-autocomplete,.gmpac{
             Array.prototype.forEach.call(caja.querySelectorAll('select[data-lin]'),function(s){
               x.impacto.lineas[+s.getAttribute('data-lin')].base=s.value;
             });
+          } else if(x.precio && cajaP){
+            var gr=cajaP.querySelector('[data-gratis]').checked;
+            var cm=$('cobroModo');
+            if(gr){
+              if(cm){ cm.value='true'; cm.dispatchEvent(new Event('change',{bubbles:true})); }
+            }else{
+              var n=Number(cajaP.querySelector('[data-precio]').value||0);
+              if(n>0){ var na=$('netoAd'); if(na){ na.value=String(n); na.dispatchEvent(new Event('input',{bubbles:true})); } }
+            }
           } else if(x.campo){
             var inp=v.querySelector('[data-campo="'+i+'"]');
             if(inp&&String(inp.value).trim()!=='') x.campo.aplica(inp.value);
@@ -5623,16 +5674,11 @@ gmp-place-autocomplete,.gmpac{
        reventaba en la cara del huésped, al reservar, con un aviso que hablaba
        de nuestra cocina. Si es gratuito, el precio no es que sea cero: es que
        no hay precio, y así se guarda. */
-    if(b.apepe_gratuito===true){
-      b.neto_adulto=0; b.neto_menor=null;
-    }else if(!(Number(b.neto_adulto)>0)){
-      toast('Si el tour cobra al cliente, el precio tiene que ser de 1 peso para arriba. Si no se cobra, ponlo como gratuito por propina.',true);
-      /* Que no se quede buscando dónde: se le abre el paso del precio y se le
-         pone el cursor en el campo. */
-      for(var _k=0;_k<PASOS.length;_k++){ if(PASOS[_k].s===4){ step=_k; pinta(); window.scrollTo(0,0); break; } }
-      var _n=$('netoAd'); if(_n) _n.focus();
-      return;
-    }
+    /* El precio ya no rebota aquí: lo pregunta la revisión de antes de
+       guardar, que ofrece las dos salidas —ponerle tarifa o marcarlo como
+       gratuito— sin sacar al operador de donde está. Javi, 25-oct-2026.
+       Esto se queda sólo como normalización: gratuito es no tener precio. */
+    if(b.apepe_gratuito===true){ b.neto_adulto=0; b.neto_menor=null; }
     /* `categoria` (texto heredado) se mantiene al dia con el nombre de la
        categoria elegida: hay pantallas viejas que todavia lo leen. Y la ficha
        deja de estar marcada como siembra en cuanto alguien la firma aqui. */
@@ -5683,12 +5729,24 @@ gmp-place-autocomplete,.gmpac{
     if(!decision)return;                    // cancelar y seguir editando
     impNuevos=decision.imp;
     if(decision.aplico){
-      /* Las propuestas de pantalla (precio, grupo, cupos) ya se escribieron en
-         sus campos; hay que releerlos para que viajen al servidor. */
-      var _na=$('netoAd'); if(_na && _na.value!=='') b.neto_adulto=Number(_na.value);
+      /* Las propuestas de pantalla (precio, gratuito, grupo, cupos) ya se
+         escribieron en sus campos; hay que releerlos para que viajen al
+         servidor, porque el cuerpo `b` se armó antes de abrir el pop-up. */
+      var _cm=$('cobroModo'); if(_cm) b.apepe_gratuito=(_cm.value==='true');
+      if(b.apepe_gratuito===true){ b.neto_adulto=0; b.neto_menor=null; }
+      else { var _na=$('netoAd'); if(_na && _na.value!=='') b.neto_adulto=Number(_na.value); }
       var _gp=$('grupoProm'); if(_gp && _gp.value!=='') b.grupo_promedio=Number(_gp.value);
       var _cn=document.querySelector('[data-c="cupo_min"]'); if(_cn) b.cupo_min=_cn.value===''?null:Number(_cn.value);
       var _cx=document.querySelector('[data-c="cupo_max"]'); if(_cx) b.cupo_max=_cx.value===''?null:Number(_cx.value);
+    }
+    /* Red de seguridad: si por lo que sea llegó aquí un tour que cobra y sigue
+       sin precio, no se guarda. Vender a cero por un descuido no se arregla
+       después. */
+    if(b.apepe_gratuito!==true && !(Number(b.neto_adulto)>0)){
+      toast('Si el tour cobra al cliente, el precio tiene que ser de 1 peso para arriba. Si no se cobra, márcalo como gratuito por propina.',true);
+      for(var _k=0;_k<PASOS.length;_k++){ if(PASOS[_k].s===4){ step=_k; pinta(); window.scrollTo(0,0); break; } }
+      var _n=$('netoAd'); if(_n) _n.focus();
+      return;
     }
     if(impNuevos.length){
       b.impacto_declarado_at=new Date().toISOString();
