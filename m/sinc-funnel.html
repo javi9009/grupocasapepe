@@ -210,6 +210,14 @@ select.sel:focus,textarea.nota:focus{outline:none;border-color:var(--naranja);bo
   <button class="chip" data-f="conocida" aria-pressed="false">Las que conocemos</button>
   <button class="chip" data-f="sintocar" aria-pressed="false">Sin tocar</button>
   <input class="busca" id="q" placeholder="Buscar touroperador…">
+  <!-- LA PLAZA. Sale sólo para quien lleva las dos casas: a quien ve una sola
+       no se le pone un selector que no puede usar, y la lista ya le llega
+       filtrada por su ubicación. Es la regla del selector de propiedad. -->
+  <span id="barraSede" style="display:none">
+    <button class="chip" data-s="" aria-pressed="true">Las dos casas</button>
+    <button class="chip" data-s="cdmx" aria-pressed="false">CDMX</button>
+    <button class="chip" data-s="puebla" aria-pressed="false">Puebla</button>
+  </span>
 </div>
 
 <div class="barra" id="barraTours" style="display:none">
@@ -340,6 +348,13 @@ async function rpc(f,b){
 }
 
 var ETAPAS=[], OPS=[], filtro='todas', abierto=null;
+/* CADA PLAZA, SU FUNNEL. Javi, 21-oct-2026: «quien se da de alta en Puebla
+   vende en Puebla». Ale lleva Puebla, y hasta hoy abría esta pantalla y veía
+   las 114 touroperadoras de CDMX revueltas con las suyas.
+   Quien decide qué ve cada uno es la cascada de ubicación (cp-acceso), no un
+   selector: a Ale le llega la lista ya filtrada. Los chips de abajo son para
+   quien lleva las dos casas y quiere mirar una. */
+var fSede='';
 /* ---------- LA PESTAÑA DE TOURS ---------- */
 var VISTA='ops', TOURS=[], fTour='todos';
 var ETOUR=[
@@ -357,6 +372,9 @@ function pasaTour(t){
   if(q && (String(t.nombre||'')+' '+String(t.operador||'')).toLowerCase().indexOf(q)<0) return false;
   if(fTour==='operador' && t.es_nuestro) return false;
   if(fTour==='nuestros' && !t.es_nuestro) return false;
+  /* La plaza del tour es la de su operadora. Los nuestros no tienen operadora,
+     así que no se les inventa una: pasan siempre. */
+  if(fSede && t.sede && String(t.sede).toLowerCase()!==fSede) return false;
   return true;
 }
 function tjTour(t){
@@ -422,6 +440,7 @@ function pasa(o){
   if(filtro==='favorita'&&!o.favorita)return false;
   if(filtro==='conocida'&&!o.conocida)return false;
   if(filtro==='sintocar'&&o.n_toques>0)return false;
+  if(fSede&&String(o.sede||'').toLowerCase()!==fSede)return false;
   return true;
 }
 
@@ -1002,6 +1021,35 @@ async function carga(){
       get('v_sinc_funnel_tours?select=*&order=nombre').catch(function(){return [];})
     ]);
     ETAPAS=r[0]; OPS=r[1]; TOURS=r[2]||[];
+
+    /* LA PLAZA DE CADA TOUROPERADORA. No viene en la vista del funnel, así que
+       se pega aquí con una llamada y un mapa: tocar esa vista -que leen otras
+       pantallas- por una columna no vale la pena. */
+    try{
+      var sd=await get('tour_operadores?select=id,sede');
+      var mapa={}; (sd||[]).forEach(function(x){ mapa[x.id]=x.sede||''; });
+      OPS.forEach(function(o){ o.sede=mapa[o.id]||''; });
+      /* Y la pestaña de sus tours: la plaza de un tour es la de su operadora. */
+      TOURS.forEach(function(t){ t.sede=mapa[t.operador_id]||''; });
+    }catch(_){}
+
+    /* Y la cascada de ubicación, la de siempre: cada quien ve su casa. Es
+       fail-open -si no hay sesión o la base no contesta, no filtra- y una
+       touroperadora sin plaza declarada pasa, que es mejor que desaparecer. */
+    try{
+      if(window.cpAcceso){
+        OPS=await cpAcceso.filtra(OPS,function(x){return x.sede;});
+        TOURS=await cpAcceso.filtra(TOURS,function(x){return x.sede;});
+      }
+    }catch(_){}
+
+    /* Los chips de plaza, sólo para quien lleva las dos. */
+    try{
+      var ub=window.cpAcceso?await cpAcceso.ubicaciones():null;
+      var dos=!ub||['cdmx','puebla'].filter(function(p){return ub.indexOf(p)>=0;}).length>1;
+      var bs=$('barraSede'); if(bs) bs.style.display=dos?'':'none';
+    }catch(_){}
+
     if(VISTA==='tours') pintaTours(); else pinta();
   }catch(x){
     $('sub').textContent='No se pudo leer el funnel. Entra al panel y vuelve a abrir esta pantalla.';
@@ -1009,10 +1057,20 @@ async function carga(){
   }
 }
 
-Array.prototype.forEach.call(document.querySelectorAll('.barra .chip'),function(b){
+/* Hijos directos de #barraOps: los chips de plaza viven dentro de un <span> y
+   tienen su propio manejador, así que no se mezclan con estos. */
+Array.prototype.forEach.call(document.querySelectorAll('#barraOps > .chip'),function(b){
   b.onclick=function(){
     filtro=b.dataset.f;
-    Array.prototype.forEach.call(document.querySelectorAll('.barra .chip'),function(o){
+    Array.prototype.forEach.call(document.querySelectorAll('#barraOps > .chip'),function(o){
+      o.setAttribute('aria-pressed',String(o===b));});
+    pinta();
+  };
+});
+Array.prototype.forEach.call(document.querySelectorAll('#barraSede .chip'),function(b){
+  b.onclick=function(){
+    fSede=b.getAttribute('data-s')||'';
+    Array.prototype.forEach.call(document.querySelectorAll('#barraSede .chip'),function(o){
       o.setAttribute('aria-pressed',String(o===b));});
     pinta();
   };
