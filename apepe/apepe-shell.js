@@ -25,6 +25,34 @@
 
     var QS = RESV ? ('?resv='+encodeURIComponent(RESV))
            : SOL  ? ('?sol='+encodeURIComponent(SOL)) : '';
+
+    /* DOS PUERTAS, Y LAS PESTAÑAS SOLO SERVÍAN POR UNA. Javi, 24-oct-2026:
+       «no abre el mapa de los huéspedes».
+
+       Estas pantallas se sirven por dos sitios: grupocasapepe.netlify.app,
+       donde Sincrético vive en /sinc/ y la APePe en /apepe/; y casapepe.mx,
+       que es la puerta que se reparte al huésped y que solo tiene mapeado
+       /sincretico/* -> /sinc/*. Ahí /sinc/ y /apepe/ no existen.
+       Como esta barra escribía sus ligas absolutas, el huésped que entraba
+       por casapepe.mx y tocaba Mapa acababa en casapepe.mx/sinc/mapa.html:
+       página no encontrada. Y no era solo el mapa — ninguna pestaña abría.
+
+       La pista de por dónde entró la tiene este mismo archivo: la liga con
+       la que lo cargaron. Si vino de /sincretico/apepe/, la casa está en
+       /sincretico/; si vino de /apepe/, en /sinc/. Se calcula una vez y
+       todas las ligas cuelgan de ahí. Nada que mantener en dos sitios. */
+    var APB = '/apepe/', SINCB = '/sinc/';
+    try {
+      var _s = (document.currentScript && document.currentScript.src) || '';
+      if (_s) {
+        var _p = new URL(_s, location.href).pathname.replace(/[^/]*$/, '');
+        if (/apepe\/$/.test(_p)) {
+          var _padre = _p.replace(/apepe\/$/, '');
+          APB = _p;
+          SINCB = (_padre && _padre !== '/') ? _padre : '/sinc/';
+        }
+      }
+    } catch (_) {}
     /* a las pantallas que también viven en Sincrético hay que decirles que
        seguimos dentro de la app */
     function ligaApp(base){
@@ -107,7 +135,7 @@
          abajo, asi que la flecha era un segundo camino a casa, mas pequeno y
          peor. Javi, 19-oct-2026. */
       +  '<div class="apsh-marcafila">'
-      +    '<img class="apsh-marca" src="/img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
+      +    '<img class="apsh-marca" src="'+SINCB+'img/casapepe/casapepe_blanco.png" alt="Casa Pepe" '
       +      'onerror="this.style.display=\'none\'">'
       +    '<div class="apsh-sede" role="button" tabindex="0">'+sede+' <span aria-hidden="true" style="opacity:.75">▾</span></div>'
       +  '</div>'
@@ -177,7 +205,11 @@
     } catch (_) {}
 
     /* --- barra de pestañas de la APePe --- */
-    var IMG = '/img/apepe/stickers/';
+    /* Por SINCB y no por /img/: la regla de _redirects que trae las imágenes
+       a la puerta de casapepe.mx es /sinc/img/apepe/* -> /img/apepe/*, y por
+       la otra puerta esa misma ruta también resuelve. Una sola forma sirve
+       para las dos. */
+    var IMG = SINCB + 'img/apepe/stickers/';
     /* Modo de acceso recortado: 'publico' (usuario local Pepe GO) o 'colab'
        (colaborador de SoyPepe); vacío = huésped, que lo ve todo.
        Manda la identidad, no el recuerdo: con token de reserva es huésped aunque
@@ -190,12 +222,12 @@
       return localStorage.getItem('apepe_modo')||'';
     }catch(_){ return ''; } })();
     var CAT = {
-      inicio: { t:'inicio', label:'Inicio', href:liga('/apepe/index.html'), img:IMG+'hola-perrito.webp', match:['/apepe/index','/apepe/'] },
-      pepego: { t:'pepego', label:'Pepe GO!', href:liga('/apepe/challenge.html'), img:IMG+'bellas-artes.webp', match:['/apepe/challenge'] },
-      vnums:  { t:'vnums', label:'Vnums', href:liga('/apepe/vnums.html'), img:'/img/apepe/vnum-moneda-128.webp', match:['/apepe/vnums'] },
-      exp:    { t:'exp', label:'Experiencias', href:ligaApp('/apepe/experiencias.html'), img:IMG+'blue-demon-a.webp', match:['/apepe/experiencias','/sinc/index','/sinc/exp'] },
-      mapa:   { t:'mapa', label:'Mapa', href:ligaApp('/sinc/mapa.html'), img:IMG+'diana-reforma.webp', match:['/sinc/mapa'] },
-      yo:     { t:'yo', label:'Yo', href:liga('/apepe/yo.html'), img:IMG+'teotihuacan.webp', match:['/apepe/yo'] }
+      inicio: { t:'inicio', label:'Inicio', href:liga(APB+'index.html'), img:IMG+'hola-perrito.webp', match:[APB+'index',APB] },
+      pepego: { t:'pepego', label:'Pepe GO!', href:liga(APB+'challenge.html'), img:IMG+'bellas-artes.webp', match:[APB+'challenge'] },
+      vnums:  { t:'vnums', label:'Vnums', href:liga(APB+'vnums.html'), img:SINCB+'img/apepe/vnum-moneda-128.webp', match:[APB+'vnums'] },
+      exp:    { t:'exp', label:'Experiencias', href:ligaApp(APB+'experiencias.html'), img:IMG+'blue-demon-a.webp', match:[APB+'experiencias',SINCB+'index',SINCB+'exp'] },
+      mapa:   { t:'mapa', label:'Mapa', href:ligaApp(SINCB+'mapa.html'), img:IMG+'diana-reforma.webp', match:[SINCB+'mapa'] },
+      yo:     { t:'yo', label:'Yo', href:liga(APB+'yo.html'), img:IMG+'teotihuacan.webp', match:[APB+'yo'] }
     };
     var ORDEN = MODO==='publico' ? ['pepego','exp','vnums','mapa']
               : MODO==='colab'  ? ['mapa','pepego','exp']
