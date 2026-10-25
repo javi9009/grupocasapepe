@@ -651,6 +651,17 @@ var Q=new URLSearchParams(location.search);
 var EMBED=(Q.get('embed')==='1');
 var VER_OP=(Q.get('op')||'').match(/^[0-9a-f-]{36}$/i)?Q.get('op'):null;
 var VER_PR=(Q.get('prod')||'').match(/^[0-9a-f-]{36}$/i)?Q.get('prod'):null;
+/* LA LIGA DEL PORTAL DE LA PRODUCTORA.
+   Javi, 22-oct-2026: «en la productora cuando ya entra a su usuario a veces
+   entra a Mi cuenta y le pide entrar otra vez». El «a veces» era la pista:
+   `productora.html` no tiene login —se entra con la liga, no con usuario— y
+   esta pantalla, embebida dentro como «Mi cuenta», pedía una sesión de
+   Supabase. Si la productora había entrado alguna vez por otro sitio en ese
+   navegador, quedaba una sesión suelta y funcionaba; si no, la mandaba a
+   entrar a una puerta que no es la suya.
+   Ahora el portal le pasa su token y esta pantalla trabaja con él. */
+var TOKP=(Q.get('t')||'').match(/^[0-9a-f-]{36}$/i)?Q.get('t'):null;
+var MODO_TOKEN=false;
 
 function $(i){return document.getElementById(i);}
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
@@ -720,6 +731,12 @@ function cerrarSesion(){
     }
   }catch(_){}
   try{ sessionStorage.clear(); }catch(_){}
+  /* Salir desde dentro del portal saca del portal, no mete una puerta en el
+     iframe: si no, se queda un login encajado en su propia casa — justo lo
+     que Javi pidió que no pasara nunca. */
+  try{
+    if(EMBED && window.top && window.top!==window){ window.top.location.href='/entrar.html'; return; }
+  }catch(_){}
   try{ location.replace('/entrar.html'); }catch(_){ location.href='/entrar.html'; }
 }
 /* EL BOTON DE SALIR NO LLAMABA A NADIE.
@@ -731,6 +748,26 @@ function cerrarSesion(){
    funcion existe. Alan, 13-oct-2026. */
 (function(){ var b=document.getElementById('btnSalir');
   if(b) b.addEventListener('click', cerrarSesion); })();
+/* GUARDAR LA FICHA, VENGA COMO VENGA.
+   Con sesión se escribe la tabla directo, como siempre. Con la liga del portal
+   no hay sesión que valga ante RLS, así que se pasa por la función del portal,
+   que comprueba el token y escribe ella. Las dos devuelven la fila: el
+   formulario comprueba que de verdad volvió algo antes de decir «guardado», y
+   eso no se puede perder. Javi, 22-oct. */
+async function guardaFicha(cuerpo){
+  if(MODO_TOKEN){
+    var r=await fetch(SB+'/rest/v1/rpc/prod_portal_update_papeles',{method:'POST',
+      headers:hdr(),body:JSON.stringify({p_token:TOKP,p:cuerpo})});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok||!j||j.error) return {ok:false,j:null,motivo:(j&&j.error)||('HTTP '+r.status)};
+    return {ok:true,j:[j]};
+  }
+  var tabla = TIPO==='operador' ? 'tour_operadores' : 'productoras';
+  var r2=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+ID,
+    {method:'PATCH',headers:hdr({'Prefer':'return=representation'}),body:JSON.stringify(cuerpo)});
+  var j2=null; try{ j2=await r2.json(); }catch(_){}
+  return {ok:r2.ok,j:j2,respuesta:r2};
+}
 function hdr(extra){
   var h={'apikey':KEY,'Authorization':'Bearer '+((SES&&SES.access_token)||KEY),
          'Content-Type':'application/json'};
@@ -1108,21 +1145,19 @@ async function guarda(){
     cuerpo.fm_vence=$('cFmVence').value||null;
   }
 
-  var tabla = TIPO==='operador' ? 'tour_operadores' : 'productoras';
   try{
-    var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+ID,
-      {method:'PATCH',headers:hdr({'Prefer':'return=representation'}),body:JSON.stringify(cuerpo)});
-    var j=await r.json().catch(function(){return null;});
+    var g=await guardaFicha(cuerpo);
+    var r=g.respuesta, j=g.j;
     /* PostgREST contesta 204 y cero filas cuando RLS bloquea: eso parece un
        guardado y no lo es. Si no vuelve la fila, no se guardó. */
-    if(!r.ok||!j||!j.length){
+    if(!g.ok||!j||!j.length){
       /* Y el motivo se enseña. Un «no se pudo guardar» a secas costó media
          hora de buscar a ciegas un candado que la base nombraba en claro:
          decía que `identificacion_tipo` solo admitía 'rfc' o 'pasaporte'.
          El que teclea no lo va a entender, pero lo copia y pega y ya está.
          Javi, 10-oct. */
-      var por = (j && (j.message||j.hint||j.details)) ||
-                (r.status===403?'la base no te deja escribir en esta ficha':'HTTP '+r.status);
+      var por = g.motivo || (j && (j.message||j.hint||j.details)) ||
+                (r&&r.status===403?'la base no te deja escribir en esta ficha':'no se pudo guardar');
       throw new Error(por);
     }
     FICHA=j[0];
@@ -2103,7 +2138,11 @@ async function abreStripe(){
         body:JSON.stringify({accion:'alta', token:(FICHA&&FICHA.portal_token),
                              origen:location.origin, volver:'checkin'})});
       j=await r.json();
-      if(!r.ok||!j.url) throw new Error((j&&(j.detalle||j.error))||('HTTP '+r.status));
+      /* «HTTP 401» no le dice nada a nadie. La función manda el motivo en
+         `error` y el gateway en `message`; si ninguno viene, al menos se dice
+         que es la sesión. Javi, 22-oct. */
+      if(!r.ok||!j.url) throw new Error((j&&(j.detalle||j.error||j.message))||
+        (r.status===401?'tu sesión caducó, vuelve a entrar':('HTTP '+r.status)));
       try{ localStorage.setItem('checkin_stripe_vuelve',
         JSON.stringify({id:ID,tipo:'productora',t:Date.now()})); }catch(_){}
       aOtraPestana(j.url); return;
@@ -2985,18 +3024,39 @@ async function arranca(){
   if(EMBED){ var b0=document.querySelector('.barra'); if(b0) b0.style.display='none'; }
 
   SES=sesionGuardada()||sesionDelEnlace();
+  /* Con token no hace falta sesión: la liga ya dice quién es. */
+  if(!SES && TOKP){
+    var fp=null;
+    try{ fp=await rpc('prod_portal_ficha',{p_token:TOKP}); }catch(_){}
+    if(fp && fp.id){
+      MODO_TOKEN=true; TIPO='productora'; ID=fp.id; FICHA=fp;
+      if(!FICHA.portal_token) FICHA.portal_token=TOKP;
+    }
+  }
   /* EMBEBIDO Y SIN SESIÓN. El portal de la productora se abre con una liga
      (`?t=`), no con una sesión, y esta pantalla sí la necesita para escribir.
      Mandarla a /entrar.html desde dentro del iframe la dejaría mirando un
      login encajado en su propio portal, sin saber qué pasó. Se le explica y
      se le abre la puerta arriba, no dentro. */
-  if(!SES){
+  if(!SES && !MODO_TOKEN){
     if(EMBED){
+      /* DENTRO DEL PORTAL NO VA UN LOGIN. Javi, 22-oct-2026: «la productora o
+         touroperadora cuando entran, entran a su portal. No metas un login
+         dentro». Y tiene razón: ya entró por la puerta del Ateneo; pedirle
+         otra vez el correo en mitad de su propia casa dice que el sistema la
+         perdió, no que ella hizo algo mal. Aquí se reintenta, y si tampoco,
+         se recarga SU portal —que es quien sabe autenticarla—, no una puerta
+         ajena. */
       document.getElementById('cargando').innerHTML=
-        '<div class="aviso">Para ver y cambiar los datos de tu cuenta tienes que entrar '+
-        'con tu correo. Es el mismo con el que te diste de alta.'+
+        '<div class="aviso">No pudimos leer tus datos en este momento.'+
         '<div class="pie-acc" style="margin-top:12px">'+
-        '<a class="btn" href="/entrar.html" target="_top">Entrar con mi correo</a></div></div>';
+        '<button class="btn" type="button" id="reintentaCuenta">Reintentar</button></div></div>';
+      var rb=document.getElementById('reintentaCuenta');
+      if(rb) rb.onclick=function(){
+        this.disabled=true; this.textContent='Un momento…';
+        try{ if(window.top&&window.top!==window){ window.top.location.reload(); return; } }catch(_){}
+        location.reload();
+      };
       return;
     }
     /* SIN SESION Y FUERA DEL PORTAL.
@@ -3019,8 +3079,10 @@ async function arranca(){
   /* Si viene ?op= o ?prod=, se intenta ESO primero. Si la base no deja leer esa
      ficha, no era de casa: se sigue por el camino normal. */
   var op=null, pr=null;
-  try{ op=await rpc('mi_operador'); }catch(_){}
-  try{ pr=await rpc('mi_productora'); }catch(_){}
+  if(!MODO_TOKEN){
+    try{ op=await rpc('mi_operador'); }catch(_){}
+    try{ pr=await rpc('mi_productora'); }catch(_){}
+  }
 
   if(VER_OP||VER_PR){
     var t = VER_OP?'tour_operadores':'productoras';
@@ -3040,11 +3102,17 @@ async function arranca(){
   else if(pr){ TIPO='productora'; ID=pr; FICHA=await leeFicha('productoras',pr); }
   else{
     if(EMBED){
-      $('cargando').innerHTML='<div class="aviso">No pudimos abrir los datos de esta cuenta. '+
-        'Si es tuya, entra con el correo con el que te diste de alta; si eres de Casa Pepe, '+
-        'ábrela desde el padrón.'+
+      /* Tampoco aquí: está dentro de su portal. Javi, 22-oct. */
+      $('cargando').innerHTML='<div class="aviso">No pudimos abrir los datos de esta cuenta.'+
         '<div class="pie-acc" style="margin-top:12px">'+
-        '<a class="btn" href="/entrar.html" target="_top">Entrar con mi correo</a></div></div>';
+        '<button class="btn" type="button" id="reintentaCuenta2">Reintentar</button></div>'+
+        '<div class="pista" style="margin-top:10px">Si sigue sin abrir, escríbenos y lo vemos.</div></div>';
+      var rb2=$('reintentaCuenta2');
+      if(rb2) rb2.onclick=function(){
+        this.disabled=true; this.textContent='Un momento…';
+        try{ if(window.top&&window.top!==window){ window.top.location.reload(); return; } }catch(_){}
+        location.reload();
+      };
       return;
     }
     $('cargando').innerHTML='<div class="aviso">Esta cuenta todavía no tiene una empresa detrás. '+

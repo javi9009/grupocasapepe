@@ -174,6 +174,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
 <div id="root"><div class="wrap"><div class="card">Cargando…</div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/sinc-crop.js" defer></script>
+<script src="/cp-video.js" defer></script>
 <script>
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
@@ -234,7 +235,33 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function toast(t,err){var e=$('toast');e.textContent=t;e.className='toast'+(err?' err':'');e.style.display='block';setTimeout(function(){e.style.display='none';},2600);}
   function fmtCuando(e){if(e.fecha_inicio&&e.fecha_fin&&String(e.fecha_inicio).slice(0,10)!==String(e.fecha_fin).slice(0,10))return String(e.fecha_inicio).slice(0,10)+'→'+String(e.fecha_fin).slice(0,10);return e.fecha_inicio?String(e.fecha_inicio).slice(0,16).replace('T',' '):'—';}
-  function hdrs(){return {'apikey':KEY,'Authorization':'Bearer '+KEY};}
+  function hdrs(){return {'apikey':KEY,'Authorization':'Bearer '+(sesTok()||KEY)};}
+  /* LA SESIÓN DE QUIEN ENTRÓ POR LA PUERTA DEL ATENEO.
+     Javi, 22-oct-2026: «el portal de productora entran por Log In ateneo» y
+     «la productora o touroperadora cuando entran entran a su portal». Hasta
+     hoy este portal solo sabía abrirse con la liga larga: quien entraba con su
+     correo llegaba a un portal en blanco. Con su sesión se le pregunta a la
+     base cuál es su productora y se recupera su propia liga. */
+  function sesTok(){
+    try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i);
+      if(k&&/sb-.*-auth-token/.test(k)){ var v=JSON.parse(localStorage.getItem(k)||'null');
+        var x=v&&(v.currentSession||v); if(x&&x.access_token) return x.access_token; } } }catch(_){}
+    return '';
+  }
+  async function miLiga(){
+    if(!sesTok()) return '';
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/mi_productora',{method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},hdrs()),body:'{}'});
+      if(!r.ok) return '';
+      var id=await r.json();
+      if(!/^[0-9a-f-]{36}$/i.test(String(id||''))) return '';
+      var f=await fetch(SB+'/rest/v1/productoras?select=portal_token&id=eq.'+id+'&limit=1',{headers:hdrs()});
+      if(!f.ok) return '';
+      var j=await f.json();
+      return (j&&j[0]&&j[0].portal_token)||'';
+    }catch(_){ return ''; }
+  }
   async function get(path){var r=await fetch(SB+'/rest/v1/'+path,{headers:hdrs()});if(!r.ok)throw new Error(path+' '+r.status);return r.json();}
   /* LA BASE DICE POR QUE, Y AQUI SE TIRABA A LA BASURA. Javi, 13-oct-2026:
      «da este error: No se pudo enviar: prod_portal_evento 409».
@@ -1464,11 +1491,14 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       '<div id="impLista" style="margin-top:12px">Cargando…</div>'+
     '</div>'+
     '<div class="fsec" data-fs="fotos">'+
-      '<div class="hint" id="fotoAviso">La primera foto es la que se ve en la tarjeta. '+
+      '<div class="hint" id="fotoAviso">La primera es la portada: la que se ve en la tarjeta. '+
         'Sin al menos una, el evento no se puede poner a la venta.</div>'+
+      '<div class="hint" id="queSubir" style="margin-top:6px;padding:10px 12px;'+
+        'border-left:3px solid var(--naranja);background:var(--hueso);border-radius:0 8px 8px 0"></div>'+
+      '<div id="malFotos"></div>'+
       '<div id="fotoLista" style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0"></div>'+
-      '<input type="file" id="fotoFile" accept="image/*" multiple style="display:none">'+
-      '<button class="btn ghost sm" id="fotoMas" type="button">＋ Subir foto</button>'+
+      '<input type="file" id="fotoFile" accept="image/*,video/mp4,video/quicktime,video/webm" multiple style="display:none">'+
+      '<button class="btn ghost sm" id="fotoMas" type="button">＋ Subir foto o video</button>'+
     '</div>'+
     // EXTRA (agenda / precios)
     '<div class="fsec" data-fs="extra">'+
@@ -2913,6 +2943,8 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
      sustituye la original. */
   function pintaFotos(){
     var c=$('fotoLista'), av=$('fotoAviso'), bt=$('fotoMas');
+    var q=$('queSubir');
+    if(q && window.cpVideo && !q.innerHTML) q.innerHTML=cpVideo.queSubir('evento');
     if(!c) return;
     if(!evCur||!evCur.id){
       c.innerHTML='';
@@ -2923,7 +2955,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
     }
     if(bt) bt.disabled=false;
     if(av) av.innerHTML=FOTOS.length
-      ? 'La <b>portada</b> es la que sale en tu ficha y en la tarjeta. Las demás van en la galería del evento.'
+      ? 'La <b>portada</b> es la que sale en tu ficha y en la tarjeta. Las demás van en la galería del evento. Arrástralas con «Portada» para cambiar cuál manda.'
       : 'Sin al menos una foto, el evento no se puede poner a la venta.';
     c.innerHTML=FOTOS.map(function(f,i){
       var esVideo=(f.tipo==='video');
@@ -2934,6 +2966,9 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
           (esVideo
             ? '<video src="'+esc(f.url)+'" style="width:100%;height:100%;object-fit:cover;display:block"></video>'
             : '<img src="'+esc(f.url)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block">')+
+          '<span style="position:absolute;left:4px;top:4px;background:'+(esVideo?'var(--magenta,#E2188E)':'rgba(30,26,22,.78)')+';'+
+            'color:#fff;font:600 8.5px/1 Oswald,system-ui;letter-spacing:.06em;padding:3px 6px;'+
+            'border-radius:99px">'+(esVideo?'▶ VIDEO':'FOTO')+'</span>'+
           (i===0?'<span style="position:absolute;left:4px;bottom:4px;background:var(--naranja,#F2682A);'+
                  'color:#fff;font:600 9px/1 Oswald,system-ui;letter-spacing:.06em;padding:3px 6px;'+
                  'border-radius:99px">PORTADA</span>':'')+
@@ -2977,8 +3012,9 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       'display:grid;place-items:center;padding:16px;overflow:auto';
     ov.innerHTML='<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;padding:18px 20px">'+
       '<h3 style="margin:0 0 2px;font-family:Oswald,system-ui,sans-serif;text-transform:uppercase;font-size:16px">Ajustar la foto</h3>'+
-      '<div class="mini" style="margin-bottom:10px">Arrastra para mover y usa el deslizador para acercar. Se recorta a lo ancho, como sale en tu ficha.</div>'+
-      '<div id="ajMarco" style="position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;'+
+      '<div class="mini" style="margin-bottom:10px">Arrastra para mover y usa el deslizador para acercar. '+
+        'Se recorta en vertical, que es el marco con el que salen todas: así la galería no queda a parches.</div>'+
+      '<div id="ajMarco" style="position:relative;width:100%;max-width:300px;margin:0 auto;aspect-ratio:3/4;overflow:hidden;'+
         'border-radius:10px;background:#1E1A16;cursor:grab;touch-action:none">'+
         /* SIN crossorigin EL RECORTE NO SALE. La foto vive en otro dominio
            (el almacén), así que el canvas queda «teñido» y el navegador se
@@ -3038,7 +3074,7 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       try{
         var W=marco.clientWidth, H=marco.clientHeight, e=st.base*st.z;
         var sx=(-st.x)/e, sy=(-st.y)/e, sw=W/e, sh=H/e;
-        var destW=Math.min(1600, Math.round(sw)), destH=Math.round(destW*9/16);
+        var destW=Math.min(900, Math.round(sw)), destH=Math.round(destW*4/3);
         var cv=document.createElement('canvas'); cv.width=destW; cv.height=destH;
         cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, destW, destH);
         var data=cv.toDataURL('image/jpeg', 0.9);
@@ -3074,6 +3110,8 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   }
   async function subeFotos(files){
     if(!files||!files.length) return;
+    var fallos=[];
+    var cajaMal=$('malFotos'); if(cajaMal) cajaMal.innerHTML='';
     /* NADIE DEBERÍA TENER QUE GUARDAR PARA PODER SUBIR UNA FOTO. Javi,
        10-oct-2026: «no me obligues a guardar evento para subir fotos». La foto
        necesita un evento al que colgarse, así que se crea el borrador solo, en
@@ -3083,22 +3121,60 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
       try{ await guardar(true); }catch(_){}
       if(!evCur||!evCur.id){ toast('No pude crear el borrador. Inténtalo otra vez.',true); return; }
     }
+    /* VIDEO TAMBIÉN. Javi, 22-oct-2026: «en Mi Cuenta de cada productor o
+       touroperador permite que también suban el video para la portada y
+       explícales». El servidor ya lo aceptaba —mp4, mov y webm, hasta 25 MB—;
+       lo que faltaba era dejar elegirlo aquí.
+       Y las fotos van TODAS por el mismo recorte vertical antes de subir: eso
+       es lo que evita que la galería de la app mezcle horizontales con
+       verticales. El video no se recorta, se manda como está. */
     var lista=Array.prototype.slice.call(files).filter(function(f){
-      return (f.type||'').indexOf('image')===0; });
-    if(!lista.length){ toast('Eso no es una imagen.',true); return; }
+      var t=(f.type||'');
+      return t.indexOf('image')===0 || t.indexOf('video')===0; });
+    var fuera=Array.prototype.slice.call(files).filter(function(f){ return lista.indexOf(f)<0; });
+    fuera.forEach(function(f){ fallos.push({nombre:f.name,motivo:'no es una foto ni un video'}); });
+    if(!lista.length){
+      if(cajaMal&&window.cpVideo) cajaMal.innerHTML=cpVideo.noEntraron(fallos);
+      toast('Eso no es una foto ni un video.',true); return; }
     for(var i=0;i<lista.length;i++){
       try{
-        toast('Subiendo '+(i+1)+' de '+lista.length+'…');
+        var f=lista[i], esVid=(f.type||'').indexOf('video')===0;
+        var fuente=f;
+        if(esVid){
+          /* Se comprime ANTES de pesarlo: el video del teléfono viene en 1080p
+             y pesa treinta megas, y encima viaja en base64, que infla un tercio
+             más. Comprimido son dos o tres. Javi, 22-oct. */
+          if(window.cpVideo){
+            toast('Comprimiendo el video… tarda lo que dura el video.');
+            var r=await new Promise(function(res){ cpVideo.comprime(f,null,function(e,x){ res(x||null); }); });
+            if(r){ fuente=r.blob; if(r.aviso) toast(r.aviso,!r.comprimido);
+              if(r.comprimido) toast('Comprimido: de '+cpVideo.mb(r.antes)+' MB a '+cpVideo.mb(r.despues)+' MB'); }
+          }
+          if(fuente.size>60*1024*1024){
+            fallos.push({nombre:f.name,motivo:'sigue pesando '+cpVideo.mb(fuente.size)+' MB y el tope son 60: córtalo más corto'});
+            continue;
+          }
+        }
+        toast((esVid?'Subiendo el video ':'Subiendo ')+(i+1)+' de '+lista.length+'…');
+        if(!esVid && window.sincCrop){
+          var blob=await new Promise(function(res){
+            sincCrop.open(f,{only:'v',titulo:'Acomoda la foto de tu evento'},function(r){
+              res((r&&(r.vBlob||r.hBlob))||null); });
+          });
+          if(!blob){ fallos.push({nombre:f.name,motivo:'cerraste el recortador sin acomodarla'}); continue; }
+          fuente=blob;
+        }
         var dataUri=await new Promise(function(res,rej){
           var fr=new FileReader();
           fr.onload=function(){res(fr.result);}; fr.onerror=rej;
-          fr.readAsDataURL(lista[i]);
+          fr.readAsDataURL(fuente);
         });
         var j=await fotoRpc({imagen:dataUri});
         FOTOS=j.fotos||[]; pintaFotos();
-      }catch(e){ toast(e.message||'No se pudo subir',true); break; }
+      }catch(e){ fallos.push({nombre:(lista[i]&&lista[i].name)||'un archivo',motivo:e.message||'no se pudo subir'}); }
     }
-    toast('Listo');
+    if(cajaMal && window.cpVideo) cajaMal.innerHTML=cpVideo.noEntraron(fallos);
+    toast(fallos.length?('Listo, con '+fallos.length+' sin subir'):'Listo', fallos.length>0);
   }
   async function quitaFoto(url){
     try{ var j=await fotoRpc({quitar:url}); FOTOS=j.fotos||[]; pintaFotos(); toast('Quitada'); }
@@ -4154,7 +4230,14 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
        quien mira puede ser ella (con su sesión) o Casa Pepe. El check-in sabe
        distinguirlo —si la ficha es suya no sale la banda negra— pero necesita
        saber de qué ficha hablamos. */
-    el.src='/checkin.html?embed=1'+(FICHA&&FICHA.id?('&prod='+encodeURIComponent(FICHA.id)):'');
+    /* Y con SU LIGA por delante. Javi, 22-oct-2026: «cuando ya entra a su
+       usuario a veces entra a Mi cuenta y le pide entrar otra vez». Este portal
+       no tiene login: se entra con la liga. El check-in pedía sesión de
+       Supabase, y solo la tenía quien hubiera entrado por otro sitio antes —de
+       ahí el «a veces». Con el token no hay nada que volver a teclear. */
+    el.src='/checkin.html?embed=1'
+      +(TOK?('&t='+encodeURIComponent(TOK)):'')
+      +(FICHA&&FICHA.id?('&prod='+encodeURIComponent(FICHA.id)):'');
     CUENTA_LISTA=true;
   }
   function pintaCuentaVieja(){
@@ -4605,6 +4688,14 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
   }
 
   (async function init(){
+    /* Sin liga en la barra, pero con sesión: es suya, se recupera su liga y
+       sigue. Nunca un login aquí dentro. */
+    if(!TOK){
+      TOK=await miLiga();
+      if(TOK){
+        try{ history.replaceState(null,'',location.pathname+'?t='+encodeURIComponent(TOK)+location.hash); }catch(_){}
+      }
+    }
     if(!TOK){FICHA=null;shell();return;}
     try{ FICHA=await rpc('prod_portal_ficha',{p_token:TOK}); EV=await rpc('prod_portal_eventos',{p_token:TOK}); }catch(e){ FICHA=null; }
     try{ ESPACIOS=await rpc('prod_portal_espacios',{p_token:TOK})||[]; }catch(e){ ESPACIOS=[]; }
