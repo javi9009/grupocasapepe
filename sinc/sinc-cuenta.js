@@ -243,6 +243,23 @@ window.sincCuenta = (function () {
     if (HUESPED !== null) return HUESPED;
     try { HUESPED = !!(await rpc('sinc_soy_huesped', {})); }
     catch (_) { HUESPED = false; }
+    /* SI DICE QUE NO, PERO AQUÍ HAY UNA LIGA. La sesión del huésped se abre una
+       vez y después la liga no se vuelve a canjear: el que entró ayer tiene la
+       sesión puesta pero no pasa otra vez por comoHuesped(), y sin esto hoy
+       vería el precio de la calle en su propio tour de cortesía. Así que se le
+       vuelve a dar a la base la prueba que sigue teniendo en el navegador -el
+       token de su reserva- y se le pregunta otra vez. La base comprueba el
+       token; esto sólo se lo recuerda. */
+    if (HUESPED === false) {
+      var t = null;
+      try { t = localStorage.getItem('sinc_resv_sesion') || null; } catch (_) {}
+      if (!t) {
+        try { t = (new URLSearchParams(location.search).get('resv') || '').trim() || null; } catch (_) {}
+      }
+      if (t && /^[0-9a-f-]{36}$/i.test(t)) {
+        try { HUESPED = !!(await rpc('sinc_marca_estancia', { p_token: t })); } catch (_) {}
+      }
+    }
     return HUESPED;
   }
   /* Lo ya sabido, para pintar sin esperar. null = todavía no se ha preguntado. */
