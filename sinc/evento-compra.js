@@ -125,10 +125,13 @@ window.eventoCompra = (function () {
     function $(i){ return caja.querySelector('#'+i); }
     function disponibles(t){ return (t.cupo==null) ? Infinity : Math.max(0,(t.cupo||0)-(t.vendidos||0)); }
 
+    /* Un boleto que no cuesta dice «Gratis», no «$0»: un cero suelto en una
+       lista de precios se lee como un precio que falta. Javi, 26-oct-2026. */
+    function prTxt(v){ return Number(v||0)>0 ? mx(v) : T('Gratis'); }
     var elegir = unico
       ? '<div class="ecU"><div><div class="nm">'+esc(tiers[0].nombre||T('Boleto'))+'</div>'
           +(tiers[0].incluye?'<div class="inc">'+esc(tiers[0].incluye)+'</div>':'')
-        +'</div><div class="pr">'+mx(tiers[0].precio)+'</div></div>'
+        +'</div><div class="pr">'+esc(prTxt(tiers[0].precio))+'</div></div>'
       : tiers.map(function(t,i){
           var disp=disponibles(t), ago=disp<=0;
           return '<label class="ecT'+(ago?' ago':'')+'" data-i="'+i+'">'
@@ -136,7 +139,7 @@ window.eventoCompra = (function () {
             +'<div><div class="nm">'+esc(t.nombre||T('Boleto'))+'</div>'
               +(t.incluye?'<div class="inc">'+esc(t.incluye)+'</div>':'')
               +(t.cupo!=null?'<div class="cupo">'+(ago?esc(T('Agotado')):(disp+' '+esc(T('disponibles'))))+'</div>':'')
-            +'</div><div class="pr">'+mx(t.precio)+'</div></label>';
+            +'</div><div class="pr">'+esc(prTxt(t.precio))+'</div></label>';
         }).join('');
 
     caja.innerHTML =
@@ -234,13 +237,27 @@ window.eventoCompra = (function () {
 
       var desc = sub - total;
       var iva  = total - (total/(1+IVA));
+      /* ENTRADA LIBRE NO SE PAGA, SE APARTA. Javi, 26-oct-2026: «si es entrada
+         gratis sólo se solicita la reserva sin meter tarjeta». Por dentro ya
+         era así -no se abre ninguna pasarela-, pero por fuera decía «Total a
+         pagar $0», «PAGAR $0» y «pago seguro con Stripe»: tres frases de cobro
+         en una pantalla donde no se cobra nada. Nadie teclea una tarjeta ahí,
+         pero sí se queda pensando si va a tener que hacerlo. */
+      var libre = !(total > 0);
       d.innerHTML =
-         '<div class="l"><span>'+esc(t.nombre||T('Boleto'))+' × '+CANT+'</span><span>'+mx2(sub)+'</span></div>'
+         '<div class="l"><span>'+esc(t.nombre||T('Boleto'))+' × '+CANT+'</span><span>'+(libre?esc(T('Sin costo')):mx2(sub))+'</span></div>'
         +(desc>0?'<div class="l desc"><span>'+esc(T('Descuento'))+' '+esc(etiqueta||'')+'</span><span>−'+mx2(desc)+'</span></div>':'')
-        +(conIva?'<div class="l imp"><span>'+esc(T('IVA'))+' '+Math.round(IVA*100)+'% '+esc(T('incluido'))+'</span><span>'+mx2(iva)+'</span></div>':'')
-        +'<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>';
+        +((conIva&&!libre)?'<div class="l imp"><span>'+esc(T('IVA'))+' '+Math.round(IVA*100)+'% '+esc(T('incluido'))+'</span><span>'+mx2(iva)+'</span></div>':'')
+        +(libre
+          ? '<div class="l tot"><span>'+esc(T('Total'))+'</span><b>'+esc(T('Entrada libre'))+'</b></div>'
+          : '<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>');
       $('ecPagar').disabled = false;
-      $('ecPagar').textContent = T('Pagar ')+mx(total);
+      $('ecPagar').textContent = libre ? T('Apartar mi lugar') : (T('Pagar ')+mx(total));
+      var _pie = caja.querySelector('.ecPie');
+      if(_pie) _pie.innerHTML = libre
+        ? esc(T('No se cobra nada: apartas tu lugar y te mandamos el pase con tu QR.'))
+        : esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))+
+          (conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'');
       guarda();
     }
 

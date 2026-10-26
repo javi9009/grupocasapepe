@@ -465,6 +465,12 @@
       'se quedan en el barrio':'stays in the neighborhood',
       'propina incluida':'tip included',
       'Este boleto está cancelado.':'This ticket has been cancelled.',
+      /* eventos de entrada libre: se apartan, no se pagan */
+      'Apartar mi lugar':'Hold my spot',
+      'Sin costo':'Free',
+      'No se cobra nada: apartas tu lugar y te mandamos el pase con tu QR.':
+        'Nothing is charged: you hold your spot and we send you your pass with its QR.',
+      'Otros eventos':'More events',
       'Por cada ':'For every ',
       'Incluye tu propina de ':'Includes your tip of ',
       ', que va completa a quien te atiende.':', which goes in full to whoever looks after you.',
