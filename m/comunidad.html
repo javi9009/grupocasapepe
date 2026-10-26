@@ -709,6 +709,19 @@ ATA.convenio=function(a){
 };
 
 VISTA.cobro=function(a){
+  /* LO QUE FALTABA AQUI. Javi, 26-oct-2026: «cobro completo: quien_factura,
+     banco/CLABE/titular, el estado real de Stripe y el boton de vincular. Con
+     forma_pago='dos_cobros' no hay donde registrar por donde cobra el resto».
+     Tenia razon: la pantalla preguntaba COMO cobra y no DONDE le pagamos, asi
+     que el dato que hace falta para transferirle no estaba en ningun sitio. */
+  var porSuStripe = a.forma_pago==='stripe_connect';
+  var str = {
+    vinculado:  ['ok',    'Stripe vinculado'],
+    liga_enviada:['amedias','Le mandamos la liga y no ha terminado'],
+    restringido:['mal',   'Stripe lo tiene restringido'],
+    pendiente:  ['amedias','Sin vincular']
+  }[a.stripe_estado||'pendiente'] || ['amedias','Sin vincular'];
+
   return '<div class="tarj"><h3>Cómo se le paga</h3>'+
     '<div class="campo"><span class="et">FORMA DE COBRO</span><select data-c="forma_pago">'+
       '<option value="">— sin definir</option>'+
@@ -716,13 +729,52 @@ VISTA.cobro=function(a){
        'dos_cobros:Anticipo con nosotros y resto en destino · solo experiencias'].map(function(x){
         var p=x.split(':'); return '<option value="'+p[0]+'"'+(a.forma_pago===p[0]?' selected':'')+'>'+p[1]+'</option>';}).join('')+
     '</select></div>'+
-    '<div class="aviso '+(a.forma_pago==='stripe_connect'&&a.stripe_estado!=='vinculado'?'err':'info')+'" style="margin-top:12px">'+
-      (a.forma_pago==='stripe_connect'
+    '<div class="campo" style="margin-top:13px"><span class="et">QUIÉN FACTURA AL CLIENTE</span><select data-c="quien_factura">'+
+      ['operador:Él, con su propio RFC','casa_pepe:Nosotros, y a él se le paga contra su factura'].map(function(x){
+        var p=x.split(':'); return '<option value="'+p[0]+'"'+((a.quien_factura||'operador')===p[0]?' selected':'')+'>'+p[1]+'</option>';}).join('')+
+    '</select><span class="ay">Decide de quién sale el comprobante que recibe el viajero.</span></div>'+
+    '<div class="aviso '+(porSuStripe&&a.stripe_estado!=='vinculado'?'err':'info')+'" style="margin-top:12px">'+
+      (porSuStripe
         ? (a.stripe_estado==='vinculado' ? 'Stripe vinculado. El dinero le cae directo.'
            : '🔒 Cobra por su Stripe y no lo ha vinculado. Sin eso no hay forma de pagarle, así que no se puede publicar.')
         : (a.forma_pago==='dos_cobros' ? 'Cobra el resto en destino: su Stripe no hace falta y no se le pide.'
            : 'Sin definir. Mientras no lo esté, no se sabe por dónde le llega el dinero.'))+'</div>'+
   '</div>'+
+
+  /* La cuenta a la que le transferimos. Solo cuando el dinero pasa por
+     nosotros: si cobra por su Stripe, nunca le mandamos nada y pedirle la
+     CLABE es pedirle un dato que no vamos a usar. */
+  (porSuStripe ? '' :
+  '<div class="tarj"><h3>A dónde le transferimos</h3>'+
+    '<div class="aviso info">Con el anticipo en nuestras manos, esto es lo único que hace falta para pagarle. Sin CLABE no hay transferencia.</div>'+
+    c('titular_cuenta','TITULAR DE LA CUENTA',a.titular_cuenta,'Como viene en el banco, no el nombre comercial')+
+    '<div class="g2" style="margin-top:13px">'+
+      c('banco','BANCO',a.banco)+
+      c('clabe','CLABE',a.clabe,'18 dígitos')+
+    '</div>'+
+    c('email_reportes','CORREO PARA SUS CORTES · OPCIONAL',a.email_reportes,'Si lo deja vacío usamos el de contacto')+
+  '</div>')+
+
+  '<div class="tarj"><h3>Su Stripe</h3>'+
+    '<div class="lin"><div class="t"><b>'+esc(a.stripe_account_id||'Sin cuenta conectada')+'</b>'+
+      '<span>'+(a.stripe_revisado_at
+        ? 'Comprobado contra Stripe el '+String(a.stripe_revisado_at).slice(0,10)
+        : 'Nunca lo hemos comprobado contra Stripe')+
+      (a.stripe_charges_enabled===true?' · cobra':'')+
+      (a.stripe_payouts_enabled===true?' · le pagan':'')+'</span></div>'+
+      '<span class="p '+str[0]+'">'+str[1]+'</span></div>'+
+    (a.stripe_requisitos
+      ? '<div class="aviso alerta" style="margin-top:10px"><b>Stripe le pide:</b> '+esc(a.stripe_requisitos)+'</div>' : '')+
+    '<div class="g2" style="margin-top:13px">'+
+      '<div class="campo"><span class="et">PEGAR SU CUENTA · acct_…</span>'+
+        '<input type="text" id="acctPegar" value="" placeholder="acct_...">'+
+        '<span class="ay">Solo si ya la tiene. Se comprueba con Stripe antes de guardarla.</span></div>'+
+      '<div class="campo" style="display:flex;align-items:flex-end;gap:8px">'+
+        '<button class="btn gris" id="bStripeRevisar" type="button">Comprobar</button>'+
+        '<button class="btn gris" id="bStripePegar" type="button">Guardar cuenta</button></div>'+
+    '</div>'+
+  '</div>'+
+
   '<div class="tarj"><h3>El reparto</h3>'+
     '<div class="aviso alerta">Lo normal del Grupo es <b>10 / 10 / 5</b>. Si su convenio dice otra cosa, se cambia aquí.</div>'+
     '<div class="g2">'+c('com_vendedor_pct','% QUIEN VENDE',a.com_vendedor_pct)+
@@ -732,26 +784,159 @@ VISTA.cobro=function(a){
   '<button class="btn naranja" id="bGuardaCobro">Guardar</button>';
 };
 ATA.cobro=function(){
+  /* Cambiar la forma de cobro reescribe la pestaña: con su Stripe no se le
+     piden los datos del banco, y al revés. Se repinta en el momento para que
+     no tenga que guardar para enterarse. */
+  var fp=document.querySelector('[data-c="forma_pago"]');
+  if(fp) fp.onchange=function(){ ABIERTA.forma_pago=fp.value; ficha(); };
+
   $('bGuardaCobro').onclick=async function(){
     var b={};
     Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(el){
       var k=el.getAttribute('data-c'), v=el.value;
       b[k] = v==='' ? null : (/_pct$/.test(k) ? Number(v) : v);});
+    /* LA CLABE SON 18 DÍGITOS Y NO SE NEGOCIA. Una mal tecleada no da error al
+       guardar: da error el día de la transferencia, con el dinero fuera. */
+    if(b.clabe){
+      var limpia=String(b.clabe).replace(/\D/g,'');
+      if(limpia.length!==18){ avisa('La CLABE tiene '+limpia.length+' dígitos y tienen que ser 18. No se guardó nada.'); return; }
+      b.clabe=limpia;
+    }
     this.disabled=true; var ok=await guarda(b); this.disabled=false;
     if(ok){ await recarga(); await abre(ABIERTA.id); }
   };
+
+  /* Comprobar contra Stripe: la ficha puede decir «vinculado» y Stripe decir
+     que todavía no cobra. Manda Stripe. */
+  var br=$('bStripeRevisar');
+  if(br) br.onclick=async function(){
+    this.disabled=true; var t=this.textContent; this.textContent='Preguntando a Stripe…';
+    try{
+      var r=await fetch(SB+'/functions/v1/stripe-revision',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'revisar'})}).then(function(x){return x.json();});
+      if(!r||!r.ok) avisa((r&&r.error)||'No se pudo comprobar.');
+      else { await recarga(); await abre(ABIERTA.id); return; }
+    }catch(e){ avisa('No se pudo comprobar: '+((e&&e.message)||e)); }
+    this.disabled=false; this.textContent=t;
+  };
+
+  var bp=$('bStripePegar');
+  if(bp) bp.onclick=async function(){
+    var v=($('acctPegar').value||'').trim();
+    if(!/^acct_[A-Za-z0-9]{8,}$/.test(v)){ avisa('Eso no tiene forma de cuenta de Stripe. Empieza por «acct_».'); return; }
+    this.disabled=true; var t=this.textContent; this.textContent='Comprobando…';
+    try{
+      var r=await fetch(SB+'/functions/v1/stripe-revision',{method:'POST',headers:hdr(),
+        body:JSON.stringify({accion:'pegar',tipo:'touroperador',id:ABIERTA.id,cuenta:v})})
+        .then(function(x){return x.json();});
+      if(!r||!r.ok){ avisa((r&&r.error)||'No se pudo guardar la cuenta.'); }
+      else { await recarga(); await abre(ABIERTA.id); return; }
+    }catch(e){ avisa('No se pudo guardar: '+((e&&e.message)||e)); }
+    this.disabled=false; this.textContent=t;
+  };
 };
 
+var ROLES=[['coordinador','Coordinador · entra al portal'],['guia','Guía'],['catador','Catador'],
+           ['mixologo','Mixólogo'],['cocina','Cocina'],['contador','Contador'],['otro','Otro']];
+
 VISTA.equipo=function(a){
+  /* ANTES SOLO LISTABA. Javi, 26-oct-2026: «equipo editable en la ficha del
+     ateneísta: hoy solo lista, no invita». Y sin poder dar de alta a nadie,
+     una touroperadora de tres guías se quedaba con el que puso en su alta y
+     ninguna manera de añadir a los otros dos: ni para elegirlos en el ADN de
+     una experiencia, ni para que entraran al portal. */
   var L=DET.equipo||[];
-  if(!L.length) return '<div class="vacio"><b>No tiene a nadie dado de alta</b>'+
-    '<span>Quien atienda al cliente entra aquí, y con eso queda como guía para poder elegirlo en el ADN de una experiencia.</span></div>';
-  return '<div class="tarj"><h3>'+L.length+' persona'+(L.length===1?'':'s')+'</h3>'+
+  var h='<div class="tarj"><h3>Añadir a alguien</h3>'+
+    '<div class="aviso info">Quien atiende al cliente entra aquí, y con eso queda como guía para poder elegirlo en el ADN de una experiencia. '+
+    'Solo el <b>coordinador</b> entra al portal; los demás existen para la operación.</div>'+
+    '<div class="g2">'+
+      '<div class="campo"><span class="et">NOMBRE</span><input type="text" id="eqNom"></div>'+
+      '<div class="campo"><span class="et">CORREO</span><input type="email" id="eqMail">'+
+        '<span class="ay">Obligatorio si va a ser coordinador</span></div>'+
+    '</div>'+
+    '<div class="g2" style="margin-top:13px">'+
+      '<div class="campo"><span class="et">WHATSAPP · OPCIONAL</span><input type="text" id="eqWa"></div>'+
+      '<div class="campo"><span class="et">QUÉ HACE</span><select id="eqRol">'+
+        ROLES.map(function(r){return '<option value="'+r[0]+'">'+r[1]+'</option>';}).join('')+
+      '</select></div>'+
+    '</div>'+
+    '<label class="chk" style="display:flex;gap:9px;align-items:center;margin:13px 0 0;cursor:pointer">'+
+      '<input type="checkbox" id="eqAtiende" checked style="width:18px;height:18px">'+
+      '<span>Atiende al cliente · se puede elegir como guía de una experiencia</span></label>'+
+    '<button class="btn naranja" id="bEqAdd" style="margin-top:14px">Darlo de alta</button>'+
+  '</div>';
+
+  if(!L.length) return h+'<div class="vacio"><b>No tiene a nadie dado de alta</b>'+
+    '<span>Ni siquiera a quien responde. Añádelo arriba.</span></div>';
+
+  return h+'<div class="tarj"><h3>'+L.length+' persona'+(L.length===1?'':'s')+'</h3>'+
     L.map(function(u){
       return '<div class="lin"><div class="t"><b>'+esc(u.nombre||u.email||'—')+'</b>'+
-        '<span>'+esc(u.rol||'sin rol')+' · '+esc(u.email||'')+
+        '<span>'+esc(u.email||'sin correo')+(u.whatsapp?' · '+esc(u.whatsapp):'')+
         (u.atiende_cliente?' · <b>atiende al cliente, es guía</b>':'')+'</span></div>'+
-        '<span class="p '+(u.activo?'ok':'amedias')+'">'+(u.activo?'activo':'pausado')+'</span></div>';}).join('')+'</div>';
+        '<select class="eqRolUno" data-u="'+u.id+'" style="width:auto;min-width:150px">'+
+          ROLES.map(function(r){return '<option value="'+r[0]+'"'+(u.rol===r[0]?' selected':'')+'>'+r[1]+'</option>';}).join('')+
+        '</select>'+
+        '<button class="btn gris sm eqBaja" data-u="'+u.id+'" data-a="'+(u.activo?'0':'1')+'">'+
+          (u.activo?'Pausar':'Reactivar')+'</button>'+
+        '<span class="p '+(u.activo?'ok':'amedias')+'">'+(u.activo?'activo':'pausado')+'</span></div>';
+    }).join('')+'</div>';
+};
+
+ATA.equipo=function(){
+  async function recargaEquipo(){
+    DET.equipo = await get('tour_operador_usuarios?select=*&operador_id=eq.'+ABIERTA.id+'&order=nombre') || [];
+    $('panelTab').innerHTML=VISTA.equipo(ABIERTA); ATA.equipo();
+  }
+
+  $('bEqAdd').onclick=async function(){
+    var nom=($('eqNom').value||'').trim();
+    var mail=($('eqMail').value||'').trim().toLowerCase();
+    var rol=$('eqRol').value;
+    if(!nom){ avisa('Falta el nombre.'); return; }
+    /* La base lo frena igual, pero decirlo aquí evita un error en crudo: un
+       coordinador sin correo no puede entrar a ningún sitio, así que no es
+       coordinador. */
+    if(rol==='coordinador' && !mail){ avisa('Un coordinador entra al portal, así que necesita correo.'); return; }
+    this.disabled=true;
+    try{
+      var r=await fetch(SB+'/rest/v1/tour_operador_usuarios',{method:'POST',
+        headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+        body:JSON.stringify({operador_id:ABIERTA.id, nombre:nom, email:mail||null,
+          whatsapp:($('eqWa').value||'').trim()||null, rol:rol,
+          atiende_cliente:$('eqAtiende').checked, activo:true})});
+      if(!r.ok){ avisa('No se pudo dar de alta: '+(await r.text()).slice(0,110)); this.disabled=false; return; }
+      await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+        body:JSON.stringify({entidad:'ateneista',entidad_id:ABIERTA.id,que:'alta de equipo',
+          quien:YO,detalle:{nombre:nom,rol:rol}})}).catch(function(){});
+      avisa('«'+nom+'» dado de alta.');
+      await recargaEquipo();
+    }catch(e){ avisa('No se pudo: '+((e&&e.message)||e)); this.disabled=false; }
+  };
+
+  Array.prototype.forEach.call(document.querySelectorAll('.eqRolUno'),function(sel){
+    sel.onchange=async function(){
+      var r=await fetch(SB+'/rest/v1/tour_operador_usuarios?id=eq.'+sel.getAttribute('data-u'),
+        {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+         body:JSON.stringify({rol:sel.value})});
+      if(!r.ok) avisa('No se pudo cambiar el rol: '+(await r.text()).slice(0,110));
+      await recargaEquipo();
+    };
+  });
+
+  /* PAUSAR NO ES BORRAR, Y A PROPÓSITO. De esta fila cuelgan las salidas que
+     ya guió: borrarla dejaría huérfano el historial de quien llevó a gente de
+     verdad a un tour de verdad. */
+  Array.prototype.forEach.call(document.querySelectorAll('.eqBaja'),function(b){
+    b.onclick=async function(){
+      b.disabled=true;
+      var r=await fetch(SB+'/rest/v1/tour_operador_usuarios?id=eq.'+b.getAttribute('data-u'),
+        {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+         body:JSON.stringify({activo:b.getAttribute('data-a')==='1'})});
+      if(!r.ok) avisa('No se pudo: '+(await r.text()).slice(0,110));
+      await recargaEquipo();
+    };
+  });
 };
 
 VISTA.historia=function(a){
