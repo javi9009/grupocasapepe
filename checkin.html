@@ -946,6 +946,9 @@ function repinta(doc){
   if(doc==='constancia'){ cont.innerHTML=cajaDoc(doc); }
   else { pintaDocs(); }
   enlazaFiles();
+  /* El tic del paso tiene que moverse con el archivo, no con la carga de la
+     pantalla. */
+  if(SOLO_PAPELES){ estadoPapeles(); pintaPasos(); }
 }
 async function subeYLee(doc,file){
   SUBIDO[doc]={leyendo:true,msg:'Guardando la foto…'};
@@ -1239,6 +1242,12 @@ var PASOS=[['Quién eres',1],['Tu equipo',0],['Qué tan formales',0],['Cómo te 
    eventos, y su inventario vive en «Mis eventos». Se empuja desde `arranca`,
    que es donde ya se sabe quién entró. */
 var AQUI=0;
+/* SOLO LE FALTAN LOS PAPELES. Se enciende cuando quien entra ya firmó su
+   contrato en el alta —o sea, ya nos dio todos los datos— pero todavia no ha
+   subido ni una identificacion. Entonces esta pantalla deja de ser un segundo
+   alta y es lo que dijo Javi el 26-oct: «al check-in solo le quedan los
+   papeles». */
+var SOLO_PAPELES=false;
 function pintaPasos(){
   $('pasos').innerHTML=PASOS.map(function(p,i){
     return '<button data-p="'+i+'"'+(i===AQUI?' class="on"':'')+(p[1]===0?' disabled':'')+'>'+
@@ -3129,7 +3138,18 @@ async function arranca(){
      ya firmó su contrato no tiene nada que hacer aquí suelto —sus datos los
      ve dentro de Mi cuenta, que es esta misma pantalla embebida. Casa Pepe
      (ADMIN) sí sigue entrando de frente, que para eso mira cuentas ajenas. */
-  if(!EMBED && !ADMIN && FICHA && FICHA.contrato_firmado_at){ alPortal(); return; }
+  /* EL QUE FIRMO EN EL ALTA TODAVIA NO HA ENTREGADO SUS PAPELES. Javi, 26-oct.
+     Esta puerta se escribio cuando el contrato se firmaba AL FINAL del check-in:
+     si estaba firmado, no quedaba nada que hacer aqui. Con el alta nueva se
+     firma AL PRINCIPIO —en /ateneista—, asi que `contrato_firmado_at` venia
+     puesto desde el primer dia y esta linea mandaba al portal a gente que nunca
+     habia subido su INE. Por eso «en los papeles no permites subir los
+     documentos que si dejas en otro lado»: no es que no dejara subirlos, es que
+     no se podia llegar a la pantalla. */
+  if(!EMBED && !ADMIN && FICHA && FICHA.contrato_firmado_at){
+    if(await tienePapeles()){ alPortal(); return; }
+    SOLO_PAPELES=true;
+  }
 
   if(EMBED && TIPO==='operador' && PASOS.length===5) PASOS.push(['Tus tours',1]);
 
@@ -3210,6 +3230,23 @@ async function arranca(){
 /* LOS PAPELES QUE YA SUBIÓ, DE VUELTA EN PANTALLA.
    Sin esto, quien regresaba veía las cajas vacías y volvía a subir su INE
    pensando que no había quedado. Estaba guardado; solo no se leía. */
+/* ¿ENTREGO LO MINIMO? Una identificacion. La poliza y el RNT se piden en su
+   paso y no frenan a nadie: se puede operar mientras se cotizan, y asi lo dice
+   la propia pantalla. Si la consulta falla devolvemos `true` a proposito: dejar
+   a alguien fuera de su portal por un error de red es peor que no insistirle
+   con un papel. */
+async function tienePapeles(){
+  var tabla = TIPO==='operador' ? 'tour_operador_docs' : 'productora_docs';
+  var llave = TIPO==='operador' ? 'operador_id' : 'productora_id';
+  try{
+    var r=await fetch(SB+'/rest/v1/'+tabla+'?select=tipo&'+llave+'=eq.'+ID+
+      '&tipo=eq.identificacion&limit=1',{headers:hdr()});
+    if(!r.ok) return true;
+    var l=await r.json();
+    return !!(l&&l.length);
+  }catch(_){ return true; }
+}
+
 async function recuperaDocs(){
   var tabla = TIPO==='operador' ? 'tour_operador_docs' : 'productora_docs';
   var llave = TIPO==='operador' ? 'operador_id' : 'productora_id';
@@ -3250,7 +3287,65 @@ function abrePasosHechos(){
   }
   if(f.firma_fotos || f.firma_validar_tel || f.contrato_firmado_at){ PASOS[3][1]=2; PASOS[4][1]=1; }
   if(f.contrato_firmado_at) PASOS[4][1]=2;
+  if(SOLO_PAPELES) modoPapeles();
   pintaPasos();
+}
+
+/* ---------- cuando solo faltan los papeles ----------
+   Las preguntas de «quien eres», «como te pagamos» y «el acuerdo» ya las
+   contesto en el alta: repetirlas aqui es pedirle dos veces lo mismo y es lo
+   que hacia que esta pantalla se sintiera un segundo alta. Los campos siguen
+   ahi —rellenos, para corregir si algo salio mal— pero el paso que marca
+   pendiente es el del papel que falta, y el titulo lo dice.
+   Lo que la base NO tiene y aqui se pide de verdad: la identificacion, la
+   constancia, la poliza, el RNT y las vigencias del pasaporte y la forma
+   migratoria, que el alta nunca captura. */
+function tieneId(){
+  if(esExtranjera()) return !!(SUBIDO.pasaporte && SUBIDO.forma_migratoria);
+  return !!SUBIDO.ine;
+}
+/* Aqui «hecho» quiere decir ENTREGADO, no contestado. Se recalcula cada vez que
+   sube un archivo: si no, el tic del paso se queda en el estado que tenia al
+   abrir la pantalla y da la impresion de que la subida no sirvio de nada. */
+function estadoPapeles(){
+  var f=FICHA||{};
+  var idOk  = tieneId();
+  var csfOk = (figura()==='fisica'||figura()==='moral') ? !!SUBIDO.constancia : true;
+  PASOS[0][1] = (idOk && csfOk) ? 2 : 1;
+  PASOS[2][1] = (SUBIDO.poliza_rc || f.poliza_cotizar) ? 2 : 1;
+  if(PASOS[1][1]===0) PASOS[1][1]=1;
+  PASOS[3][1] = 2;
+  PASOS[4][1] = 2;
+}
+function modoPapeles(){
+  PASOS[0][0]='Tus papeles';
+  PASOS[2][0]='Seguro y registro';
+  estadoPapeles();
+
+  $('tit').textContent = 'Tus papeles';
+  $('lead').textContent = 'Tus datos ya quedaron guardados con tu alta — aqui no hay que '
+    + 'volver a escribirlos. Lo unico que nos falta son los documentos: sube los que tengas, '
+    + 'y si alguno te falta nos lo dices y lo vemos.';
+
+  /* Que nadie quede atrapado. Esto va ARRIBA, fuera de los pasos, para que se
+     vea igual en el de la identificacion y en el del seguro: «Salir» cierra la
+     sesion, no devuelve a su portal, y sin esta liga la unica salida era
+     perderla. */
+  if(!$('papelesSalida')){
+    var d=document.createElement('div');
+    d.id='papelesSalida'; d.className='aviso';
+    d.style.margin='0 0 18px';
+    d.innerHTML='Puedes empezar a trabajar sin esperar a esto: los papeles nos hacen falta '
+      + 'para tu expediente, no para que vendas.'
+      + '<div class="pie-acc" style="margin-top:12px">'
+      + '<button class="btn fantasma" type="button" id="alPortalYa">Ir a mi portal</button></div>';
+    var app=$('app'); if(app) app.insertBefore(d, app.firstChild);
+    var b=$('alPortalYa'); if(b) b.onclick=function(){ alPortal(); };
+  }
+
+  AQUI = (PASOS[0][1]===2 && PASOS[2][1]!==2) ? 2 : 0;
+  for(var k=0;k<PASOS.length;k++){ var e=$('p'+(k+1)); if(e) e.classList.toggle('oculto',k!==AQUI); }
+  if(AQUI===2) cargaForm();
 }
 
 /* Una pantalla que se cae en silencio es peor que una que avisa. */
