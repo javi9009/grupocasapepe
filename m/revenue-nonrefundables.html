@@ -83,9 +83,10 @@ a.cb:hover{text-decoration:underline}
 
   <div class="card">
     <div class="cifras">
-      <div class="cifra"><b id="cN">—</b><span>Reservas abiertas</span></div>
-      <div class="cifra"><b id="cD">—</b><span>Sin cobrar</span></div>
+      <div class="cifra"><b id="cN">—</b><span id="eN">Reservas abiertas</span></div>
+      <div class="cifra"><b id="cD">—</b><span id="eD">Sin cobrar</span></div>
       <div class="cifra"><b id="cT">—</b><span>Con tarjeta en garantía</span></div>
+      <div class="cifra"><b id="cM">—</b><span>Sin correo · no se les puede escribir</span></div>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <select id="fCasa">
@@ -93,11 +94,21 @@ a.cb:hover{text-decoration:underline}
         <option value="cdmx">Casa Pepe CDMX</option>
         <option value="puebla">Casa Pepe Puebla</option>
       </select>
+      <!-- COBRADAS Y NO COBRADAS, POR SEPARADO. Javi, 25-oct-2026: «me permitas
+           filtrar por cobradas / nobradas». Antes sólo se podía elegir entre lo
+           que queda por hacer y absolutamente todo, así que para ver lo ya
+           cobrado había que leer la lista entera a ojo. -->
       <select id="fEstado">
-        <option value="abiertas">Lo que queda por hacer</option>
+        <option value="abiertas">Sin cobrar · lo que queda por hacer</option>
+        <option value="cobrado">Cobradas</option>
+        <option value="pendiente">Pendientes · sin tocar</option>
+        <option value="no_paso">El cobro no pasó</option>
+        <option value="avisado">Avisadas, esperando</option>
+        <option value="perdonado">Perdonadas</option>
         <option value="todas">Todo, incluso lo cerrado</option>
       </select>
       <button class="btn" id="bCorrer">Correr el estudio ahora</button>
+      <button class="btn" id="bCorreos">Buscar los correos que faltan</button>
     </div>
     <div id="aviso"></div>
   </div>
@@ -161,6 +172,7 @@ async function carga(){
   let q="nonref_dia?select=*&order=check_in.asc&limit=400";
   if(casa) q+="&property=eq."+encodeURIComponent(casa);
   if(est==="abiertas") q+="&estado=in.(pendiente,no_paso,avisado)";
+  else if(est!=="todas") q+="&estado=eq."+encodeURIComponent(est);
   const r=await fetch(SB+"/rest/v1/"+q,{headers:H()});
   if(!r.ok){ document.getElementById("lead").textContent="No pudimos leer la lista ("+r.status+")."; return; }
   FILAS=await r.json();
@@ -169,10 +181,20 @@ async function carga(){
 
 function pinta(){
   const tb=document.getElementById("filas");
-  const abiertas=FILAS.filter(f=>["pendiente","no_paso","avisado"].includes(f.estado));
-  document.getElementById("cN").textContent=abiertas.length;
-  document.getElementById("cD").textContent=P(abiertas.reduce((a,f)=>a+Number(f.saldo||0),0));
-  document.getElementById("cT").textContent=abiertas.filter(f=>f.tiene_tarjeta).length;
+  /* Las cifras cuentan LO QUE SE ESTÁ VIENDO. Con el filtro en «cobradas»,
+     contar sólo las abiertas daba tres ceros y parecía que no había nada. */
+  const est=document.getElementById("fEstado").value;
+  const soloAbiertas = est==="abiertas" || est==="todas";
+  const cuenta = soloAbiertas
+    ? FILAS.filter(f=>["pendiente","no_paso","avisado"].includes(f.estado))
+    : FILAS;
+  document.getElementById("eN").textContent = soloAbiertas ? "Reservas abiertas" : "Reservas en la lista";
+  document.getElementById("eD").textContent = soloAbiertas ? "Sin cobrar" : "Suman";
+  document.getElementById("cN").textContent=cuenta.length;
+  document.getElementById("cD").textContent=P(cuenta.reduce((a,f)=>a+Number(f.saldo||0),0));
+  document.getElementById("cT").textContent=cuenta.filter(f=>f.tiene_tarjeta).length;
+  /* A cuántas no se les puede escribir: es lo que frena el cobro. */
+  document.getElementById("cM").textContent=cuenta.filter(f=>!String(f.email||"").trim()).length;
   document.getElementById("lead").textContent=FILAS.length
     ? FILAS.length+" reserva"+(FILAS.length===1?"":"s")+" · la más próxima llega el "+fd(FILAS[0].check_in)
     : "";
@@ -218,9 +240,20 @@ async function accion(id, que, btn){
   btn.disabled=true; const old=btn.textContent;
   try{
     if(que==="avisar"){
-      if(!confirm("Se le manda a "+(fila.email||"—")+" el correo de que su pago no pasó, con la liga para pagarlo él. ¿Lo mandamos?")){
-        btn.disabled=false; return;
+      /* SE PREGUNTA EN LA PANTALLA, NO EN UN POP-UP DEL NAVEGADOR. Javi lleva
+         meses diciéndolo: ese «grupocasapepe.netlify.app dice» tapa media
+         pantalla en el móvil y no se ve de quién habla. Dos toques: el primero
+         enseña a quién se le va a escribir, el segundo lo manda. */
+      if(btn.getAttribute("data-conf")!=="1"){
+        btn.setAttribute("data-conf","1");
+        btn.textContent="Mandar a "+(fila.email||"—");
+        di("Toca otra vez para mandarle el aviso. Toca cualquier otro botón para dejarlo.");
+        btn.disabled=false;
+        setTimeout(function(){ if(btn.getAttribute("data-conf")==="1"){
+          btn.removeAttribute("data-conf"); btn.textContent=old; di(""); } }, 8000);
+        return;
       }
+      btn.removeAttribute("data-conf");
       btn.textContent="Mandando…";
       const r=await fetch(SB+"/functions/v1/revenue-nonref-aviso",{method:"POST",headers:H(),
         body:JSON.stringify({id:id})}).then(x=>x.json());
@@ -242,6 +275,41 @@ async function accion(id, que, btn){
 
 document.getElementById("fCasa").onchange=carga;
 document.getElementById("fEstado").onchange=carga;
+
+/* BUSCAR LOS CORREOS QUE FALTAN.
+   Javi, 25-oct-2026: «me dio un error al mandar un mail, dice que no hay, pero
+   todos los huéspedes SÍ tienen mail. Fue Anna Cullen». No era cosa de ella:
+   la lista se arma con el libro de Cloudbeds, que no trae el correo, así que
+   la fila nacía sin él y nadie volvía a buscarlo. Esto va reserva por reserva
+   a Cloudbeds y se lo pone. Por tandas, que cada una es una llamada y la
+   función tiene el reloj contado. */
+document.getElementById("bCorreos").onclick=async function(){
+  const b=this; b.disabled=true; const old=b.textContent;
+  const casa=document.getElementById("fCasa").value;
+  const casas = casa ? [casa] : ["cdmx","puebla"];
+  let puestos=0, sinCorreo=0, quedan=0;
+  try{
+    for(const c of casas){
+      for(let vuelta=0; vuelta<4; vuelta++){
+        b.textContent="Buscando en "+(CASA[c]||c)+"…";
+        const r=await fetch(SB+"/functions/v1/revenue-nonrefundables",{method:"POST",headers:H(),
+          body:JSON.stringify({rellenar:true, prop:c, limite:20})}).then(x=>x.json());
+        if(!r||!r.ok){ di((r&&r.error)||"No se pudo buscar los correos.",true); break; }
+        puestos+=Number(r.con_correo||0);
+        sinCorreo+=Number(r.sin_correo_en_cloudbeds||0);
+        quedan=Number(r.quedan||0);
+        if(!Number(r.revisadas||0) || quedan===0) break;
+      }
+    }
+  }catch(e){ di("Tardó demasiado. Vuelve a tocarlo y sigue donde se quedó.",true); }
+  b.disabled=false; b.textContent=old;
+  if(puestos||sinCorreo){
+    di(puestos+" correo"+(puestos===1?"":"s")+" recuperado"+(puestos===1?"":"s")+" de Cloudbeds"+
+       (sinCorreo?" · "+sinCorreo+" no lo tienen ni allá":"")+
+       (quedan?" · quedan "+quedan+", vuelve a tocarlo":"")+".");
+  } else di("No había correos que recuperar.");
+  carga();
+};
 
 /* Correr el estudio: una casa por llamada, que mirar el libro entero de las dos
    se pasa del limite de la funcion. */
