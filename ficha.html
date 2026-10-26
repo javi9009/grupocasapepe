@@ -5720,6 +5720,9 @@ gmp-place-autocomplete,.gmpac{
       }).join('');
 
       var hayBloqueo=rev.hallazgos.some(function(x){return x.bloquea;});
+      /* Se distingue el candado del impacto de los demás: del impacto se puede
+         salir guardando la ficha sin él; de un precio en cero, no. */
+      var bloqImp=rev.hallazgos.some(function(x){return x.bloquea&&x.impacto;});
       var v=cxAbre(
         '<div class="cab"><h3>Antes de guardar</h3></div>'+
         '<div class="cue">'+
@@ -5728,14 +5731,19 @@ gmp-place-autocomplete,.gmpac{
             ? '<div class="revlista">'+cuerpoH+'</div>'
             : '<div class="ay" style="margin-top:12px">No vemos nada raro. Todo cuadra.</div>')+
           '<div class="ft" style="justify-content:flex-start;margin-top:18px;flex-wrap:wrap;gap:8px">'+
+            /* Con un impacto que no cabe, la salida ya no es «cancelar y
+               empezar otra vez»: se guarda la ficha y se deja el impacto
+               fuera, que es lo único que no puede publicarse. */
             (rev.hallazgos.length
               ? '<button type="button" class="btn" data-con>Aplicar y guardar</button>'+
-                '<button type="button" class="btn fantasma" data-sin'+(hayBloqueo?' disabled':'')+'>Guardar sin cambios</button>'
+                '<button type="button" class="btn fantasma" data-sin'+((hayBloqueo&&!bloqImp)?' disabled':'')+'>'+
+                  (bloqImp?'Guardar sin tocar el impacto':'Guardar sin cambios')+'</button>'
               : '<button type="button" class="btn" data-sin>Guardar</button>')+
             '<button type="button" class="btn fantasma" data-vuelve>Cancelar y seguir editando</button>'+
           '</div>'+
           (hayBloqueo
-            ? '<div class="mini" style="margin-top:10px;color:var(--error,#9E3B2E)">Lo marcado con ⛔ hay que resolverlo: guardarlo publicaría un sello de impacto que no es cierto.</div>'
+            ? '<div class="mini" style="margin-top:10px;color:var(--error,#9E3B2E)">Lo marcado con ⛔ no se puede publicar tal cual.'+
+              (bloqImp?' Puedes guardar el resto de la ficha ahora y dejar el impacto como estaba.':'')+'</div>'
             : '')+
         '</div>');
 
@@ -5874,8 +5882,11 @@ gmp-place-autocomplete,.gmpac{
       }
 
       var bCon=v.querySelector('[data-con]'), bSin=v.querySelector('[data-sin]'), bV=v.querySelector('[data-vuelve]');
+      /* Si hay un impacto que no cabe y se guarda «sin tocarlo», el impacto no
+         viaja: la ficha sí. */
       if(bCon)bCon.onclick=function(){ var r=cosecha(true);  cxCierra(); listo({guardar:true, imp:r.imp, aplico:true}); };
-      if(bSin)bSin.onclick=function(){ var r=cosecha(false); cxCierra(); listo({guardar:true, imp:r.imp, aplico:false}); };
+      if(bSin)bSin.onclick=function(){ var r=cosecha(false); cxCierra();
+        listo({guardar:true, imp:r.imp, aplico:false, saltaImpacto:bloqImp}); };
       if(bV) bV.onclick=function(){ cxCierra(); listo(null); };
       var obs=setInterval(function(){
         if(!document.getElementById('cxVelo')){clearInterval(obs);listo(null);}
@@ -6005,6 +6016,19 @@ gmp-place-autocomplete,.gmpac{
     var decision=await confirmaRevision(rev, impNuevos, tp, pv);
     if(!decision)return;                    // cancelar y seguir editando
     impNuevos=decision.imp;
+    /* EL IMPACTO QUE NO CABE NO SECUESTRA LA FICHA ENTERA. Javi, 26-oct-2026:
+       «ni dándole a guardar arriba a la derecha ni guardando desde el pop up
+       me guardas el de dónde sale ni el impacto».
+       Tenía razón y era lo mismo: todo viaja en un solo guardado, así que un
+       impacto que no cuadra impedía guardar también el punto de encuentro, las
+       fotos, los horarios... todo el trabajo de la tarde. Y para arreglar el
+       impacto hacía falta guardar, que era justo lo que no se podía.
+       La regla de fondo sigue intacta -no se publica un sello de derrama que
+       no es cierto-: lo que se deja fuera es el impacto, no la ficha. Se
+       guarda todo lo demás y el impacto se queda como estaba, dicho con
+       todas las letras. */
+    var impFuera = decision.saltaImpacto===true;
+    if(impFuera) impNuevos=[];
     if(decision.aplico){
       /* Las propuestas de pantalla (precio, gratuito, grupo, cupos) ya se
          escribieron en sus campos; hay que releerlos para que viajen al
@@ -6045,7 +6069,20 @@ gmp-place-autocomplete,.gmpac{
     if(b.antelacion==='__otro')b.antelacion=null;
 
     $('btnGuardar').disabled=true;$('btnGuardar').textContent='Guardando…';
-    var r=await patch('op_experiencias',ID,b);
+    /* Se pide de vuelta la fila guardada. Un PATCH que no casa ninguna fila
+       -porque los permisos de la base no dejan tocar esta ficha- contesta que
+       todo fue bien y no cambia nada: la pantalla decía «ficha guardada» y no
+       se había guardado nada. Con la fila de vuelta se nota. Javi, 26-oct. */
+    var r=await req('op_experiencias?id=eq.'+ID,
+      {method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(b)});
+    if(r.ok){
+      var _f=null; try{ _f=await r.clone().json(); }catch(_){ }
+      if(Array.isArray(_f)&&_f.length===0){
+        $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
+        error('No se guardó nada: la base no dejó cambiar esta ficha. Suele ser de permisos — avisa a Casa Pepe.');
+        return;
+      }
+    }
     if(!r.ok){
       $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
       error('No se pudo guardar: '+await porQueNoGuardo(r));
@@ -6121,7 +6158,9 @@ gmp-place-autocomplete,.gmpac{
     }
 
     $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
-    toast('Ficha guardada');
+    toast(impFuera
+      ? 'Ficha guardada. El impacto se quedó como estaba: lo declarado no cabe en el boleto.'
+      : 'Ficha guardada');
     var a=await get('v_op_experiencias?select=*&id=eq.'+ID+'&limit=1');
     if(a[0]){var pr=E._protas;E=a[0];E._protas=pr;}
     await detalle();pinta();
