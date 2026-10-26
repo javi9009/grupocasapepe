@@ -135,6 +135,9 @@ function hdr(){return {apikey:KEY,Authorization:'Bearer '+tok(),'Content-Type':'
 function avisa(t){var e=$('toast');e.textContent=t;e.style.display='block';setTimeout(function(){e.style.display='none';},2600);}
 function dinero(n){ if(n==null||n==='') return '—';
   return '$'+Number(n).toLocaleString('es-MX',{maximumFractionDigits:0}); }
+function fecha(s){ if(!s) return '';
+  try{ return new Date(s).toLocaleDateString('es-MX',{day:'numeric',month:'short'}); }
+  catch(_){ return String(s).slice(0,10); } }
 
 var FORMATOS={tour:['🚶','Tour'],evento:['🎫','Evento'],transporte:['🚐','Transporte']};
 var ESTADOS={publicada:['ok','Publicada'],en_revision:['al','En revisión'],
@@ -145,7 +148,8 @@ function pasa(p){
   if(F.estado && String(p.estado||'')!==F.estado) return false;
   if(F.tipo && String(p.tipo||'')!==F.tipo) return false;
   if(F.q){
-    var t=(String(p.nombre||'')+' '+String(p.sku||'')+' '+String(OPS[p.operador_id]||'')).toLowerCase();
+    var t=(String(p.nombre||'')+' '+String(p.sku||'')+' '+
+           String(p._dueno||OPS[p.operador_id]||'')).toLowerCase();
     if(t.indexOf(F.q.toLowerCase())<0) return false;
   }
   return true;
@@ -166,6 +170,7 @@ function pasa(p){
    A un tour por propina para huéspedes sí se le pide precio: es el que paga
    quien llega de la calle. La regla es la misma que la de la ficha. */
 function leFalta(p){
+  if(p._ev) return leFaltaEvento(p);
   var f=[];
   var fmt=String(p.formato||'tour');
   if(!(Number(p.neto_adulto)>0) && fmt!=='evento' && (fmt==='tour' || !p.apepe_gratuito))
@@ -175,6 +180,49 @@ function leFalta(p){
   if(!p.cer_inicio_lugar && !p.punto_encuentro) f.push('sin punto de encuentro');
   if(p.tipo==='tercero' && !p.operador_id) f.push('sin dueño');
   return f;
+}
+
+/* A UN EVENTO NO SE LE PIDE LO MISMO. No tiene punto de encuentro -tiene sala-
+   ni hace falta la duración para venderlo. Lo que no puede faltar es cuándo es,
+   dónde es y cuánto cuesta. Y un evento con boletos tiene el precio en ellos,
+   no en su campo: mirar sólo `eventos.precio` fue el mismo fallo que ya se
+   arregló en el calendario. Una renta de espacio -clase 'espacio'- no tiene
+   fecha: se alquila cuando alguien la pide. Javi, 26-oct-2026. */
+function leFaltaEvento(p){
+  var f=[];
+  var esEspacio = p._clase==='espacio';
+  if(!esEspacio && !p._fecha) f.push('sin fecha');
+  if(!p._sala) f.push('sin sala');
+  if(!p._gratis && !(Number(p.neto_adulto)>0)) f.push('sin precio');
+  if(!p._fotos) f.push('sin fotos');
+  return f;
+}
+
+/* Los dos mundos se enseñan juntos pero no se mezclan: un evento del Ateneo
+   sigue viviendo en su tabla, con sus estados. Aquí sólo se traduce para que
+   la lista hable un idioma. «Propuesto» es su manera de decir «en revisión»:
+   es el estado con el que sale en la cola de aprobación. */
+var EV_ESTADO={borrador:'borrador',propuesto:'en_revision',
+               publicado:'publicada',realizado:'pasada',cancelado:'anulada'};
+
+function normalizaEvento(e, prodNombre, precioBoleto){
+  var precio = Number(e.precio||0)>0 ? Number(e.precio)
+             : (precioBoleto>0 ? precioBoleto : null);
+  return {
+    id:e.id, _ev:true, _clase:e.clase||'evento',
+    nombre:e.nombre, formato:'evento',
+    estado: EV_ESTADO[e.estado] || 'borrador',
+    _estadoReal: e.estado,
+    tipo: e.productora_id ? 'tercero' : 'propio',
+    operador_id:null, _dueno: prodNombre || 'Casa Pepe',
+    neto_adulto: precio, precio_adulto: null,
+    _gratis: !!e.es_gratis,
+    duracion_min: e.duracion_min || null,
+    _fecha: e.fecha_inicio || null,
+    _sala: e.espacio || null,
+    _fotos: !!(e.fotos && e.fotos.length),
+    ciudad:'CDMX', sku:null, updated_at: e.updated_at || e.created_at
+  };
 }
 
 function pinta(){
@@ -199,6 +247,7 @@ function pinta(){
   }
   caja.innerHTML=v.map(function(p){
     var fo=FORMATOS[p.formato||'tour']||['🧾',p.formato||'—'];
+    if(p._clase==='espacio') fo=['🏛','Espacio'];
     var es=ESTADOS[p.estado]||['ne',p.estado||'—'];
     var falta=leFalta(p);
     return '<div class="fila">'+
@@ -211,16 +260,22 @@ function pinta(){
           (p.tipo==='propio'?'<span class="pill na">Propia</span>':'')+
           falta.map(function(x){return '<span class="pill al">'+esc(x)+'</span>';}).join('')+
         '</div>'+
-        '<div class="donde">'+esc(OPS[p.operador_id]||(p.tipo==='propio'?'Casa Pepe':'sin dueño'))+
-          (p.ciudad?' · '+esc(p.ciudad):'')+(p.sku?' · '+esc(p.sku):'')+'</div>'+
+        '<div class="donde">'+esc(p._dueno||OPS[p.operador_id]||(p.tipo==='propio'?'Casa Pepe':'sin dueño'))+
+          (p._sala?' · '+esc(p._sala):'')+(p._fecha?' · '+esc(fecha(p._fecha)):'')+
+          (p.ciudad&&!p._ev?' · '+esc(p.ciudad):'')+(p.sku?' · '+esc(p.sku):'')+'</div>'+
       '</div>'+
       /* Si no hay PVP calculado se enseña el neto, que es lo que el operador
          escribió: un «—» donde hay cien pesos puestos es lo que nos tenía
          mirando fichas vacías que no lo estaban. */
-      '<div class="cifra"'+(p.precio_adulto==null&&Number(p.neto_adulto)>0?' title="Neto del operador · sin PVP calculado"':'')+
-        '><b>'+dinero(p.precio_adulto!=null?p.precio_adulto:p.neto_adulto)+'</b><span>'+
-        (p.duracion_min?p.duracion_min+' min':'—')+'</span></div>'+
-      '<div class="acc"><a class="btn sm" target="_top" href="/ficha.html?id='+encodeURIComponent(p.id)+'">Editar ↗</a>'+
+      '<div class="cifra"'+(!p._ev&&p.precio_adulto==null&&Number(p.neto_adulto)>0?' title="Neto del operador · sin PVP calculado"':'')+
+        '><b>'+((p._ev&&p._gratis&&!(Number(p.neto_adulto)>0))?'Gratis'
+                : dinero(p.precio_adulto!=null?p.precio_adulto:p.neto_adulto))+'</b><span>'+
+        (p.duracion_min?p.duracion_min+' min':(p._ev?'evento':'—'))+'</span></div>'+
+      /* Un evento del Ateneo no se edita en la ficha de Sincrético: vive en su
+         propia tabla y se toca en su pantalla, con su calendario y sus salas. */
+      '<div class="acc"><a class="btn sm" target="_top" href="'+
+        (p._ev ? '/m/eventos.html#evt' : '/ficha.html?id='+encodeURIComponent(p.id))+
+        '">Editar ↗</a>'+
         /* EL PASO QUE FALTABA: DE BORRADOR A LA COLA. Mientras es borrador la
            ficha se está armando y no la ve nadie más; mandarla a revisión es
            decir «ya está». Hasta hoy sólo se podía desde dentro de la ficha, y
@@ -235,9 +290,14 @@ function pinta(){
               ? '<span class="btn sm gris" title="Le falta '+esc(falta.join(', '))+'. Arréglalo y ya se puede mandar." style="opacity:.45;cursor:default">Mandar a revisión</span>'
               : '<button class="btn sm" data-revisar="'+esc(p.id)+'">Mandar a revisión</button>')
           : '')+
-        (p.estado==='publicada'
-          ? '<span class="btn sm gris" title="Quítala de la venta primero" style="opacity:.45;cursor:default">Borrar</span>'
-          : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
+        /* Un evento no se borra desde aquí. Lleva boletos vendidos, sala
+           apartada y su propio calendario detrás: eso se deshace en su
+           pantalla, que es la que sabe qué se lleva por delante. */
+        (p._ev
+          ? ''
+          : p.estado==='publicada'
+            ? '<span class="btn sm gris" title="Quítala de la venta primero" style="opacity:.45;cursor:default">Borrar</span>'
+            : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
       '</div>'+
     '</div>';
   }).join('');
@@ -255,10 +315,15 @@ async function mandaRevision(id, btn){
   var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
   if(!p || p.estado!=='borrador') return;
   if(btn){ btn.disabled=true; btn.textContent='Mandando…'; }
+  /* Cada mundo guarda el mismo paso con su palabra: la experiencia pasa a
+     `en_revision` y el evento a `propuesto`, que es el estado con el que la
+     cola de aprobación los va a buscar. */
+  var tabla = p._ev ? 'eventos' : 'op_experiencias';
+  var nuevo = p._ev ? {estado:'propuesto'} : {estado:'en_revision'};
   try{
-    var r=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+encodeURIComponent(id),
+    var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
       {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-       body:JSON.stringify({estado:'en_revision'})});
+       body:JSON.stringify(nuevo)});
     if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
     var fila=await r.json().catch(function(){return null;});
     /* Un PATCH que no devuelve nada es un PATCH que no cambió nada: la base lo
@@ -267,11 +332,13 @@ async function mandaRevision(id, btn){
     try{
       await fetch(SB+'/rest/v1/historia',{method:'POST',
         headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
-        body:JSON.stringify({entidad:'experiencia',entidad_id:id,que:'mandada a revisión',
-          quien:YO||'el equipo',detalle:{desde:'borrador',nombre:p.nombre,
-            operador:OPS[p.operador_id]||null}})});
+        body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,
+          que:'mandada a revisión',quien:YO||'el equipo',
+          detalle:{desde:'borrador',nombre:p.nombre,
+            operador:p._dueno||OPS[p.operador_id]||null}})});
     }catch(_){}
     p.estado='en_revision';
+    if(p._ev) p._estadoReal='propuesto';
     avisa('Mandada a revisión · ya está en la cola de aprobación');
     pinta();
   }catch(e){
@@ -289,6 +356,9 @@ async function mandaRevision(id, btn){
 async function borra(id){
   var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
   if(!p) return;
+  /* Red por si alguna vez se llama con un evento: éste no es su sitio, y un
+     DELETE aquí se llevaría por delante boletos y sala apartada. */
+  if(p._ev){ avisa('Los eventos se borran en su pantalla, que sabe qué se lleva por delante.'); return; }
   if(p.estado==='publicada'){ avisa('Está publicada. Quítala de la venta y luego se borra.'); return; }
 
   var res, sal;
@@ -347,6 +417,37 @@ async function carga(){
     MEDIA={};
     var m=await fetch(SB+'/rest/v1/sinc_media?select=experiencia_id&tipo=eq.foto&estado=eq.listo&limit=5000',{headers:hdr()});
     if(m.ok){ (await m.json()).forEach(function(x){ if(x.experiencia_id) MEDIA[x.experiencia_id]=1; }); }
+
+    /* LOS EVENTOS DEL ATENEO, EN LA MISMA LISTA. Javi, 26-oct-2026. Viven en su
+       propia tabla y se venden por su propio camino, así que esta pantalla no
+       los veía: el filtro «Eventos» sólo enseñaba las seis fichas de
+       op_experiencias con formato evento, ninguna de ellas a la venta, mientras
+       los 17 que sí se venden no salían por ningún lado.
+       No se migra nada ni se duplica nada: se leen las dos tablas y se traduce
+       la de eventos al idioma de la lista. Si un día los eventos se mudan, lo
+       único que cambia es de dónde se leen. */
+    try{
+      var ev=await fetch(SB+'/rest/v1/eventos?select=id,nombre,estado,clase,espacio,fecha_inicio,'+
+        'es_gratis,precio,duracion_min,fotos,productora_id,created_at,updated_at&order=updated_at.desc&limit=1000',
+        {headers:hdr()});
+      if(ev.ok){
+        var EVS=await ev.json();
+        /* Un evento con boletos tiene el precio en ellos, no en su campo: el
+           más barato es el «desde» que se enseña. */
+        var BOL={};
+        var bp=await fetch(SB+'/rest/v1/evento_precios?select=evento_id,precio&limit=2000',{headers:hdr()});
+        if(bp.ok){ (await bp.json()).forEach(function(b){
+          var n=Number(b.precio||0); if(!(n>0)) return;
+          if(!BOL[b.evento_id] || n<BOL[b.evento_id]) BOL[b.evento_id]=n; }); }
+        var PROD={};
+        var pr=await fetch(SB+'/rest/v1/productoras?select=id,nombre_comercial&limit=1000',{headers:hdr()});
+        if(pr.ok){ (await pr.json()).forEach(function(x){ PROD[x.id]=x.nombre_comercial; }); }
+        TODOS=TODOS.concat(EVS.map(function(e){
+          return normalizaEvento(e, PROD[e.productora_id], BOL[e.id]);
+        }));
+        TODOS.sort(function(a,b){ return String(b.updated_at||'').localeCompare(String(a.updated_at||'')); });
+      }
+    }catch(_){ /* si los eventos no cargan, la lista de experiencias sigue sirviendo */ }
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   pinta();
 }
