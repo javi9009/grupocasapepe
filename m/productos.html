@@ -49,8 +49,18 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .btn.sm{padding:6px 11px;font-size:11.5px}
 .btn.gris{border-color:var(--linea);color:var(--gris)}
 .btn[disabled]{opacity:.5;cursor:default}
-.filtros{display:grid;grid-template-columns:minmax(0,1.6fr) 1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+.filtros{display:grid;grid-template-columns:minmax(0,1.6fr) 1fr 1fr;gap:10px;margin-bottom:10px}
 .filtros input,.filtros select{border:1.5px solid var(--linea);border-radius:9px;padding:10px 12px;background:#fff;width:100%}
+.estados{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 12px}
+.estados button{cursor:pointer;font:600 11px Oswald;letter-spacing:.07em;text-transform:uppercase;
+  border:1.5px solid var(--linea);background:#fff;color:var(--gris);border-radius:999px;padding:6px 13px}
+.estados button:hover{border-color:var(--gris)}
+.estados button.on{border-color:var(--naranja);background:var(--naranja);color:#fff}
+.fila .acc{flex-wrap:wrap;justify-content:flex-end}
+.fila .acc.conf{flex:1 1 320px}
+.conf{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.conf input{border:1.5px solid var(--linea);border-radius:8px;padding:6px 9px;font-size:12.5px;width:200px;background:#fff}
+.conf .dice{font-size:12px;color:var(--gris);width:100%;text-align:right}
 .pill{font:600 10.5px Oswald;letter-spacing:.08em;text-transform:uppercase;border-radius:999px;padding:3px 10px;white-space:nowrap}
 .pill.ok{background:var(--ok-bg);color:var(--ok)}
 .pill.al{background:var(--alerta-bg);color:var(--alerta)}
@@ -99,14 +109,18 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
       <option value="evento">Eventos</option>
       <option value="transporte">Transportes</option>
     </select>
-    <select id="festado">
-      <option value="">Todos los estados</option>
-      <option value="publicada">Publicadas</option>
-      <option value="en_revision">En revisión</option>
-      <option value="borrador">Borrador</option>
-      <option value="pasada">Pasadas</option>
-      <option value="anulada">Anuladas</option>
-    </select>
+    <!-- Los estados ya no son una lista de una sola opción: casi nunca se
+         quiere ver «sólo borradores», se quiere ver «lo que no está publicado»
+         o «lo que está en juego». Se tocan y se suman; ninguno marcado es
+         todos. Javi, 26-oct-2026. -->
+    <div class="estados" id="festados">
+      <button type="button" data-e="borrador">Borrador</button>
+      <button type="button" data-e="en_revision">En revisión</button>
+      <button type="button" data-e="publicada">Publicadas</button>
+      <button type="button" data-e="pausada">En pausa</button>
+      <button type="button" data-e="pasada">Pasadas</button>
+      <button type="button" data-e="anulada">Anuladas</button>
+    </div>
     <select id="ftipo">
       <option value="">Propias y de terceros</option>
       <option value="propio">Propias</option>
@@ -122,7 +136,21 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 <script>
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-var ses=null, TODOS=null, FALLO='', OPS={}, MEDIA={}, YO='', F={q:'',formato:'',estado:'',tipo:''};
+var ses=null, TODOS=null, FALLO='', OPS={}, MEDIA={}, YO='';
+var F={q:'',formato:'',estados:[],tipo:''};
+
+/* LA CASA LA MANDA EL SELECTOR DE ARRIBA. El panel pasa ?proyecto= al abrir el
+   módulo y lo guarda en localStorage, pero cambiarlo NO recarga el iframe: hay
+   que leerlo y vigilarlo. Mismo patrón que la home del panel.
+   Sólo cdmx y puebla filtran de verdad; virreyes enseña sus eventos, y
+   sincrético o corporativo lo ven todo. Javi, 26-oct-2026. */
+function proyActual(){ var p='';
+  try{ p=(new URLSearchParams(location.search).get('proyecto')||'').toLowerCase(); }catch(_){}
+  if(!p){ try{ p=(localStorage.getItem('cpp_proyecto')||'').toLowerCase(); }catch(_){} }
+  return p;
+}
+var PROY=proyActual();
+var CIUDAD={cdmx:'CDMX',puebla:'Puebla'};
 
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -141,11 +169,26 @@ function fecha(s){ if(!s) return '';
 
 var FORMATOS={tour:['🚶','Tour'],evento:['🎫','Evento'],transporte:['🚐','Transporte']};
 var ESTADOS={publicada:['ok','Publicada'],en_revision:['al','En revisión'],
-             borrador:['ne','Borrador'],pasada:['ne','Pasada'],anulada:['er','Anulada']};
+             borrador:['ne','Borrador'],pausada:['ne','En pausa'],
+             pasada:['ne','Pasada'],anulada:['er','Anulada']};
+
+/* De qué casa es cada cosa. Una experiencia lo dice en su ciudad; un evento del
+   Ateneo está en Virreyes, que es CDMX. Las 66 fichas sin ciudad puesta se ven
+   en las dos: esconder trabajo hecho por un campo vacío es peor que enseñarlo
+   donde quizá no toca, y así además se ve que les falta. */
+function esDeLaCasa(p){
+  if(PROY!=='cdmx' && PROY!=='puebla' && PROY!=='virreyes') return true;
+  if(p._ev) return PROY==='cdmx' || PROY==='virreyes';
+  if(PROY==='virreyes') return false;
+  var c=String(p.ciudad||'').trim();
+  if(!c) return true;
+  return c===CIUDAD[PROY];
+}
 
 function pasa(p){
+  if(!esDeLaCasa(p)) return false;
   if(F.formato && String(p.formato||'tour')!==F.formato) return false;
-  if(F.estado && String(p.estado||'')!==F.estado) return false;
+  if(F.estados.length && F.estados.indexOf(String(p.estado||''))<0) return false;
   if(F.tipo && String(p.tipo||'')!==F.tipo) return false;
   if(F.q){
     var t=(String(p.nombre||'')+' '+String(p.sku||'')+' '+
@@ -240,9 +283,14 @@ function pinta(){
   }
   if(TODOS===null){ caja.innerHTML='<div class="vacio">Cargando…</div>'; return; }
 
+  /* La cuenta de arriba cuenta lo de esta casa, no lo del Grupo entero: si el
+     selector dice Puebla, decir «331 productos» sería contarle a Puebla los de
+     CDMX. */
+  var dela=TODOS.filter(esDeLaCasa);
   var pub=0, med=0;
-  TODOS.forEach(function(p){ if(p.estado==='publicada')pub++; else if(p.estado!=='anulada'&&p.estado!=='pasada')med++; });
-  $('cuenta').innerHTML='<b>'+TODOS.length+'</b> productos · <b>'+pub+'</b> publicados · <b>'+med+'</b> a medias';
+  dela.forEach(function(p){ if(p.estado==='publicada')pub++; else if(p.estado!=='anulada'&&p.estado!=='pasada')med++; });
+  var casa=(PROY==='cdmx'?' en CDMX':PROY==='puebla'?' en Puebla':PROY==='virreyes'?' en Virreyes':'');
+  $('cuenta').innerHTML='<b>'+dela.length+'</b> productos'+casa+' · <b>'+pub+'</b> publicados · <b>'+med+'</b> a medias';
 
   var v=TODOS.filter(pasa);
   if(!v.length){
@@ -292,24 +340,118 @@ function pinta(){
            de al lado, con las mismas palabras. */
         (p.estado==='borrador'
           ? (falta.length
-              ? '<span class="btn sm gris" title="Le falta '+esc(falta.join(', '))+'. Arréglalo y ya se puede mandar." style="opacity:.45;cursor:default">Mandar a revisión</span>'
+              ? gris('Mandar a revisión','Le falta '+falta.join(', ')+'. Arréglalo y ya se puede mandar.')
               : '<button class="btn sm" data-revisar="'+esc(p.id)+'">Mandar a revisión</button>')
           : '')+
-        /* Un evento no se borra desde aquí. Lleva boletos vendidos, sala
-           apartada y su propio calendario detrás: eso se deshace en su
-           pantalla, que es la que sabe qué se lleva por delante. */
-        (p._ev
-          ? ''
-          : p.estado==='publicada'
-            ? '<span class="btn sm gris" title="Quítala de la venta primero" style="opacity:.45;cursor:default">Borrar</span>'
-            : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
+        /* PUBLICAR ES PONERLO A LA VENTA, así que pide lo mismo que pedía la
+           ficha: si le falta algo, el botón no está. Desde «en revisión» es
+           aprobarlo sin dar el rodeo por la cola; desde borrador o desde pausa
+           es sacarlo directo, que es lo que hace quien lo armó él mismo. */
+        (['borrador','en_revision','pausada'].indexOf(p.estado)>=0
+          ? (falta.length
+              ? gris('Publicar','Le falta '+falta.join(', ')+'. Eso no se pone a la venta.')
+              : '<button class="btn sm verde" data-publicar="'+esc(p.id)+'">Publicar</button>')
+          : '')+
+        /* DESPUBLICAR NO BORRA NADA: lo quita del escaparate y lo deja donde
+           pueda volver. Una experiencia queda en pausa; un evento vuelve a
+           borrador, que es lo más cerca que tiene de una pausa. */
+        (p.estado==='publicada'
+          ? '<button class="btn sm" data-despublicar="'+esc(p.id)+'">Despublicar</button>'
+          : '')+
+        (p.estado==='publicada'
+          ? gris('Borrar','Quítala de la venta primero')
+          : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
       '</div>'+
     '</div>';
   }).join('');
   Array.prototype.forEach.call(caja.querySelectorAll('[data-borrar]'),function(b){
-    b.onclick=function(){ borra(b.getAttribute('data-borrar')); };});
+    b.onclick=function(){ pideMotivo(b.getAttribute('data-borrar'), b); };});
   Array.prototype.forEach.call(caja.querySelectorAll('[data-revisar]'),function(b){
     b.onclick=function(){ mandaRevision(b.getAttribute('data-revisar'), b); };});
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-publicar]'),function(b){
+    b.onclick=function(){ cambiaEstado(b.getAttribute('data-publicar'),'publicar',b); };});
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-despublicar]'),function(b){
+    b.onclick=function(){ cambiaEstado(b.getAttribute('data-despublicar'),'despublicar',b); };});
+}
+
+function gris(txt,porque){
+  return '<span class="btn sm gris" title="'+esc(porque)+'" style="opacity:.45;cursor:default">'+esc(txt)+'</span>';
+}
+
+/* PUBLICAR Y DESPUBLICAR. Cada mundo con su palabra y con lo suyo: una
+   experiencia apunta cuándo se publicó, un evento apunta quién lo validó -que
+   es lo que mira su pantalla-. Despublicar deja la experiencia en pausa y el
+   evento en borrador, que es donde cada uno puede volver.
+   Lo que no se hace aquí es apartar la sala de un evento: eso es un paso del
+   calendario, con sus choques, y publicar desde una lista no puede decidirlo.
+   Por eso un evento sin sala no tiene botón: le falta y se ve. */
+async function cambiaEstado(id, que, btn){
+  var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
+  if(!p) return;
+  var ahora=new Date().toISOString();
+  var tabla = p._ev ? 'eventos' : 'op_experiencias';
+  var cuerpo, nuevoVisible;
+  if(que==='publicar'){
+    cuerpo = p._ev ? {estado:'publicado',validado_at:ahora,validado_por:YO||null}
+                   : {estado:'publicada',publicada_at:ahora};
+    nuevoVisible='publicada';
+  }else{
+    cuerpo = p._ev ? {estado:'borrador'} : {estado:'pausada'};
+    nuevoVisible = p._ev ? 'borrador' : 'pausada';
+  }
+  var antes=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent=que==='publicar'?'Publicando…':'Quitando…'; }
+  try{
+    var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+       body:JSON.stringify(cuerpo)});
+    if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
+    var fila=await r.json().catch(function(){return null;});
+    if(!fila || !fila.length) throw new Error('la base no dejó cambiar esto');
+    try{
+      await fetch(SB+'/rest/v1/historia',{method:'POST',
+        headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+        body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,
+          que:que==='publicar'?'publicada':'despublicada',quien:YO||'el equipo',
+          detalle:{desde:p.estado,nombre:p.nombre,operador:p._dueno||OPS[p.operador_id]||null}})});
+    }catch(_){}
+    p.estado=nuevoVisible;
+    if(p._ev) p._estadoReal=cuerpo.estado;
+    avisa(que==='publicar' ? 'Publicada · ya está a la venta'
+                           : 'Quitada de la venta · no se borró nada');
+    pinta();
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent=antes; }
+    avisa('No se pudo: '+((e&&e.message)||e));
+  }
+}
+
+/* BORRAR SIN POP-UP DEL NAVEGADOR. Javi lo lleva pidiendo desde hace meses:
+   «ese "grupocasapepe.netlify.app dice" rompe la casa y en el móvil tapa media
+   pantalla». La pregunta se hace en la propia fila, donde está lo que se va a
+   borrar, y el motivo se escribe ahí mismo. */
+function pideMotivo(id, btn){
+  var acc=btn && btn.parentNode; if(!acc) return;
+  var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
+  if(!p) return;
+  acc.className='acc conf';
+  /* Los botones se buscan por data-, no por id: un uuid que empieza por dígito
+     no es un selector CSS válido y querySelector reventaría. */
+  acc.innerHTML='<div class="dice">Esto no se deshace. ¿Por qué se borra?</div>'+
+    '<input placeholder="El motivo es lo único que queda de ella" maxlength="200">'+
+    '<button class="btn sm rojo" data-si="1">Sí, borrar</button>'+
+    '<button class="btn sm gris" data-no="1">No</button>';
+  var inp=acc.querySelector('input');
+  var si=acc.querySelector('[data-si]');
+  inp.focus();
+  acc.querySelector('[data-no]').onclick=function(){ pinta(); };
+  si.onclick=function(){
+    var txt=String(inp.value||'').trim();
+    if(txt.length<4){ acc.querySelector('.dice').textContent='Escribe el motivo: es lo único que queda de ella.'; inp.focus(); return; }
+    si.disabled=true; si.textContent='Borrando…';
+    borra(id, txt, acc);
+  };
+  inp.onkeydown=function(ev){ if(ev.key==='Enter') si.click(); };
 }
 
 /* Mandar a revisión no cambia la ficha, sólo de quién es el turno: pasa a la
@@ -358,54 +500,63 @@ async function mandaRevision(id, btn){
    vivas y sin saber de qué eran. Una venta que no sabe qué vendió es el mismo
    fallo que nos hizo dar por perdida la de Jorge Ruvalcaba. Se cuenta antes,
    y si hay reservas se dice que no con el número delante. */
-async function borra(id){
+async function borra(id, motivo, acc){
   var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
   if(!p) return;
-  /* Red por si alguna vez se llama con un evento: éste no es su sitio, y un
-     DELETE aquí se llevaría por delante boletos y sala apartada. */
-  if(p._ev){ avisa('Los eventos se borran en su pantalla, que sabe qué se lleva por delante.'); return; }
   if(p.estado==='publicada'){ avisa('Está publicada. Quítala de la venta y luego se borra.'); return; }
+  function dice(t){ var d=acc&&acc.querySelector('.dice'); if(d) d.textContent=t; else avisa(t); }
 
-  var res, sal;
+  /* UN EVENTO SE CUENTA IGUAL, pero lo suyo son boletos vendidos y la sala que
+     tiene apartada. Un boleto vendido es alguien que va a presentarse en la
+     puerta: eso no se borra, se cancela en su pantalla. */
+  var res=0, sal=0;
   try{
-    var r1=await fetch(SB+'/rest/v1/sinc_reservas?select=id&op_experiencia_id=eq.'+id+'&limit=1',
-      {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
-    if(!r1.ok) throw new Error('no pudimos contar sus reservas ('+r1.status+')');
-    res=Number((r1.headers.get('content-range')||'/0').split('/')[1]||0);
-    var r2=await fetch(SB+'/rest/v1/sinc_salidas?select=id&experiencia_id=eq.'+id,{headers:hdr()});
-    sal=r2.ok?(await r2.json()).length:0;
+    if(p._ev){
+      var r1=await fetch(SB+'/rest/v1/evento_reservas?select=id&evento_id=eq.'+id+'&limit=1',
+        {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
+      if(!r1.ok) throw new Error('no pudimos contar sus boletos ('+r1.status+')');
+      res=Number((r1.headers.get('content-range')||'/0').split('/')[1]||0);
+      var r2=await fetch(SB+'/rest/v1/ev_ocupaciones?select=id&evento_id=eq.'+id,{headers:hdr()});
+      sal=r2.ok?(await r2.json()).length:0;
+    }else{
+      var e1=await fetch(SB+'/rest/v1/sinc_reservas?select=id&op_experiencia_id=eq.'+id+'&limit=1',
+        {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
+      if(!e1.ok) throw new Error('no pudimos contar sus reservas ('+e1.status+')');
+      res=Number((e1.headers.get('content-range')||'/0').split('/')[1]||0);
+      var e2=await fetch(SB+'/rest/v1/sinc_salidas?select=id&experiencia_id=eq.'+id,{headers:hdr()});
+      sal=e2.ok?(await e2.json()).length:0;
+    }
   }catch(e){
-    avisa('No se borró: '+((e&&e.message)||e)+'. Sin poder comprobarlo, no lo toco.');
+    dice('No se borró: '+((e&&e.message)||e)+'. Sin poder comprobarlo, no lo toco.');
     return;
   }
 
   if(res>0){
-    alert('«'+(p.nombre||'esta ficha')+'» tiene '+res+' reserva'+(res===1?'':'s')+' colgando.\n\n'+
-          'Si la borras, esas reservas se quedan sin saber de qué eran. Pásala a anulada en vez de borrarla.');
+    dice(p._ev
+      ? 'Tiene '+res+' boleto'+(res===1?'':'s')+' vendido'+(res===1?'':'s')+'. Eso se cancela en la pantalla de eventos, no se borra.'
+      : 'Tiene '+res+' reserva'+(res===1?'':'s')+' colgando. Si la borras se quedan sin saber de qué eran: pásala a anulada.');
     return;
   }
 
-  var txt=prompt('Vas a borrar «'+(p.nombre||'esta ficha')+'».'+
-    (sal?'\nSe van con ella '+sal+' salida'+(sal===1?'':'s')+' programada'+(sal===1?'':'s')+'.':'')+
-    '\n\nEsto no se deshace. ¿Por qué se borra?');
-  if(txt===null) return;
-  if(String(txt).trim().length<4){ avisa('Escribe el motivo: es lo único que queda de ella.'); return; }
-
   try{
     await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
-      body:JSON.stringify({entidad:'experiencia',entidad_id:id,que:'borrada',quien:YO||'el equipo',
-        detalle:{nombre:p.nombre,estado:p.estado,formato:p.formato,
-                 operador:OPS[p.operador_id]||null,salidas_borradas:sal,motivo:String(txt).trim()}})});
+      body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,que:'borrada',
+        quien:YO||'el equipo',
+        detalle:{nombre:p.nombre,estado:p._estadoReal||p.estado,formato:p.formato,
+                 operador:p._dueno||OPS[p.operador_id]||null,
+                 salidas_borradas:sal,motivo:String(motivo||'').trim()}})});
     if(sal){
-      var rs=await fetch(SB+'/rest/v1/sinc_salidas?experiencia_id=eq.'+id,{method:'DELETE',headers:hdr()});
-      if(!rs.ok) throw new Error('no se pudieron quitar sus salidas ('+rs.status+')');
+      var tsal=p._ev?'ev_ocupaciones?evento_id=eq.':'sinc_salidas?experiencia_id=eq.';
+      var rs=await fetch(SB+'/rest/v1/'+tsal+id,{method:'DELETE',headers:hdr()});
+      if(!rs.ok) throw new Error('no se pudo soltar lo que tenía apartado ('+rs.status+')');
     }
-    var rr=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+id,{method:'DELETE',headers:hdr()});
+    var tab=p._ev?'eventos':'op_experiencias';
+    var rr=await fetch(SB+'/rest/v1/'+tab+'?id=eq.'+id,{method:'DELETE',headers:hdr()});
     if(!rr.ok) throw new Error('la base respondió '+rr.status+' · '+(await rr.text()).slice(0,140));
     TODOS=TODOS.filter(function(x){return String(x.id)!==String(id);});
     avisa('Borrada · la quitó '+(YO||'el equipo'));
     pinta();
-  }catch(e){ avisa('No se pudo borrar: '+((e&&e.message)||e)); }
+  }catch(e){ dice('No se pudo borrar: '+((e&&e.message)||e)); }
 }
 
 async function carga(){
@@ -457,10 +608,28 @@ async function carga(){
   pinta();
 }
 
-['fq','fformato','festado','ftipo'].forEach(function(id){
-  var k={fq:'q',fformato:'formato',festado:'estado',ftipo:'tipo'}[id];
+['fq','fformato','ftipo'].forEach(function(id){
+  var k={fq:'q',fformato:'formato',ftipo:'tipo'}[id];
   $(id).addEventListener(id==='fq'?'input':'change',function(){ F[k]=this.value; pinta(); });
 });
+
+/* Los estados se suman: tocar uno lo enciende, tocarlo otra vez lo apaga, y
+   ninguno encendido quiere decir todos. */
+Array.prototype.forEach.call($('festados').querySelectorAll('button'),function(b){
+  b.onclick=function(){
+    var e=b.getAttribute('data-e'), i=F.estados.indexOf(e);
+    if(i<0) F.estados.push(e); else F.estados.splice(i,1);
+    b.classList.toggle('on', i<0);
+    pinta();
+  };
+});
+
+/* El selector de casa del panel cambia sin recargar este módulo, así que se
+   vigila. Dos segundos es de sobra: nadie cambia de casa dos veces seguidas. */
+setInterval(function(){
+  var p=proyActual();
+  if(p!==PROY){ PROY=p; pinta(); }
+}, 2000);
 
 ses=sesionPanel();
 try{ YO=(ses&&ses.user&&ses.user.email)||''; }catch(_){}
