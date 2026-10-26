@@ -206,6 +206,74 @@ Ojo, Javi: dijiste que **Barrio tiene dos** hoteles asociados y la base tiene **
   duplicado**: son dos cosas distintas. Las dejé separadas.
 
 
+**2026-10-26 (madrugada) · El circuito del alta, que no existía**
+
+Javi pidió una prueba del alta de ateneísta. La hice de verdad, llamando a la misma función
+que llama el formulario, con la llave pública. La ficha se creó. **Y ahí se acababa todo.**
+
+- Nacía en `borrador`, y la cola de aprobación lee `en_revision`: **caía en un cajón que nadie
+  abre.** Nadie se enteraba de que alguien se había dado de alta.
+- No salía ningún correo, ni al que se dio de alta ni a la casa.
+- **No se le creaba cuenta**, así que no podía entrar nunca. Se quedaba esperando un correo
+  que no existía, y la última pantalla le decía «ya eres ateneísta» y «te mandamos la liga de
+  tu portal»: las dos cosas, mentira.
+
+Ahora son tres momentos, cada uno con su correo (función `ateneista-aviso`, con el mismo
+Resend y el mismo marco que `operador-alta`):
+
+| | Qué pasa | Quién recibe |
+|---|---|---|
+| **alta** | la ficha entra `en_revision` y aparece en la cola | acuse al ateneísta + aviso a experience.cdmx |
+| **aprobada** | **se le crea la cuenta** y se genera la liga de contraseña | el ateneísta, con el botón para entrar |
+| **devuelta** | vuelve a `borrador` | el ateneísta, con el motivo que escribió quien revisó |
+
+La liga de la contraseña **no sale de la plantilla de Supabase**: se genera con
+`admin/generate_link` y se manda en nuestro correo, para que quien la reciba vea Sincrético y
+no un correo gris de un servicio que no conoce. Cae en `/acceso.html`, que ya sabía recibir un
+`type=recovery` y guardar la contraseña nueva **antes** de entrar — si no, el enlace se gasta y
+la próxima vez vuelve a no poder.
+
+Probado de punta a punta: alta → acuse (`correo:true`) → aprobar → usuario creado y confirmado
+en `auth.users`, con `recovery_sent_at`. Los dos correos fueron a `javi+zzprueba@casapepe.mx`.
+
+---
+
+**2026-10-26 (madrugada) · Una sola puerta en la raíz**
+
+`grupocasapepe.netlify.app` preguntaba **«¿cuál es tu casa?»** con cuatro tarjetas antes de
+pedir el correo. Es la misma pregunta —«¿qué eres?»— que tenía a seis empresas dadas de alta
+dos y tres veces, y aquí ni siquiera hacía falta: quién es cada quien ya está en la base.
+
+Ahora pide correo y contraseña, y después mira: equipo → el panel; touroperadora →
+`/operador.html`; **hotel → `/hotelero.html`** (antes caía en el panel y leía «sin accesos» sin
+saber que su portal existía). Más «Darme de alta» → `/ateneista` e «Ir a Casa Pepe».
+La portada de las cuatro marcas sigue viva en `/entrar.html`.
+
+---
+
+**2026-10-26 (madrugada) · Las tres que faltaban**
+
+Javi: *«no veo que hayas editado dentro de la página de los ateneístas ni la página de venta
+que les creamos ni tampoco el funnel»*. Tenía razón: toqué el panel y el portal del
+touroperador, y esas tres se quedaron fuera.
+
+- **El funnel** vuelve al menú (lo había retirado por redundante, y no lo es: lo que hay en el
+  funnel todavía no está en la comunidad). Ya no es sólo de touroperadoras: cada tarjeta dice
+  **qué trae**, con las mismas pastillas y **leyendo de `v_ateneistas`, la misma fuente que lee
+  La comunidad**. Si las dos pantallas no leen lo mismo, no es la misma gente. Más filtro por
+  capacidad, que se dibuja con lo que hay.
+- **El portal de la productora** tiene la tira de capacidades en la cabecera, por token
+  (`prod_portal_capacidades`, porque ese portal entra sin sesión). Sólo sabía que quien entra
+  produce eventos; si además traía tours no se enteraba y acababa dándose de alta otra vez por
+  el otro lado. **Eso es lo que tenía duplicados a Barrio Hostel y a Café Cumbre.**
+- **La página de venta** gana un bloque con sus experiencias publicadas
+  (`ateneista_experiencias_publicas`). Sólo sabía enseñar fechas, así que le escondía a su
+  dueño la mitad de lo que vende — y justo la mitad que se puede reservar cualquier día.
+
+Hoy devuelve vacío para los dos ateneístas enlazados, y es correcto: ninguno tiene todavía una
+experiencia publicada.
+
+
 ## Lo que sigue
 
 | | |
