@@ -109,6 +109,12 @@ a.cb:hover{text-decoration:underline}
       </select>
       <button class="btn" id="bCorrer">Correr el estudio ahora</button>
       <button class="btn" id="bCorreos">Buscar los correos que faltan</button>
+      <!-- LA RED DEBAJO DEL WEBHOOK. Javi, 26-oct-2026: «¿podrías revisar si hay
+           alguna reserva que ya se cobró vía Stripe y en Cloudbeds no se haya
+           marcado como cobrada?». Todo dependía de que Stripe nos avisara; si
+           ese aviso no llega, el dinero entra y de este lado no se entera
+           nadie. Esto le pregunta a Stripe al revés, una por una. -->
+      <button class="btn" id="bBarrido">Revisar los cobros contra Stripe</button>
     </div>
     <div id="aviso"></div>
   </div>
@@ -337,7 +343,56 @@ document.getElementById("bCorrer").onclick=async function(){
   carga();
 };
 
+/* ---------- revisar los cobros contra Stripe ----------
+   Primero MIRA y no toca nada: escribir en la cuenta de un huésped en Cloudbeds
+   no es algo que se haga de paso. Si aparece dinero que entró y aquí no consta,
+   se dice cuánto y de quién, y el botón de asentarlo pide confirmación aparte. */
+document.getElementById("bBarrido").onclick=async function(){
+  const b=this, old=b.textContent; b.disabled=true; b.textContent="Preguntándole a Stripe…";
+  let r=null;
+  try{
+    r=await fetch(SB+"/functions/v1/apepe-pago-barrido",{method:"POST",headers:H(),
+      body:JSON.stringify({dias:60})}).then(x=>x.json());
+  }catch(e){ di("No se pudo revisar: "+((e&&e.message)||e),true); }
+  b.disabled=false; b.textContent=old;
+  if(!r||!r.ok){ di((r&&r.error)||"No se pudo revisar contra Stripe.",true); return; }
+
+  const n=Number(r.resumen&&r.resumen.pagados_en_stripe||0);
+  if((r.falta_llave||[]).length){
+    di("Faltan llaves de Stripe en el panel: "+r.falta_llave.join(", ")+". Sin ellas no se puede revisar esa casa.",true);
+    return;
+  }
+  if(!n){
+    di("Revisadas "+r.mirados+" sesiones de pago: ninguna se cobró en Stripe sin constar aquí."+
+       ((r.resumen.problemas)?(" ("+r.resumen.problemas+" no se pudieron consultar.)"):""));
+    return;
+  }
+
+  const lista=(r.pagados||[]).slice(0,8).map(function(x){
+    return "· reserva "+x.reserva+" ("+x.casa+") $"+Math.round(x.cobrado)+
+           (x.cloudbeds_ya_lo_tiene===true?" — ya está en Cloudbeds":
+            x.cloudbeds_ya_lo_tiene===false?" — NO está en Cloudbeds":" — no se pudo leer Cloudbeds");
+  }).join("\n");
+  const ok=confirm(
+    n+" cobro"+(n===1?"":"s")+" entró en Stripe y aquí seguía como pendiente, por $"+
+    Number(r.resumen.importe_pagado).toLocaleString("es-MX")+" MXN.\n\n"+lista+
+    ((r.pagados||[]).length>8?"\n… y "+((r.pagados||[]).length-8)+" más":"")+
+    "\n\n¿Los asiento en Cloudbeds y cierro los no reembolsables que correspondan?\n"+
+    "Los que Cloudbeds ya tiene no se vuelven a asentar: solo se pone al día la ficha de aquí.");
+  if(!ok){ di("No se tocó nada. El informe sigue disponible cuando quieras."); return; }
+
+  b.disabled=true; b.textContent="Asentando…";
+  let a=null;
+  try{
+    a=await fetch(SB+"/functions/v1/apepe-pago-barrido",{method:"POST",headers:H(),
+      body:JSON.stringify({dias:60, aplicar:true})}).then(x=>x.json());
+  }catch(e){ di("Se quedó a medias: "+((e&&e.message)||e),true); }
+  b.disabled=false; b.textContent=old;
+  if(!a||!a.ok){ di((a&&a.error)||"No se pudo asentar.",true); return; }
+  const malos=(a.pagados||[]).filter(function(x){return String(x.hecho||"").indexOf("NO se pudo")===0;});
+  di((a.resumen.pagados_en_stripe-malos.length)+" cobro(s) puestos al día"+
+     (malos.length?" · "+malos.length+" no se pudieron asentar en Cloudbeds, revísalos a mano":"")+".");
+  carga();
+};
+
 carga();
-</script>
-</body>
-</html>
