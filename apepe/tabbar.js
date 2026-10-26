@@ -99,8 +99,11 @@
 
     /* Hoy es el catálogo de la ciudad. Se entra por el redirector de la app,
        que es el que conserva el token y la marca; el mapa cae aquí. */
-    hoy: { id:'hoy', txt:'Hoy', base:'/apepe/experiencias.html', ico:ICO.sol, app:true,
-      caeEn:['/apepe/experiencias','/sinc/index','/sinc/exp','/sinc/todas','/sinc/mapa'] },
+    /* La agenda del dia es pantalla propia: el catalogo contesta otra pregunta
+       y vive en Sincretico. Las rutas de Sincretico tambien encienden Hoy,
+       porque desde aqui se sale hacia alla. */
+    hoy: { id:'hoy', txt:'Hoy', base:'/apepe/hoy.html', ico:ICO.sol,
+      caeEn:['/apepe/hoy','/apepe/experiencias','/sinc/index','/sinc/exp','/sinc/todas','/sinc/mapa'] },
 
     arte: { id:'arte', txt:'Artesanías', base:'/apepe/tienda.html', ico:ICO.bolsa,
       caeEn:['/apepe/tienda'] },
@@ -121,7 +124,7 @@
   else if (MODO==='colab') ORDEN=['hoy','mapa'];
   else                     ORDEN=['casa','hoy','arte','mex','wallet'];
   /* Sin huésped no hay Hoy que redirija con token: el público va al catálogo. */
-  if (MODO==='publico' || MODO==='colab') CAT.hoy.base='/sinc/index.html';
+  if (MODO==='publico' || MODO==='colab'){ CAT.hoy.base='/sinc/index.html'; CAT.hoy.app=true; }
   /* Y para el colaborador, el mapa es pestaña propia: es su herramienta. */
   if (MODO==='colab') CAT.hoy.caeEn=['/apepe/experiencias','/sinc/index','/sinc/exp','/sinc/todas'];
 
