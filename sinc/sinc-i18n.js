@@ -441,6 +441,7 @@
       'Adultos':'Adults',
       'Menores':'Children',
       'Niños':'Children',
+      'años':'years',
       'Precio reducido':'Reduced price',
       /* la ficha: la tarjeta del impacto, su hoja y el botón de seguir */
       'se queda en el barrio':'stays in the neighborhood',
@@ -451,6 +452,11 @@
         'What this experience leaves in the neighborhood',
       'Detalle':'Details',
       'Continuar':'Continue',
+      /* la pantalla de pago: la liga para volver y la barra del teléfono */
+      'Cambiar día, hora o personas':'Change day, time or people',
+      'Apartar':'Hold my spot',
+      'Hoy. Faltan ':'Today. ',
+      ' el día del tour':' left for the day of the tour',
       'Elige tu fecha':'Pick your date',
       'Ver el calendario':'See the calendar',
       'Cerrar el calendario':'Close the calendar',
