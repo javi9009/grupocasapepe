@@ -122,7 +122,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 <script>
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-var ses=null, TODOS=null, FALLO='', OPS={}, YO='', F={q:'',formato:'',estado:'',tipo:''};
+var ses=null, TODOS=null, FALLO='', OPS={}, MEDIA={}, YO='', F={q:'',formato:'',estado:'',tipo:''};
 
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -152,12 +152,26 @@ function pasa(p){
 }
 
 /* Lo que le falta a una ficha para poder venderse. Mismas palabras que usa
-   el operador en su portal: si aqui dice "sin precio" alla dice lo mismo. */
+   el operador en su portal: si aqui dice "sin precio" alla dice lo mismo.
+
+   DOS CAMPOS QUE YA NO SE LLENAN. Javi, 26-oct-2026: esta pantalla preguntaba
+   por `precio_adulto` y por `fotos`, y ninguno de los dos es ya donde viven
+   esos datos. El precio que escribe el operador es el neto -220 de los 264
+   borradores lo tienen, y sólo 20 tienen precio_adulto-, y las fotos se
+   mudaron a sinc_media -161 borradores tienen, y la columna `fotos` está
+   vacía en los 264-. Resultado: la pantalla decía "sin precio, sin fotos" a
+   fichas completas, y la cola de aprobación repetía la mentira. El Cable Bus
+   de Kari salía como "sin precio" con sus 100 pesos y sus seis fotos puestas.
+
+   A un tour por propina para huéspedes sí se le pide precio: es el que paga
+   quien llega de la calle. La regla es la misma que la de la ficha. */
 function leFalta(p){
   var f=[];
-  if(!p.precio_adulto) f.push('sin precio');
+  var fmt=String(p.formato||'tour');
+  if(!(Number(p.neto_adulto)>0) && fmt!=='evento' && (fmt==='tour' || !p.apepe_gratuito))
+    f.push('sin precio');
   if(!p.duracion_min) f.push('sin duración');
-  if(!(p.fotos&&p.fotos.length)) f.push('sin fotos');
+  if(!MEDIA[p.id]) f.push('sin fotos');
   if(!p.cer_inicio_lugar && !p.punto_encuentro) f.push('sin punto de encuentro');
   if(p.tipo==='tercero' && !p.operador_id) f.push('sin dueño');
   return f;
@@ -200,8 +214,27 @@ function pinta(){
         '<div class="donde">'+esc(OPS[p.operador_id]||(p.tipo==='propio'?'Casa Pepe':'sin dueño'))+
           (p.ciudad?' · '+esc(p.ciudad):'')+(p.sku?' · '+esc(p.sku):'')+'</div>'+
       '</div>'+
-      '<div class="cifra"><b>'+dinero(p.precio_adulto)+'</b><span>'+(p.duracion_min?p.duracion_min+' min':'—')+'</span></div>'+
+      /* Si no hay PVP calculado se enseña el neto, que es lo que el operador
+         escribió: un «—» donde hay cien pesos puestos es lo que nos tenía
+         mirando fichas vacías que no lo estaban. */
+      '<div class="cifra"'+(p.precio_adulto==null&&Number(p.neto_adulto)>0?' title="Neto del operador · sin PVP calculado"':'')+
+        '><b>'+dinero(p.precio_adulto!=null?p.precio_adulto:p.neto_adulto)+'</b><span>'+
+        (p.duracion_min?p.duracion_min+' min':'—')+'</span></div>'+
       '<div class="acc"><a class="btn sm" target="_top" href="/ficha.html?id='+encodeURIComponent(p.id)+'">Editar ↗</a>'+
+        /* EL PASO QUE FALTABA: DE BORRADOR A LA COLA. Mientras es borrador la
+           ficha se está armando y no la ve nadie más; mandarla a revisión es
+           decir «ya está». Hasta hoy sólo se podía desde dentro de la ficha, y
+           desde aquí -que es donde se ven los 264 borradores de golpe- no había
+           manera. Javi, 26-oct-2026.
+           Si le falta algo para venderse, el botón se queda en gris: la cola de
+           aprobación es el rato de alguien, y una ficha sin precio ni fotos le
+           hace perder ese rato. Lo que le falta ya está escrito en las pastillas
+           de al lado, con las mismas palabras. */
+        (p.estado==='borrador'
+          ? (falta.length
+              ? '<span class="btn sm gris" title="Le falta '+esc(falta.join(', '))+'. Arréglalo y ya se puede mandar." style="opacity:.45;cursor:default">Mandar a revisión</span>'
+              : '<button class="btn sm" data-revisar="'+esc(p.id)+'">Mandar a revisión</button>')
+          : '')+
         (p.estado==='publicada'
           ? '<span class="btn sm gris" title="Quítala de la venta primero" style="opacity:.45;cursor:default">Borrar</span>'
           : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
@@ -210,6 +243,41 @@ function pinta(){
   }).join('');
   Array.prototype.forEach.call(caja.querySelectorAll('[data-borrar]'),function(b){
     b.onclick=function(){ borra(b.getAttribute('data-borrar')); };});
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-revisar]'),function(b){
+    b.onclick=function(){ mandaRevision(b.getAttribute('data-revisar'), b); };});
+}
+
+/* Mandar a revisión no cambia la ficha, sólo de quién es el turno: pasa a la
+   cola de aprobación y deja de ser del operador. Por eso no se pregunta nada
+   -no hay nada que decidir- y por eso se deja escrito quién la mandó: cuando
+   alguien la apruebe, la fila de al lado dirá de dónde venía. */
+async function mandaRevision(id, btn){
+  var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
+  if(!p || p.estado!=='borrador') return;
+  if(btn){ btn.disabled=true; btn.textContent='Mandando…'; }
+  try{
+    var r=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+       body:JSON.stringify({estado:'en_revision'})});
+    if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
+    var fila=await r.json().catch(function(){return null;});
+    /* Un PATCH que no devuelve nada es un PATCH que no cambió nada: la base lo
+       dejó pasar pero no dejó tocar esta ficha. Decirlo, no cantar victoria. */
+    if(!fila || !fila.length) throw new Error('la base no dejó cambiar esta ficha');
+    try{
+      await fetch(SB+'/rest/v1/historia',{method:'POST',
+        headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+        body:JSON.stringify({entidad:'experiencia',entidad_id:id,que:'mandada a revisión',
+          quien:YO||'el equipo',detalle:{desde:'borrador',nombre:p.nombre,
+            operador:OPS[p.operador_id]||null}})});
+    }catch(_){}
+    p.estado='en_revision';
+    avisa('Mandada a revisión · ya está en la cola de aprobación');
+    pinta();
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent='Mandar a revisión'; }
+    avisa('No se mandó: '+((e&&e.message)||e));
+  }
 }
 
 /* BORRAR UNA FICHA NO ES UN DELETE. Javi, 26-oct-2026.
@@ -268,12 +336,17 @@ async function borra(id){
 async function carga(){
   FALLO=''; TODOS=null; pinta();
   try{
-    var campos='id,nombre,formato,estado,tipo,operador_id,precio_adulto,duracion_min,fotos,sku,ciudad,cer_inicio_lugar,punto_encuentro,updated_at';
+    var campos='id,nombre,formato,estado,tipo,operador_id,precio_adulto,neto_adulto,apepe_gratuito,duracion_min,sku,ciudad,cer_inicio_lugar,punto_encuentro,updated_at';
     var r=await fetch(SB+'/rest/v1/op_experiencias?select='+campos+'&order=updated_at.desc&limit=2000',{headers:hdr()});
     if(!r.ok) throw new Error('la base respondió '+r.status);
     TODOS=await r.json();
     var o=await fetch(SB+'/rest/v1/tour_operadores?select=id,nombre_comercial&limit=1000',{headers:hdr()});
     if(o.ok){ (await o.json()).forEach(function(x){ OPS[x.id]=x.nombre_comercial; }); }
+    /* Las fotos viven en sinc_media desde la unificación de la galería. Se
+       traen sólo los ids: aquí no se pintan, sólo hace falta saber si hay. */
+    MEDIA={};
+    var m=await fetch(SB+'/rest/v1/sinc_media?select=experiencia_id&tipo=eq.foto&estado=eq.listo&limit=5000',{headers:hdr()});
+    if(m.ok){ (await m.json()).forEach(function(x){ if(x.experiencia_id) MEDIA[x.experiencia_id]=1; }); }
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   pinta();
 }
