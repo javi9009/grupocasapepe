@@ -498,7 +498,7 @@ gmp-place-autocomplete,.gmpac{
     <img src="/img/sincretico/sincretico-isotipo-256.png" alt="">
     <span class="marca">Sincrético</span></a><span class="sep">·</span>
   <span class="nom" id="bNom">Ficha</span>
-  <span class="der"><span id="bEtq"></span><select class="sel sm" id="bEstado" title="En qué punto está esta ficha"></select><button class="btn fantasma sm" id="bVer" title="Cómo se vería publicada">Previsualizar anuncio</button><button class="btn fantasma sm" id="bVolver">← Volver</button><button class="btn sm" id="btnGuardar">Guardar</button></span>
+  <span class="der"><span id="bEtq"></span><select class="sel sm" id="bEstado" title="En qué punto está esta ficha"></select><button class="btn fantasma sm" id="bVer" title="Cómo se vería publicada">Previsualizar anuncio</button><button class="btn fantasma sm" id="bVolver">← Volver</button><button class="btn fantasma sm" id="btnRevision" style="display:none" title="Nos la mandas y la revisamos para ponerla a la venta">Enviar para revisión</button><button class="btn sm" id="btnGuardar">Guardar</button></span>
 </div></div>
 
 <div class="cargaf" id="cargaFicha"></div>
@@ -2792,6 +2792,11 @@ gmp-place-autocomplete,.gmpac{
                ['publicada','Publicada · a la venta'],['pausada','En pausa'],
                ['pasada','Ya pasó · retirada']];
   function pintaEstado(){
+    /* EL BOTÓN DE MANDARLA A REVISIÓN. Mientras es borrador, el operador la
+       está editando y el botón es su forma de decir «ya está». En cuanto se
+       manda -o se publica- desaparece: ya no es su turno. */
+    var br=$('btnRevision');
+    if(br) br.style.display = (E.estado==='borrador') ? '' : 'none';
     var sel=$('bEstado'); if(!sel)return;
     var puede=interno?ESTADOS:ESTADOS.filter(function(x){
       return x[0]==='borrador'||x[0]==='en_revision'||x[0]===E.estado;});
@@ -5746,7 +5751,7 @@ gmp-place-autocomplete,.gmpac{
          salir guardando la ficha sin él; de un precio en cero, no. */
       var bloqImp=rev.hallazgos.some(function(x){return x.bloquea&&x.impacto;});
       var v=cxAbre(
-        '<div class="cab"><h3>Antes de guardar</h3></div>'+
+        '<div class="cab"><h3>Antes de mandarla a revisión</h3></div>'+
         '<div class="cue">'+
           '<div class="desglose">'+filas+'</div>'+
           (rev.hallazgos.length
@@ -5757,10 +5762,10 @@ gmp-place-autocomplete,.gmpac{
                empezar otra vez»: se guarda la ficha y se deja el impacto
                fuera, que es lo único que no puede publicarse. */
             (rev.hallazgos.length
-              ? '<button type="button" class="btn" data-con>Aplicar y guardar</button>'+
+              ? '<button type="button" class="btn" data-con>Aplicar y mandar a revisión</button>'+
                 '<button type="button" class="btn fantasma" data-sin'+((hayBloqueo&&!bloqImp)?' disabled':'')+'>'+
-                  (bloqImp?'Guardar sin tocar el impacto':'Guardar sin cambios')+'</button>'
-              : '<button type="button" class="btn" data-sin>Guardar</button>')+
+                  (bloqImp?'Mandar sin tocar el impacto':'Mandar así')+'</button>'
+              : '<button type="button" class="btn" data-sin>Mandar a revisión</button>')+
             '<button type="button" class="btn fantasma" data-vuelve>Cancelar y seguir editando</button>'+
           '</div>'+
           (hayBloqueo
@@ -5942,10 +5947,30 @@ gmp-place-autocomplete,.gmpac{
     return String(msg).slice(0,400);
   }
 
-  $('btnGuardar').onclick=async function(){
+  /* DOS ACTOS DISTINTOS. Javi, 26-oct-2026:
+       «Borrador = el touroperador está editándolo. Revisión = crea un botón
+        para que el ateneísta mande a revisión el tour. Mantén el botón de
+        guardar para que el avance no se pierda... y añade un botón de enviar
+        para revisión: ése es el que abre el pop-up que ya tenemos.»
+
+     Hasta hoy los dos actos eran uno solo, y de ahí venía el atasco de la
+     tarde: la revisión saltaba al GUARDAR, así que un impacto mal declarado
+     o un precio a medias impedían guardar el trabajo. Guardar es apretar el
+     botón para no perder la tarde; mandar a revisión es decir «ya está, miradlo».
+     Sólo lo segundo tiene que cuadrar.
+
+     Guardar no revisa nada y no bloquea nunca. Enviar para revisión abre el
+     pop-up de siempre y, si se sale bien, deja la ficha en revisión. */
+  async function guardaFicha(opts){
+    opts=opts||{};
+    var REVISA=opts.revisar===true;
+    /* El botón de revisión se apaga mientras trabaja; cualquier salida por la
+       puerta de atrás -cancelar, un candado, un error- tiene que volver a
+       encenderlo o se queda muerto hasta recargar. */
+    function suelta(){ var b=$('btnRevision'); if(b)b.disabled=false; }
     if(esPreficha()){
       var sigo=await confirmaPreficha();
-      if(!sigo)return;
+      if(!sigo){ suelta(); return; }
     }
     var b={};
     Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(el){
@@ -6034,10 +6059,16 @@ gmp-place-autocomplete,.gmpac{
        cuadra y la propuesta, y él decide. Lo del impacto sigue sin poder
        guardarse tal cual —publicaría un sello falso— pero ya se arregla desde
        el propio pop-up. Javi, 25-oct-2026. */
-    var rev=revisaFicha(b, impNuevos, tp, pv);
-    var decision=await confirmaRevision(rev, impNuevos, tp, pv);
-    if(!decision)return;                    // cancelar y seguir editando
-    impNuevos=decision.imp;
+    var decision=null;
+    if(REVISA){
+      var rev=revisaFicha(b, impNuevos, tp, pv);
+      decision=await confirmaRevision(rev, impNuevos, tp, pv);
+      if(!decision){ suelta(); return; }     // cancelar y seguir editando
+      impNuevos=decision.imp;
+    }else{
+      /* Guardar a secas: lo que esté en pantalla, tal cual. */
+      decision={aplico:false};
+    }
     /* EL IMPACTO QUE NO CABE NO SECUESTRA LA FICHA ENTERA. Javi, 26-oct-2026:
        «ni dándole a guardar arriba a la derecha ni guardando desde el pop up
        me guardas el de dónde sale ni el impacto».
@@ -6072,13 +6103,13 @@ gmp-place-autocomplete,.gmpac{
     var _bajo = esTour()
       ? !(Number(b.neto_adulto)>=_netoSuelo)
       : (b.apepe_gratuito!==true && !(Number(b.neto_adulto)>0));
-    if(_bajo){
+    if(_bajo && REVISA){
       toast(esTour()
         ? ('El precio mínimo de un tour son '+MINIMO_TOUR+' pesos para el cliente: pon el neto en '+_netoSuelo+' o más. Si el huésped no tiene que pagar, márcalo como por propina para huéspedes, pero el precio se queda.')
         : 'Si el tour cobra al cliente, el precio tiene que ser de 1 peso para arriba. Si no se cobra, márcalo como gratuito por propina.',true);
       for(var _k=0;_k<PASOS.length;_k++){ if(PASOS[_k].s===4){ step=_k; pinta(); window.scrollTo(0,0); break; } }
       var _n=$('netoAd'); if(_n) _n.focus();
-      return;
+      suelta(); return;
     }
     if(impNuevos.length){
       b.impacto_declarado_at=new Date().toISOString();
@@ -6102,13 +6133,13 @@ gmp-place-autocomplete,.gmpac{
       if(Array.isArray(_f)&&_f.length===0){
         $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
         error('No se guardó nada: la base no dejó cambiar esta ficha. Suele ser de permisos — avisa a Casa Pepe.');
-        return;
+        suelta(); return;
       }
     }
     if(!r.ok){
       $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
       error('No se pudo guardar: '+await porQueNoGuardo(r));
-      return;
+      suelta(); return;
     }
     /* Validada: deja de ser nuestra y el azul se va */
     if(b.origen==='operador'){
@@ -6205,13 +6236,31 @@ gmp-place-autocomplete,.gmpac{
       if(filas.length)await post('op_exp_lugares',filas);
     }
 
+    /* Y si lo que se pidió fue mandarla a revisión, ése es el último paso:
+       se cambia el estado cuando ya está todo guardado, no antes. */
+    var aRevision=false;
+    if(REVISA && E.estado==='borrador'){
+      var rr=await patch('op_experiencias',ID,{estado:'en_revision'});
+      if(rr.ok) aRevision=true;
+      else error('Se guardó, pero no pudimos mandarla a revisión: '+await porQueNoGuardo(rr));
+    }
+
     $('btnGuardar').disabled=false;$('btnGuardar').textContent=textoGuardar();
-    toast(impFuera
-      ? 'Ficha guardada. El impacto se quedó como estaba: lo declarado no cabe en el boleto.'
-      : 'Ficha guardada');
+    if($('btnRevision'))$('btnRevision').disabled=false;
+    toast(aRevision
+      ? 'Mandada a revisión. Te avisamos en cuanto la miremos.'
+      : impFuera
+        ? 'Ficha guardada. El impacto se quedó como estaba: lo declarado no cabe en el boleto.'
+        : 'Ficha guardada');
     var a=await get('v_op_experiencias?select=*&id=eq.'+ID+'&limit=1');
     if(a[0]){var pr=E._protas;E=await completaDeTabla(a[0]);E._protas=pr;}
     await detalle();pinta();
+  }
+
+  $('btnGuardar').onclick=function(){ return guardaFicha({revisar:false}); };
+  $('btnRevision').onclick=function(){
+    $('btnRevision').disabled=true;
+    return guardaFicha({revisar:true});
   };
 
   /* Si algo revienta antes de pintar, el sticker no se puede quedar girando
