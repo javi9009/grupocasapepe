@@ -440,7 +440,31 @@
       'En este tour':'On this tour',
       'Adultos':'Adults',
       'Menores':'Children',
+      'Niños':'Children',
       'Precio reducido':'Reduced price',
+      /* la ficha: la tarjeta del impacto, su hoja y el botón de seguir */
+      'se queda en el barrio':'stays in the neighborhood',
+      'De lo que pagas, ':'Of what you pay, ',
+      ' va a la comunidad':' goes to the community',
+      'A dónde va tu dinero':'Where your money goes',
+      'Lo que esta experiencia deja en el barrio':
+        'What this experience leaves in the neighborhood',
+      'Detalle':'Details',
+      'Continuar':'Continue',
+      'Elige tu fecha':'Pick your date',
+      'Ver el calendario':'See the calendar',
+      'Cerrar el calendario':'Close the calendar',
+      'Cerrar':'Close',
+      'Todavía no hay fechas abiertas. Escríbenos y te avisamos en cuanto las haya.':
+        'No dates are open yet. Write to us and we’ll let you know as soon as there are.',
+      'Este tour es por propina para huéspedes. Duermes en la casa, así que no pagas nada: si te gusta, le dejas al guía lo que quieras.':
+        'This tour is tip-based for house guests. You sleep here, so you pay nothing: if you enjoy it, tip the guide whatever you like.',
+      'Para quien duerme en la casa este tour es por propina. Si te alojas con nosotros, entra con la liga de tu reserva y no pagas nada.':
+        'For anyone sleeping at the house this tour is tip-based. If you stay with us, come in through your booking link and you pay nothing.',
+      'El cargo de hoy aparta tu lugar; el resto se paga el día del tour.':
+        'Today’s charge holds your spot; the rest is paid on the day of the tour.',
+      'min antes':'min before',
+      'o pick up en tu hotel':'or pick-up at your hotel',
       'c/u':'each',
       'Quedan ':'Only ',
       'lugares':'spots left',
