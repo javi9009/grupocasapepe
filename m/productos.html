@@ -74,7 +74,9 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .fila .cifra{text-align:right;flex:0 0 auto}
 .fila .cifra b{font:600 15px Inter;display:block}
 .fila .cifra span{font:400 11.5px Inter;color:var(--tenue)}
-.fila .acc{flex:0 0 auto}
+.fila .acc{flex:0 0 auto;display:flex;gap:7px;align-items:center}
+.btn.rojo{border-color:var(--error);color:var(--error)}
+.btn.rojo:hover{background:var(--error);color:#fff}
 .ico{flex:0 0 42px;height:42px;border-radius:11px;display:grid;place-items:center;font-size:19px;background:var(--hueso)}
 </style></head><body>
 <div class="wrap">
@@ -120,7 +122,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 <script>
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-var ses=null, TODOS=null, FALLO='', OPS={}, F={q:'',formato:'',estado:'',tipo:''};
+var ses=null, TODOS=null, FALLO='', OPS={}, YO='', F={q:'',formato:'',estado:'',tipo:''};
 
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -199,9 +201,68 @@ function pinta(){
           (p.ciudad?' · '+esc(p.ciudad):'')+(p.sku?' · '+esc(p.sku):'')+'</div>'+
       '</div>'+
       '<div class="cifra"><b>'+dinero(p.precio_adulto)+'</b><span>'+(p.duracion_min?p.duracion_min+' min':'—')+'</span></div>'+
-      '<div class="acc"><a class="btn sm" target="_top" href="/ficha.html?id='+encodeURIComponent(p.id)+'">Editar ↗</a></div>'+
+      '<div class="acc"><a class="btn sm" target="_top" href="/ficha.html?id='+encodeURIComponent(p.id)+'">Editar ↗</a>'+
+        (p.estado==='publicada'
+          ? '<span class="btn sm gris" title="Quítala de la venta primero" style="opacity:.45;cursor:default">Borrar</span>'
+          : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>')+
+      '</div>'+
     '</div>';
   }).join('');
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-borrar]'),function(b){
+    b.onclick=function(){ borra(b.getAttribute('data-borrar')); };});
+}
+
+/* BORRAR UNA FICHA NO ES UN DELETE. Javi, 26-oct-2026.
+   La base NO lo frena: sinc_reservas.op_experiencia_id está en ON DELETE SET
+   NULL, así que borrar una ficha con reservas no da error — deja las reservas
+   vivas y sin saber de qué eran. Una venta que no sabe qué vendió es el mismo
+   fallo que nos hizo dar por perdida la de Jorge Ruvalcaba. Se cuenta antes,
+   y si hay reservas se dice que no con el número delante. */
+async function borra(id){
+  var p=(TODOS||[]).filter(function(x){return String(x.id)===String(id);})[0];
+  if(!p) return;
+  if(p.estado==='publicada'){ avisa('Está publicada. Quítala de la venta y luego se borra.'); return; }
+
+  var res, sal;
+  try{
+    var r1=await fetch(SB+'/rest/v1/sinc_reservas?select=id&op_experiencia_id=eq.'+id+'&limit=1',
+      {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
+    if(!r1.ok) throw new Error('no pudimos contar sus reservas ('+r1.status+')');
+    res=Number((r1.headers.get('content-range')||'/0').split('/')[1]||0);
+    var r2=await fetch(SB+'/rest/v1/sinc_salidas?select=id&experiencia_id=eq.'+id,{headers:hdr()});
+    sal=r2.ok?(await r2.json()).length:0;
+  }catch(e){
+    avisa('No se borró: '+((e&&e.message)||e)+'. Sin poder comprobarlo, no lo toco.');
+    return;
+  }
+
+  if(res>0){
+    alert('«'+(p.nombre||'esta ficha')+'» tiene '+res+' reserva'+(res===1?'':'s')+' colgando.\n\n'+
+          'Si la borras, esas reservas se quedan sin saber de qué eran. Pásala a anulada en vez de borrarla.');
+    return;
+  }
+
+  var txt=prompt('Vas a borrar «'+(p.nombre||'esta ficha')+'».'+
+    (sal?'\nSe van con ella '+sal+' salida'+(sal===1?'':'s')+' programada'+(sal===1?'':'s')+'.':'')+
+    '\n\nEsto no se deshace. ¿Por qué se borra?');
+  if(txt===null) return;
+  if(String(txt).trim().length<4){ avisa('Escribe el motivo: es lo único que queda de ella.'); return; }
+
+  try{
+    await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+      body:JSON.stringify({entidad:'experiencia',entidad_id:id,que:'borrada',quien:YO||'el equipo',
+        detalle:{nombre:p.nombre,estado:p.estado,formato:p.formato,
+                 operador:OPS[p.operador_id]||null,salidas_borradas:sal,motivo:String(txt).trim()}})});
+    if(sal){
+      var rs=await fetch(SB+'/rest/v1/sinc_salidas?experiencia_id=eq.'+id,{method:'DELETE',headers:hdr()});
+      if(!rs.ok) throw new Error('no se pudieron quitar sus salidas ('+rs.status+')');
+    }
+    var rr=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+id,{method:'DELETE',headers:hdr()});
+    if(!rr.ok) throw new Error('la base respondió '+rr.status+' · '+(await rr.text()).slice(0,140));
+    TODOS=TODOS.filter(function(x){return String(x.id)!==String(id);});
+    avisa('Borrada · la quitó '+(YO||'el equipo'));
+    pinta();
+  }catch(e){ avisa('No se pudo borrar: '+((e&&e.message)||e)); }
 }
 
 async function carga(){
@@ -223,6 +284,7 @@ async function carga(){
 });
 
 ses=sesionPanel();
+try{ YO=(ses&&ses.user&&ses.user.email)||''; }catch(_){}
 carga();
 </script>
 </body></html>
