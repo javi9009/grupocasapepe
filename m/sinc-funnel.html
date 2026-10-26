@@ -209,6 +209,7 @@ select.sel:focus,textarea.nota:focus{outline:none;border-color:var(--naranja);bo
   <button class="chip" data-f="favorita" aria-pressed="false">Favoritas</button>
   <button class="chip" data-f="conocida" aria-pressed="false">Las que conocemos</button>
   <button class="chip" data-f="sintocar" aria-pressed="false">Sin tocar</button>
+  <button class="chip" data-f="descartadas" aria-pressed="false">Descartadas</button>
   <input class="busca" id="q" placeholder="Buscar touroperador…">
   <!-- LA PLAZA. Sale sólo para quien lleva las dos casas: a quien ve una sola
        no se le pone un selector que no puede usar, y la lista ya le llega
@@ -441,6 +442,10 @@ function pasa(o){
   if(filtro==='conocida'&&!o.conocida)return false;
   if(filtro==='sintocar'&&o.n_toques>0)return false;
   if(fSede&&String(o.sede||'').toLowerCase()!==fSede)return false;
+  /* LAS DESCARTADAS NO ESTORBAN, PERO NO SE PIERDEN. Fuera del tablero salvo
+     que se pidan a propósito con su chip. Javi, 26-oct-2026. */
+  if(filtro==='descartadas') return !!o.descartada_at;
+  if(o.descartada_at) return false;
   return true;
 }
 
@@ -637,6 +642,26 @@ function abre(id){
       '<div id="pNotaOk" class="ok"></div>'+
     '</div>'+
 
+    /* DESCARTAR NO ES BORRAR. Lo que entra por la puerta pública no siempre
+       encaja, y alguna llega dos veces. Antes sólo cabía dejarla ahí para
+       siempre o borrarla, que se lleva todo. Esto la saca del tablero y deja
+       escrito quién, cuándo y por qué; la ficha se queda entera y vuelve con
+       un botón. Javi, 26-oct-2026. */
+    '<div class="bloque">'+
+      '<h3>'+(o.descartada_at?'Descartada':'Descartar')+'</h3>'+
+      (o.descartada_at
+        ? dato('Se descartó', esc(String(o.descartada_at).slice(0,10))+
+            (o.descartada_por?' · '+esc(o.descartada_por):''))+
+          (o.descartada_motivo?dato('Por qué', esc(o.descartada_motivo)):'')+
+          '<div style="margin-top:9px"><button class="chip" id="pRecupera">Devolverla al funnel</button></div>'
+        : '<div class="dato"><span class="v">Sale del tablero y deja de contar, pero no se borra nada: '+
+          'su ficha y su historia se quedan enteras y la puedes devolver cuando quieras.</span></div>'+
+          '<input class="busca" style="min-width:0;width:100%;margin-top:8px" id="pDescMot" '+
+          'placeholder="Por qué la descartas · opcional">'+
+          '<div style="margin-top:9px"><button class="chip" id="pDescarta">Descartar</button></div>')+
+      '<div id="pDescOk" class="ok"></div>'+
+    '</div>'+
+
     '<div class="bloque"><h3>Lo que ya se hizo</h3><div id="pHist">Cargando…</div></div>';
 
   $('pEtapa').onchange=function(){mueve(id,$('pEtapa').value);};
@@ -665,15 +690,45 @@ function abre(id){
         await rpc('crm_funnel_mover',{p_operador:id,p_etapa:
           (ETAPAS.filter(function(e){return e.codigo===o.etapa;})[0]||{}).codigo||'primer_contacto',
           p_nota:$('pNota').value||null, p_canal:b.getAttribute('data-canal')});
-        $('pNota').value=''; $('pNotaOk').textContent='Apuntado.';
+        $('pNota').value=''; $('pNotaOk').style.color=''; $('pNotaOk').textContent='Apuntado.';
         await carga(); historial(id);
-      }catch(x){ alert('No se pudo apuntar: '+x.message); }
+      }catch(x){
+        /* El aviso va en la propia pantalla: un pop-up del navegador tapa lo
+           que estaba escribiendo y se lleva el texto por delante. */
+        $('pNotaOk').style.color='var(--error,#9E3B2E)';
+        $('pNotaOk').textContent='No se pudo apuntar: '+(x.message||x);
+      }
     };
   });
+
+  var bDesc=$('pDescarta');
+  if(bDesc) bDesc.onclick=function(){ descarta(id, ($('pDescMot')||{}).value); };
+  var bRec=$('pRecupera');
+  if(bRec) bRec.onclick=function(){ descarta(id, null, true); };
 
   historial(id);
   $('panel').classList.add('on'); $('velo').classList.add('on');
   $('panel').setAttribute('aria-hidden','false');
+}
+/* Descartar y devolver son el mismo gesto en los dos sentidos: lo único que
+   cambia es si se pone la fecha o se quita. Nunca se borra nada. */
+async function descarta(id, motivo, recupera){
+  var caja=$('pDescOk');
+  if(caja){ caja.style.color=''; caja.textContent='Guardando…'; }
+  var cuerpo = recupera
+    ? {descartada_at:null, descartada_por:null, descartada_motivo:null}
+    : {descartada_at:new Date().toISOString(),
+       descartada_por:(SES&&SES.user&&SES.user.email)||null,
+       descartada_motivo:(motivo&&String(motivo).trim())||null};
+  try{
+    var r=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+encodeURIComponent(id),
+      {method:'PATCH', headers:hdr({'Prefer':'return=minimal'}), body:JSON.stringify(cuerpo)});
+    if(!r.ok) throw new Error('la base respondió '+r.status);
+    await carga();
+    if(recupera) abre(id); else cierra();
+  }catch(x){
+    if(caja){ caja.style.color='var(--error,#9E3B2E)'; caja.textContent='No se pudo: '+(x.message||x); }
+  }
 }
 function dato(k,v){
   return '<div class="dato"><span class="k">'+esc(k)+'</span><span class="v">'+
@@ -1026,9 +1081,16 @@ async function carga(){
        se pega aquí con una llamada y un mapa: tocar esa vista -que leen otras
        pantallas- por una columna no vale la pena. */
     try{
-      var sd=await get('tour_operadores?select=id,sede');
-      var mapa={}; (sd||[]).forEach(function(x){ mapa[x.id]=x.sede||''; });
-      OPS.forEach(function(o){ o.sede=mapa[o.id]||''; });
+      var sd=await get('tour_operadores?select=id,sede,descartada_at,descartada_por,descartada_motivo');
+      var mapa={}, desc={};
+      (sd||[]).forEach(function(x){ mapa[x.id]=x.sede||''; desc[x.id]=x; });
+      OPS.forEach(function(o){
+        o.sede=mapa[o.id]||'';
+        var d=desc[o.id]||{};
+        o.descartada_at=d.descartada_at||null;
+        o.descartada_por=d.descartada_por||null;
+        o.descartada_motivo=d.descartada_motivo||null;
+      });
       /* Y la pestaña de sus tours: la plaza de un tour es la de su operadora. */
       TOURS.forEach(function(t){ t.sede=mapa[t.operador_id]||''; });
     }catch(_){}

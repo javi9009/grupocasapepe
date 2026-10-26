@@ -72,6 +72,7 @@ body.embed .top{display:none}
     <div class="card" style="padding:12px 10px">
       <button class="btn" id="btnNueva" style="width:100%;margin-bottom:10px">+ Nueva productora</button>
       <ul class="lista" id="lista"></ul>
+      <div id="pieLista"></div>
     </div>
   </div>
 
@@ -330,6 +331,19 @@ body.embed .top{display:none}
            embudo, que es otra pantalla. Dar de baja (el selector de arriba) y
            borrar no son lo mismo: la baja deja la historia, el borrado no se
            deshace. Por eso va aparte y al final. -->
+      <!-- DESCARTAR NO ES BORRAR, NI ES DAR DE BAJA. Javi, 26-oct-2026:
+           «permíteme también aquí y en el funnel descartar aplicaciones».
+           Por la puerta pública del Ateneo entra gente que no encaja, alguna
+           se apunta dos veces y otras se quedan a medias. La baja es para
+           quien trabajó con nosotros y se fue; borrar se lleva todo y no se
+           deshace. Esto es la salida de en medio: sale de la lista de trabajo
+           y deja escrito quién, cuándo y por qué, con la ficha entera. -->
+      <div class="card" id="cardDescartar">
+        <h3>Descartar la solicitud</h3>
+        <div class="hint">Sale de la lista, pero no se borra nada: su ficha y su historia se quedan enteras y la puedes devolver cuando quieras.</div>
+        <div id="descCaja" style="margin-top:10px"></div>
+      </div>
+
       <div class="card" style="border-color:#E6B8B2">
         <h3 style="color:#B3261E">Borrar la ficha</h3>
         <div class="hint">Esto no es dar de baja. Borrar se lleva su ficha y todo lo que cuelga de ella, y <b>no se deshace</b>. Es para limpiar pruebas. Primero te enseño qué arrastraría.</div>
@@ -415,6 +429,9 @@ body.embed .top{display:none}
      Los eventos son un módulo aparte (/m/eventos.html) que depende de la productora. */
   var PASOS=[{t:'Empresa',s:0},{t:'Contacto',s:1},{t:'Su equipo',s:2},{t:'Lo formal',s:3},{t:'Cómo le pagamos',s:4},{t:'Acuerdo',s:5},{t:'Administrar permisos',s:6}];
   var O=[],cur=null,U=[],EV=[],TIPOS=[],ROLES=[],step=0;
+  /* Si la lista de la izquierda está enseñando las descartadas en vez de las
+     de siempre. Javi, 26-oct-2026. */
+  var VERDESC=false;
   var NUM={comision_pct:1,com_vendedor_pct:1,com_hotel_pct:1,com_plataforma_pct:1,poliza_suma:1};
   var BOOL={tiene_poliza:1,puede_gratis:1};
 
@@ -536,13 +553,77 @@ body.embed .top{display:none}
     var r=await fetch(SB+'/rest/v1/v_productoras?select=*&order=nombre_comercial',{headers:hdr()});
     if(!r.ok){$('sub').textContent='No se pudo cargar (revisa tu sesión en el panel).';return;}
     O=await r.json();
-    $('sub').textContent=O.length+' productoras · '+O.filter(function(o){return o.estado==='activo';}).length+' activas';
-    $('lista').innerHTML=O.map(function(o){
+
+    /* Lo descartado no vive en v_productoras —no hace falta tocar esa vista
+       por tres columnas—, así que se pega aquí con una llamada y un mapa. */
+    try{
+      var rd=await fetch(SB+'/rest/v1/productoras?select=id,descartada_at,descartada_por,descartada_motivo',{headers:hdr()});
+      if(rd.ok){
+        var md={}; (await rd.json()).forEach(function(x){ md[x.id]=x; });
+        O.forEach(function(o){ var d=md[o.id]||{};
+          o.descartada_at=d.descartada_at||null;
+          o.descartada_por=d.descartada_por||null;
+          o.descartada_motivo=d.descartada_motivo||null; });
+      }
+    }catch(_){}
+
+    /* La lista de trabajo son las que siguen vivas. Las descartadas se ven
+       cuando se piden, y nunca desaparecen de la base. */
+    var vivas=O.filter(function(o){return !o.descartada_at;});
+    var fuera=O.filter(function(o){return !!o.descartada_at;});
+    var muestra=VERDESC?fuera:vivas;
+    $('sub').textContent=vivas.length+' productoras · '+
+      vivas.filter(function(o){return o.estado==='activo';}).length+' activas'+
+      (fuera.length?' · '+fuera.length+' descartada'+(fuera.length===1?'':'s'):'');
+    $('lista').innerHTML=muestra.map(function(o){
       var t=o.estado==='activo'?'ok':(o.estado==='suspendido'||o.estado==='baja'?'bad':'warn');
-      return '<li data-id="'+o.id+'" class="'+(cur&&cur.id===o.id?'on':'')+'"><b>'+esc(o.nombre_comercial||'(sin nombre)')+'</b><div class="m">'+esc(o.tipo_nombre||o.estado)+' · '+o.eventos+' evento'+(o.eventos===1?'':'s')+'</div></li>';
-    }).join('')||'<li class="mini">Sin productoras</li>';
+      return '<li data-id="'+o.id+'" class="'+(cur&&cur.id===o.id?'on':'')+'"><b>'+esc(o.nombre_comercial||'(sin nombre)')+'</b><div class="m">'+
+        (o.descartada_at?'descartada':esc(o.tipo_nombre||o.estado))+' · '+o.eventos+' evento'+(o.eventos===1?'':'s')+'</div></li>';
+    }).join('')||'<li class="mini">'+(VERDESC?'Nada descartado':'Sin productoras')+'</li>';
+    $('pieLista').innerHTML=(fuera.length||VERDESC)
+      ? '<button class="btn ghost" id="btnVerDesc" style="width:100%;margin-top:10px;font-size:12px">'+
+        (VERDESC?'Volver a las de siempre':'Ver las descartadas ('+fuera.length+')')+'</button>'
+      : '';
+    if($('btnVerDesc')) $('btnVerDesc').onclick=function(){ VERDESC=!VERDESC; load(); };
     Array.prototype.forEach.call($('lista').querySelectorAll('li[data-id]'),function(li){li.onclick=function(){abrir(li.getAttribute('data-id'));};});
     if(sel||!cur)abrir(sel||(O[0]&&O[0].id));else abrir(cur.id);
+  }
+
+  /* DESCARTAR Y DEVOLVER. El mismo gesto en los dos sentidos: poner la fecha
+     o quitarla. No borra nada, y queda escrito quién y por qué. */
+  function pintaDescarte(){
+    var c=$('descCaja'); if(!c||!cur)return;
+    if(cur.descartada_at){
+      c.innerHTML='<div class="mini">Descartada el <b>'+esc(String(cur.descartada_at).slice(0,10))+'</b>'+
+        (cur.descartada_por?' por '+esc(cur.descartada_por):'')+
+        (cur.descartada_motivo?'<br>'+esc(cur.descartada_motivo):'')+'</div>'+
+        '<div class="ft" style="justify-content:flex-start;margin-top:10px">'+
+        '<button class="btn ghost" id="btnRecupera" type="button">Devolverla a la lista</button></div>'+
+        '<div id="descOk" class="mini" style="margin-top:8px"></div>';
+      $('btnRecupera').onclick=function(){ descarta(true); };
+    }else{
+      c.innerHTML='<input id="descMotivo" placeholder="Por qué la descartas · opcional" style="width:100%">'+
+        '<div class="ft" style="justify-content:flex-start;margin-top:10px">'+
+        '<button class="btn ghost" id="btnDescarta" type="button">Descartar</button></div>'+
+        '<div id="descOk" class="mini" style="margin-top:8px"></div>';
+      $('btnDescarta').onclick=function(){ descarta(false); };
+    }
+  }
+
+  async function descarta(recupera){
+    if(!cur)return;
+    var ok=$('descOk'); if(ok){ ok.style.color=''; ok.textContent='Guardando…'; }
+    var yo=''; try{ yo=(window.cpAcceso&&cpAcceso.tokEmail&&cpAcceso.tokEmail())||''; }catch(_){}
+    var mot=$('descMotivo')?String($('descMotivo').value||'').trim():'';
+    var cuerpo = recupera
+      ? {descartada_at:null, descartada_por:null, descartada_motivo:null}
+      : {descartada_at:new Date().toISOString(), descartada_por:yo||null, descartada_motivo:mot||null};
+    var r=await parchea(SB+'/rest/v1/productoras?id=eq.'+cur.id, cuerpo);
+    if(!r.ok){ if(ok){ ok.style.color='#B3261E'; ok.textContent='No se guardó: '+(r.msg||''); } return; }
+    Object.assign(cur, cuerpo);
+    /* La ficha se queda abierta aunque salga de la lista de la izquierda: así
+       ve lo que acaba de hacer y puede devolverla de un botón. */
+    await load(cur.id);
   }
 
   async function abrir(id){
@@ -591,7 +672,7 @@ body.embed .top{display:none}
        se abre en «a mano» para que suma() no la pise al pintar la ficha. */
     TOT_A_MANO = cur.comision_pct!=null &&
       Math.abs(Number(cur.comision_pct) - ((Number(cur.com_vendedor_pct)||0)+(Number(cur.com_hotel_pct)||0)+(Number(cur.com_plataforma_pct)||0))) > 0.005;
-    suma();pintaTipo();pintaCobro();pintaLiga(id);pintaFichaPub();pintaDocs();
+    suma();pintaTipo();pintaCobro();pintaLiga(id);pintaFichaPub();pintaDocs();pintaDescarte();
     var r1=await fetch(SB+'/rest/v1/productora_usuarios?select=*&productora_id=eq.'+id+'&order=created_at',{headers:hdr()});
     U=r1.ok?await r1.json():[];pintaEquipo();
     pintaSide();
