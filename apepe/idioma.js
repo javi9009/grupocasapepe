@@ -236,6 +236,13 @@
        no, el huésped inglés lee «Reception · Escríbenos, 24 horas» y parece
        que la app se rompió. */
     'Cómo funciona la casa': 'How the house works',
+    'Trabaja a tres calles de aquí, en el Ateneo.': 'Work three streets from here, at the Ateneo.',
+    'El más pedido': 'Most booked',
+    'al día': 'per day',
+    'a la semana': 'per week',
+    'al mes': 'per month',
+    'Ahora mismo no hay lugar': 'No space right now',
+    'Por horas': 'By the hour',
     'Carta y horarios': 'Menu and hours',
     'Escríbenos, 24 horas': 'Write to us, 24 hours',
     'Una noche más, o salir tarde': 'One more night, or a late checkout',
