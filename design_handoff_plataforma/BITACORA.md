@@ -60,15 +60,117 @@ circulando y hay gente a medio llenarla.
 
 ---
 
+**2026-10-26 · F2-4 La comunidad · `/m/comunidad.html`**
+
+Una sola pantalla donde antes había tres listados que decían casi lo mismo —Touroperadores,
+Productoras y parte de Hoteles asociados—. Por existir por separado, Barrio Hostel acabó dado
+de alta tres veces y Café Cumbre dos.
+
+- D1 listado con contadores reales, cuatro filtros y pastillas de capacidad con su cuenta.
+- D2 ficha con ocho pestañas, **todas editables desde el panel**: lo que el ateneísta puede
+  escribir en su portal, el equipo lo puede cambiar aquí, y queda anotado quién lo capturó.
+- **Revocar una capacidad pide motivo** antes de guardarla, igual que el `check` de la base.
+  La pantalla no reinventa la regla: la repite.
+- **El nombre y las pastillas no se pisan**, que era la corrección 2 de Javi: el nombre manda
+  en su línea con `min-width:0`, las pastillas van debajo en la suya.
+
+---
+
+**2026-10-26 · F2-5 La cola de aprobación · `/m/aprobacion.html`**
+
+La pantalla más importante del panel: el ateneísta crea lo que quiera, pero nada sale a la
+venta sin que alguien de la casa lo mire. Si la cola se atasca, la plataforma se para.
+
+- Tres cosas que se deciden —experiencias `en_revision`, eventos `propuesto`, altas
+  `en_revision`— y una cuarta que **no es una decisión**: las fichas sin términos escritos,
+  que son tarea de la casa y por eso no llevan botón de aprobar.
+- **Lo que lleva más de 48 h esperando sale en rojo.**
+- **Rechazar pide motivo** (mínimo cuatro letras). Un «no» sin razón obliga a adivinar y
+  vuelve dos veces.
+- **No se publica a quien no puede cobrar sin avisar**: antes de aprobar se mira el candado
+  del dueño —el mismo que mira la base— y si bloquea, se pregunta. Publicar a alguien sin
+  Stripe es vender boletos que nadie puede cobrar; ya pasó con tres productoras.
+- Todo deja rastro en `historia`.
+
+---
+
+**2026-10-26 · F6-23 y F6-24 · `/m/productos.html` y `/m/salidas.html`**
+
+- **Productos**: todo lo que vive en `op_experiencias` —tours, transportes y eventos, propios
+  y de terceros— en un solo listado. El formato es una pastilla, no una pantalla aparte. Cada
+  ficha enseña **lo que le falta** para poder venderse, con las mismas palabras que ve su dueño.
+- **Salidas del día**: una fila por salida con hora, guía, cupo y lo que llega sin pagar; al
+  abrirla, los nombres. **El día se elige, no se adivina**: arranca en hoy, pero manda el
+  selector, porque la recepción perdía las llegadas de la mañana siguiente por mirar siempre
+  «hoy».
+
+---
+
+**2026-10-26 · F1-2b Inicio de Sincrético · `/m/sinc-inicio.html`**
+
+No es un tablero de indicadores: es la lista de lo que hay que hacer hoy, en orden de urgencia
+real. Cada número lleva a la pantalla donde se arregla.
+
+**Cada cuadro se pide por su cuenta y falla por su cuenta.** Que no se pueda leer la cola no
+debe dejar en blanco las salidas de hoy, y un cuadro que no se pudo leer lo dice con su motivo
+en vez de enseñar un cero. Cero y error no se ven igual: es la lección de la venta de Jorge
+Ruvalcaba, que parecía perdida y sólo estaba detrás de una consulta rota.
+
+---
+
+**2026-10-26 · La puerta · `/acceso.html` (`/acceso`, `/login`, `/entrada`)**
+
+Una sola pantalla de login para todo el que forma parte del proyecto: correo, contraseña,
+recuperar y alta, con el logotipo de Sincrético y el botón para pasar a Casa Pepe.
+
+**No se pregunta «qué eres».** La respuesta ya la tenemos: después de entrar se mira
+`es_equipo_casa()`, luego `tour_operadores` y luego `hoteles` —RLS ya filtra a lo suyo— y cada
+quien cae en su portal. Preguntarlo es lo que crea duplicados. El único que elige puerta es el
+que todavía no existe, y ese se va al alta.
+
+Volviendo del correo de recuperación **primero se guarda la contraseña nueva y luego se entra**:
+si no, el enlace se gasta y la próxima vez vuelve a no poder.
+
+---
+
+**2026-10-26 · El menú: todo lo de Sincrético bajo Sincrético**
+
+Las seis pantallas nuevas salían **en la raíz del menú**, entre Panel y RH, porque se dieron de
+alta sin `parent_codigo`. Y tres de ellas daban *Page not found*: estaban anunciadas en el menú
+antes de que el archivo existiera. El menú promete y el archivo cumple; si se da de alta la
+fila primero, el menú miente.
+
+- Nuevo contenedor raíz **`MENU2-SINC` «Sincrético»**, con Inicio · Cola de aprobación ·
+  La comunidad · Productos · Salidas del día · Ventas, y debajo Ateneo, Hoteles y ⋯ Otros.
+- **Retiradas por redundantes** (el archivo sigue ahí, sólo sale del menú, y el nombre dice
+  quién hace ahora su trabajo): Ficha de alta de empresa y Ficha de productoras → La comunidad;
+  Salidas · reservas y estados → Salidas del día; Eventos · aprobar y publicar → Cola de
+  aprobación; Funnel de captación → La comunidad; Ventas Experiencias → Ventas; y las cuatro
+  «dentro de la ficha» (Ficha del producto, Guía del Guía, Costeo, Ficha de venta).
+- **Tres entradas apuntaban a archivos que no existen** y daban 404: `sinc-stats.html`,
+  `sinc-cosmica-editor.html` y `demo-cosmica.html`. La de La Cósmica se apuntó al archivo que
+  sí existe (`/m/sinc-cosmica.html`); las otras dos, apagadas.
+- Los permisos de cada pantalla retirada se copiaron a la que la sustituye: nadie pierde acceso
+  por la mudanza.
+- Se auditaron **las 109 rutas activas del menú** contra el repo. Las que no llevan `.html`
+  (`/m/rh-bonos`, `/m/contratos`…) funcionan: Netlify sirve el archivo igual.
+
+**Y un agujero que cerré de paso:** `ateneista_capacidades` e `historia` estaban **sin RLS**.
+Cualquiera con sesión —y eso incluye a cada ateneísta y cada hotelero con login— podía
+concederse una capacidad a sí mismo. Ahora las capacidades las lee todo el que entra pero sólo
+las escribe `es_equipo_casa()`, y la historia sólo la lee la casa.
+
+
 ## Lo que sigue
 
 | | |
 |---|---|
-| F2-4 | D1 La comunidad y D2 Ficha del ateneísta → `/m/comunidad.html` |
-| F2-5 | D3 Cola de aprobación → `/m/aprobacion.html` |
-| F6-23 | D5 Productos → `/m/productos.html` |
-| F6-24 | D6 Salidas del día → `/m/salidas.html` |
-| F1-2b | Inicio de Sincrético → `/m/sinc-inicio.html` |
+| F3 | Fichas de producto: unificar `ficha.html` y `ficha2.html` en una sola |
+| F4 | Portal del ateneísta: que lea las mismas capacidades que la ficha del panel |
+| F5 | Hotel: el portal del hotelero contra el nuevo registro único |
+| — | Decisiones que no toma un agente: ver AGENTE.md |
+
+Hecho hasta aquí: F1-1, F1-2, F1-2b, F2-3, F2-4, F2-5, F6-23, F6-24, la puerta y el menú.
 
 ## Correcciones al diseño que pidió Javi
 
