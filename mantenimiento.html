@@ -744,14 +744,22 @@ async function renderTablero(){
   const tanque=Number(CC.gas_tanque_litros||1600);
   // Promedio de los últimos 30 días, por huésped-noche. Agua/luz por delta del medidor; gas por las BAJADAS del % (las subidas son recargas).
   const asc=[...(lec||[])].sort((a,b)=>a.fecha<b.fecha?-1:1);
+  // Topes de consumo por DÍA: ignoran lecturas corruptas (un medidor no sube 100+ m³ ni miles de kWh en un día).
+  const MAXA=60, MAXL=2500;
   let aguaL=0,aguaGN=0, luzK=0,luzGN=0, gasL=0,gasGN=0, ndias=0;
   for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i]; if(c.fecha<win30)continue;
+    const dd=Math.max(1,Math.round((new Date(c.fecha+'T12:00:00')-new Date(p.fecha+'T12:00:00'))/86400000));
     const gn=(c.huespedes!=null)?Number(c.huespedes):null; if(gn)ndias++;
-    if(gn&&c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>p.agua_lectura){aguaL+=(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros);aguaGN+=gn;}
-    if(gn&&c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>p.luz_lectura){luzK+=(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh);luzGN+=gn;}
+    const gnw=gn?gn*dd:0;   // huésped-noches del intervalo (reparte entre los días que cubre)
+    if(gnw&&c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>p.agua_lectura){
+      const dM3=Number(c.agua_lectura)-Number(p.agua_lectura);
+      if(dM3/dd<=MAXA){aguaL+=dM3*Number(CC.agua_factor_litros);aguaGN+=gnw;}}
+    if(gnw&&c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>p.luz_lectura){
+      const dK=Number(c.luz_lectura)-Number(p.luz_lectura);
+      if(dK/dd<=MAXL){luzK+=dK*Number(CC.luz_factor_kwh);luzGN+=gnw;}}
     // Gas: litros totales del(los) tanque(s). Puebla tiene 2 tanques → se suman. Solo cuentan las BAJADAS (las subidas son recargas).
     const gLit=r=>((Number(r.gas_pct)||0)/100*tanque)+((r.gas2_pct!=null)?(Number(r.gas2_pct)/100*tanque):0);
-    if(gn&&c.gas_pct!=null&&p.gas_pct!=null){const cl=gLit(c),pl=gLit(p); if(pl>cl){gasL+=(pl-cl);gasGN+=gn;}}
+    if(gnw&&c.gas_pct!=null&&p.gas_pct!=null){const cl=gLit(c),pl=gLit(p); if(pl>cl){gasL+=(pl-cl);gasGN+=gnw;}}
   }
   const aguaH=aguaGN?aguaL/aguaGN:null, luzH=luzGN?luzK/luzGN:null, gasH=gasGN?gasL/gasGN:null;
   const gasUlt=asc.length?asc[asc.length-1]:null;
@@ -2393,8 +2401,8 @@ async function renderLect(){
   const asc=[...rows].sort((a,b)=>a.fecha<b.fecha?-1:1), cons=[];
   for(let i=1;i<asc.length;i++){const p=asc[i-1],c=asc[i];const mes=parseInt(c.fecha.slice(5,7))-1;
     const dias=Math.max(1,diffDays(p.fecha,c.fecha)); const gn=guestNights(p.fecha,c.fecha);
-    const aguaC=(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura)?(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros):null;
-    const luzC=(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura)?(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh):null;
+    const aguaC=(c.agua_lectura!=null&&p.agua_lectura!=null&&c.agua_lectura>=p.agua_lectura&&(Number(c.agua_lectura)-Number(p.agua_lectura))/dias<=60)?(c.agua_lectura-p.agua_lectura)*Number(CC.agua_factor_litros):null;
+    const luzC=(c.luz_lectura!=null&&p.luz_lectura!=null&&c.luz_lectura>=p.luz_lectura&&(Number(c.luz_lectura)-Number(p.luz_lectura))/dias<=2500)?(c.luz_lectura-p.luz_lectura)*Number(CC.luz_factor_kwh):null;
     cons.push({fecha:c.fecha,gn,dias,mes,aguaH:(gn&&aguaC!=null)?aguaC/gn:null,luzH:(gn&&luzC!=null)?luzC/gn:null});}
   cons.reverse();
   // ---- gas por costo (recargas + huésped-noches últimos 30 días) ----
