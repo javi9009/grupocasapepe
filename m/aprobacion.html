@@ -149,6 +149,19 @@ async function historia(entidad,id,que,detalle){
   }catch(_){}
 }
 
+/* El correo lo manda la funcion, que es la unica que puede crear la cuenta:
+   desde el navegador no se toca auth ni con la sesion del equipo. */
+async function aviso(accion,id,motivo){
+  try{
+    var r=await fetch(SB+'/functions/v1/ateneista-aviso',{method:'POST',
+      headers:Object.assign(hdr(),{}),
+      body:JSON.stringify({accion:accion,id:id,motivo:motivo||null})});
+    var j=await r.json().catch(function(){return null;});
+    if(!r.ok || !j) return {ok:false,error:'la función respondió '+r.status};
+    return {ok: j.correo!==false && j.ok!==false, error: j.motivo||j.error||null};
+  }catch(e){ return {ok:false,error:String((e&&e.message)||e)}; }
+}
+
 async function patch(tabla,id,cambios){
   var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
     {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),body:JSON.stringify(cambios)});
@@ -171,6 +184,17 @@ async function aprobar(tipo,id){
       await historia('evento',id,'publicado',{desde:'propuesto'}); }
     if(tipo==='ate'){ await patch('tour_operadores',id,{estado:'activo'});
       await historia('ateneista',id,'alta aprobada',{desde:'en_revision'}); }
+    /* APROBAR UN ATENEISTA ES ABRIRLE LA PUERTA. Hasta aqui no tenia cuenta:
+       la funcion le crea el usuario y le manda la liga para poner contrasena.
+       Si el correo no sale, el alta YA quedo aprobada -no se deshace por un
+       correo- pero se dice en voz alta, porque si no el que espera se queda
+       esperando sin que nadie lo sepa. */
+    if(tipo==='ate'){
+      var c=await aviso('aprobada',id);
+      avisa(c.ok ? 'Aprobado · le mandamos la liga para su contraseña'
+                 : 'Aprobado, PERO el correo no salió: '+(c.error||'sin motivo')+'. Reenvíaselo tú.');
+      carga(); return;
+    }
     avisa('Aprobado · lo publicó '+(YO||'el equipo'));
     carga();
   }catch(e){ avisa('No se pudo aprobar: '+((e&&e.message)||e)); }
@@ -192,7 +216,11 @@ async function rechazar(tipo,id){
     if(tipo==='evt'){ await patch('eventos',id,{estado:'borrador',notas:txt});
       await historia('evento',id,'devuelto a borrador',{motivo:txt}); }
     if(tipo==='ate'){ await patch('tour_operadores',id,{estado:'borrador'});
-      await historia('ateneista',id,'alta devuelta',{motivo:txt}); }
+      await historia('ateneista',id,'alta devuelta',{motivo:txt});
+      var c=await aviso('devuelta',id,txt);
+      avisa(c.ok ? 'Devuelto · le mandamos el motivo por correo'
+                 : 'Devuelto, pero el correo no salió: '+(c.error||'sin motivo'));
+      carga(); return; }
     avisa('Devuelto con motivo.');
     carga();
   }catch(e){ avisa('No se pudo devolver: '+((e&&e.message)||e)); }
