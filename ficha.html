@@ -2706,7 +2706,17 @@ gmp-place-autocomplete,.gmpac{
     ponChips('chGastro',g.map(idAGastro));ponChips('chTangible',t.map(idATangible));
     $('reqMin').onchange();$('segGrupo').onchange();$('cosBien').onchange();$('cosDesp').onchange();
     bienCarga();
-    var rm=document.querySelector('input[name=salida_modo][value="'+(E.salida_modo||'fijo')+'"]');if(rm)rm.checked=true;
+    /* «Pasamos por ellos al hotel» no es un modo de salida de los que guarda
+       la base -ahí sólo caben fija, por día y por hora-, así que salida_modo
+       nunca va a decir «pickup» al volver a abrir la ficha. Se deduce de lo
+       que sí quedó escrito: hay pick up Y no hay punto de encuentro, o sea
+       que recoger ES la salida. Con punto de encuentro, el pick up es el
+       añadido que marca su propia casilla y el modo sigue siendo el suyo.
+       Javi, 26-oct-2026. */
+    var _soloPick = !!E.pickup_hotel && !String(E.cer_inicio_lugar||'').trim();
+    var _md = (E.salida_modo==='pickup'||_soloPick) ? 'pickup' : (E.salida_modo||'fijo');
+    if(_md==='pickup') E.salida_modo='pickup';
+    var rm=document.querySelector('input[name=salida_modo][value="'+_md+'"]');if(rm)rm.checked=true;
     var rc=document.querySelector('input[name=calendario_modo][value="'+(E.calendario_modo||'semanal')+'"]');if(rc)rc.checked=true;
     pintaFormato();
     pintaSalidaModo();pintaDonde();pintaCal();pintaSalidas();pintaParadas();pintaBloqueos();pintaProtas();pintaMedia();pintaCobroModo();pintaImpacto();pintaMedido();pintaReparto();pintaGlasgow();
@@ -5657,10 +5667,22 @@ gmp-place-autocomplete,.gmpac{
         var dentro='';
         if(x.impacto){
           var g=x.impacto.grupo;
-          dentro='<div class="revimp" data-revimp>'+x.impacto.lineas.map(function(l,j){
+          /* SI LE PEDIMOS EL GRUPO, QUE PUEDA ESCRIBIRLO AQUÍ. Javi,
+             26-oct-2026: el aviso decía «antes de nada dinos de cuánta gente
+             es un grupo típico» y no había dónde decirlo: los selectores de
+             «por salida» salían apagados porque sin ese número no hay entre
+             cuántos repartir, y los dos botones de guardar estaban bloqueados.
+             La única salida era cancelar, volver a Capacidad, buscar el campo
+             y empezar otra vez. */
+          dentro=(g>0?'':'<div class="revcampo" style="margin-bottom:10px">'+
+            '<label>Un grupo típico es de '+
+            '<input type="number" min="1" step="1" data-grupoimp placeholder="8" style="width:84px">'+
+            ' <span class="mini">personas · con esto repartimos lo que se paga por salida</span></label></div>')+
+            '<div class="revimp" data-revimp>'+x.impacto.lineas.map(function(l,j){
             return '<label class="revlin">'+
               '<span class="revn">'+esc(l.nota||l.clave)+'</span>'+
               '<b>'+money(l.monto_mxn)+'</b>'+
+              /* Se habilitan en cuanto se escriba el tamaño del grupo. */
               '<select data-lin="'+j+'"'+(g>0?'':' disabled')+'>'+
                 '<option value="persona"'+(l.base!=='grupo'?' selected':'')+'>por persona</option>'+
                 '<option value="grupo"'+(l.base==='grupo'?' selected':'')+'>por salida'+(g>0?' (÷'+g+')':'')+'</option>'+
@@ -5724,8 +5746,14 @@ gmp-place-autocomplete,.gmpac{
         if(!caja)return;
         var hx=rev.hallazgos.filter(function(y){return y.impacto;})[0];
         if(!hx)return;
-        var g=hx.impacto.grupo, suyo=hx.impacto.suyo, tot=0;
+        /* El grupo puede venir de la ficha o escribirse aquí mismo. */
+        var inpG=v.querySelector('[data-grupoimp]');
+        var g=Number(inpG&&inpG.value)||hx.impacto.grupo||0;
+        var suyo=hx.impacto.suyo, tot=0;
         Array.prototype.forEach.call(caja.querySelectorAll('select[data-lin]'),function(s){
+          s.disabled=!(g>0);
+          var o=s.querySelector('option[value="grupo"]');
+          if(o)o.textContent='por salida'+(g>0?' (÷'+g+')':'');
           var l=hx.impacto.lineas[+s.getAttribute('data-lin')];
           var m=Number(l.monto_mxn||0);
           tot += (s.value==='grupo') ? (g>0?Math.round(m/g):0) : m;
@@ -5739,6 +5767,8 @@ gmp-place-autocomplete,.gmpac{
       }
       if(caja){
         caja.addEventListener('change',recalcula);
+        var _ig=v.querySelector('[data-grupoimp]');
+        if(_ig)_ig.addEventListener('input',recalcula);
         recalcula();
       }
 
@@ -5790,6 +5820,14 @@ gmp-place-autocomplete,.gmpac{
         if(!aplicando) return {imp:salida};
         rev.hallazgos.forEach(function(x,i){
           if(x.impacto && caja){
+            /* El grupo escrito aquí se lleva a su campo de la ficha: si no,
+               la cuenta cuadraría en el pop-up y volvería a no cuadrar al
+               guardar, que es justo el bucle del que se quejó Javi. */
+            var ig=v.querySelector('[data-grupoimp]');
+            if(ig && Number(ig.value)>0){
+              var gp=$('grupoProm');
+              if(gp){ gp.value=String(Number(ig.value)); gp.dispatchEvent(new Event('input',{bubbles:true})); }
+            }
             Array.prototype.forEach.call(caja.querySelectorAll('select[data-lin]'),function(s){
               x.impacto.lineas[+s.getAttribute('data-lin')].base=s.value;
             });
@@ -5911,6 +5949,16 @@ gmp-place-autocomplete,.gmpac{
     /* Si sale recogiendo, el pick up queda encendido en la base aunque nadie
        haya bajado a marcar la casilla. */
     b.pickup_hotel = (b.salida_modo==='pickup') ? true : !!E.pickup_hotel;
+    /* Y «pickup» NO VIAJA COMO MODO DE SALIDA. Javi, 26-oct-2026: ninguna
+       ficha con «pasamos por ellos al hotel» se podía guardar, y el aviso
+       decía «violates check constraint "op_exp_» y se cortaba justo ahí.
+       La base sólo admite fija, por día o por hora: recoger en el hotel no es
+       una cuarta forma de salir, es que no hay punto de encuentro, y eso ya lo
+       dice pickup_hotel —que la línea de arriba acaba de encender—. La
+       pantalla lo sigue enseñando como una opción más porque así se piensa;
+       al guardar se traduce a lo que la base entiende, en vez de inventarle
+       un valor que va a rechazar. */
+    if(b.salida_modo==='pickup') b.salida_modo='fijo';
     /* Guardar una pre-ficha es validarla: lo que dejó tal cual también lo da
        por bueno, y desde aquí la ficha ya es suya, no nuestra. */
     if(esPreficha()){
