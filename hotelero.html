@@ -536,6 +536,7 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
     if(sec==='espacios')  return vEspacios(w);
     if(sec==='exps')      return vExps(w);
     if(sec==='eventos')   return vEventos(w);
+    if(sec==='ventas')    return vVentas(w);
     w.innerHTML=vPronto();
     if(sec==='general'||sec==='anfitrion'||sec==='rest') ataGuarda();
   }
@@ -1476,6 +1477,114 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
         +'Mientras tanto, lo de arriba ya le dice si hay dónde comer y a qué hora.</div></div>';
   }
 
+  /* ---------- mis ventas ----------
+     Bloque 4. Esta pestaña estaba en el menú de las dos vistas y caía en
+     «Próximamente».
+
+     Antes de escribirla hubo que poner el cable: la única política de lectura
+     de `sinc_reservas` dejaba pasar al equipo de casa y al operador dueño de
+     la experiencia. Un hotel no es ninguno de los dos, así que la consulta le
+     devolvía CERO FILAS — y cero filas se ve exactamente igual que «todavía no
+     has vendido nada». Montar la pantalla encima habría sido construir un cero
+     que miente. */
+  var VTAS=null, VTAS_ERR=false;
+
+  async function vVentas(w){
+    var d=destino();
+    w.innerHTML='<div class="card"><h3>'+(nivel==='grupo'?'Mis ventas':'Sus ventas')+'</h3>'
+      +'<div class="mini">Trayendo lo vendido…</div></div>';
+
+    /* En el nivel de grupo se piden las de todas sus casas; en el de casa,
+       solo las de esa. La base vuelve a filtrar por su cuenta: esto es para
+       no traer de más, no para decidir quién ve qué. */
+    var ids=[d.id];
+    if(nivel==='grupo') ids=ids.concat(HOT.map(function(x){return x.id;}));
+    var q='sinc_reservas?select=id,folio,created_at,estado,pax,total,al_hotel,bono_concierge,'
+      +'vendedor_nombre,canal,hotel_id,op_experiencia_id,pago_estado'
+      +'&hotel_id=in.('+ids.join(',')+')&order=created_at.desc&limit=500';
+    var r=await get(q);
+    VTAS_ERR = (r===null);
+    VTAS = r||[];
+    pintaVentas(w);
+  }
+
+  function pintaVentas(w){
+    /* UN CERO Y UN ERROR NO SE DICEN IGUAL. */
+    if(VTAS_ERR){
+      w.innerHTML='<div class="card"><h3>No pudimos traer tus ventas</h3>'
+        +'<div class="pronto">No es que no haya ninguna: es que la consulta no llegó. '
+        +'Vuelve a entrar y si sigue igual, avísanos — no es lo mismo que no haber vendido.</div>'
+        +'<div class="ft"><button class="btn" id="vtOtra">Reintentar</button></div></div>';
+      var b=$('vtOtra'); if(b) b.onclick=function(){ vVentas(w); };
+      return;
+    }
+    var vivas=VTAS.filter(function(x){ return x.estado!=='anulada' && x.estado!=='cancelada'; });
+    if(!vivas.length){
+      w.innerHTML='<div class="card"><h3>'+(nivel==='grupo'?'Mis ventas':'Sus ventas')+'</h3>'
+        +'<div class="pronto">Todavía no te ha comprado nadie. En cuanto alguien de recepción venda una '
+        +'experiencia, aquí aparece qué vendió, cuánto le toca a la casa y cuánto a quien la vendió.</div></div>';
+      return;
+    }
+
+    var tot=0, aCasa=0, aConc=0, pax=0, porConc={};
+    vivas.forEach(function(x){
+      tot  += Number(x.total||0);
+      aCasa+= Number(x.al_hotel||0);
+      aConc+= Number(x.bono_concierge||0);
+      pax  += Number(x.pax||0);
+      var k=(x.vendedor_nombre||'Sin nombre').trim();
+      if(!porConc[k]) porConc[k]={n:0,v:0,b:0};
+      porConc[k].n++; porConc[k].v+=Number(x.total||0); porConc[k].b+=Number(x.bono_concierge||0);
+    });
+
+    var h='<div class="card"><h3>'+(nivel==='grupo'?'Mis ventas':'Sus ventas')+'</h3>'
+      +'<div class="hint">'+vivas.length+' venta'+(vivas.length===1?'':'s')+' · '+pax+' persona'+(pax===1?'':'s')+'.</div>'
+      +'<div class="hgrid">'
+      +cajaNum('Vendido', tot)
+      +cajaNum('Para la casa', aCasa)
+      +cajaNum('Para quien vendió', aConc)
+      +'</div></div>';
+
+    /* QUIEN VENDIO Y CUANTO SE LE DEBE. Es la pregunta que hace el hotelero el
+       dia de pagar, y la que hoy se sacaba a mano. */
+    var nombres=Object.keys(porConc).sort(function(a,b){return porConc[b].v-porConc[a].v;});
+    h+='<div class="card"><h3>Quién vendió</h3>'
+      +'<div class="hint">Lo que le toca a cada quien de lo vendido. Se liquida en el corte.</div>';
+    h+=nombres.map(function(k){
+      var c=porConc[k];
+      return '<div class="fld" style="display:flex;gap:12px;align-items:baseline;justify-content:space-between;'
+        +'padding:8px 0;border-bottom:1px solid var(--rule)">'
+        +'<div><b>'+esc(k)+'</b><div class="mini">'+c.n+' venta'+(c.n===1?'':'s')+' · '+pesos(c.v)+'</div></div>'
+        +'<b>'+pesos(c.b)+'</b></div>';
+    }).join('');
+    h+='</div>';
+
+    h+='<div class="card"><h3>Una por una</h3>';
+    h+=vivas.slice(0,80).map(function(x){
+      var pagada = x.pago_estado==='pagado';
+      return '<div class="fld" style="display:flex;gap:12px;align-items:baseline;justify-content:space-between;'
+        +'padding:8px 0;border-bottom:1px solid var(--rule)">'
+        +'<div><b>'+esc(x.folio||x.id.slice(0,8))+'</b>'
+          +'<div class="mini">'+String(x.created_at||'').slice(0,10)
+          +' · '+esc(x.vendedor_nombre||'sin vendedor')
+          +' · '+(x.pax||0)+' pax'
+          +(x.canal?' · '+esc(x.canal):'')
+          +(pagada?'':' · <b>sin pagar</b>')+'</div></div>'
+        +'<div style="text-align:right"><b>'+pesos(x.total)+'</b>'
+          +'<div class="mini">a la casa '+pesos(x.al_hotel)+'</div></div></div>';
+    }).join('');
+    if(vivas.length>80) h+='<div class="mini" style="margin-top:10px">Se enseñan las 80 más recientes de '+vivas.length+'.</div>';
+    h+='</div>';
+
+    w.innerHTML=h;
+  }
+
+  function cajaNum(t,v){
+    return '<div class="card" style="margin:0"><div class="mini">'+esc(t)+'</div>'
+      +'<div style="font:700 22px Oswald,system-ui;letter-spacing:.02em;margin-top:2px">'+pesos(v)+'</div></div>';
+  }
+  function pesos(n){ return '$'+Math.round(Number(n||0)).toLocaleString('es-MX'); }
+
   function vAnfitrion(){
     var d=destino();
     return '<div class="card"><h3>Mi anfitrión</h3>'
@@ -1960,7 +2069,6 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 
   function vPronto(){
     var T={
-      ventas:['Mis ventas','Lo vendido, las próximas salidas y el desglose por concierge: quién vendió qué y cuánto se le debe. Entra en cuanto haya una venta que contar.'],
       mapa:['Su mapa',''],intang:['Sus intangibles','']};
     var t=T[sec]||['Pronto',''];
     return '<div class="card"><h3>'+esc(t[0])+'</h3><div class="pronto">'+esc(t[1])+'</div></div>';
