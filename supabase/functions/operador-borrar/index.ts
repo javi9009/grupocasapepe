@@ -102,8 +102,19 @@ Deno.serve(async (req) => {
        Sus experiencias llegan por dos caminos: la ficha de producto
        (op_experiencias.operador_id) y la experiencia pública
        (experiencias.operador_id). No siempre coinciden, así que se juntan. */
+    /* OJO CON EL NOMBRE DE LA COLUMNA. Javi, 25-oct-2026: «no me deja borrar
+       ZZ Mexican Tales prueba», y las demas de prueba tampoco. El borrado
+       entero se caia aqui mismo, en el primer vistazo, con un 42703: esta
+       linea pedia `experiencias.estado` y esa tabla no tiene `estado`, tiene
+       `estatus` -y sus valores son activo/borrador, no publicada-. La de
+       arriba, op_experiencias, SI se llama `estado`: dos tablas hermanas con
+       el campo nombrado distinto, que es como se cuela un fallo asi.
+
+       Y como la comprobacion de que no se borre nada vivo venia de esa misma
+       lectura, el fallo salia por el lado bueno: no borraba. Peor habria sido
+       al reves. */
     const opExps = await filas(`op_experiencias?${f}&select=id,experiencia_id,estado`);
-    const expsPropias = await filas(`experiencias?${f}&select=id,nombre,estado`);
+    const expsPropias = await filas(`experiencias?${f}&select=id,nombre,estatus`);
     const expIds = [
       ...new Set([
         ...expsPropias.map((x) => String(x.id)),
@@ -144,7 +155,7 @@ Deno.serve(async (req) => {
       cuantas("sinc_lugares", f),
     ]);
 
-    const publicadas = expsPropias.filter((e) => String(e.estado || "") === "publicada").length;
+    const publicadas = expsPropias.filter((e) => String(e.estatus || "") === "activo").length;
     const conDinero = reservas.filter(dineroReal);
 
     const cuelga = {
