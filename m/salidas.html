@@ -87,6 +87,16 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .dia{display:flex;gap:9px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .dia input[type=date]{border:1.5px solid var(--linea);border-radius:9px;padding:9px 12px;background:#fff}
 .dia .hoy{font:600 12.5px Oswald;letter-spacing:.05em;text-transform:uppercase;color:var(--gris)}
+.pax tr.hu{cursor:pointer}
+.pax tr.hu:hover td{background:var(--hueso)}
+.pax tr.ficha{display:none}
+.pax tr.ficha.on{display:table-row}
+.pax tr.ficha td{background:var(--hueso);border-radius:0 0 9px 9px}
+.datos{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px}
+.datos .d span{display:block;font:600 10px Oswald;letter-spacing:.09em;text-transform:uppercase;color:var(--gris)}
+.datos .d b{font:500 13px Inter}
+.pax .acc{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+.fila .ver{flex:0 0 auto}
 </style></head><body>
 <div class="wrap">
 
@@ -179,6 +189,7 @@ function pinta(){
         '<div class="pax" id="pax-'+esc(s.id)+'"></div>'+
       '</div>'+
       '<div class="cifra"><b>'+tom+(max?'/'+max:'')+'</b><span>personas</span></div>'+
+      (s.experiencia_id?'<div class="ver"><a class="btn sm gris" target="_top" href="/ficha.html?id='+encodeURIComponent(s.experiencia_id)+'">Ver el tour ↗</a></div>':'')+
     '</div>';
   }).join('');
 
@@ -199,7 +210,10 @@ async function abre(id){
   if(RES[id]){ pintaPax(caja,RES[id]); return; }
   caja.innerHTML='<div style="color:var(--gris);padding:6px 0">Buscando quién viene…</div>';
   try{
-    var r=await fetch(SB+'/rest/v1/v_sinc_salidas_dia?select=*&salida_id=eq.'+encodeURIComponent(id)+'&order=huesped',{headers:hdr()});
+    /* v_sinc_portal y no v_sinc_salidas_dia: trae el telefono, el pais, el
+       idioma, el canal y el pick-up. Quien recibe al huesped necesita poder
+       llamarle, no solo saber que viene. */
+    var r=await fetch(SB+'/rest/v1/v_sinc_portal?select=*&salida_id=eq.'+encodeURIComponent(id)+'&order=huesped',{headers:hdr()});
     if(!r.ok) throw new Error('la base respondió '+r.status);
     RES[id]=await r.json();
     pintaPax(caja,RES[id]);
@@ -208,21 +222,51 @@ async function abre(id){
   }
 }
 
+function dato(t,v){ return v ? '<div class="d"><span>'+esc(t)+'</span><b>'+esc(v)+'</b></div>' : ''; }
+
 function pintaPax(caja,lista){
   if(!lista.length){
     caja.innerHTML='<div style="color:var(--gris);padding:6px 0">Esta salida no tiene reservas todavía.</div>';
     return;
   }
   caja.innerHTML='<table><tr><th>Huésped</th><th>Pax</th><th>Pago</th><th>Hotel</th><th>Folio</th></tr>'+
-    lista.map(function(p){
+    lista.map(function(p,i){
       var pg=String(p.pago_estado||'');
       var cl = pg==='pagado'?'ok' : pg==='en_destino'?'al' : pg?'ne':'er';
-      return '<tr><td><b>'+esc(p.huesped||'—')+'</b><br><span style="color:var(--tenue)">'+esc(p.email||'')+'</span></td>'+
+      var tel=String(p.telefono||'').replace(/[^0-9+]/g,'');
+      return '<tr class="hu" data-i="'+i+'"><td><b>'+esc(p.huesped||'—')+'</b><br>'+
+          '<span style="color:var(--tenue)">'+esc(p.email||'')+'</span></td>'+
         '<td>'+(p.pax||'—')+'</td>'+
         '<td><span class="pill '+cl+'">'+esc(pg||'sin pago')+'</span></td>'+
         '<td>'+esc(p.hotel||'—')+'</td>'+
-        '<td style="color:var(--tenue)">'+esc(p.folio||'')+'</td></tr>';
+        '<td style="color:var(--tenue)">'+esc(p.folio||'')+' ›</td></tr>'+
+      '<tr class="ficha" id="hu-'+i+'"><td colspan="5">'+
+        '<div class="datos">'+
+          dato('Teléfono', p.telefono)+
+          dato('País', p.pais)+
+          dato('Idioma', p.idioma)+
+          dato('Canal', p.canal)+
+          dato('Adultos / menores', (p.adultos!=null||p.menores!=null)?((p.adultos||0)+' / '+(p.menores||0)):'')+
+          dato('Pagó', p.pago_total!=null?('$'+Number(p.pago_total).toLocaleString('es-MX')+' '+(p.pago_moneda||'')):'')+
+          dato('Vendió', p.touroperadora || p.anfitrion)+
+          dato('Reservó', p.reservada_at?String(p.reservada_at).slice(0,10):'')+
+          (p.pickup?dato('Pick-up', (p.pickup_lugar||p.hotel||'sí')+(p.pickup_hora?' · '+p.pickup_hora:'')):'')+
+          dato('Notas', p.notas)+
+        '</div>'+
+        '<div class="acc">'+
+          (tel?'<a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/'+esc(tel.replace(/^\+/,''))+'">WhatsApp ↗</a>':'')+
+          (p.email?'<a class="btn sm gris" href="mailto:'+esc(p.email)+'">Escribirle</a>':'')+
+          (p.id?'<a class="btn sm gris" target="_top" href="/m/sinc-operacion.html?reserva='+encodeURIComponent(p.id)+'">Ver la reserva ↗</a>':'')+
+        '</div>'+
+      '</td></tr>';
     }).join('')+'</table>';
+  Array.prototype.forEach.call(caja.querySelectorAll('tr.hu'),function(tr){
+    tr.addEventListener('click',function(e){
+      if(e.target.closest('a,button')) return;
+      var f=caja.querySelector('#hu-'+tr.getAttribute('data-i'));
+      if(f) f.classList.toggle('on');
+    });
+  });
 }
 
 async function carga(){
@@ -234,6 +278,11 @@ async function carga(){
     SAL=await r.json();
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   pinta();
+  if(ABRIR){ var id=ABRIR; ABRIR=''; setTimeout(function(){
+    abre(id);
+    var el=document.querySelector('.fila[data-id="'+id+'"]');
+    if(el){ try{ el.scrollIntoView({behavior:'smooth',block:'center'}); }catch(_){} }
+  },120); }
 }
 
 function ponDia(iso){ DIA=iso; $('fecha').value=iso; carga(); }
@@ -245,6 +294,9 @@ $('hoy').addEventListener('click',function(){ ponDia(hoyISO()); });
 
 ses=sesionPanel();
 var qs=new URLSearchParams(location.search);
+/* Se puede llegar aqui desde Inicio con una salida concreta: se abre sola,
+   que es lo que esperaba quien hizo clic en ella. */
+var ABRIR=qs.get('abrir')||'';
 ponDia(qs.get('fecha')||hoyISO());
 </script>
 </body></html>
