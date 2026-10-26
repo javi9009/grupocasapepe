@@ -1428,7 +1428,7 @@ function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia'
 async function renderProg(){
   const [cfgR,tkR,profR,urgR,catR]=await Promise.all([
     sb.from('mtto_config').select('*').eq('property_id',PROP.id).maybeSingle(),
-    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso']),
+    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso','pausado']),
     sb.from('mtto_profundo_plan').select('*, ubic:ubicacion_id(nombre,codigo)').eq('property_id',PROP.id).eq('estado','pendiente'),
     sb.rpc('mtto_urgencias',{p_property:PROP.id}),
     sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
@@ -1440,8 +1440,12 @@ async function renderProg(){
   const {data:puR}=await sb.from('mtto_puesto').select('*');
   const PUESTOS={}; (puR||[]).forEach(p=>PUESTOS[p.employee_id]=p);
   const tks=tkR.data||[]; const urg={}; (urgR.data||[]).forEach(u=>urg[u.id]=u);
-  const enSemana=tks.filter(r=>r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK);
-  const pend=tks.filter(r=>!(r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK))
+  // "Asignado para ESTA semana" = tiene técnico + semana de esta semana + no está pausado.
+  // Todo lo demás (sin técnico, sin semana, semana pasada no hecha, o pausado en espera de compra)
+  // regresa automáticamente a "Sin asignar" y se mantiene ahí hasta que se haga y lo acepten.
+  const asignadoWk=r=>r.asignado_a&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK&&r.estado!=='pausado';
+  const enSemana=tks.filter(asignadoWk);
+  const pend=tks.filter(r=>!asignadoWk(r))
     .map(r=>Object.assign({},r,{_u:urg[r.id]?urg[r.id].urgencia_score:0,_ud:urg[r.id]}))
     .sort((a,b)=>b._u-a._u);
   const prof=(profR.data||[]).filter(p=>new Date(p.semana_programada)<=new Date(PROG_WK))
@@ -1509,7 +1513,7 @@ async function renderProg(){
         ${totPA?agingSummary(allPA):''}
         ${grpFlat('react','🔔 Reactivos',reactivos,'tk')}
         ${grpFlat('correc','🔧 Correctivos',correctivos,'tk')}
-        ${grpArea('venc','🛠️ Preventivos vencidos',vencItems)}
+        ${grpArea('venc','🛠️ Preventivos pendientes',vencItems)}
       </div>
     </div>`;
   wireDrag();
@@ -1541,7 +1545,7 @@ function normRowHtml(n){
   const da={tk:'data-tk',prof:'data-prof',pp:'data-prevplan',cat:'data-prev'}[n.type];
   const fn={tk:'tkMenu',prof:'profMenu',pp:'prevPlanMenu',cat:'prevMenu'}[n.type];
   return `<div class="pitem" ${da}="${n.id}" draggable="true" onclick="${fn}('${n.id}')">
-    <div class="t">${clsChip(n.cls)} <span>${esc(n.nombre)}</span>${n.crit?' <span class="chip c-react">crítico</span>':''}</div>
+    <div class="t">${clsChip(n.cls)} <span>${esc(n.nombre)}</span>${n.crit?' <span class="chip c-react">crítico</span>':''}${n.raw&&n.raw.estado==='pausado'?' <span class="chip" style="background:var(--warn-bg);color:var(--warn)" title="En espera de compra o material — sigue pendiente">⏸ espera</span>':''}</div>
     <div class="m"><span class="chip" style="background:${ageBucket(n.dias||0).c};color:#fff" title="pendiente desde hace ${n.dias||0} días">⏳ ${n.dias||0}d</span><span class="ur ${urCls(n.urg)}" title="urgencia">⚡${n.urg}</span><span${n.areaInf&&n.area!=='sin área'?' title="Tomado del texto del reporte — confirma la ubicación al asignar" style="border-bottom:1px dotted var(--rule2)"':''}>📍 ${esc(n.area)}${n.areaInf&&n.area!=='sin área'?' ~':''}</span><span>${n.min} min</span><span class="chip c-info">${esc(ofNombre(n.oficio))}</span></div></div>`;
 }
 function sortNorm(list,key){
