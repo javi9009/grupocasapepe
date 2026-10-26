@@ -215,11 +215,27 @@
        Manda la identidad, no el recuerdo: con token de reserva es huésped aunque
        el teléfono guardara otro modo de una visita anterior -a Javi le había
        dejado la app sin Vnums ni Yo-. Un ?modo= en la liga sí manda. */
+    /* Y el modo no se queda a vivir en el teléfono: vive en sessionStorage,
+       que dura lo que dura esta navegación. Javi abrió la app con su cuenta y
+       le salía la barra del colaborador -tres pestañas- porque el modo se le
+       había quedado guardado de una visita a SoyPepe y, sin token de reserva,
+       nada lo borraba. Lo guardado de antes se migra una vez y se tira. La
+       misma regla que en tabbar.js: las dos barras tienen que decir lo mismo,
+       o el huésped ve una cosa en una pantalla y otra en la siguiente. */
     var MODO = (function(){ try{
+      var viejo=''; try{ viejo=localStorage.getItem('apepe_modo')||''; }catch(_){ }
+      if(viejo){
+        try{ if(!sessionStorage.getItem('apepe_modo')) sessionStorage.setItem('apepe_modo', viejo); }catch(_){ }
+        try{ localStorage.removeItem('apepe_modo'); }catch(_){ }
+      }
       var m=P.get('modo')||'';
-      if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
-      if(RESV || SOL){ try{ localStorage.removeItem('apepe_modo'); }catch(_){ } return ''; }
-      return localStorage.getItem('apepe_modo')||'';
+      if(m){ try{ sessionStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
+      if(RESV || SOL){
+        try{ sessionStorage.removeItem('apepe_modo'); }catch(_){ }
+        try{ localStorage.removeItem('apepe_modo'); }catch(_){ }
+        return '';
+      }
+      return sessionStorage.getItem('apepe_modo')||'';
     }catch(_){ return ''; } })();
     var CAT = {
       inicio: { t:'inicio', label:'Inicio', href:liga(APB+'index.html'), img:IMG+'hola-perrito.webp', match:[APB+'index',APB] },

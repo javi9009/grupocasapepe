@@ -36,20 +36,45 @@
      un huésped que alguna vez abrió el Pepe GO! público o SoyPepe le desaparecían
      los Vnums y el Yo de su propia app. Así que: si hay token de reserva, es
      huésped y punto, y de paso se borra el modo guardado. Un ?modo= en la liga sí
-     manda -es un acto de esta navegación-; lo guardado, sólo cuando no hay token. */
+     manda -es un acto de esta navegación-; lo guardado, sólo cuando no hay token.
+
+     EL MODO YA NO SE QUEDA A VIVIR EN EL TELÉFONO. Javi, 26-oct-2026: abrió la
+     app con su cuenta y le salía la barra de tres pestañas -Mapa, Pepe GO,
+     Experiencias-, que es la del colaborador, y al tocar Experiencias se iba a
+     Sincrético y parecía que la app lo echaba. El modo se le había quedado
+     guardado de alguna vez que entró por SoyPepe, y como él nunca lleva token
+     de reserva -entra con su cuenta-, no había nada que lo borrara: la app se
+     le quedó recortada para siempre.
+     Ahora el modo vive en sessionStorage: dura lo que dura esa navegación, que
+     es justo para lo que se guardaba -no perderlo al cambiar de pantalla-, y
+     mañana la app vuelve a estar entera. Lo que quedó guardado de antes se
+     migra una vez y se borra, para que esto se limpie solo en los teléfonos
+     que ya lo tienen. */
   var MODO = (function(){
     function bueno(v){ v=String(v==null?'':v).trim();
       return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)?v:''; }
     function ls(k){ try{ return bueno(localStorage.getItem(k)); }catch(_){ return ''; } }
+    function guarda(v){ try{ sessionStorage.setItem('apepe_modo', v); }catch(_){ } }
+    function olvida(){
+      try{ sessionStorage.removeItem('apepe_modo'); }catch(_){ }
+      try{ localStorage.removeItem('apepe_modo'); }catch(_){ }
+    }
+    /* El viejo guardado en localStorage: se recoge una vez y se tira. */
+    var viejo=''; try{ viejo=localStorage.getItem('apepe_modo')||''; }catch(_){ }
+    if(viejo){
+      try{ if(!sessionStorage.getItem('apepe_modo')) sessionStorage.setItem('apepe_modo', viejo); }catch(_){ }
+      try{ localStorage.removeItem('apepe_modo'); }catch(_){ }
+    }
+
     var p; try{ p=new URLSearchParams(location.search); }catch(_){ p=null; }
     var m = p ? (p.get('modo')||'') : '';
-    if(m){ try{ localStorage.setItem('apepe_modo', m); }catch(_){ } return m; }
+    if(m){ guarda(m); return m; }
     var hayReserva = false;
     try{ hayReserva = !!(window.apepeResv && (window.apepeResv.token()||window.apepeResv.sol())); }catch(_){ }
     if(!hayReserva && p) hayReserva = !!(bueno(p.get('resv'))||bueno(p.get('sol')));
     if(!hayReserva) hayReserva = !!(ls('apepe_resv')||ls('apepe_sol'));
-    if(hayReserva){ try{ localStorage.removeItem('apepe_modo'); }catch(_){ } return ''; }
-    try{ return localStorage.getItem('apepe_modo')||''; }catch(_){ return ''; }
+    if(hayReserva){ olvida(); return ''; }
+    try{ return sessionStorage.getItem('apepe_modo')||''; }catch(_){ return ''; }
   })();
 
   var CAT = {
