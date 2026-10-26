@@ -161,6 +161,51 @@ concederse una capacidad a sí mismo. Ahora las capacidades las lee todo el que 
 las escribe `es_equipo_casa()`, y la historia sólo la lee la casa.
 
 
+**2026-10-26 (madrugada) · El portal del ateneísta: lo que trae, no lo que es**
+
+- Tira de capacidades en su portal, leída de `ateneista_capacidades`. Quien ya tiene fichas
+  las trae marcadas aunque nadie se lo hubiera puesto: no se le quita lo que ya hace.
+- **Marcar habilita crear**, que es la regla de Javi. RPC `ateneista_marca_capacidad`,
+  `security definer`, y sólo deja marcarse `experiencias`, `eventos` y `artesania`: `hotel`
+  entra por su propia puerta y `membresia` la concede la casa. Publicar sigue pasando por
+  la cola.
+- **Un evento es una `op_experiencia` con `formato='evento'`**: la misma ficha, el mismo
+  editor y el mismo id. Dos tablas era lo que hacía que un taller con fecha fija acabara
+  dado de alta dos veces, una como tour y otra como evento.
+- El menú de La Cósmica sólo se aplica a los tours: un evento no lleva bienvenida ni despedida.
+
+---
+
+**2026-10-26 (madrugada) · La cadena no es un hotel**
+
+`hotel_grupos` ya existía y estaba bien usado: Barrio es la cadena y Bolívar, Isabel la
+Católica y Barrio Hostel son sus tres casas. Lo que estaba mal eran dos cosas:
+
+1. **Barrio Hostel estaba marcado `es_grupo=true` y además tenía 21 cuartos**: era cadena y
+   casa a la vez. Corregido; queda como casa dentro de la cadena, con la nota en su ficha y
+   el apunte en `historia`.
+2. **La lista era plana**, así que las tres casas de Barrio se leían como tres cadenas. Ahora
+   la cadena encabeza y las casas cuelgan debajo.
+
+Ojo, Javi: dijiste que **Barrio tiene dos** hoteles asociados y la base tiene **tres**
+(Hostel 21 cuartos, Bolívar 18, Isabel la Católica 24). No toqué ninguno: dime cuál sobra.
+
+---
+
+**2026-10-26 (madrugada) · Las fusiones, sin borrar nada**
+
+- **Café Cumbre ya estaba resuelta**: su productora apuntaba a su touroperadora, así que en
+  La comunidad sale **una vez**, con experiencias + eventos. Y su candado no bloquea nada,
+  así que **no hubo que mover ningún Stripe** — que era la parte que no pensaba tocar
+  mientras dormías.
+- **Barrio Hostel sí estaba duplicado**: dos fichas con el mismo correo. **Enlacé** la
+  productora a la touroperadora en vez de borrarla. Tu nota decía que la productora estaba
+  vacía, pero **le cuelgan 16 espacios**: borrarla los dejaba huérfanos. Ahora sale una vez,
+  con experiencias + eventos + hotel.
+- **Casa Pepe Puebla y «Terraza La Cósmica de Casa Pepe»** comparten correo pero **no son un
+  duplicado**: son dos cosas distintas. Las dejé separadas.
+
+
 ## Lo que sigue
 
 | | |
