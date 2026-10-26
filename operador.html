@@ -377,6 +377,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       <button data-v="galeria">Galería</button>
       <button data-v="cuenta">Mi cuenta</button>
       <button data-v="impacto">Mi impacto</button>
+      <!-- SOLO SI TRAE HOTEL. `pintaCaps` lo enciende: ofrecerle una pestaña
+           vacía a quien no tiene hotel es peor que no ofrecerla. -->
+      <button data-v="hoteles" id="btnHoteles" style="display:none">Sus hoteles</button>
       <!-- El que recibe al huésped es quien escanea. Ya no abre la pantalla del
            panel de casa —que le pedía una sesión que no tiene y le cerraba la
            puerta—: el escáner vive aquí dentro. Javi, 11-oct-2026. -->
@@ -455,6 +458,20 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       </div>
       <div class="galeria" id="ggaleria"></div>
     </div>
+  </div></div>
+
+  <!-- ============ SUS HOTELES ============
+       Javi, 26-oct-2026: el alta preguntaba «¿un hotel o un grupo?» y «¿cuántos
+       cuartos?», y la base tiraba las dos respuestas. Ya no: la capacidad
+       `hotel` crea la ficha, y aquí es donde la ve y donde cuelga las casas.
+       El árbol es cadena→casas porque un grupo de hoteles no es un hotel: la
+       cadena no tiene cuartos ni recepción, tiene casas que sí. -->
+  <div class="vista" id="vHoteles"><div class="wrap">
+    <div class="encab">
+      <div><h1 id="hotTit">Sus hoteles</h1>
+        <div class="mini" id="hotSub">Tus casas, sus cuartos y por dónde entra cada una.</div></div>
+    </div>
+    <div id="hotCaja"><div class="card"><div class="mini">Abriendo…</div></div></div>
   </div></div>
 
   <!-- ============ EDITOR DE EXPERIENCIA ============ -->
@@ -1178,7 +1195,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(v==='ventas'){try{cargaVentas();}catch(_){}}
       if(v==='boletos'){try{preparaEscaner();}catch(_){}}
       if(v!=='boletos'){try{apagaBoletos();}catch(_){}}
-      if(v==='impacto'){try{odsCarga();}catch(_){}}};});
+      if(v==='impacto'){try{odsCarga();}catch(_){}}
+      if(v==='hoteles'){try{cargaHoteles();}catch(_){}}};});
 
   /* El check-in, dentro de Mi cuenta. Se carga la primera vez que se abre la
      pestaña, no al arrancar el portal: abrirlo siempre costaría una pantalla
@@ -1189,6 +1207,115 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var u='/checkin.html?embed=1'+(ADMIN?('&op='+encodeURIComponent(cur.id)):'');
     $('ifCuenta').src=u;
     CUENTA_LISTA=true;
+  }
+
+  /* ---------- sus hoteles ----------
+     El arbol es cadena->casas. Una cadena no tiene cuartos ni recepcion:
+     tiene casas que si. Por eso el grupo se pinta como encabezado y lo que
+     se cuenta -cuartos, lo que falta, por donde se entra- cuelga de cada casa. */
+  var HOT={grupos:[],casas:[]}, HOT_LISTA=false;
+
+  async function cargaHoteles(){
+    if(!cur) return;
+    var caja=$('hotCaja');
+    if(!HOT_LISTA) caja.innerHTML='<div class="card"><div class="mini">Abriendo…</div></div>';
+    try{
+      var g=await fetch(SB+'/rest/v1/hotel_grupos?select=id,nombre,slug,estado&ateneista_id=eq.'+cur.id+'&order=nombre',{headers:hdr()});
+      var c=await fetch(SB+'/rest/v1/hoteles?select=id,nombre_comercial,slug,ciudad,direccion,cuartos,estado,etapa,grupo_id&ateneista_id=eq.'+cur.id+'&order=nombre_comercial',{headers:hdr()});
+      HOT.grupos = g.ok ? await g.json() : [];
+      HOT.casas  = c.ok ? await c.json() : [];
+      HOT_LISTA=true;
+    }catch(e){
+      caja.innerHTML='<div class="card"><div class="mini">No pudimos abrir tus hoteles: '+esc((e&&e.message)||e)+
+        '<br><br><button class="btn fantasma" id="hotOtra">Reintentar</button></div></div>';
+      var r=$('hotOtra'); if(r) r.onclick=cargaHoteles;
+      return;
+    }
+    pintaHoteles();
+  }
+
+  /* Lo que le falta a una casa para estar a la venta, dicho en su idioma y no
+     en nombres de columna. */
+  function faltaCasa(h){
+    var f=[];
+    if(!h.cuartos)  f.push('cuántos cuartos tiene');
+    if(!h.direccion)f.push('la dirección');
+    if(!h.ciudad)   f.push('la ciudad');
+    return f;
+  }
+
+  function casaHTML(h){
+    var f=faltaCasa(h);
+    return '<div class="card" style="margin-bottom:10px">'+
+      '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'+
+        '<div style="flex:1 1 220px">'+
+          '<b>'+esc(h.nombre_comercial||'(sin nombre)')+'</b>'+
+          '<div class="mini">'+esc(h.ciudad||'—')+
+            (h.cuartos?' · '+h.cuartos+' cuarto'+(h.cuartos===1?'':'s'):'')+
+            ' · '+esc(h.estado||'')+'</div>'+
+          (f.length?'<div class="mini" style="margin-top:6px;color:var(--alerta,#8C6212)">Le falta '+esc(f.join(', '))+'.</div>':'')+
+        '</div>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+          '<a class="btn fantasma" href="/hotelero.html" target="_blank" rel="noopener">Entrar a esta casa ↗</a>'+
+        '</div>'+
+      '</div></div>';
+  }
+
+  function pintaHoteles(){
+    var caja=$('hotCaja'), h='';
+    var sueltas=HOT.casas.filter(function(x){return !x.grupo_id;});
+
+    if(!HOT.grupos.length && !HOT.casas.length){
+      caja.innerHTML='<div class="card"><b>Todavía no hay nada aquí.</b>'+
+        '<div class="mini" style="margin-top:6px">Tu alta marcó que traes hotel, pero no encontramos su ficha. '+
+        'Escríbenos y la creamos contigo: no tienes que volver a darte de alta.</div></div>';
+      return;
+    }
+
+    HOT.grupos.forEach(function(g){
+      var suyas=HOT.casas.filter(function(x){return x.grupo_id===g.id;});
+      h+='<div class="card" style="background:var(--hueso,#F4EFE8)">'+
+           '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
+             '<div style="flex:1 1 220px"><b>'+esc(g.nombre)+'</b>'+
+               '<div class="mini">'+(suyas.length?suyas.length+' casa'+(suyas.length===1?'':'s'):'todavía sin casas')+'</div></div>'+
+             '<button class="btn" data-grupo="'+esc(g.id)+'">＋ Colgar una casa</button>'+
+           '</div></div>';
+      if(!suyas.length){
+        h+='<div class="card" style="margin-bottom:10px"><div class="mini">'+
+           'Un grupo no se vende solo: lo que el viajero reserva es una casa. Cuelga la primera.</div></div>';
+      }
+      h+=suyas.map(casaHTML).join('');
+    });
+
+    if(sueltas.length){
+      if(HOT.grupos.length) h+='<h2 style="margin:18px 0 10px">Fuera del grupo</h2>';
+      h+=sueltas.map(casaHTML).join('');
+    }
+
+    caja.innerHTML=h;
+    Array.prototype.forEach.call(caja.querySelectorAll('[data-grupo]'),function(b){
+      b.onclick=function(){ nuevaCasa(b.getAttribute('data-grupo'), b); };
+    });
+    var n=HOT.casas.length;
+    $('hotSub').textContent = n
+      ? n+' casa'+(n===1?'':'s')+(HOT.grupos.length?' en '+HOT.grupos.length+' grupo'+(HOT.grupos.length===1?'':'s'):'')+'.'
+      : 'Tus casas, sus cuartos y por dónde entra cada una.';
+  }
+
+  async function nuevaCasa(grupo, boton){
+    var nom=prompt('¿Cómo se llama la casa?');
+    if(!nom || !nom.trim()) return;
+    if(boton){ boton.disabled=true; boton.textContent='Un momento…'; }
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/ateneista_crea_casa',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p:{nombre_comercial:nom.trim(), grupo_id:grupo}})});
+      var j=r.ok?await r.json():null;
+      if(!j || j.ok!==true){ toast((j&&j.motivo)||'No se pudo crear la casa.',true); return; }
+      HOT_LISTA=false;
+      await cargaHoteles();
+      toast('«'+nom.trim()+'» colgada. Ábrela y dile cuántos cuartos tiene.');
+    }catch(e){ toast('No se pudo crear: '+((e&&e.message)||e),true); }
+    finally{ if(boton){ boton.disabled=false; boton.textContent='＋ Colgar una casa'; } }
   }
 
   /* ---------- galería ---------- */
@@ -2888,6 +3015,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     /* El boton de evento solo existe si trae eventos: ofrecer crear algo que
        luego no se puede guardar es peor que no ofrecerlo. */
     var be=$('btnNuevoEvt'); if(be) be.style.display = tiene('eventos') ? '' : 'none';
+    var bh=$('btnHoteles'); if(bh) bh.style.display = tiene('hotel') ? '' : 'none';
   }
   async function marcaCap(c, boton){
     if(boton){ boton.disabled=true; boton.textContent='Un momento…'; }
