@@ -230,33 +230,6 @@
     'hasta las 22:00': 'until 10:00 PM',
     '¿Dónde duermes?': 'Where do you sleep?',
     '¿Te quedas más?': 'Staying longer?',
-
-    /* Casa · la tarjeta de la estancia y sus accesos. Javi, 26-oct-2026.
-       Van juntas y completas a propósito: con media frase traducida y media
-       no, el huésped inglés lee «Reception · Escríbenos, 24 horas» y parece
-       que la app se rompió. */
-    'Cómo funciona la casa': 'How the house works',
-    'Trabaja a tres calles de aquí, en el Ateneo.': 'Work three streets from here, at the Ateneo.',
-    'El más pedido': 'Most booked',
-    'al día': 'per day',
-    'a la semana': 'per week',
-    'al mes': 'per month',
-    'Ahora mismo no hay lugar': 'No space right now',
-    'Por horas': 'By the hour',
-    'Carta y horarios': 'Menu and hours',
-    'Escríbenos, 24 horas': 'Write to us, 24 hours',
-    'Una noche más, o salir tarde': 'One more night, or a late checkout',
-    '¿Algo no funciona en tu cuarto? Dínoslo y lo arreglamos.':
-      'Something not working in your room? Tell us and we fix it.',
-    'Tu cuarto': 'Your room',
-    'Noche {n} de {t}': 'Night {n} of {t}',
-    'Tu llegada es el': 'You arrive on',
-    'Tu estancia terminó. Vuelve cuando quieras.': 'Your stay is over. Come back any time.',
-    'Salida el': 'Checkout on',
-    'hasta las 12:00': 'until 12:00',
-    'enero':'January','febrero':'February','marzo':'March','abril':'April',
-    'mayo':'May','junio':'June','julio':'July','agosto':'August',
-    'septiembre':'September','octubre':'October','noviembre':'November','diciembre':'December',
     'Caducó sin pagar': 'Expired unpaid',
     'El premio de hoy': 'Today\'s prize',
     'Estás en tu casa': 'Make yourself at home',
