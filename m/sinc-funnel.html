@@ -236,6 +236,7 @@ select.sel:focus,textarea.nota:focus{outline:none;border-color:var(--naranja);bo
   Una preficha que armamos nosotros leyendo su web <b>no</b> cuenta como ficha suya.
 </div></div>
 
+<div id="capsFil"></div>
 <div class="tablero" id="tablero"></div>
 
 <div class="velo" id="velo"></div>
@@ -348,7 +349,7 @@ async function rpc(f,b){
   return j;
 }
 
-var ETAPAS=[], OPS=[], filtro='todas', abierto=null;
+var ETAPAS=[], OPS=[], filtro='todas', abierto=null, fCap='';
 /* CADA PLAZA, SU FUNNEL. Javi, 21-oct-2026: «quien se da de alta en Puebla
    vende en Puebla». Ale lleva Puebla, y hasta hoy abría esta pantalla y veía
    las 114 touroperadoras de CDMX revueltas con las suyas.
@@ -442,12 +443,31 @@ function pasa(o){
   if(filtro==='conocida'&&!o.conocida)return false;
   if(filtro==='sintocar'&&o.n_toques>0)return false;
   if(fSede&&String(o.sede||'').toLowerCase()!==fSede)return false;
+  if(fCap && (o.capacidades||[]).indexOf(fCap)<0) return false;
   /* LAS DESCARTADAS NO ESTORBAN, PERO NO SE PIERDEN. Fuera del tablero salvo
      que se pidan a propósito con su chip. Javi, 26-oct-2026. */
   if(filtro==='descartadas') return !!o.descartada_at;
   if(o.descartada_at) return false;
   return true;
 }
+
+(function(){
+  var st=document.createElement('style');
+  st.textContent=
+   '.tj .caps{display:flex;gap:4px;flex-wrap:wrap;margin:5px 0 2px}'+
+   '.tj .cap{font:600 9.5px Oswald;letter-spacing:.07em;text-transform:uppercase;'+
+     'border-radius:999px;padding:2px 8px}'+
+   '.tj .cap.experiencias{background:#FDE7DC;color:#C9501A}'+
+   '.tj .cap.eventos{background:#FBDCEE;color:#B3106F}'+
+   '.tj .cap.hotel{background:#E4F1FA;color:#2F6E93}'+
+   '.tj .cap.artesania{background:#F7ECD4;color:#8C6212}'+
+   '.tj .cap.membresia{background:#E1F0E7;color:#1D6B4A}'+
+   '#capsFil{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}'+
+   '#capsFil button{cursor:pointer;border:1.5px solid #E6DFD6;background:#fff;border-radius:999px;'+
+     'padding:5px 12px;font:600 11px Oswald;letter-spacing:.07em;text-transform:uppercase;color:#6E665C}'+
+   '#capsFil button.on{border-color:#1E1A16;background:#1E1A16;color:#fff}';
+  document.head.appendChild(st);
+})();
 
 function tarjeta(o){
   var marcas='';
@@ -465,16 +485,43 @@ function tarjeta(o){
     ((o.falta_para_firmar&&o.falta_para_firmar.length)
       ? ('le faltan '+o.falta_para_firmar.length)
       : 'puede firmar ya')+'</span>';
+  /* Lo que TRAE va primero: es lo que decide qué conversación tener con él.
+     Las mismas palabras y los mismos colores que en La comunidad. */
+  var CAPNOM={experiencias:'Experiencias',eventos:'Eventos',hotel:'Hotel',
+              artesania:'Artesanía',membresia:'Membresía'};
+  var caps=(o.capacidades||[]).map(function(c){
+    return '<span class="cap '+c+'">'+(CAPNOM[c]||c)+'</span>'; }).join('');
   var t=cuandoTexto(o.ultimo_toque);
   return '<article class="tj" draggable="true" data-id="'+esc(o.id)+'">'+
     '<b>'+esc(o.nombre_comercial||'sin nombre')+'</b>'+
+    (caps?'<div class="caps">'+caps+'</div>':'')+
     '<div class="don">'+esc([o.ciudad, t?'último toque '+t:'sin tocar'].filter(Boolean).join(' · '))+'</div>'+
     (marcas?'<div class="marcas">'+marcas+'</div>':'')+
     (datos?'<div class="datos">'+datos+'</div>':'')+
   '</article>';
 }
 
+/* El filtro de capacidades se dibuja con lo que hay, no con una lista fija:
+   si un dia aparece una capacidad nueva, sale sola. */
+function pintaCapsFil(){
+  var caja=document.getElementById('capsFil'); if(!caja) return;
+  var CAPNOM={experiencias:'Experiencias',eventos:'Eventos',hotel:'Hotel',
+              artesania:'Artesanía',membresia:'Membresía'};
+  var cuenta={};
+  OPS.forEach(function(o){ (o.capacidades||[]).forEach(function(c){ cuenta[c]=(cuenta[c]||0)+1; }); });
+  var ks=Object.keys(cuenta).sort(function(a,b){ return cuenta[b]-cuenta[a]; });
+  if(!ks.length){ caja.innerHTML=''; return; }
+  caja.innerHTML='<button data-c="" class="'+(fCap?'':'on')+'">Todo lo que traen</button>'+
+    ks.map(function(c){
+      return '<button data-c="'+c+'" class="'+(fCap===c?'on':'')+'">'+(CAPNOM[c]||c)+' · '+cuenta[c]+'</button>';
+    }).join('');
+  Array.prototype.forEach.call(caja.querySelectorAll('button'),function(b){
+    b.onclick=function(){ fCap=b.getAttribute('data-c')||''; pinta(); };
+  });
+}
+
 function pinta(){
+  pintaCapsFil();
   var vis=OPS.filter(pasa);
   $('sub').textContent=vis.length+' de '+OPS.length+' touroperadores · '+
     OPS.filter(function(o){return o.favorita;}).length+' favoritas · '+
@@ -1076,6 +1123,24 @@ async function carga(){
       get('v_sinc_funnel_tours?select=*&order=nombre').catch(function(){return [];})
     ]);
     ETAPAS=r[0]; OPS=r[1]; TOURS=r[2]||[];
+
+    /* EL FUNNEL ES DE LA COMUNIDAD, NO SOLO DE TOUROPERADORAS. Javi, 26-oct-2026.
+       La vista del funnel nació cuando lo único que se captaba eran tours. Hoy
+       el mismo señor puede traer experiencias, eventos, artesanía o un hotel, y
+       el tablero tenía que poder decirlo: si no, lo que se ve aquí y lo que se
+       ve en La comunidad no es la misma gente. Las capacidades y el candado se
+       leen de v_ateneistas, que es la misma fuente que lee La comunidad: así
+       ninguna de las dos pantallas inventa su propia versión. */
+    try{
+      var at=await get('v_ateneistas?select=id,capacidades,candado');
+      var mc={};
+      (at||[]).forEach(function(x){ mc[x.id]=x; });
+      OPS.forEach(function(o){
+        var a=mc[o.id]||{};
+        o.capacidades = a.capacidades || [];
+        try{ o.le_falta = (a.candado && a.candado.bloquea) || []; }catch(_){ o.le_falta=[]; }
+      });
+    }catch(_){ OPS.forEach(function(o){ o.capacidades=o.capacidades||[]; o.le_falta=o.le_falta||[]; }); }
 
     /* LA PLAZA DE CADA TOUROPERADORA. No viene en la vista del funnel, así que
        se pega aquí con una llamada y un mapa: tocar esa vista -que leen otras
