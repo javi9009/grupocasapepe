@@ -5335,6 +5335,23 @@
       'Sí, quitar':'Yes, remove',
       'Esta foto no deja recortarse (permiso de la imagen). Prueba con «Cambiar foto».':'This photo cannot be cropped (image permissions). Try «Change photo».',
       'No se pudo abrir la imagen.':'The image could not be opened.',
+      '24 horas antes de la salida':'24 hours before departure',
+      '48 horas antes de la salida':'48 hours before departure',
+      'Hasta las 12:00 del mismo día':'Until 12:00 on the day itself',
+      'Hasta las 20:00 del día anterior':'Until 20:00 the day before',
+      'Hasta las 23:59 del día anterior':'Until 23:59 the day before',
+      'Se puede reservar hasta 24 horas antes de la salida.':'Bookings are accepted until 24 hours before departure.',
+      'Se puede reservar hasta 48 horas antes de la salida.':'Bookings are accepted until 48 hours before departure.',
+      'Se puede reservar hasta las 12:00 del mismo día.':'Bookings are accepted until 12:00 on the day itself.',
+      'Se puede reservar hasta las 20:00 del día anterior.':'Bookings are accepted until 20:00 the day before.',
+      'Se puede reservar hasta las 23:59 del día anterior.':'Bookings are accepted until 23:59 the day before.',
+      'Se reserva hasta 2 horas antes de la salida.':'Bookable until 2 hours before departure.',
+      'Se reserva hasta 24 horas antes de la salida.':'Bookable until 24 hours before departure.',
+      'Se reserva hasta 48 horas antes de la salida.':'Bookable until 48 hours before departure.',
+      'Se reserva hasta 6 horas antes de la salida.':'Bookable until 6 hours before departure.',
+      'Se reserva hasta las 12:00 del mismo día.':'Bookable until 12:00 on the day itself.',
+      'Se reserva hasta las 20:00 del día anterior.':'Bookable until 20:00 the day before.',
+      'Se reserva hasta las 23:59 del día anterior.':'Bookable until 23:59 the day before.',
 
     }
   };

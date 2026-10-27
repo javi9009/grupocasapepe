@@ -22,6 +22,11 @@
     var SOL  = bueno(P.get('sol'))  || ls('apepe_sol');
     var esApp = P.get('app')==='1' || !!RESV || !!SOL;
     if (!esApp) return;
+    /* Una marca para que la pantalla sepa que esta dentro de la app. La ficha
+       del tour la usa para subir su barra de precio por encima de la barra de
+       pestanas, que va fija con z-index 1200 y se la comia entera.
+       Javi, 27-oct-2026. */
+    try { document.documentElement.classList.add('apsh'); } catch (_) {}
 
     var QS = RESV ? ('?resv='+encodeURIComponent(RESV))
            : SOL  ? ('?sol='+encodeURIComponent(SOL)) : '';
