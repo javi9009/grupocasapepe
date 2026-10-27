@@ -98,8 +98,19 @@ th{font-family:Oswald;font-size:10.5px;text-transform:uppercase;letter-spacing:.
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;background:var(--oscuro);color:var(--crema);padding:10px 16px;border-radius:8px;font-family:Oswald;font-weight:600;letter-spacing:.04em;display:none;z-index:60}.toast.err{background:var(--bad)}
 /* sub-pestañas de la ficha (estilo tour-editor) */
 .fnav{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--linea);margin-bottom:14px}
-.fnav button{border:0;background:none;font-family:Oswald;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--gris);padding:10px 12px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.fnav button{border:0;background:none;font-family:Oswald;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--gris);padding:10px 12px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
 .fnav button[aria-selected="true"]{color:var(--tinta);border-bottom-color:var(--oro)}
+/* El punto de cada paso, igual que en la ficha de experiencia: dice de un
+   vistazo qué está hecho, qué va a medias y qué ni se ha tocado. */
+.fpunto{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:50%;
+  font-size:10.5px;font-weight:700;background:#EDE8DF;color:#6B6459;flex:none}
+.fpunto.medio{background:#F6EBD5;color:#8C6212}
+.fpunto.ok{background:var(--ok-bg,#E1F0E7);color:var(--ok,#1D6B4A)}
+.comova .l{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px}
+.comova .l i{font-style:normal;width:14px;text-align:center}
+.comova .l.ok{color:var(--ok,#1D6B4A)}
+.comova .l.medio{color:#8C6212}
+.comova .l.no{color:var(--gris)}
 .fsec{display:none}.fsec.on{display:block}
 [data-ef]{display:none}
 .tecbox{border:1px solid var(--linea,#E2DCCF);border-radius:11px;background:#fff;margin-top:4px}
@@ -1608,7 +1619,12 @@ if(!window.__miniRespaldo){ window.__miniRespaldo=1;
     });
     montajeUI();
     if($('extraMas')) $('extraMas').onclick=function(){ EXTRA.push({equipo:'',cantidad:1,clase:'equipo'}); renExtra(); };
-    Array.prototype.forEach.call($('fnav').children,function(b){b.onclick=function(){try{guardaYa('auto');}catch(_){ }var f=b.getAttribute('data-f');Array.prototype.forEach.call($('fnav').children,function(x){x.setAttribute('aria-selected',x.getAttribute('data-f')===f?'true':'false');});document.querySelectorAll('.fsec').forEach(function(s){s.classList.toggle('on',s.getAttribute('data-fs')===f);});};});
+    Array.prototype.forEach.call($('fnav').children,function(b){b.onclick=function(){try{guardaYa('auto');}catch(_){ }var f=b.getAttribute('data-f');Array.prototype.forEach.call($('fnav').children,function(x){x.setAttribute('aria-selected',x.getAttribute('data-f')===f?'true':'false');});document.querySelectorAll('.fsec').forEach(function(s){s.classList.toggle('on',s.getAttribute('data-fs')===f);});try{pintaPasosEv();}catch(_){ }};});
+    try{ pintaPasosEv(); }catch(_){ }
+    /* Mientras escribe, no al guardar: el punto tiene que moverse cuando se
+       llena el campo, no un segundo despues. */
+    $('fichaHost').addEventListener('input',function(){ try{pintaPasosEv();}catch(_){ } });
+    $('fichaHost').addEventListener('change',function(){ try{pintaPasosEv();}catch(_){ } });
     $('agMas').onclick=function(){AG.push({fecha:null,hora:null,titulo:'',ponente:''});renAg();};
     $('prMas').onclick=function(){PR.push({nombre:'',precio:null,cupo:null,incluye:''});renPr();};
     if($('paqMas')) $('paqMas').onclick=function(){ PAQS.push({horas:4,precio:null}); pintaPaqs(); tocado(); };
@@ -2556,6 +2572,10 @@ if(!window.__miniRespaldo){ window.__miniRespaldo=1;
             '</div>'+
             '<div id="vivoCueEv" style="margin-top:9px"></div>'+
           '</div>'+
+          '<div class="card">'+
+            '<b style="font-size:12.5px;letter-spacing:.06em;text-transform:uppercase">Cómo va la ficha</b>'+
+            '<div id="comoVaEv" style="margin-top:9px"></div>'+
+          '</div>'+
         '</aside>'+
       '</div>';
     wire();
@@ -3308,6 +3328,63 @@ if(!window.__miniRespaldo){ window.__miniRespaldo=1;
      rojo era imposible de cumplir y el evento no se podia mandar nunca. Ahora
      a un servicio por horas se le pide lo suyo: que dias, de que hora a que
      hora y cuanto cuesta la hora. */
+  /* CÓMO VA LA FICHA, PASO A PASO. Javi, 27-oct-2026: «el diseño que tienes
+     ahora». En la ficha de experiencia cada paso dice si está completo, a
+     medias o sin empezar, y a la derecha se ve el resumen. Aquí es lo mismo,
+     leyendo lo que el evento ya tiene. Las funciones del evento no se tocan:
+     lo que cambia es que ahora se ve dónde estás. */
+  function evEstado(){
+    function val(id){ var e=$(id); return e ? String(e.value||'').trim() : ''; }
+    var h={esencial:0, cuando:0, fotos:0, extra:0, impacto:0};
+
+    var nom=val('ev-nombre'), desc=val('ev-desc');
+    var gratis=$('ev-gratis')&&$('ev-gratis').checked;
+    var precio=Number(val('ev-precio')||val('ev-precio-hora')||0);
+    if(nom) h.esencial=1;
+    if(nom && (desc || gratis || precio>0)) h.esencial=2;
+
+    var sala=val('ev-espacio');
+    var cuando = esPorHoras()
+      ? (DISPO_DIAS.length>0 && val('ev-hdesde') && val('ev-hhasta'))
+      : (val('ev-fecha') || val('ev-desde'));
+    if(sala || cuando) h.cuando=1;
+    if(sala && cuando) h.cuando=2;
+
+    if((FOTOS||[]).length) h.fotos=2;
+    if((PR||[]).length || (AG||[]).length) h.extra=2;
+    return h;
+  }
+
+  function pintaPasosEv(){
+    var nav=$('fnav'); if(!nav) return;
+    var h=evEstado(), n=0;
+    Array.prototype.forEach.call(nav.children,function(b){
+      if(b.style.display==='none') return;
+      var f=b.getAttribute('data-f'), g=h[f];
+      if(g===undefined) return;
+      n++;
+      var p=b.querySelector('.fpunto');
+      if(!p){ p=document.createElement('span'); p.className='fpunto'; b.insertBefore(p,b.firstChild); }
+      p.className='fpunto'+(g===2?' ok':(g===1?' medio':''));
+      p.textContent = g===2?'✓':(g===1?'◐':String(n));
+      b.title = g===2?'Completo':(g===1?'A medias':'Sin empezar');
+    });
+    pintaComoVa(h);
+  }
+
+  var ETIQ={esencial:'Lo esencial', cuando:'Cuándo y dónde', fotos:'Fotos', extra:'Agenda y boletos'};
+  function pintaComoVa(h){
+    var c=$('comoVaEv'); if(!c) return;
+    h=h||evEstado();
+    var ks=Object.keys(ETIQ), ok=0;
+    c.innerHTML='<div class="comova">'+ks.map(function(k){
+      var g=h[k]||0; if(g===2) ok++;
+      return '<div class="l '+(g===2?'ok':(g===1?'medio':'no'))+'">'+
+        '<i>'+(g===2?'✓':(g===1?'◐':'○'))+'</i>'+esc(ETIQ[k])+'</div>';
+    }).join('')+'</div>'+
+    '<div class="mini" style="margin-top:8px">'+ok+' de '+ks.length+' completos</div>';
+  }
+
   function faltaPara(F){
     var falta=[];
     if(!$('ev-nombre').value.trim())            falta.push('como se llama');
