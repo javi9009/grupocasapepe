@@ -2813,7 +2813,7 @@
       '¿Cómo se llama la casa?':'What is the house called?',
       '¿El portal de quién?':'Whose portal?',
       '¿Está pagada?':'Is it paid?',
-      '¿Lo quitamos?':'Shall we remove it?',
+      '¿Lo quitamos?':'Remove it?',
       '¿Quién lo emite?':'Who issues it?',
       '¿Seguro? Pulsa otra vez':'Are you sure? Press again',
       '¿Te suena?':'Does it ring a bell?',
@@ -4524,7 +4524,7 @@
       'No se pudo guardar: {a}':'It could not be saved: {a}',
       'No se pudo recortar: {a}':'It could not be cropped: {a}',
       'No se pudo subir ({a})':'It could not be uploaded ({a})',
-      'No se pudo: {a}':'It could not be done: {a}',
+      'No se pudo: {a}':"It didn't work: {a}",
       'Pedida la sala de {a} a {b} · pendiente de confirmar':'Room requested from {a} to {b} · awaiting confirmation',
       'Perfecto. Te esperamos en recepción con {a} antes del montaje.':'Perfect. We will see you at the front desk with {a} before the set-up.',
       'Por hora{a}':'Per hour{a}',
@@ -4749,7 +4749,7 @@
       'Empieza a ofrecerse':'Starts being offered',
       'Encender':'Switch on',
       'Encontramos':'We found',
-      'Entendido':'Understood',
+      'Entendido':'Got it',
       'Entra a Sincrético y reserva':'They go to Sincrético and book',
       'Entras como':'You are signed in as',
       'Enviado a Casa Pepe':'Sent to Casa Pepe',
@@ -5330,6 +5330,11 @@
       'Compras':'Shopping',
       '★★ Dos estrellas':'★★ Two stars',
       '🌿 Estrella Verde':'🌿 Green Star',
+      'Sí':'Yes',
+      'Sí, borrar':'Yes, delete',
+      'Sí, quitar':'Yes, remove',
+      'Esta foto no deja recortarse (permiso de la imagen). Prueba con «Cambiar foto».':'This photo cannot be cropped (image permissions). Try «Change photo».',
+      'No se pudo abrir la imagen.':'The image could not be opened.',
 
     }
   };

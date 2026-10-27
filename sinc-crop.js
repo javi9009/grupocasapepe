@@ -294,7 +294,10 @@
           if(fh) fh.aBlob(OUT_H,function(x){ res.hBlob=x; listo(); });
         }catch(err){
           b.disabled=false; b.textContent='Guardar';
-          alert('Esta foto no deja recortarse (permiso de la imagen). Prueba con «Cambiar foto».');
+          /* Nada de alert() del navegador: sale con el nombre del dominio encima
+             y, peor, lo escribe el navegador, asi que no se puede traducir.
+             27-oct-2026. */
+          avisa('Esta foto no deja recortarse (permiso de la imagen). Prueba con «Cambiar foto».');
         }
       };
     };
@@ -307,7 +310,7 @@
         img.src=fuente+((fuente.indexOf('?')<0?'?':'&')+'r='+Date.now());
         return;
       }
-      alert('No se pudo abrir la imagen.');
+      avisa('No se pudo abrir la imagen.');
       if(esArchivo) URL.revokeObjectURL(url);
     };
     img.src=url;
@@ -397,6 +400,16 @@
       limpia.src=recorte;
     };
     img.src=url+((url.indexOf('?')<0?'?':'&')+'r='+Date.now());
+  }
+
+  /* Avisar sin pop-up del navegador. Si la pantalla trae cp-dialogo.js se usa
+     ese (y traduce solo); si no, el toast de la propia pantalla; y si tampoco,
+     la consola. Nunca un alert(). 27-oct-2026. */
+  function avisa(texto){
+    try{ if(window.cpAviso) return window.cpAviso(texto); }catch(_){}
+    try{ if(window.toast) return window.toast(texto, true); }catch(_){}
+    try{ if(window.cpUI && cpUI.toast) return cpUI.toast(texto); }catch(_){}
+    try{ console.warn('[recorte] '+texto); }catch(_){}
   }
 
   window.sincCrop={open:open, subir:subir, limpiaBordes:limpiaBordes};

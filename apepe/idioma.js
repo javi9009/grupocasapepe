@@ -176,7 +176,7 @@
     'sin mudarte': 'no move',
     '{n} lugares': '{n} places',
     '{n} persona': '{n} guest',
-    '¿Lo aparto?': 'Shall I hold it?',
+    '¿Lo aparto?': 'Hold it for you?',
     '🎴 Pasaporte': '🎴 Passport',
     '7:00 – 22:00': '7:00 AM – 10:00 PM',
     'Borrar firma': 'Clear signature',
@@ -1190,6 +1190,12 @@
     'Atrás':'Back',
     'Continuar':'Continue',
     'tus':'your',
+    'Cancelar':'Cancel',
+    'Entendido':'Got it',
+    'Guardar':'Save',
+    'Sí':'Yes',
+    'Sí, borrar':'Yes, delete',
+    'Sí, apártala':'Yes, hold it',
 
   };
 
