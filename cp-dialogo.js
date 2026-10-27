@@ -59,6 +59,10 @@
     '.cpd-b.si{background:var(--naranja,var(--green,#C9501A));color:#fff}',
     '.cpd-b.si.grave{background:var(--error,#9E3B2E)}',
     '.cpd-b:focus-visible{outline:2px solid var(--tinta,var(--ink,#241c14));outline-offset:2px}',
+    '.cpd-et{display:block;font:600 11px/1.2 Inter,system-ui,sans-serif;letter-spacing:.08em;',
+      'text-transform:uppercase;color:var(--gris,var(--muted,#6E665C));margin:0 0 4px}',
+    '.cpd-et .cpd-in{margin-top:4px}',
+    '.cpd-mal{font:13px/1.4 Inter,system-ui,sans-serif;color:var(--error,#9E3B2E);margin:0 0 10px}',
     '@media (max-width:420px){.cpd-pie{flex-direction:column-reverse}.cpd-b{width:100%}}'
   ].join('');
 
@@ -91,7 +95,7 @@
       p.textContent = opc.texto;
       caja.appendChild(p);
 
-      var campo = null;
+      var campo = null, campos = null;
       if (opc.tipo === 'pide') {
         campo = document.createElement('input');
         campo.className = 'cpd-in';
@@ -99,7 +103,26 @@
         campo.value = opc.valor == null ? '' : String(opc.valor);
         if (opc.marca) campo.placeholder = opc.marca;
         caja.appendChild(campo);
+      } else if (opc.tipo === 'varios') {
+        campos = [];
+        opc.campos.forEach(function (c) {
+          var l = document.createElement('label');
+          l.className = 'cpd-et';
+          l.textContent = c.et + (c.req ? ' *' : '');
+          var i = document.createElement('input');
+          i.className = 'cpd-in';
+          i.type = c.tipo;
+          i.value = c.valor;
+          if (c.marca) i.placeholder = c.marca;
+          l.appendChild(i);
+          caja.appendChild(l);
+          campos.push({ k: c.k, et: c.et, req: c.req, el: i });
+        });
       }
+      var aviso = document.createElement('div');
+      aviso.className = 'cpd-mal';
+      aviso.hidden = true;
+      caja.appendChild(aviso);
 
       var pie = document.createElement('div');
       pie.className = 'cpd-pie';
@@ -131,11 +154,24 @@
       }
       function tecla(e) {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fin(opc.nada); }
-        else if (e.key === 'Enter' && (!campo || e.target === campo)) {
+        else if (e.key === 'Enter' && (!campo || e.target === campo) && opc.tipo !== 'varios') {
           e.preventDefault(); e.stopPropagation(); acepta();
         }
       }
       function acepta() {
+        if (opc.tipo === 'varios') {
+          var faltan = campos.filter(function (c) { return c.req && !c.el.value.trim(); });
+          if (faltan.length) {
+            aviso.textContent = opc.falta + ' ' + faltan.map(function (c) { return c.et; }).join(', ');
+            aviso.hidden = false;
+            try { faltan[0].el.focus(); } catch (_) {}
+            return;
+          }
+          var out = {};
+          campos.forEach(function (c) { out[c.k] = c.el.value.trim(); });
+          fin(out);
+          return;
+        }
         if (opc.tipo === 'pide') fin(campo.value);
         else fin(opc.tipo === 'aviso' ? undefined : true);
       }
@@ -147,7 +183,7 @@
 
       document.addEventListener('keydown', tecla, true);
       (document.body || document.documentElement).appendChild(fondo);
-      try { (campo || bSi).focus(); if (campo) campo.select(); } catch (_) {}
+      try { ((campos && campos[0] && campos[0].el) || campo || bSi).focus(); if (campo) campo.select(); } catch (_) {}
     });
   }
 
@@ -164,6 +200,23 @@
     return monta({ tipo: 'aviso', texto: T(texto), nada: undefined, si: T(o.si || 'Entendido') });
   }
 
+  /* Varios campos de una vez, para las altas cortas: el alta del guia desde
+     Programacion, sin salir a Mi cuenta a por ella. Devuelve un objeto con
+     los valores, o null si se cancela. Javi, 27-oct-2026. */
+  function cpPideVarios(texto, campos, o) {
+    o = o || {};
+    campos = campos || [];
+    return monta({
+      tipo: 'varios', texto: T(texto), nada: null,
+      campos: campos.map(function (c) {
+        return { k: c.k, et: T(c.et || c.k), req: !!c.req, valor: c.valor == null ? '' : String(c.valor),
+                 marca: c.marca ? T(c.marca) : '', tipo: c.tipo || 'text' };
+      }),
+      si: T(o.si || 'Guardar'), no: T(o.no || 'Cancelar'),
+      falta: T(o.falta || 'Falta por rellenar:')
+    });
+  }
+
   function cpPide(texto, valor, o) {
     o = o || {};
     return monta({
@@ -175,5 +228,6 @@
   global.cpPregunta = cpPregunta;
   global.cpAviso = cpAviso;
   global.cpPide = cpPide;
-  global.cpDialogo = { pregunta: cpPregunta, aviso: cpAviso, pide: cpPide, t: T };
+  global.cpPideVarios = cpPideVarios;
+  global.cpDialogo = { pregunta: cpPregunta, aviso: cpAviso, pide: cpPide, pideVarios: cpPideVarios, t: T };
 })(window);
