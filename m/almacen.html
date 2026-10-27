@@ -72,8 +72,33 @@ code{font-size:11.5px;color:var(--muted);word-break:break-all}
     <div class="d">Las más pesadas primero, que son las que importan.</div>
     <div id="muestra"><div class="d">—</div></div>
   </div>
+
+  <!-- FOTOS CON FRANJAS. Javi, 27-oct-2026: «sigues con las fotos horizontales
+       que ya edité». Las franjas color hueso no están en la pantalla: están
+       metidas dentro del archivo, de cuando el recortador guardaba la foto
+       entera dentro del marco. Editar la horizontal no las quita de la
+       vertical, que es la que mira casi todo.
+       El botón de la ficha arregla una ficha; esto recorre todo lo publicado,
+       que es lo que ve el huésped. Trabaja en este navegador, foto por foto,
+       porque recortar es cosa de un lienzo y el servidor no tiene uno. -->
+  <div class="card">
+    <h2>Fotos con franjas</h2>
+    <div class="d">Las que llevan bandas color hueso arriba y abajo, de cuando se guardaban enteras
+      dentro del marco. A cada una se le quitan las franjas y se vuelve a encuadrar llenando: queda
+      la vertical, la horizontal y la miniatura nuevas. Las que ya están limpias no se tocan.
+      <b>Sólo se miran las experiencias publicadas</b>, que son las que alguien ve.</div>
+    <div class="nums" id="numsF"><div class="num"><b>—</b><span>sin revisar</span></div></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn ghost" id="bRevisar">Revisar y arreglar</button>
+      <button class="btn ghost" id="bParar" style="display:none">Parar</button>
+    </div>
+    <div id="msgF"></div>
+    <div id="detF"></div>
+  </div>
 </div>
 
+<!-- El recortador: el mismo de la ficha y de los portales, una sola copia. -->
+<script src="/sinc-crop.js"></script>
 <script>
 (function(){
   var SB='https://rehophywchakfapivsbh.supabase.co';
@@ -126,8 +151,25 @@ code{font-size:11.5px;color:var(--muted);word-break:break-all}
   }
 
   $('bMirar').onclick=mirar;
+
+  /* NINGÚN POP-UP DEL NAVEGADOR. Javi lo tiene dicho desde hace meses: ese
+     «grupocasapepe.netlify.app dice» rompe la casa, y en el móvil tapa media
+     pantalla. Aquí había un confirm() delante de un borrado que no se deshace.
+     La confirmación vive ahora en la página: el primer clic pregunta, el
+     segundo borra, y el de al lado se arrepiente. */
+  var armado=false;
   $('bBarrer').onclick=async function(){
-    if(!confirm('Esto borra los archivos del almacén y no se puede deshacer.\n\n¿Seguimos?')) return;
+    if(!armado){
+      armado=true;
+      var txt=this.textContent;
+      this.textContent='Sí, borrar de verdad';
+      $('msg').innerHTML='<div class="aviso ojo"><b>Esto borra los archivos del almacén y no se deshace.</b> '+
+        'Vuelve a pulsar para seguir. <button class="btn ghost" id="bNo" style="margin-left:8px">Mejor no</button></div>';
+      var b=this;
+      $('bNo').onclick=function(){ armado=false; b.textContent=txt; $('msg').innerHTML=''; };
+      return;
+    }
+    armado=false;
     this.disabled=true; var a=this.textContent; this.textContent='Barriendo…';
     try{
       var j=await barrer({ejecutar:true});
@@ -139,6 +181,84 @@ code{font-size:11.5px;color:var(--muted);word-break:break-all}
       this.disabled=false; this.textContent=a;
     }
   };
+
+  /* ---------- LAS FRANJAS ----------
+     Se recorre lo publicado y se le pide a sinc-crop que mire cada foto. Él
+     sabe reconocer la banda porque conoce su color exacto -el mismo que pinta
+     al guardar una foto entera-, así que una playa clara o un cielo plano no
+     se confunden con una franja: el tono tiene que ser ése.
+     Va de una en una a propósito. Son fotos de tres megas bajándose y
+     volviendo a subir; diez a la vez ahogan la conexión del que lo abra y
+     además no habría forma de parar a medias. */
+  var parar=false;
+
+  async function api(ruta, o){
+    var r=await fetch(SB+'/rest/v1/'+ruta, Object.assign({headers:{
+      'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':'application/json'}}, o||{}));
+    return r;
+  }
+
+  function numsF(n){ $('numsF').innerHTML=n.map(function(x){
+    return '<div class="num"><b>'+x[0]+'</b><span>'+esc(x[1])+'</span></div>'; }).join(''); }
+
+  async function revisaFranjas(){
+    parar=false;
+    $('bRevisar').disabled=true; $('bParar').style.display='';
+    $('msgF').innerHTML=''; $('detF').innerHTML='';
+    numsF([['…','buscando las fotos']]);
+
+    var r=await api('sinc_media?select=id,url,storage_path,operador_id,experiencia_id,'+
+                    'op_experiencias!inner(estado)&tipo=eq.foto&storage_path=not.is.null'+
+                    '&op_experiencias.estado=eq.publicada&order=created_at.desc&limit=1000');
+    if(!r.ok){
+      $('msgF').innerHTML='<div class="aviso mal">No se pudo leer la lista: '+esc(await r.text())+'</div>';
+      $('bRevisar').disabled=false; $('bParar').style.display='none'; return;
+    }
+    var fotos=await r.json();
+    var limpias=0, yaEstaban=0, fallos=[];
+
+    for(var i=0;i<fotos.length && !parar;i++){
+      var m=fotos[i];
+      numsF([[ (i+1)+' / '+fotos.length, 'revisadas'],
+             [limpias,'arregladas'],[yaEstaban,'ya estaban bien']]);
+      var ruta=(m.operador_id?('op-'+m.operador_id):'casa-pepe')+'/'+(m.experiencia_id||'suelto');
+      var res=await new Promise(function(ok){
+        try{ sincCrop.limpiaBordes(m.url,{sb:SB,key:KEY,token:tok(),bucket:'sincretico',ruta:ruta},
+               function(err,x){ ok(err?{err:err}:x); }); }
+        catch(e){ ok({err:e}); }
+      });
+      if(res&&res.err){ fallos.push([m.id, (res.err.message||'no se pudo abrir')]); continue; }
+      if(!res||res.sinBordes){ yaEstaban++; continue; }
+      if(!res.vUrl){ fallos.push([m.id,'el almacén no la aceptó']); continue; }
+      /* La fila de vuelta: un PATCH que no toca nada también contesta que sí. */
+      var p=await api('sinc_media?id=eq.'+encodeURIComponent(m.id),{method:'PATCH',
+        headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':'application/json',
+                 'Prefer':'return=representation'},
+        body:JSON.stringify({url:res.vUrl,storage_path:res.vPath,
+          url_h:res.hUrl||null,storage_path_h:res.hPath||null,
+          url_t:res.tUrl||null,storage_path_t:res.tPath||null,
+          foco_x:0.5,foco_y:0.5})});
+      var fila=null; if(p.ok){ try{ fila=await p.json(); }catch(_){} }
+      if(!fila||!fila.length){ fallos.push([m.id,'la base no dejó guardarla']); continue; }
+      limpias++;
+    }
+
+    numsF([[limpias,'arregladas'],[yaEstaban,'ya estaban bien'],[fallos.length,'sin tocar']]);
+    $('msgF').innerHTML = parar
+      ? '<div class="aviso ojo">Parado a medias. Lo arreglado se queda arreglado; vuelve a darle cuando quieras.</div>'
+      : (limpias
+          ? '<div class="aviso ok">Listo: '+limpias+' foto'+(limpias===1?'':'s')+' sin franjas.</div>'
+          : '<div class="aviso ok">Ninguna de las publicadas tenía franjas.</div>');
+    $('detF').innerHTML = fallos.length
+      ? '<table><thead><tr><th>Foto</th><th>Qué pasó</th></tr></thead><tbody>'+
+        fallos.slice(0,30).map(function(f){
+          return '<tr><td><code>'+esc(f[0])+'</code></td><td>'+esc(f[1])+'</td></tr>'; }).join('')+
+        '</tbody></table>' : '';
+    $('bRevisar').disabled=false; $('bParar').style.display='none';
+  }
+
+  $('bRevisar').onclick=revisaFranjas;
+  $('bParar').onclick=function(){ parar=true; this.disabled=true; this.textContent='Parando…'; };
 
   mirar();
 })();
