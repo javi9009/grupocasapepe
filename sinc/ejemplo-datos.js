@@ -113,7 +113,10 @@ window.EJEMPLO = (function () {
     var o = { timeZone: 'America/Mexico_City', weekday: largo ? 'long' : 'short',
               day: 'numeric', month: largo ? 'long' : 'short' };
     if (conHora) { o.hour = '2-digit'; o.minute = '2-digit'; o.hour12 = false; }
-    return new Intl.DateTimeFormat('es-MX', o).format(d).replace(/\.$/, '');
+    /* En el idioma de la pagina, igual que en la ficha de verdad. */
+    var loc = 'es-MX';
+    try { if (window.sincI18n && sincI18n.idioma() === 'en') loc = 'en-GB'; } catch (_) {}
+    return new Intl.DateTimeFormat(loc, o).format(d).replace(/\.$/, '');
   }
   function de(clave) {
     for (var i = 0; i < EVENTOS.length; i++) if (EVENTOS[i].clave === clave) return EVENTOS[i];

@@ -1804,6 +1804,8 @@
       'Nadie sale por defecto: en tu página marcas tú a cada quien.':'Nobody shows by default: on your page you mark each person yourself.',
       'Pulsa cualquiera y verás la ficha del evento como la ve quien va a reservar. Entran solas en cuanto el Ateneo las publica: eso no lo tienes que hacer tú.':'Tap any of them and you’ll see the event page as the person booking sees it. They appear by themselves as soon as the Ateneo publishes them: that isn’t something you have to do.',
       '← Volver a mi portal':'← Back to my portal',
+      /* El ejemplo de correo en la puerta de entrar. 27-oct-2026. */
+      'tu@correo.com':'you@email.com',
 
     }
   };

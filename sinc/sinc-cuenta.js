@@ -413,7 +413,7 @@ window.sincCuenta = (function () {
           '<div class="cuO">' + esc(T('o con tu correo')) + '</div>' +
           '<label for="cuMail">' + esc(T('Tu correo')) + '</label>' +
           '<input id="cuMail" type="email" inputmode="email" autocomplete="email" ' +
-            'placeholder="tu@correo.com" value="' + esc(correo) + '">' +
+            'placeholder="' + esc(T('tu@correo.com')) + '" value="' + esc(correo) + '">' +
           '<button class="cuBtn" id="cuManda">' + esc(T('Mandarme un código')) + '</button>' +
           (opts.obligatorio ? ''
             : '<button class="cuBtn plano" id="cuNo">' + esc(T('Ahora no')) + '</button>') +
