@@ -454,30 +454,41 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     pintaNivel(); pintaNav(); ve(SECS[nivel][0].k);
   }
 
-  var TIPOL=[];
+  var TIPOL=[], OTRACIU=0;
+  /* LA CIUDAD ERA UNA ADIVINANZA, Y ADIVINABA QUE SI. Javi, 26-oct-2026:
+     «los tours son de la ciudad del hotel o tienes todos? Solo pon la ciudad».
+     Lo que habia era una lista negra: descartaba la experiencia solo si su
+     texto mencionaba OTRA ciudad. Como 24 de 34 no mencionan ninguna, pasaban
+     todas — Barrio Bolivar veia hasta los de Cholula. Ahora la ciudad es una
+     columna de la experiencia y se compara de verdad.
+     Las que todavia no tienen ciudad NO se esconden: salen aparte y marcadas,
+     porque esconder 21 de 34 es cambiar un problema por otro peor — uno que
+     no se ve. */
+  function sinAcento(x){return (x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();}
+  function mismaCiudad(a,b){
+    a=sinAcento(a); b=sinAcento(b);
+    if(!a||!b) return false;
+    if(a===b) return true;
+    var ALIAS={'cdmx':'cdmx','ciudad de mexico':'cdmx','mexico df':'cdmx','df':'cdmx','mexico city':'cdmx'};
+    return (ALIAS[a]||a)===(ALIAS[b]||b);
+  }
   async function cargaCatalogo(){
-    var ciu=(destino().ciudad||'').toLowerCase();
-    /* El lugar de salida viene vacio en casi todas, asi que tambien se mira el
-       nombre: "Cholula - Puebla" se cuela si solo miras la direccion. */
-    var OTRAS={'puebla':1,'cholula':1,'atlixco':1,'oaxaca':1,'merida':1,'guanajuato':1,'queretaro':1};
-    function sinAcento(x){return (x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-    function deAqui(){
-      var t=sinAcento(Array.prototype.slice.call(arguments).filter(Boolean).join(' '));
-      if(!ciu || !t) return true;
-      var mia=sinAcento(ciu).split(' ').filter(function(w){return w.length>3;});
-      for(var k in OTRAS){ if(t.indexOf(k)>=0 && mia.indexOf(k)<0) return false; }
-      return true;
-    }
+    var ciu=(destino().ciudad||'');
 
     TIPOL = await get('mapa_tipologias?select=codigo,nombre,icono&order=orden') || [];
 
     var ops={}; (await get('tour_operadores?select=id,nombre_comercial,com_vendedor_pct,com_hotel_pct')||[])
       .forEach(function(o){ops[o.id]=o;});
     var e=await get('experiencias?select=id,nombre,foto_url,galeria,duracion,pvp,operador_id,itinerario,tipo,'
-      +'colonia_salida,adn_gastronomico,adn_informacion,adn_dinamica,adn_protagonista,adn_souvenir,'
+      +'ciudad,colonia_salida,adn_gastronomico,adn_informacion,adn_dinamica,adn_protagonista,adn_souvenir,'
       +'lugar_salida,hora_salida,dias_horario,grupo_minimo,rating,num_reviews,ods_que_cumple,'
       +'impacto_unesco_glasgow,touroperador,propio_3o&estatus=eq.activo&limit=300&order=nombre')||[];
-    CAT.experiencia=e.filter(function(x){return deAqui(x.lugar_salida,x.nombre,x.colonia_salida);}).map(function(x){
+    /* De otra ciudad fuera; de la tuya y sin ciudad, dentro -las segundas,
+       marcadas-. OTRACIU se cuenta para poder decirlo en pantalla. */
+    OTRACIU = e.filter(function(x){ return x.ciudad && !mismaCiudad(x.ciudad, ciu); }).length;
+    CAT.experiencia=e.filter(function(x){
+      return !x.ciudad || mismaCiudad(x.ciudad, ciu);
+    }).map(function(x){
       var o=ops[x.operador_id]||{};
       /* dias_horario viene como "Mié,Sáb 7:00": se parte en dias y hora para
          que el hotelero lo lea de un vistazo en la tarjeta. */
@@ -487,6 +498,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
         hot:o.com_hotel_pct==null?5:Number(o.com_hotel_pct),
         quien:o.nombre_comercial||x.touroperador||'',
         tipo:x.tipo||'', colonia:x.colonia_salida||colDe(x.lugar_salida),
+        ciudad:x.ciudad||'', sinCiudad:!x.ciudad,
         dias: dh.replace(/\s*\d{1,2}:\d{2}\s*/,'').trim(),
         hora: (x.hora_salida?String(x.hora_salida).slice(0,5):(mh?mh[1]:'')),
         nfotos: cuenta(x.galeria),
@@ -1250,7 +1262,16 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
   function vBuffet(w,tipos,titulo,ayuda){
     var esMapa = tipos.length===1 && tipos[0]==='mapa';
     var cs = esMapa ? [] : TIPOS.filter(function(t){return tipos.indexOf(t.k)>=0;});
+    /* Que se vea de donde es lo que se esta viendo, y cuanto se dejo fuera:
+       un catalogo filtrado en silencio parece un catalogo pobre. */
+    var ciuT = (destino().ciudad||'').trim();
+    var sinC = (CAT.experiencia||[]).filter(function(x){return x.sinCiudad;}).length;
     w.innerHTML='<div class="card"><h3>'+esc(titulo)+'</h3><div class="hint">'+ayuda+'</div>'
+      + (!esMapa && ciuT
+          ? '<div class="mini" style="margin-top:8px">Solo lo de <b>'+esc(ciuT)+'</b>.'
+            + (OTRACIU? ' Se quedaron fuera <b>'+OTRACIU+'</b> de otras ciudades.':'')
+            + (sinC? ' Hay <b>'+sinC+'</b> sin ciudad puesta: salen igual, marcadas, hasta que alguien diga de dónde son.':'')
+            + '</div>' : '')
       + (esMapa? '<div class="tipos" id="tipos"></div>' : '')
       +'<div class="bufbar">'
       + (cs.length ? '<button class="chip'+(filtro==='todos'?' on':'')+'" data-f="todos">Todo</button>'
@@ -1331,7 +1352,8 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'</span>'
       +'<span class="cu">'
       +'<span class="nm">'+esc(x.n)+'</span>'
-      +'<span class="sub">'+[x.tipo||'sin tipo', x.d, x.colonia].filter(Boolean).map(esc).join(' · ')+'</span>'
+      +'<span class="sub">'+[x.tipo||'sin tipo', x.d, x.colonia||x.ciudad].filter(Boolean).map(esc).join(' · ')
+      + (x.sinCiudad?' · <b style="color:var(--warn)">sin ciudad</b>':'')+'</span>'
       +'<span class="eco3">'
       +'<span><i>PVP</i><b>'+(x.pvp?dinero(x.pvp):'—')+'</b></span>'
       +'<span><i>Concierge</i><b>'+(x.pvp?dinero(x.pvp*x.vend/100):'—')+'</b></span>'
