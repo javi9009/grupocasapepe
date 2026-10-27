@@ -407,11 +407,19 @@ async function abreCajon(id){
 
   /* Su casa y su productora, que es lo que decide por que puerta entra. */
   var r=await Promise.all([
-    get('hoteles?select=id,nombre_comercial,slug&ateneista_id=eq.'+id+'&limit=1'),
+    get('hoteles?select=id,nombre_comercial,slug&ateneista_id=eq.'+id+'&order=nombre_comercial'),
     get('productoras?select=id,nombre_comercial&limit=1&id=eq.'+(a.productora_id||'00000000-0000-0000-0000-000000000000'))
   ]);
-  var casa=(r[0]||[])[0]||null, prod=(r[1]||[])[0]||null;
+  var casas=r[0]||[], casa=casas[0]||null, prod=(r[1]||[])[0]||null;
   if(!CAJ || CAJ.id!==id) return;           /* lo cerró mientras cargaba */
+
+  /* QUE CUELGA DE EL. Javi, 27-oct-2026: «no me deja borrar», y le salia el
+     error crudo de Postgres -«Key is still referenced from table hoteles»-.
+     La base ya lo impedia; lo que faltaba era decirlo antes y con palabras.
+     No solo los productos: tambien sus casas, que es lo que le fallo. */
+  var cuelga=[];
+  if((a.productos||0)>0) cuelga.push('tiene '+a.productos+' producto'+(a.productos===1?'':'s'));
+  if(casas.length) cuelga.push('tiene '+casas.length+' casa'+(casas.length===1?'':'s')+' colgando');
 
   function dato(k,v){ return (v==null||v==='') ? '' :
     '<div class="cdato"><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></div>'; }
@@ -439,7 +447,8 @@ async function abreCajon(id){
     + dato('Correo', a.email?esc(a.email):null)
     + dato('WhatsApp', a.whatsapp?esc(a.whatsapp):null)
     + dato(a.curp?'CURP':'RFC', esc(a.rfc||a.curp||'')||null)
-    + (casa?dato('Su casa', esc(casa.nombre_comercial)):'')
+    + (casas.length?dato(casas.length===1?'Su casa':'Sus casas',
+          casas.map(function(c){return esc(c.nombre_comercial);}).join(' · ')):'')
     + (prod?dato('Su productora', esc(prod.nombre_comercial)+' · ficha aparte'):'')
     + '</div>';
 
@@ -455,16 +464,17 @@ async function abreCajon(id){
     + (String(a.estado||'')==='baja'
         ? '<button class="btn sm" type="button" id="cAlta">Reactivar</button>'
         : '<button class="btn sm" type="button" id="cBaja">Archivar</button>')
-    + ((a.productos||0)>0
+    + (cuelga.length
         ? '<button class="btn sm" type="button" disabled style="opacity:.45;cursor:default" '
-          +'title="Tiene '+(a.productos||0)+' producto(s). Muévelos o bórralos primero.">Borrar</button>'
+          +'title="'+esc(cuelga.join(' · '))+'">Borrar</button>'
         : '<button class="btn sm rojo" type="button" id="cBorrar">Borrar</button>')
     + '</div>'
     + '<div class="cmini">'
-    + (String(a.estado||'')==='baja'
-        ? 'Está archivado: no sale en la lista ni puede publicar, pero su historia se conserva.'
-        : ((a.productos||0)>0
-           ? 'Archivar lo saca de la lista y conserva su historia. Borrar no se puede mientras tenga productos colgando: se quedarían huérfanos.'
+    + (cuelga.length
+        ? 'No se puede borrar: '+esc(cuelga.join(' y '))+'. Si lo borras se quedan sin dueño, '
+          +'así que primero muévelo o bórralo. <b>Archivar</b> sí puede: lo saca de la lista y conserva su historia.'
+        : (String(a.estado||'')==='baja'
+           ? 'Está archivado: no sale en la lista ni puede publicar, pero su historia se conserva.'
            : 'Archivar lo saca de la lista y conserva su historia. Borrar no se deshace.'))
     + '</div></div>';
 
@@ -493,7 +503,14 @@ async function borraAteneista(a){
   if((a.productos||0)>0){ avisa('Tiene productos colgando; archívalo en vez de borrarlo'); return; }
   if(!confirm('¿Borrar a '+(a.nombre_comercial||'')+'? No se puede deshacer.\n\nSi solo quieres que desaparezca de la lista, usa Archivar.')) return;
   var r=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+a.id,{method:'DELETE',headers:hdr()});
-  if(!r.ok){ avisa('No se pudo borrar: '+(await r.text()).slice(0,110)); return; }
+  if(!r.ok){
+    var t=await r.text();
+    /* El 23503 es «esto todavia lo usa otra tabla». Se dice con palabras. */
+    avisa(t.indexOf('23503')>=0
+      ? 'No se puede borrar: todavía hay cosas colgando de él. Archívalo.'
+      : 'No se pudo borrar: '+t.slice(0,110));
+    return;
+  }
   TODOS=TODOS.filter(function(x){return x.id!==a.id;});
   cierraCajon(); avisa('Borrado'); listado();
 }
