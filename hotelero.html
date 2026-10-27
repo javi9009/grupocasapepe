@@ -420,6 +420,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       {k:'ventas',   t:'Mis ventas',      g:'cash', d:'Lo vendido y quién lo vendió.'},
       {k:'vender',   t:'Vender experiencias',g:'tag',d:'Lo que tus concierges ofrecen a los huéspedes, con la comisión a la vista.'},
       {k:'conc',     t:'Mis concierges',  g:'users',d:'A tu equipo de venta lo das de alta tú. Cada uno vende con su nombre y su código, en la casa donde trabaja.'},
+      {k:'app',      t:'Mi app',          g:'plug', d:'La portada que ve tu huésped y qué va en cada caja. Lo que no llenes, no se pinta.'},
       {k:'enlaces',  t:'Sus enlaces',     g:'key',  d:'Las tres puertas: tu equipo, tus huéspedes y tu dirección.'}
     ],
     hotel:[
@@ -430,6 +431,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       {k:'vender',   t:'Vender experiencias', g:'tag', d:'Lo que se ofrece en esta casa.'},
       {k:'conc',     t:'Sus concierges',      g:'users',d:'Quién vende en esta casa.'},
       {k:'ventas',   t:'Sus ventas',          g:'cash',d:'Lo vendido en esta casa.'},
+      {k:'app',      t:'Su app',              g:'plug',d:'La portada de esta casa y qué va en cada caja.'},
       {k:'enlaces',  t:'Sus enlaces',         g:'key', d:'Las ligas de esta casa.'}
     ]};
   var TIPOS=[{k:'experiencia',t:'Experiencias',g:'map'},{k:'evento',t:'Eventos',g:'ticket'},{k:'tienda',t:'Tienda',g:'bag'}];
@@ -684,6 +686,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     if(sec==='eventos')   return vEventos(w);
     if(sec==='ventas')    return vVentas(w);
     if(sec==='conc')      return vConcierges(w);
+    if(sec==='app')       return vApp(w);
     if(sec==='vender')    return w.innerHTML=vVender();
     w.innerHTML=vPronto();
     if(sec==='general'||sec==='rest') ataGuarda();
@@ -2326,6 +2329,200 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     c.innerHTML = vende.length
       ? vende.length+' de '+EQ.gente.length+' venden.'
       : '<span class="nomi" style="display:block">Todavía nadie tiene código de venta. Dale uno a alguien abajo y aparece aquí.</span>';
+  }
+
+  /* ---------- mi app: la portada y sus cajas ----------
+     Javi, 26-oct-2026: «si se pudiera que escogiera el usuario qué info va en
+     cada caja para que pudiera editarlo un poco».
+     El diseno pedia once campos nuevos en la ficha. Seis no existian, y
+     anadirlos no aguantaba las cuatro clases de propiedad: un gran turismo
+     quiere spa y seis departamentos, una renta corta quiere «como entrar» y
+     «la lavadora», y ninguna quiere las columnas de la otra. Asi que no son
+     columnas: son PIEZAS, y la casa decide en que ranura va cada una.
+     Las `auto` no se teclean -su valor sale de la ficha al leerlo, para que no
+     se quede viejo-; las `libres` las escribe la casa. */
+  var PZ=[], PZedit=null;
+
+  var RANURAS=[
+    ['rapida', 'La banda de arriba', 'Tres datos cortos que el huésped ve sin bajar. Si pones más de tres, los demás esperan su turno.'],
+    ['rejilla','En la casa',         'Lo que tienes y se puede usar: el restaurante, las maletas, la terraza, el wifi.'],
+    ['indice', 'El índice',          'La lista numerada de la portada sobria. Máximo seis; de la séptima en adelante sale un «ver todo».'],
+    ['contacto','A quién se escribe','Recepción, o cada departamento si eres grande, o la persona del WhatsApp si es una renta corta.'],
+    ['',       'Guardadas, sin usar','Existen pero no se pintan. Es la manera de apagar algo sin borrarlo.']
+  ];
+  var PORTADAS=[
+    ['casa',    'La casa por delante', 'Manda una foto grande de la propiedad y debajo lo que tienes. Necesita foto de portada.'],
+    ['contacto','Habla con la casa',   'Lo primero es cómo llegar a una persona. Para quien resuelve por WhatsApp o por recepción.'],
+    ['sobria',  'Sobria',              'Poca imagen y mucho aire. Es la que aguanta con menos datos, y la que se pone si no eliges.']
+  ];
+
+  async function cargaPiezas(){
+    var d=destino(); if(!d) return;
+    PZ = await get('hotel_piezas?select=*&hotel_id=eq.'+d.id+'&order=ranura,orden') || [];
+  }
+
+  async function vApp(w){
+    var d=destino();
+    w.innerHTML='<div class="card"><h3>La portada</h3>'
+      +'<div class="hint">Lo que ve tu huésped al abrir la app. Las tres llevan tu logo y tus colores; lo que cambia es qué se ve primero.</div>'
+      +'<div class="hgrid" id="pgPort" style="margin-top:12px"></div></div>'
+      +'<div class="card"><h3>La foto de portada</h3>'
+      +'<div class="hint">Una sola, de la propiedad. Sin ella no se puede elegir «La casa por delante»: sería una portada de foto sin foto.</div>'
+      +'<div class="fgrid"><div class="fld" style="grid-column:1/-1"><label>URL de la imagen</label>'
+      +'<input data-c="foto_portada" value="'+esc(d.foto_portada||'')+'" placeholder="https://…/portada.jpg"></div></div>'
+      + (d.foto_portada?'<img src="'+esc(d.foto_portada)+'" alt="" style="margin-top:10px;width:100%;max-width:340px;border-radius:10px;display:block">':'')
+      +'<div class="ft"><button class="btn" id="gGen">Guardar</button></div></div>'
+      +'<div class="card"><h3>Qué va en cada caja</h3>'
+      +'<div class="hint">Cada cosa que enseñas es una pieza, y tú decides en qué caja va. '
+      +'Las que dicen <b>de tu ficha</b> no se escriben aquí: salen de lo que ya pusiste en Mi cuenta, '
+      +'así que el día que cambies tu hora de salida, cambia sola. '
+      +'<b>Una caja sin piezas no se pinta</b>: no queda hueco.</div>'
+      +'<div class="ft" style="justify-content:flex-start;margin-top:10px">'
+      +'<button class="btn" id="pzNueva">+ Añadir una pieza</button>'
+      +'<button class="btn ghost" id="pzSembrar">Traer lo que ya está en mi ficha</button></div></div>'
+      +'<div id="pzCajas"><div class="mini">Cargando…</div></div>';
+    ataGuarda();
+    pintaPortadas();
+    await cargaPiezas();
+    pintaPiezas();
+    $('pzNueva').onclick=function(){ PZedit={nuevo:true, origen:'libre', ranura:'rejilla', activo:true}; pintaPiezas(); };
+    $('pzSembrar').onclick=async function(){
+      var b=this; b.disabled=true;
+      try{
+        var r=await fetch(SB+'/rest/v1/rpc/hotel_piezas_siembra',{method:'POST',headers:hdr(),
+          body:JSON.stringify({p_hotel:destino().id})});
+        if(!r.ok) throw new Error(await r.text());
+        var n=await r.json();
+        toast(n? ('Traídas '+n+' piezas de tu ficha') : 'Tu ficha no tiene nada más que traer');
+        await cargaPiezas(); pintaPiezas();
+      }catch(e){ toast('No se pudo',true); }
+      b.disabled=false;
+    };
+  }
+
+  function pintaPortadas(){
+    var d=destino(), hay=!!(d.foto_portada||'').trim(), act=d.portada||'sobria';
+    $('pgPort').innerHTML = PORTADAS.map(function(p){
+      var bloqueada = p[0]==='casa' && !hay, on = act===p[0];
+      return '<button class="hc'+(on?' on':'')+'" data-p="'+p[0]+'"'
+        + (bloqueada?' disabled style="opacity:.5;cursor:default"':'')
+        + (on?' style="border-color:var(--accent);background:var(--accent-soft)"':'')+'>'
+        +'<div class="hn">'+esc(p[1])+(on?' ·':'')+'</div>'
+        +'<div class="hm">'+esc(p[2])
+        + (bloqueada?'<br><b style="color:var(--warn)">Te falta la foto de portada</b>':'')
+        + (on?'<br><b>La que tienes puesta</b>':'')+'</div></button>';
+    }).join('');
+    $('pgPort').querySelectorAll('.hc[data-p]:not([disabled])').forEach(function(b){
+      b.onclick=async function(){
+        var v=b.getAttribute('data-p');
+        var r=await fetch(SB+'/rest/v1/hoteles?id=eq.'+destino().id,{method:'PATCH',
+          headers:hdr(),body:JSON.stringify({portada:v})});
+        if(!r.ok){ toast('No se pudo guardar',true); return; }
+        destino().portada=v; toast('Portada: '+v); pintaPortadas();
+      };
+    });
+  }
+
+  function pzTitulo(x){
+    var T={checkin:'Check-in',checkout:'Salida',maletas:'Guardar maletas',
+           llegada:'Cómo llegar',restaurante:'Restaurante',whatsapp:'WhatsApp'};
+    return x.titulo || T[x.clave] || '(sin título)';
+  }
+
+  function pintaPiezas(){
+    var w=$('pzCajas'); if(!w) return;
+    var h='';
+    if(PZedit) h+=pzForm();
+    RANURAS.forEach(function(r){
+      var L=PZ.filter(function(x){ return (x.ranura||'')===r[0]; });
+      if(!L.length && r[0]==='') return;           /* el cajón vacío no se enseña */
+      h+='<div class="card"><h3>'+esc(r[1])+'</h3><div class="hint">'+esc(r[2])+'</div>'
+        + (L.length
+           ? '<div class="eqt" style="margin-top:12px"><table><thead><tr>'
+             +'<th>Qué</th><th>Dato</th><th>De dónde</th><th></th><th></th></tr></thead><tbody>'
+             + L.map(function(x){
+                 return '<tr'+(x.activo?'':' style="opacity:.5"')+'>'
+                   +'<td><b>'+esc(pzTitulo(x))+'</b>'
+                     +(x.nota?'<span class="mini" style="display:block">'+esc(x.nota)+'</span>':'')+'</td>'
+                   +'<td class="mini">'+esc(x.origen==='auto'?'—':(x.dato||'—'))+'</td>'
+                   +'<td class="mini">'+(x.origen==='auto'
+                        ?'<b>de tu ficha</b>':'lo escribiste tú')+'</td>'
+                   +'<td><span class="est '+(x.activo?'si':'no')+'">'+(x.activo?'Se ve':'Apagada')+'</span></td>'
+                   +'<td><span class="ac"><button data-pe="'+x.id+'">Editar</button>'
+                     +'<button class="bad" data-pq="'+x.id+'">'+(x.activo?'Apagar':'Encender')+'</button></span></td></tr>';
+               }).join('')
+             +'</tbody></table></div>'
+           : '<div class="nomi">Nada aquí todavía, así que esta caja no se pinta en la app.</div>')
+        +'</div>';
+    });
+    w.innerHTML=h;
+    w.querySelectorAll('button[data-pe]').forEach(function(b){ b.onclick=function(){
+      PZedit=PZ.filter(function(x){return x.id===b.getAttribute('data-pe');})[0]; pintaPiezas(); window.scrollTo(0,0); };});
+    w.querySelectorAll('button[data-pq]').forEach(function(b){ b.onclick=function(){
+      var x=PZ.filter(function(y){return y.id===b.getAttribute('data-pq');})[0];
+      pzGuarda({id:x.id, activo:!x.activo}); };});
+    if(PZedit) pzAta();
+  }
+
+  function pzForm(){
+    var x=PZedit, auto=x.origen==='auto';
+    return '<div class="card" style="border-color:var(--accent)">'
+      +'<h3>'+(x.nuevo?'Una pieza nueva':'Editar '+esc(pzTitulo(x)))+'</h3>'
+      + (auto?'<div class="hint">Esta sale de tu ficha, así que su título y su dato no se escriben aquí: '
+              +'se cambian en <b>Mi cuenta</b> y aquí cambian solos. Lo que sí decides es en qué caja va.</div>':'')
+      +'<div class="fgrid">'
+      + (auto?'' :
+          '<div class="fld"><label>Cómo se llama</label><input id="pzT" value="'+esc(x.titulo||'')+'" placeholder="Wi-Fi"></div>'
+         +'<div class="fld"><label>El dato, corto</label><input id="pzD" value="'+esc(x.dato||'')+'" placeholder="barrio_huesped · 2026"></div>'
+         +'<div class="fld" style="grid-column:1/-1"><label>Una línea más, si hace falta</label>'
+         +'<input id="pzN" value="'+esc(x.nota||'')+'" placeholder="La clave cambia cada mes; pregunta en recepción."></div>')
+      +'<div class="fld"><label>En qué caja va</label><select id="pzR">'
+      + RANURAS.map(function(r){ return '<option value="'+r[0]+'"'+((x.ranura||'')===r[0]?' selected':'')+'>'+esc(r[1])+'</option>'; }).join('')
+      +'</select></div>'
+      +'<div class="fld"><label>Orden dentro de la caja</label><input id="pzO" type="number" step="10" value="'+esc(x.orden==null?20:x.orden)+'"></div>'
+      + (auto?'':'<div class="fld" style="grid-column:1/-1"><label>Foto (opcional)</label>'
+         +'<input id="pzF" value="'+esc(x.foto_url||'')+'" placeholder="https://…"></div>')
+      +'</div>'
+      +'<div class="ft" style="justify-content:flex-start">'
+      +'<button class="btn" id="pzOk">Guardar</button>'
+      +'<button class="btn ghost" id="pzNo">Cancelar</button>'
+      + (!x.nuevo && !auto ? '<button class="btn ghost" id="pzBorrar" style="margin-left:auto;border-color:var(--bad);color:var(--bad)">Borrar</button>':'')
+      +'</div></div>';
+  }
+
+  function pzAta(){
+    $('pzNo').onclick=function(){ PZedit=null; pintaPiezas(); };
+    $('pzOk').onclick=function(){
+      var x=PZedit, b={ranura:$('pzR').value||null, orden:Number($('pzO').value||0)};
+      if(x.origen!=='auto'){
+        b.titulo=($('pzT').value||'').trim();
+        b.dato=($('pzD').value||'').trim()||null;
+        b.nota=($('pzN').value||'').trim()||null;
+        b.foto_url=($('pzF').value||'').trim()||null;
+        if(!b.titulo){ toast('Ponle un nombre',true); return; }
+      }
+      if(x.nuevo){ b.hotel_id=destino().id; b.origen='libre'; b.activo=true; }
+      else b.id=x.id;
+      pzGuarda(b, x.nuevo);
+    };
+    if($('pzBorrar')) $('pzBorrar').onclick=async function(){
+      if(!confirm('¿Borrar esta pieza? No se puede deshacer.')) return;
+      var r=await fetch(SB+'/rest/v1/hotel_piezas?id=eq.'+PZedit.id,{method:'DELETE',headers:hdr()});
+      if(!r.ok){ toast('No se pudo borrar',true); return; }
+      PZedit=null; toast('Borrada'); await cargaPiezas(); pintaPiezas();
+    };
+  }
+
+  async function pzGuarda(body, esNueva){
+    var r;
+    if(esNueva) r=await fetch(SB+'/rest/v1/hotel_piezas',{method:'POST',headers:hdr(),body:JSON.stringify([body])});
+    else {
+      var id=body.id; delete body.id;
+      r=await fetch(SB+'/rest/v1/hotel_piezas?id=eq.'+id,{method:'PATCH',headers:hdr(),body:JSON.stringify(body)});
+    }
+    if(!r.ok){ toast('No se pudo guardar: '+(await r.text()).slice(0,100),true); return; }
+    PZedit=null; toast('Guardado');
+    await cargaPiezas(); pintaPiezas();
   }
 
   /* ---------- vender experiencias ----------
