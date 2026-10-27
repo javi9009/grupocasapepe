@@ -5253,6 +5253,26 @@
       '{a} de {b} pasos completos':'{a} of {b} steps complete',
       'de lo que pagas se queda en la comunidad':'of what you pay stays in the community',
       ', de Grupo Casa Pepe':', by Grupo Casa Pepe',
+      /* LO QUE CONTESTA EL SERVIDOR. Se pinta tal cual en la pantalla de la cuenta, asi que pasa por aqui. 27-oct-2026. */
+      'Acabamos de mandarte uno. Revisa tu correo antes de pedir otro.':'We have just sent you one. Check your email before asking for another.',
+      'Demasiados intentos. Pide un código nuevo.':'Too many attempts. Ask for a new code.',
+      'El código son seis cifras':'The code is six digits',
+      'Esa liga no vale':'That link is not valid',
+      'Esa liga ya caducó':'That link has expired',
+      'Ese correo no se ve bien escrito':'That email does not look right',
+      'Ese código no es.':'That is not the code.',
+      'Ese código no es. Te quedan {a} intentos.':'That is not the code. You have {a} attempts left.',
+      'Ese código ya caducó. Pide uno nuevo.':'That code has expired. Ask for a new one.',
+      'No encontramos tu reserva':'We could not find your booking',
+      'No pudimos abrir tu cuenta. Inténtalo otra vez.':'We could not open your account. Try again.',
+      'No pudimos abrirte la sesión. Inténtalo otra vez.':'We could not sign you in. Try again.',
+      'No pudimos comprobar tu reserva':'We could not check your booking',
+      'No pudimos mandarte el correo. Inténtalo en un momento.':'We could not send you the email. Try again in a moment.',
+      'No pudimos preparar el código. Inténtalo otra vez.':'We could not prepare the code. Try again.',
+      'Pediste muchos códigos seguidos. Espera un rato e inténtalo otra vez.':'You have asked for too many codes in a row. Wait a while and try again.',
+      'Pide un código nuevo: ese ya no vale.':'Ask for a new code: that one is no longer valid.',
+      'Respondió {a}':'It answered {a}',
+      'Tu reserva no trae correo':'Your booking has no email on it',
 
     }
   };

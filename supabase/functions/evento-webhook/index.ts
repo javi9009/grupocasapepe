@@ -92,22 +92,76 @@ async function esEquipo(req: Request) {
   }).then((x) => x.ok ? x.json() : false).catch(() => false) === true;
 }
 
+/* EL IDIOMA DEL BOLETO. 27-oct-2026: el correo salia siempre en espanol,
+   aunque la pantalla de compra estuviera en ingles. Aqui no hay nada que
+   deducir -no hay pais, y el pais tampoco seria el idioma-, asi que lo guarda
+   la pantalla en `evento_reservas.idioma` al apartar el lugar. Si falta, va en
+   espanol: que es lo que hacia antes. El nombre del evento se pide traducido a
+   la tabla i18n, igual que en las fichas. */
+const TXB = {
+  es: {
+    titulo: "¡Pago confirmado!",
+    /* El plural, bien: antes decia «tu 2 boletos ... quedo pagado». */
+    cuerpo: (n: number, nom: string, ev: string, cuando: string, tier: string) =>
+      n > 1
+        ? `Hola ${nom}, tus ${n} boletos para <b>${ev}</b> ${cuando} ${tier} quedaron pagados.`
+        : `Hola ${nom}, tu boleto para <b>${ev}</b> ${cuando} ${tier} quedó pagado.`,
+    folio: (f: string) => `Folio <b>${f}</b>. Abre tu boleto con su código QR — es lo que te deja entrar:`,
+    boton: "Ver mi boleto",
+    sinBoton: (l: string) => `Si el botón no abre, copia: ${l}`,
+    asunto: (ev: string, f: string) => `Tu boleto · ${ev} · ${f}`,
+    tuEvento: "tu evento",
+  },
+  en: {
+    titulo: "Payment confirmed!",
+    cuerpo: (n: number, nom: string, ev: string, cuando: string, tier: string) =>
+      n > 1
+        ? `Hi ${nom}, your ${n} tickets for <b>${ev}</b> ${cuando} ${tier} are paid.`
+        : `Hi ${nom}, your ticket for <b>${ev}</b> ${cuando} ${tier} is paid.`,
+    folio: (f: string) => `Reference <b>${f}</b>. Open your ticket with its QR code — that is what gets you in:`,
+    boton: "See my ticket",
+    sinBoton: (l: string) => `If the button does not open, copy: ${l}`,
+    asunto: (ev: string, f: string) => `Your ticket · ${ev} · ${f}`,
+    tuEvento: "your event",
+  },
+} as const;
+
+/* El nombre del evento, en el idioma del correo. Vive en la tabla i18n igual
+   que el de las experiencias; si no hay fila, se queda el original. */
+async function nombreEn(eventoId: string, nombre: string, idioma: "es" | "en") {
+  if (idioma === "es") return nombre;
+  try {
+    const t = await sb(`i18n?select=texto&tabla=eq.eventos&campo=eq.nombre&idioma=eq.en&fila_id=eq.${encodeURIComponent(eventoId)}&limit=1`);
+    const v = t.body?.[0]?.texto;
+    return (typeof v === "string" && v.trim()) ? v : nombre;
+  } catch { return nombre; }
+}
+
 async function mandaBoleto(reservaId: string) {
   try {
-    const r = await sb(`evento_reservas?id=eq.${reservaId}&select=folio,email,nombre,tier_nombre,pax,qr_token,evento_id&limit=1`);
+    const r = await sb(`evento_reservas?id=eq.${reservaId}&select=folio,email,nombre,tier_nombre,pax,qr_token,evento_id,idioma&limit=1`);
     const res = r.body?.[0]; if (!res || !res.email) return;
-    let evNombre = "tu evento", cuando = "";
+    const lang: "es" | "en" = String(res.idioma ?? "es").toLowerCase().slice(0, 2) === "en" ? "en" : "es";
+    const t = TXB[lang];
+    let evNombre = t.tuEvento, cuando = "";
     const e = await sb(`eventos?id=eq.${res.evento_id}&select=nombre,fecha_inicio&limit=1`);
     if (e.body?.[0]) { evNombre = e.body[0].nombre ?? evNombre; cuando = e.body[0].fecha_inicio ?? ""; }
+    evNombre = await nombreEn(String(res.evento_id ?? ""), String(evNombre), lang);
     if (!RESEND) return;
-    const link = `${BOLETO_BASE}?f=${encodeURIComponent(res.folio)}`;
+    const link = `${BOLETO_BASE}?f=${encodeURIComponent(res.folio)}${lang === "en" ? "&lang=en" : ""}`;
     const html = `<div style="font-family:Inter,Arial,sans-serif;max-width:480px;margin:auto;color:#2c2c2a">
-      <h2 style="font-family:Oswald,Arial;text-transform:uppercase">¡Pago confirmado!</h2>
-      <p>Hola ${res.nombre ?? ""}, tu ${res.pax > 1 ? res.pax + " boletos" : "boleto"} para <b>${evNombre}</b> ${cuando ? "· " + String(cuando).slice(0, 16).replace("T", " ") : ""} ${res.tier_nombre ? "(" + res.tier_nombre + ")" : ""} quedó pagado.</p>
-      <p>Folio <b>${res.folio}</b>. Abre tu boleto con su código QR — es lo que te deja entrar:</p>
-      <p style="text-align:center;margin:22px 0"><a href="${link}" style="background:#C9501A;color:#fff;text-decoration:none;padding:13px 22px;border-radius:10px;font-weight:700">Ver mi boleto</a></p>
-      <p style="color:#888;font-size:12px">Si el botón no abre, copia: ${link}</p></div>`;
-    const body: Record<string, unknown> = { from: FROM, to: res.email, subject: `Tu boleto · ${evNombre} · ${res.folio}`, html };
+      <h2 style="font-family:Oswald,Arial;text-transform:uppercase">${t.titulo}</h2>
+      <p>${t.cuerpo(
+        Number(res.pax ?? 1),
+        String(res.nombre ?? ""),
+        String(evNombre),
+        cuando ? "· " + String(cuando).slice(0, 16).replace("T", " ") : "",
+        res.tier_nombre ? "(" + res.tier_nombre + ")" : "",
+      )}</p>
+      <p>${t.folio(String(res.folio))}</p>
+      <p style="text-align:center;margin:22px 0"><a href="${link}" style="background:#C9501A;color:#fff;text-decoration:none;padding:13px 22px;border-radius:10px;font-weight:700">${t.boton}</a></p>
+      <p style="color:#888;font-size:12px">${t.sinBoton(link)}</p></div>`;
+    const body: Record<string, unknown> = { from: FROM, to: res.email, subject: t.asunto(String(evNombre), String(res.folio)), html };
     if (REPLY) body.reply_to = REPLY;
     await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   } catch (e) { console.error("mandaBoleto", reservaId, String(e)); }

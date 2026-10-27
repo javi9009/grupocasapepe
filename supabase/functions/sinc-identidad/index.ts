@@ -85,21 +85,47 @@ function tapa(email: string) {
   return `${v}@${d}`;
 }
 
-const marco = (cuerpo: string) =>
+const marco = (cuerpo: string, pie = "Una empresa de Grupo Casa Pepe") =>
   `<!doctype html><html><body style="margin:0;background:#F4F1EA;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1F1B16">
   <div style="max-width:520px;margin:0 auto;padding:28px 18px">
     <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#137A56;font-weight:800">Sincrético</div>
     ${cuerpo}
-    <div style="margin-top:30px;padding-top:14px;border-top:1px solid #E2DCCF;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#A49B8C;font-weight:600">Una empresa de Grupo Casa Pepe</div>
+    <div style="margin-top:30px;padding-top:14px;border-top:1px solid #E2DCCF;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#A49B8C;font-weight:600">${esc(pie)}</div>
   </div></body></html>`;
 
-function correoCodigo(codigo: string) {
+/* EL IDIOMA LO DICE LA PANTALLA. 27-oct-2026: aqui todavia no hay pais ni
+   telefono -solo un correo-, asi que no hay nada que deducir. Pero quien lo
+   pide SI sabe en que idioma esta leyendo, y lo manda en la llamada. Sin eso,
+   espanol, que es lo de siempre. */
+const TX = {
+  es: {
+    asunto: (c: string) => `Tu código de Sincrético: ${c}`,
+    titulo: (c: string) => `Tu código es ${c}`,
+    porque: "Tecléalo en la pantalla donde lo pediste para confirmar que este correo es tuyo. Hace falta porque aquí te va a llegar tu boleto con el QR, y ese QR es el que te deja entrar.",
+    vive: (m: number) => `Vale ${m} minutos y se usa una sola vez.`,
+    nofui: "Si no lo pediste tú, no hagas nada: sin el código nadie entra, y este correo no da acceso a nada por sí solo.",
+    pie: "Una empresa de Grupo Casa Pepe",
+  },
+  en: {
+    asunto: (c: string) => `Your Sincrético code: ${c}`,
+    titulo: (c: string) => `Your code is ${c}`,
+    porque: "Type it on the screen where you asked for it, to confirm this email is yours. We need it because your ticket with its QR code lands here, and that QR code is what gets you in.",
+    vive: (m: number) => `It is good for ${m} minutes and works once.`,
+    nofui: "If you did not ask for it, do nothing: without the code nobody gets in, and this email on its own gives access to nothing.",
+    pie: "A Grupo Casa Pepe company",
+  },
+} as const;
+const idi = (x: unknown): "es" | "en" =>
+  String(x ?? "").toLowerCase().slice(0, 2) === "en" ? "en" : "es";
+
+function correoCodigo(codigo: string, idioma: "es" | "en" = "es") {
+  const t = TX[idioma];
   return marco(`
-    <h1 style="font-size:23px;margin:8px 0 10px">Tu código es ${esc(codigo)}</h1>
-    <p style="font-size:15px;line-height:1.6;color:#3A3630;margin:0 0 16px">Tecléalo en la pantalla donde lo pediste para confirmar que este correo es tuyo. Hace falta porque aquí te va a llegar tu boleto con el QR, y ese QR es el que te deja entrar.</p>
+    <h1 style="font-size:23px;margin:8px 0 10px">${esc(t.titulo(codigo))}</h1>
+    <p style="font-size:15px;line-height:1.6;color:#3A3630;margin:0 0 16px">${esc(t.porque)}</p>
     <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:.24em;background:#fff;border:1px solid #E2DCCF;border-radius:12px;padding:18px;text-align:center;margin:0 0 18px">${esc(codigo)}</div>
-    <p style="font-size:13.5px;line-height:1.6;color:#6B6459;margin:0 0 20px">Vale ${VIVE_MIN} minutos y se usa una sola vez.</p>
-    <p style="font-size:12px;color:#A49B8C;line-height:1.5;margin:0">Si no lo pediste tú, no hagas nada: sin el código nadie entra, y este correo no da acceso a nada por sí solo.</p>`);
+    <p style="font-size:13.5px;line-height:1.6;color:#6B6459;margin:0 0 20px">${esc(t.vive(VIVE_MIN))}</p>
+    <p style="font-size:12px;color:#A49B8C;line-height:1.5;margin:0">${esc(t.nofui)}</p>`, t.pie);
 }
 
 async function enviar(to: string, asunto: string, html: string) {
@@ -257,7 +283,8 @@ Deno.serve(async (req: Request) => {
     });
     if (!ins.ok) return json({ error: "No pudimos preparar el código. Inténtalo otra vez." }, 500);
 
-    const m = await enviar(email, `Tu código de Sincrético: ${codigo}`, correoCodigo(codigo));
+    const lang = idi((b as any).idioma);
+    const m = await enviar(email, TX[lang].asunto(codigo), correoCodigo(codigo, lang));
     if (!m.ok) {
       console.error("correo", m.error);
       return json({ error: "No pudimos mandarte el correo. Inténtalo en un momento." }, 502);

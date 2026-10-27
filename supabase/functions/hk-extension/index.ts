@@ -206,43 +206,98 @@ async function subeFirma(opKey: string, dataUrl: string) {
   } catch { return null; }
 }
 
+/* ---------- EL IDIOMA DEL HUÉSPED ----------
+   Misma regla que `apepe-correo-enviar`, y a propósito: si a alguien le llega
+   la confirmación de su reserva en inglés, el papel de su extensión no puede
+   llegarle en español. Cloudbeds no guarda en qué idioma habla, así que se
+   deduce del país que puso al reservar y, si lo dejó vacío —pasa mucho en las
+   OTAs—, del prefijo de su móvil, que casi nunca miente. 27-oct-2026. */
+const PAISES_ES = new Set(["MX","ES","AR","CO","CL","PE","UY","VE","EC","BO","PY","CR","PA","GT","HN","SV","NI","DO","CU","PR","GQ"]);
+const PREFIJOS_ES = ["+52","+34","+54","+57","+56","+51","+598","+58","+593","+591","+595","+506","+507","+502","+504","+503","+505","+53"];
+function idiomaDe(pais?: string, telefono?: string): "es" | "en" {
+  const p = String(pais || "").toUpperCase().trim();
+  if (p) return PAISES_ES.has(p) ? "es" : "en";
+  const t = String(telefono || "").replace(/[^0-9+]/g, "");
+  if (t.startsWith("+")) {
+    for (const pre of PREFIJOS_ES) if (t.startsWith(pre)) return "es";
+    return "en";
+  }
+  return "es";
+}
+
 /* ---------- EL CORREO QUE LA HACE VÁLIDA ----------
    Javi: "se envía mail al cliente con la cantidad y la reserva para que tenga
    validez". No es un acuse de cortesía: es el papel de lo que acaba de firmar con
-   el dedo en un teléfono que no es suyo. */
+   el dedo en un teléfono que no es suyo.
+
+   Va en UN idioma. Antes iba en español con un párrafo-resumen en inglés
+   debajo, y ese resumen decía menos que el correo: no traía el nombre, ni
+   quién lo vendió, ni a quién reclamar. Un huésped que no lee español se
+   quedaba con la mitad del papel. 27-oct-2026. */
+const TX = {
+  es: {
+    titulo: "Te quedas con nosotros",
+    entrada: (n: string, noches: number) =>
+      `${n}, acabas de extender tu estancia ${noches > 1 ? `${noches} noches` : "una noche"} más. Esto es lo que quedó registrado en tu reserva.`,
+    reserva: "Reserva",
+    donde: "Dónde duermes",
+    noches: "Noches",
+    salida: "Nueva salida",
+    total: "Total de la extensión",
+    descuento: "El precio ya lleva tu descuento SuperPepe.",
+    ahorro: (m: string) => `Te ahorras ${m} sobre la tarifa del día.`,
+    saldo: "El importe queda como saldo pendiente en tu cuenta: lo pagas en recepción cuando bajes.",
+    mueve: "🧳 Para esta extensión te cambiamos de cama. Deja tus cosas juntas y listas: te las movemos nosotros. Pasa por recepción por tu nueva llave.",
+    gestiono: (q: string) => `Lo gestionó ${q} y lo firmaste desde su teléfono. Si algo no cuadra, dínoslo en recepción antes de tu salida.`,
+    equipo: "el equipo de la casa",
+    gracias: "¡Gracias por escoger Casa Pepe!",
+    asunto: (f: string) => `Tu extensión en Casa Pepe · hasta el ${f}`,
+  },
+  en: {
+    titulo: "You're staying with us",
+    entrada: (n: string, noches: number) =>
+      `${n}, you have just extended your stay by ${noches > 1 ? `${noches} nights` : "one night"}. This is what went on your booking.`,
+    reserva: "Booking",
+    donde: "Where you sleep",
+    noches: "Nights",
+    salida: "New check-out",
+    total: "Extension total",
+    descuento: "The price already includes your SuperPepe discount.",
+    ahorro: (m: string) => `You save ${m} on the day's rate.`,
+    saldo: "The amount stays as a balance on your account: you pay it at the front desk on your way down.",
+    mueve: "🧳 For this extension we are moving you to another bed. Leave your things together and ready: we'll move them for you. Pick up your new key at the front desk.",
+    gestiono: (q: string) => `${q} handled it and you signed from their phone. If something doesn't add up, tell us at the front desk before you check out.`,
+    equipo: "the house team",
+    gracias: "Thanks for choosing Casa Pepe!",
+    asunto: (f: string) => `Your extension at Casa Pepe · until ${f}`,
+  },
+} as const;
+
 function correoHtml(d: any) {
+  const t = TX[(d.idioma === "en" ? "en" : "es") as "es" | "en"];
   const linea = (k: string, v: string) =>
     `<tr><td style="padding:7px 0;color:#6B6459;font-size:13px">${esc(k)}</td><td style="padding:7px 0;text-align:right;font-weight:700;color:#2b2622;font-size:14px">${esc(v)}</td></tr>`;
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f2efe9;padding:26px 14px">
   <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;padding:26px 24px">
     <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#cd9a4b;font-weight:700">Casa Pepe</div>
-    <h1 style="margin:8px 0 4px;font-size:21px;color:#2b2622">Te quedas con nosotros</h1>
+    <h1 style="margin:8px 0 4px;font-size:21px;color:#2b2622">${esc(t.titulo)}</h1>
     <p style="margin:0 0 16px;color:#6B6459;font-size:14px;line-height:1.55">
-      ${esc(d.huesped)}, acabas de extender tu estancia ${d.noches > 1 ? `${d.noches} noches` : "una noche"} más.
-      Esto es lo que quedó registrado en tu reserva.</p>
+      ${esc(t.entrada(String(d.huesped || ""), Number(d.noches || 0)))}</p>
     <table style="width:100%;border-collapse:collapse;border-top:1px solid #e4ded3;border-bottom:1px solid #e4ded3;margin-bottom:16px">
-      ${linea("Reserva", d.reservation_id)}
-      ${linea("Dónde duermes", d.donde)}
-      ${linea("Noches", String(d.noches))}
-      ${linea("Nueva salida", d.nueva_salida)}
-      ${linea("Total de la extensión", money(d.monto) + " MXN")}
+      ${linea(t.reserva, d.reservation_id)}
+      ${linea(t.donde, d.donde)}
+      ${linea(t.noches, String(d.noches))}
+      ${linea(t.salida, d.nueva_salida)}
+      ${linea(t.total, money(d.monto) + " MXN")}
     </table>
     <p style="margin:0 0 14px;color:#2b2622;font-size:14px;line-height:1.55">
-      <b>El precio ya lleva tu descuento SuperPepe.</b> ${d.ahorro > 0 ? `Te ahorras ${money(d.ahorro)} sobre la tarifa del día.` : ""}
-      El importe queda como saldo pendiente en tu cuenta: lo pagas en recepción cuando bajes.</p>
+      <b>${esc(t.descuento)}</b> ${d.ahorro > 0 ? esc(t.ahorro(money(d.ahorro))) : ""}
+      ${esc(t.saldo)}</p>
     ${d.mueve_cosas ? `<p style="margin:0 0 14px;background:#fbf0dc;border-radius:10px;padding:12px 14px;color:#8a6420;font-size:13.5px;line-height:1.5">
-      🧳 Para esta extensión te cambiamos de cama. Deja tus cosas juntas y listas: te las movemos nosotros.
-      Pasa por recepción por tu nueva llave.</p>` : ""}
+      ${esc(t.mueve)}</p>` : ""}
     <p style="margin:0 0 6px;color:#6B6459;font-size:13.5px;line-height:1.55">
-      Lo gestionó ${esc(d.vendedor_nombre || "el equipo de la casa")} y lo firmaste desde su teléfono.
-      Si algo no cuadra, dínoslo en recepción antes de tu salida.</p>
-    <p style="margin:14px 0 0;color:#2b2622;font-size:14px">¡Gracias por escoger Casa Pepe!</p>
-    <hr style="border:0;border-top:1px solid #e4ded3;margin:20px 0 14px">
-    <p style="margin:0;color:#888780;font-size:12px;line-height:1.5">
-      <b>EN ·</b> You just extended your stay ${d.noches > 1 ? `${d.noches} more nights` : "one more night"} until ${esc(d.nueva_salida)}
-      — ${esc(d.donde)}. Total ${money(d.monto)} MXN, SuperPepe discount included, payable at reception.
-      ${d.mueve_cosas ? "We're moving you to another bed: leave your things together and pick up your new key at reception." : ""}
-      Thanks for choosing Casa Pepe!</p>
+      ${esc(t.gestiono(String(d.vendedor_nombre || t.equipo)))}</p>
+    <p style="margin:14px 0 0;color:#2b2622;font-size:14px">${esc(t.gracias)}</p>
   </div></div>`;
 }
 
@@ -253,7 +308,7 @@ async function mandaCorreo(to: string, d: any) {
     headers: { Authorization: `Bearer ${RESEND}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       from: FROM, to: [to],
-      subject: `Tu extensión en Casa Pepe · hasta el ${d.nueva_salida}`,
+      subject: TX[(d.idioma === "en" ? "en" : "es") as "es" | "en"].asunto(String(d.nueva_salida || "")),
       html: correoHtml(d),
     }),
   });
@@ -361,6 +416,10 @@ Deno.serve(async (req) => {
         huesped, reservation_id: rid, donde: `${r.donde}${r.detalle ? " · " + r.detalle : ""}`,
         noches, nueva_salida: r.nueva_salida, monto: r.monto, ahorro: r.ahorro || 0,
         mueve_cosas: !!r.mueve_cosas, vendedor_nombre: b.vendedor_nombre || "",
+        idioma: idiomaDe(
+          dres.guestCountry || main.guestCountry || dres.country || "",
+          dres.guestPhone || main.guestPhone || dres.phone || "",
+        ),
       });
       try {
         await rest(`apepe_extension?op_key=eq.${encodeURIComponent(opKey)}`, {

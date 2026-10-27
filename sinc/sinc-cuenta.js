@@ -18,6 +18,7 @@ window.sincCuenta = (function () {
   /* El idioma del huésped. Si esta pantalla no trae sinc-i18n.js, T() devuelve
      el español y todo sigue funcionando. */
   function T(x){ try{ return window.sincI18n ? sincI18n.t(x) : x; }catch(_){ return x; } }
+  function sincI18nTn(m,a){ try{ return window.sincI18n && sincI18n.tn ? sincI18n.tn(m,a) : String(m).replace('{a}',a); }catch(_){ return String(m).replace('{a}',a); } }
 
   'use strict';
 
@@ -368,11 +369,27 @@ window.sincCuenta = (function () {
   async function fn(nombre, cuerpo, conSesion) {
     var h = conSesion ? await hdr()
                       : { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY, 'Content-Type': 'application/json' };
+    /* EL IDIOMA VIAJA CON LA LLAMADA. 27-oct-2026: el correo del codigo salia
+       siempre en espanol, aunque la pantalla desde la que se pide estuviera en
+       ingles. La funcion no puede adivinarlo -no hay pais todavia, solo un
+       correo-, pero la pantalla si lo sabe: lo eligio la persona hace un
+       momento. Asi que se manda, y la funcion que no lo mire no pierde nada. */
+    var cuerpoIdi = cuerpo || {};
+    try {
+      if (cuerpoIdi.idioma == null && window.sincI18n && sincI18n.idioma) {
+        cuerpoIdi = Object.assign({}, cuerpoIdi, { idioma: sincI18n.idioma() });
+      }
+    } catch (_) {}
     var r = await fetch(SB + '/functions/v1/' + nombre, {
-      method: 'POST', headers: h, body: JSON.stringify(cuerpo || {}),
+      method: 'POST', headers: h, body: JSON.stringify(cuerpoIdi),
     });
     var t = await r.text(), j = null; try { j = t ? JSON.parse(t) : null; } catch (_) {}
-    if (!r.ok) throw new Error((j && j.error) || ('Respondió ' + r.status));
+    /* EL ERROR DEL SERVIDOR TAMBIEN SE LEE. 27-oct-2026: lo que contesta la
+       funcion -«Ese correo no se ve bien escrito»- se pinta tal cual en la
+       pantalla, asi que pasa por el diccionario como cualquier otro texto. Si
+       no esta, sale en espanol, que es el respaldo de siempre. */
+    if (!r.ok) throw new Error(
+      (j && j.error) ? T(j.error) : sincI18nTn('Respondió {a}', r.status));
     return j;
   }
 

@@ -290,6 +290,17 @@ window.eventoCompra = (function () {
         b.disabled=false; b.textContent=txt; return;
       }
       try{ sessionStorage.removeItem(LLAVE); }catch(_){}
+      /* EL IDIOMA DE SU BOLETO. 27-oct-2026: el correo del boleto lo manda el
+         webhook, y alli no hay forma de saber en que idioma compro -no hay
+         pais, y el pais tampoco seria el idioma-. Aqui si: lo eligio hace un
+         minuto en esta pantalla. Se apunta aparte para no tocar la RPC que
+         aparta el lugar; si falla, el correo sale en espanol, que es lo de
+         siempre. */
+      try{
+        var _idi = (window.sincI18n && sincI18n.idioma) ? sincI18n.idioma() : 'es';
+        rpc('evento_reserva_idioma', { p_folio: r.data.folio, p_idioma: _idi })
+          .catch(function(){});
+      }catch(_){}
       /* Entrada libre es una reserva de $0: no hay pasarela que abrir, el
          boleto con su QR ya existe. Javi: «mismo procedimiento». */
       if (r.data.sin_cobro) {
