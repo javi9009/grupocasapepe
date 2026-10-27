@@ -383,6 +383,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 .pgllega.si{background:var(--ok-bg,#E1F0E7);color:var(--ok);border-color:var(--ok);cursor:default}
 .pgnum{width:62px;padding:6px 8px;border:1px solid var(--linea);border-radius:9px;font:inherit}
 .pgform{border-top:1px solid var(--linea);padding:16px;background:var(--hueso,#F4EFE8)}
+.pgcli.abierta{background:var(--hueso,#F4EFE8)}
+.pgcli[data-cli]{cursor:pointer}
+.pgdet{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap}
+.pgdt{flex:1 1 150px;min-width:0;background:#fff;border:1px solid var(--linea);border-radius:10px;padding:8px 11px}
+.pgdt span{display:block;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--gris)}
+.pgdt b{font-size:13.5px;font-weight:600;word-break:break-word}
 .ccbloque{margin:0 0 30px}
 .ccbloque h2{font-family:'Oswald';font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--gris);margin:0 0 12px}
 .ccserv{display:flex;gap:14px;flex-wrap:wrap}
@@ -1333,7 +1339,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        · `guia_id` no se había usado nunca: cero salidas con guía en toda la
          historia.
      Ahora: política propia para sus salidas y `v_mis_guias` para su equipo. */
-  var PG = {lunes:null, dia:null, salidas:[], clientes:{}, guias:[], exps:{}, nueva:null};
+  var PG = {lunes:null, dia:null, salidas:[], clientes:{}, guias:[], exps:{}, hoteles:{}, nueva:null, abierto:null};
 
   function pgYmd(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
   function pgHoy(){ var h=new Date(); h.setHours(0,0,0,0); return h; }
@@ -1376,13 +1382,24 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(sids.length){
         var rc=await fetch(SB+'/rest/v1/sinc_reservas?select=id,salida_id,nombre,pax,adultos,menores,idioma,email,telefono,'+
           'pickup,pickup_lugar,pickup_hora,pago_estado,total,notas,cancelada_at,encuentro_estado,recordatorio_3h_at,'+
-          'canal,restricciones,llegaron,llego_at'+
+          'canal,restricciones,llegaron,llego_at,folio,hotel_id,adultos,menores'+
           '&salida_id=in.('+sids.join(',')+')&cancelada_at=is.null&order=pickup_hora',{headers:hdr()});
         if(rc.ok)(await rc.json()).forEach(function(c){ (PG.clientes[c.salida_id]=PG.clientes[c.salida_id]||[]).push(c); });
       }
 
       var rg=await fetch(SB+'/rest/v1/v_mis_guias?select=id,nombre,idiomas&operador_id=eq.'+cur.id+'&order=nombre',{headers:hdr()});
       PG.guias = rg.ok ? await rg.json() : [];
+
+      /* DE DÓNDE VIENE CADA UNO. Javi, 27-oct-2026: «procedencia (hotel que
+         la compró)». Está en la reserva desde siempre como un id, que no le
+         dice nada a nadie: hay que traer el nombre. */
+      PG.hoteles={};
+      var hids=[]; Object.keys(PG.clientes).forEach(function(k){ PG.clientes[k].forEach(function(c){
+        if(c.hotel_id && hids.indexOf(c.hotel_id)<0) hids.push(c.hotel_id); }); });
+      if(hids.length){
+        var rh=await fetch(SB+'/rest/v1/hoteles?select=id,nombre_comercial&id=in.('+hids.join(',')+')',{headers:hdr()});
+        if(rh.ok)(await rh.json()).forEach(function(h){ PG.hoteles[h.id]=h.nombre_comercial; });
+      }
     }catch(e){
       $('pgLista').innerHTML='<div class="mini" style="padding:18px 0;color:var(--error,#9E3B2E)">No pudimos traer tu semana: '+esc(e.message||e)+'</div>';
       return;
@@ -1404,13 +1421,18 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     Array.prototype.forEach.call($('pgSem').querySelectorAll('[data-f]'),function(b){
       b.onclick=function(){ PG.dia=b.getAttribute('data-f'); pintaProg(); };});
 
-    /* EL AVISO DE LA VÍSPERA. Sólo para mañana, que es cuando sirve: avisar de
-       lo de hoy a media mañana no es un aviso, es un susto. */
+    /* EL AVISO, DE HOY Y DE MAÑANA. Javi, 27-oct-2026: «le di a Joseph y le
+       quitó lo de notificar a huéspedes». No fue Joseph: acababan de dar las
+       doce, y la salida que era de mañana pasó a ser de hoy. El aviso sólo
+       miraba mañana, así que desapareció él solo la madrugada antes de la
+       salida, que es justo cuando hace falta. Avisar la mañana del mismo día
+       no es un susto: es la última oportunidad. */
     var man=pgYmd(pgMas(pgHoy(),1));
-    var deMan=pgDeDia(man).filter(function(s){ return !s.aviso_enviado_at; });
+    var deMan=pgDeDia(hoy).concat(pgDeDia(man)).filter(function(s){ return !s.aviso_enviado_at; });
+    var esHoy=deMan.length && deMan[0].fecha===hoy;
     var cuantos=deMan.reduce(function(a,s){ return a+(PG.clientes[s.id]||[]).length; },0);
     $('pgVispera').innerHTML = (deMan.length && cuantos)
-      ? '<div class="pgvis"><div class="tx"><b>Confirma la salida de mañana a tus '+cuantos+' cliente'+(cuantos===1?'':'s')+'</b>'+
+      ? '<div class="pgvis"><div class="tx"><b>Confirma la salida de '+(esHoy?'hoy':'mañana')+' a tus '+cuantos+' cliente'+(cuantos===1?'':'s')+'</b>'+
         '<span class="mini">Les llega cómo encontrarte, su hora de recogida y dos botones para decirte si vienen. '+
         'Si lo mandas ahora, ya no les llega el recordatorio de tres horas antes: es el mismo correo.</span></div>'+
         '<button class="btn" id="pgAvisar">Notificar a clientes</button></div>'
@@ -1480,9 +1502,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
             var pagado=String(c.pago_estado||'')==='pagado';
             var nota=[c.idioma&&String(c.idioma).toLowerCase().indexOf('en')===0?'habla inglés':'',
                       c.restricciones?('come: '+c.restricciones):'', c.notas||''].filter(Boolean).join(' · ');
-            return '<div class="pgcli">'+
+            return '<div class="pgcli'+(PG.abierto===c.id?' abierta':'')+'" data-cli="'+c.id+'">'+
               '<div class="qn"><b>'+esc(c.nombre||'(sin nombre)')+'</b> <span class="mini">'+(Number(c.pax)||1)+' pers.</span>'+
-                '<div class="mini">'+esc([c.pickup_lugar||'',nota].filter(Boolean).join(' · '))+'</div></div>'+
+                '<div class="mini">'+esc([c.pickup_lugar||'',nota].filter(Boolean).join(' · '))+'</div>'+
+                (PG.abierto===c.id?detalleCliente(c):'')+'</div>'+
               /* SIN RECOGIDA NO HAY HORA QUE PROGRAMAR. Javi, 26-oct-2026:
                  «en los tours que NO hay pickup como este, entonces no hace
                  falta programar hora. Sí guía». Un campo de hora en un tour
@@ -1510,9 +1533,30 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       (e.requiere_welcoming
         ? (PG.nueva===s.id ? formExterna(s) :
            '<div class="pgcli"><button class="btn sm" data-nueva="'+s.id+'">＋ Apuntar una reserva de fuera</button>'+
+           '<button class="btn sm" data-excel="'+s.id+'">Subir el Excel del día</button>'+
+           '<input type="file" accept=".xlsx,.xls,.csv" id="xArch'+s.id+'" style="display:none">'+
            '<span class="mini">Las que vende otra plataforma y reciben aquí.</span></div>')
         : '')+
     '</div>';
+  }
+
+  /* EL DETALLE DEL CLIENTE. Javi, 27-oct-2026. Lo que de verdad hace falta
+     saber antes de recibir a alguien: cuántos son y cuántos de ellos son
+     niños, de qué hotel vienen, qué no pueden comer y cómo escribirles. Todo
+     estaba en la base; ninguno se veía. */
+  function detalleCliente(c){
+    var CAN={concierge:'Vendida en recepción', web:'Vendida en la web', turitop:'Turitop',
+             operador:'La vendió la touroperadora', otro:'De otra plataforma'};
+    function li(et,v){ return v ? '<div class="pgdt"><span>'+esc(et)+'</span><b>'+esc(v)+'</b></div>' : ''; }
+    return '<div class="pgdet">'+
+      li('Personas', (Number(c.pax)||1)+((c.menores>0)?(' · '+Number(c.adultos||0)+' adulto'+(Number(c.adultos)===1?'':'s')+' y '+Number(c.menores)+' niño'+(Number(c.menores)===1?'':'s')):''))+
+      li('Procedencia', (c.hotel_id&&PG.hoteles[c.hotel_id]) ? PG.hoteles[c.hotel_id] : (CAN[c.canal]||c.canal||''))+
+      li('Requisitos especiales', c.restricciones||'ninguno')+
+      li('Correo', c.email||'sin correo')+
+      li('Teléfono', c.telefono||'')+
+      li('Folio', c.folio||'')+
+      (c.llego_at?li('Llegó', String(c.llego_at).slice(0,16).replace('T',' a las ')):'')+
+      '</div>';
   }
 
   /* En la página, nunca en un pop-up del navegador. */
@@ -1561,6 +1605,74 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     PG.nueva=null; toast('Apuntada.'); await cargaProg();
   }
 
+  /* EL EXCEL DEL DÍA. Javi, 27-oct-2026: «poder subir un excel con el detalle
+     de las reservas del día para cargarlas todas juntas».
+     Las columnas se buscan por su nombre, sin acentos ni mayúsculas, porque
+     cada plataforma las llama distinto y nadie va a renombrar un archivo
+     antes de subirlo. Lo que no se entiende no se inventa: se dice cuántas
+     filas se quedaron fuera y por qué. */
+  var XLSJS=null;
+  function cargaXLSX(){
+    if(XLSJS) return Promise.resolve(XLSJS);
+    return new Promise(function(ok,mal){
+      var t=document.createElement('script');
+      t.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      t.onload=function(){ XLSJS=window.XLSX; ok(XLSJS); };
+      t.onerror=function(){ mal(new Error('No se pudo cargar el lector de Excel.')); };
+      document.head.appendChild(t);
+    });
+  }
+  function llave(k){ return String(k||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,''); }
+  function campo(fila, nombres){
+    for(var k in fila){ if(nombres.indexOf(llave(k))>=0) return fila[k]; }
+    return null;
+  }
+  async function subeExcel(sid, file, inp){
+    var s=PG.salidas.filter(function(x){return x.id===sid;})[0];
+    inp.value='';
+    if(!s) return;
+    toast('Leyendo el archivo…');
+    var filas;
+    try{
+      var X=await cargaXLSX();
+      var buf=await file.arrayBuffer();
+      var wb=X.read(buf,{type:'array'});
+      filas=X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:null});
+    }catch(e){ toast('No pudimos leer ese archivo: '+(e.message||e), true); return; }
+    if(!filas.length){ toast('El archivo no trae ninguna fila.', true); return; }
+
+    var buenas=[], fuera=0;
+    filas.forEach(function(f){
+      var nom=campo(f,['nombre','reserva','nombredelareserva','cliente','titular','name']);
+      if(!nom || !String(nom).trim()){ fuera++; return; }
+      var ad=Number(campo(f,['adultos','adulto','adults']))||0;
+      var ni=Number(campo(f,['ninos','nino','menores','ninios','children','kids']))||0;
+      var pax=Number(campo(f,['personas','pax','total','numerodepersonas']))||0;
+      if(!pax) pax=ad+ni;
+      if(!pax){ fuera++; return; }
+      if(!ad && !ni) ad=pax;
+      var pg=String(campo(f,['pagado','pago','estadopagado','estado','pagada'])||'').toLowerCase();
+      buenas.push({salida_id:s.id, experiencia_id:s.experiencia_id,
+        nombre:String(nom).trim(), adultos:ad, menores:ni, pax:pax,
+        email:(String(campo(f,['mail','correo','email','emailaddress'])||'').trim()||null),
+        restricciones:(String(campo(f,['restricciones','restriccionesalimenticias','alimenticias','alergias','dieta'])||'').trim()||null),
+        pago_estado:(/^(si|s|yes|y|pagad|1|true|x)/.test(pg)?'pagado':(pg?'pendiente':'sin_cobro')),
+        canal:'otro', estado:'confirmada',
+        notas:'Reserva de otra plataforma · cargada desde '+file.name,
+        created_by:(ses&&ses.user&&ses.user.email)||null});
+    });
+    if(!buenas.length){ toast('Ninguna fila tenía nombre y personas: no se cargó nada.', true); return; }
+
+    var r=await fetch(SB+'/rest/v1/sinc_reservas',{method:'POST',
+      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+      body:JSON.stringify(buenas)});
+    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
+    if(!fila||!fila.length){ toast('La base no dejó cargarlas.', true); return; }
+    toast(fuera ? ('Cargadas '+fila.length+', y '+fuera+' se quedaron fuera por no traer nombre o personas.')
+                : ('Cargadas '+fila.length+' reserva'+(fila.length===1?'':'s')+'.'), !!fuera);
+    await cargaProg();
+  }
+
   /* LLEGÓ, Y CUÁNTOS. Javi: «si una reserva llega con menos de los que
      reservó se puede editar ahí». Por eso el botón no pregunta: da por
      buenos los que venían, y luego se corrige el número, que es lo que pasa
@@ -1582,8 +1694,17 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(){ ponGuia(b.getAttribute('data-s'), b.getAttribute('data-guia')); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-rec]'),function(i){
       i.onchange=function(){ ponRecogida(i.getAttribute('data-rec'), i.value, i); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-cli]'),function(d){
+      d.onclick=function(e){
+        if(e.target.closest('input,button,select,label,.pgllega')) return;
+        var id=d.getAttribute('data-cli');
+        PG.abierto = (PG.abierto===id) ? null : id; pintaProg(); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-nueva]'),function(b){
       b.onclick=function(){ PG.nueva=b.getAttribute('data-nueva'); pintaProg(); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-excel]'),function(b){
+      b.onclick=function(){ var i=$('xArch'+b.getAttribute('data-excel')); if(i) i.click(); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[id^="xArch"]'),function(i){
+      i.onchange=function(){ if(i.files&&i.files[0]) subeExcel(i.id.slice(5), i.files[0], i); };});
     var xc=$('xCancela'); if(xc) xc.onclick=function(){ PG.nueva=null; pintaProg(); };
     var xg=$('xGuarda');  if(xg) xg.onclick=function(){ guardaExterna(PG.nueva, this); };
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-llego]'),function(b){
