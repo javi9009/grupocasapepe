@@ -61,11 +61,13 @@ window.sincVitrina = (function () {
     n = Number(n);
     return n === 0 ? T('Gratis') : '$' + n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
   }
-  /* Supabase redimensiona al vuelo; se pide el ancho que de verdad se ve. */
+  /* La miniatura está guardada al lado de cada vertical (_t.jpg): se cambia la
+     letra en vez de pedírsela al redimensionador, que se cobra por imagen
+     distinta al mes. Lo que no es un recorte nuestro se deja tal cual. */
   function mini(u, ancho) {
     if (!u || u.indexOf('/storage/v1/object/public/') < 0) return u;
-    return u.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/') +
-           '?width=' + ancho + '&quality=72&resize=cover';
+    if (ancho <= 600 && /_v\.jpg$/i.test(u)) return u.replace(/_v\.jpg$/i, '_t.jpg');
+    return u;
   }
 
   /* Sin foto no se pone un hueco gris ni una inicial gigante: se pone el
