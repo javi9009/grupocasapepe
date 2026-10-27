@@ -328,6 +328,10 @@ function pasa(p){
    A un tour por propina para huéspedes sí se le pide precio: es el que paga
    quien llega de la calle. La regla es la misma que la de la ficha. */
 function leFalta(p){
+  /* A lo que ya ocurrió no se le reclama nada: una ficha de un evento de hace
+     dos semanas no se va a terminar, y el «sin punto de encuentro» en rojo
+     sólo hace ruido en la lista. */
+  if(p.estado==='pasada' || p.estado==='anulada') return [];
   if(p._ev) return leFaltaEvento(p);
   var f=[];
   var fmt=String(p.formato||'tour');
@@ -363,6 +367,43 @@ function leFaltaEvento(p){
 var EV_ESTADO={borrador:'borrador',propuesto:'en_revision',
                publicado:'publicada',realizado:'pasada',cancelado:'anulada'};
 
+/* LO QUE YA PASÓ, PASADO. Javi, 27-oct-2026: «en productos, cuando ya pasaron
+   déjalos en pasados y que no aparezcan en publicados ni en borrador o
+   pendiente de revisión».
+   Era ruido de verdad: El Bonche del 25 de octubre seguía saliendo «en
+   cartera», y la lista de lo que hay que terminar o revisar se llenaba de
+   fechas que ya ocurrieron. Nadie va a terminar la ficha de un evento de hace
+   dos semanas.
+   No se guarda nada: haber pasado es cuestión de la fecha, así que se calcula
+   al leer. Guardarlo pediría un trabajo nocturno que lo fuera marcando, y a la
+   mañana siguiente estaría otra vez desfasado.
+   Lo anulado se queda anulado —esa decisión la tomó una persona— y una sala
+   (clase espacio) no pasa nunca: se alquila cuando alguien la pide. Una
+   experiencia que se repite cada semana tampoco: sólo la que tiene fechas
+   contadas o un último día. */
+function yaPaso(p){
+  if(p.estado==='anulada') return false;
+  if(p._clase==='espacio') return false;
+  var hoy=new Date(); hoy.setHours(0,0,0,0);
+  var fin=null;
+  if(p._ev) fin=p._fin||null;
+  else if(p.termina_en) fin=p.termina_en;
+  else if(p.calendario_modo==='fechas' && p.fechas && p.fechas.length)
+    fin=p.fechas.slice().sort().pop();
+  if(!fin) return false;
+  var d=new Date(fin);
+  if(isNaN(d.getTime())) return false;
+  return d < hoy;
+}
+
+/* Se aplica a todo lo que entra en la lista, venga de la tabla que venga. */
+function marcaPasados(l){
+  l.forEach(function(p){
+    if(yaPaso(p)){ p._estadoAntes=p.estado; p.estado='pasada'; }
+  });
+  return l;
+}
+
 function normalizaEvento(e, prodNombre, precioBoleto){
   /* Una sala no se vende por entrada sino por hora: su precio vive en otro
      campo, y mirar sólo los dos de siempre la dejaba como «sin precio» con sus
@@ -382,6 +423,7 @@ function normalizaEvento(e, prodNombre, precioBoleto){
     _gratis: !!e.es_gratis,
     duracion_min: e.duracion_min || null,
     _fecha: e.fecha_inicio || null,
+    _fin: e.fecha_fin || e.fecha_inicio || null,
     _sala: e.espacio || null,
     _foto: (e.fotos && e.fotos.length && (e.fotos[0].url || e.fotos[0])) || '',
     _fotos: !!(e.fotos && e.fotos.length),
@@ -759,7 +801,7 @@ async function borra(id, motivo, acc){
 async function carga(){
   FALLO=''; TODOS=null; pinta();
   try{
-    var campos='id,experiencia_id,nombre,formato,estado,tipo,operador_id,precio_adulto,neto_adulto,apepe_gratuito,duracion_min,sku,ciudad,cer_inicio_lugar,punto_encuentro,updated_at';
+    var campos='id,experiencia_id,nombre,formato,estado,tipo,operador_id,precio_adulto,neto_adulto,apepe_gratuito,duracion_min,sku,ciudad,cer_inicio_lugar,punto_encuentro,updated_at,fechas,termina_en,calendario_modo';
     var r=await api(SB+'/rest/v1/op_experiencias?select='+campos+'&order=updated_at.desc&limit=2000');
     if(!r.ok) throw new Error('la base respondió '+r.status);
     TODOS=await r.json();
@@ -791,7 +833,7 @@ async function carga(){
        la de eventos al idioma de la lista. Si un día los eventos se mudan, lo
        único que cambia es de dónde se leen. */
     try{
-      var ev=await api(SB+'/rest/v1/eventos?select=id,nombre,estado,clase,espacio,fecha_inicio,'+
+      var ev=await api(SB+'/rest/v1/eventos?select=id,nombre,estado,clase,espacio,fecha_inicio,fecha_fin,'+
         'es_gratis,precio,precio_por_hora,duracion_min,fotos,productora_id,created_at,updated_at&order=updated_at.desc&limit=1000',
         {headers:hdr()});
       if(ev.ok){
@@ -812,6 +854,10 @@ async function carga(){
         TODOS.sort(function(a,b){ return String(b.updated_at||'').localeCompare(String(a.updated_at||'')); });
       }
     }catch(_){ /* si los eventos no cargan, la lista de experiencias sigue sirviendo */ }
+    /* Lo último, cuando ya están las dos tablas en la misma lista: lo que ya
+       ocurrió se va a Pasadas y deja de estorbar en borrador, en revisión y
+       publicadas. */
+    if(TODOS) marcaPasados(TODOS);
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   pinta();
 }

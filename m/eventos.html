@@ -108,6 +108,17 @@ select,input,textarea{padding:8px 10px;border:1px solid var(--rule);border-radiu
 .etq.casa{background:var(--accent-soft);color:#4A2E70}
 .etq.prod{background:var(--ok-bg);color:var(--ok)}
 .semaf{display:flex;gap:4px;flex-wrap:wrap;max-width:240px}
+.disgrupo{border:1px solid var(--rule);border-radius:12px;padding:14px;margin-bottom:14px;background:var(--surface)}
+.dislinea{background:var(--surface-2);border-radius:9px;padding:9px;display:grid;gap:5px;margin-bottom:12px}
+.disfila{position:relative;height:24px}
+.disbar{position:absolute;top:0;height:24px;border-radius:5px;color:#fff;font-size:11.5px;font-weight:700;line-height:24px;padding:0 7px;overflow:hidden;white-space:nowrap}
+.dismont{position:absolute;top:0;height:24px;border-radius:4px;background:repeating-linear-gradient(45deg,#E2DCCF,#E2DCCF 4px,transparent 4px,transparent 8px)}
+.disgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px}
+.discard{border:1.5px solid var(--rule);border-radius:10px;padding:11px 12px;background:var(--surface)}
+.discard.gana{border-color:var(--ok);background:var(--ok-bg)}
+.discard.pierde{opacity:.6}
+.disrow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:2px 0;border-bottom:1px dotted var(--rule)}
+.disrow span{color:var(--muted)}
 .qcops{display:grid;grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:8px}
 .qcop{display:flex;gap:10px;padding:11px 13px;border-radius:10px;border:1.5px solid var(--rule);background:var(--surface);cursor:pointer}
 .qcop .bolita{width:16px;height:16px;margin-top:2px;flex:none;border-radius:50%;border:2px solid var(--rule);background:transparent}
@@ -314,6 +325,19 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     </div>
   </section>
 
+  <!-- HORARIOS DISPUTADOS. Bloque 2 del rediseño, 27-oct-2026.
+       Varias solicitudes pisándose en la misma sala y la misma hora. No es un
+       error que haya que evitar: es lo que pasa cuando una sala es buena, y la
+       base lo permite a propósito -sólo lo confirmado aparta-. Lo que faltaba
+       era el sitio donde alguien de casa mira las tres y elige. -->
+  <section id="sec-dis" style="display:none">
+    <div class="card">
+      <h3>Horarios con varias solicitudes</h3>
+      <div class="hint">Una solicitud sin confirmar no aparta la sala: otros pueden pedir el mismo horario. Aquí eliges con cuál te quedas. A las demás no les pasa nada —se quedan vivas, con una nota fechada— y hay que proponerles otra fecha.</div>
+      <div id="disLista"></div>
+    </div>
+  </section>
+
   <!-- ESPACIOS -->
   <section id="sec-esp" style="display:none">
     <div class="card" id="cardEditEsp" style="display:none">
@@ -421,7 +445,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   function toast(t,e){var x=$('toast');x.textContent=t;x.className='toast'+(e?' err':'');x.style.display='block';setTimeout(function(){x.style.display='none';},e?5200:2800);}
   (function(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&/sb-.*-auth-token/.test(k)){var v=JSON.parse(localStorage.getItem(k)||'null');var s=v&&(v.currentSession||v);if(s&&s.access_token){sb.auth.setSession({access_token:s.access_token,refresh_token:s.refresh_token});break;}}}}catch(_){}})();
 
-  var SECS=[['evt','Eventos'],['cal','Qué hay en las salas'],['esp','Los espacios']];
+  var SECS=[['evt','Eventos'],['cal','Qué hay en las salas'],['dis','Horarios disputados'],['esp','Los espacios']];
   var sec='evt', ESP=[], PROD=[], EVT=[], ASOC={}, dia=new Date(), lunes=null, mes=new Date(), modoCal='mes';
   var fCalSala='', fCalEstado='';
   /* Deep-link por pestaña: el panel abre esta página en #evt (Ficha de eventos),
@@ -525,7 +549,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   function aLunes(d){var x=new Date(d);var k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);x.setHours(0,0,0,0);return x;}
 
   function pintaNav(){
-    var n={evt:EVT.length,cal:EVT.filter(function(e){return e.espacio_id&&e.fecha_inicio;}).length,esp:ESP.filter(function(e){return e.activo;}).length};
+    var n={evt:EVT.length,cal:EVT.filter(function(e){return e.espacio_id&&e.fecha_inicio;}).length,
+           dis:disputas().length,esp:ESP.filter(function(e){return e.activo;}).length};
     $('nav').innerHTML=SECS.map(function(s){return '<button data-s="'+s[0]+'" aria-selected="'+(s[0]===sec)+'">'+esc(s[1])+'<span class="n">'+(n[s[0]]||0)+'</span></button>';}).join('');
     Array.prototype.forEach.call($('nav').querySelectorAll('button'),function(b){b.onclick=function(){sec=b.getAttribute('data-s');pinta();};});
   }
@@ -893,6 +918,152 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   }
   function nombreSala(id){ var e=ESP.filter(function(x){return x.id===id;})[0]; return e?e.nombre:'la sala'; }
 
+  /* ---------- HORARIOS DISPUTADOS ----------
+     Javi, 27-oct-2026, bloque 2: «un horario solicitado sin confirmar no
+     bloquea la sala: otros pueden pedir el mismo horario y quien valida
+     elige. A los demás se les propone otra fecha».
+     Al elegir, la ganadora se confirma -y ahí sí la sala queda apartada, que
+     es lo que hace el candado de la base- y a las demás no se les toca el
+     estado: se les deja una nota fechada diciendo que perdieron ese horario.
+     Nadie se queda sin su solicitud por una decisión que se puede deshacer. */
+  function ventana(e){
+    var ini=new Date(e.fecha_inicio);
+    var fin=new Date(e.fecha_fin||new Date(ini.getTime()+2*3600000));
+    return {d:new Date(ini.getTime()-(e.montaje_min||0)*60000),
+            h:new Date(fin.getTime()+(e.desmontaje_min||0)*60000),
+            ini:ini, fin:fin};
+  }
+  function apartada(e){ return ['confirmado','publicado','realizado'].indexOf(e.estado)>=0; }
+
+  /* Grupos de dos o más solicitudes vivas que se pisan en la misma sala.
+     Sólo de hoy en adelante: lo que ya pasó no se decide. */
+  function disputas(){
+    var hoy=new Date(); hoy.setHours(0,0,0,0);
+    var vivos=EVT.filter(function(e){
+      return e.espacio_id && e.fecha_inicio
+          && ['borrador','propuesto','confirmado','publicado'].indexOf(e.estado)>=0
+          && new Date(e.fecha_fin||e.fecha_inicio) >= hoy;
+    }).sort(function(a,b){return new Date(a.fecha_inicio)-new Date(b.fecha_inicio);});
+
+    var grupos=[], usados={};
+    vivos.forEach(function(e){
+      if(usados[e.id])return;
+      var v=ventana(e);
+      var juntos=vivos.filter(function(o){
+        if(o.espacio_id!==e.espacio_id)return false;
+        var w=ventana(o);
+        return w.d < v.h && w.h > v.d;
+      });
+      if(juntos.length<2)return;
+      juntos.forEach(function(o){usados[o.id]=1;});
+      grupos.push({sala:e.espacio_id, cuando:v.ini, evs:juntos});
+    });
+    return grupos;
+  }
+
+  function pintaDis(){
+    var gs=disputas(), c=$('disLista');
+    if(!gs.length){
+      c.innerHTML='<div class="mini" style="color:var(--faint);padding:10px 0">Ningún horario está disputado ahora mismo. Cuando dos solicitudes se pisen en la misma sala, aparecen aquí.</div>';
+      return;
+    }
+    c.innerHTML=gs.map(function(g,gi){
+      var ganada=g.evs.filter(apartada)[0];
+      /* la línea del día: desde media hora antes de la primera hasta media
+         hora después de la última, para que se vea el hueco */
+      var d0=null,d1=null;
+      g.evs.forEach(function(e){var v=ventana(e);
+        if(!d0||v.d<d0)d0=v.d; if(!d1||v.h>d1)d1=v.h;});
+      d0=new Date(d0.getTime()-30*60000); d1=new Date(d1.getTime()+30*60000);
+      var largo=d1-d0;
+      function pc(t){ return Math.max(0,Math.min(100,((new Date(t)-d0)/largo)*100)); }
+
+      var barras=g.evs.map(function(e){
+        var v=ventana(e), gana=ganada&&ganada.id===e.id, pierde=ganada&&!gana;
+        var col=gana?'var(--ok)':(apartada(e)?'var(--ok)':'#D9A441');
+        return '<div class="disfila">'+
+          '<div class="dismont" style="left:'+pc(v.d)+'%;width:'+(pc(v.ini)-pc(v.d))+'%"></div>'+
+          '<div class="disbar" style="left:'+pc(v.ini)+'%;width:'+(pc(v.fin)-pc(v.ini))+'%;background:'+col+
+            (pierde?';opacity:.35':'')+'">'+esc(e.nombre||'sin nombre')+'</div>'+
+          '<div class="dismont" style="left:'+pc(v.fin)+'%;width:'+(pc(v.h)-pc(v.fin))+'%'+(pierde?';opacity:.35':'')+'"></div>'+
+        '</div>';
+      }).join('');
+
+      var tarjetas=g.evs.map(function(e){
+        var v=ventana(e), bb=bolDe(e), gana=ganada&&ganada.id===e.id, pierde=ganada&&!gana;
+        var dias=Math.round((new Date()-new Date(e.created_at))/86400000);
+        return '<div class="discard'+(gana?' gana':'')+(pierde?' pierde':'')+'">'+
+          '<div class="mini" style="color:var(--muted)">'+esc(nomDueno(e.productora_id))+
+            ' · pidió '+(dias<=0?'hoy':dias===1?'ayer':'hace '+dias+' días')+'</div>'+
+          '<div style="font-weight:700;font-size:15px;margin:3px 0 7px">'+esc(e.nombre||'sin nombre')+'</div>'+
+          '<div class="disrow"><span>Horario</span><b>'+hhmm(v.ini)+'–'+hhmm(v.fin)+'</b></div>'+
+          '<div class="disrow"><span>Con montaje</span><b>'+hhmm(v.d)+' a '+hhmm(v.h)+'</b></div>'+
+          '<div class="disrow"><span>Boletos</span><b>'+
+            (e.es_gratis?'Gratis':(bb.length?bb.map(function(x){return '$'+(x.precio||0);}).join(' / ')
+              :(e.precio!=null?'$'+e.precio:(e.precio_por_hora!=null?'$'+e.precio_por_hora+'/h':'sin precio'))))+
+            (bb.length?' · '+bb.reduce(function(a,x){return a+(Number(x.cupo)||0);},0)+' lugares'
+                      :(e.cupo?' · '+e.cupo+' lugares':''))+'</b></div>'+
+          '<div class="disrow"><span>Estado</span><b>'+esc((ESTN[e.estado]||[e.estado])[0])+'</b></div>'+
+          '<div style="margin-top:9px;display:flex;gap:7px;flex-wrap:wrap">'+
+            (ganada
+              ? (gana?'<span class="tag ok">✓ Se queda con el horario</span>'+
+                      '<button class="btn ghost sm" data-desdis="'+e.id+'">Deshacer</button>'
+                    :'<span class="mini" style="color:var(--muted)">Hay que proponerle otra fecha</span>')
+              : '<button class="btn sm" data-queda="'+e.id+'" data-g="'+gi+'">Quedarse con este</button>')+
+            '<button class="btn ghost sm" data-abredis="'+e.id+'">Ver la ficha</button>'+
+          '</div></div>';
+      }).join('');
+
+      return '<div class="disgrupo">'+
+        '<div class="mini" style="color:var(--accent);font-weight:700;letter-spacing:.06em;text-transform:uppercase">Slot con varias solicitudes</div>'+
+        '<h4 style="margin:2px 0 3px;font-size:19px">'+esc(nombreSala(g.sala))+' · '+fecha(g.cuando)+'</h4>'+
+        '<div class="mini" style="color:var(--muted);margin-bottom:10px">'+g.evs.length+' solicitudes se pisan. '+
+          (ganada?'Ya está decidido: se quedó «'+esc(ganada.nombre||'')+'».'
+                 :'Elige con cuál te quedas; a las demás hay que proponerles otra fecha.')+'</div>'+
+        '<div class="dislinea">'+barras+'</div>'+
+        '<div class="disgrid">'+tarjetas+'</div></div>';
+    }).join('');
+
+    Array.prototype.forEach.call(c.querySelectorAll('[data-queda]'),function(b){
+      b.onclick=function(){ quedarseCon(b.getAttribute('data-queda'), Number(b.getAttribute('data-g'))); };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-desdis]'),function(b){
+      b.onclick=function(){ deshaceDisputa(b.getAttribute('data-desdis')); };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-abredis]'),function(b){
+      b.onclick=function(){ var e=EVT.filter(function(x){return x.id===b.getAttribute('data-abredis');})[0];
+        if(e){ sec='evt'; pinta(); abreEvt(e); window.scrollTo(0,0); } };});
+  }
+
+  async function quedarseCon(id, gi){
+    var g=disputas()[gi]; if(!g)return;
+    var gana=g.evs.filter(function(x){return x.id===id;})[0]; if(!gana)return;
+    var hoy=new Date().toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});
+
+    /* Primero la ganadora: si la base la rebota -le falta foto, precio o
+       descripción para ponerse a la venta- no se le deja una nota a nadie por
+       una decisión que no se pudo aplicar. */
+    var r=await sb.from('eventos').update({estado:'confirmado'}).eq('id',id);
+    if(r.error){ toast(r.error.message,true); return; }
+
+    var fallos=0;
+    for(var i=0;i<g.evs.length;i++){
+      var o=g.evs[i]; if(o.id===id) continue;
+      var nota='['+hoy+'] El horario del '+fecha(gana.fecha_inicio)+' '+hhmm(gana.fecha_inicio)+
+               ' en '+nombreSala(g.sala)+' se le dio a «'+(gana.nombre||'')+'». Hay que proponerle otra fecha.';
+      var ro=await sb.from('eventos').update({notas:(o.notas?o.notas+'\n':'')+nota}).eq('id',o.id);
+      if(ro.error) fallos++;
+    }
+    toast(fallos ? ('Se confirmó «'+(gana.nombre||'')+'», pero '+fallos+' nota'+(fallos===1?'':'s')+' no se pudo guardar.')
+                 : 'Listo: «'+(gana.nombre||'')+'» se queda con el horario. A las demás les quedó la nota.', !!fallos);
+    await carga();
+  }
+
+  async function deshaceDisputa(id){
+    var r=await sb.from('eventos').update({estado:'propuesto'}).eq('id',id);
+    if(r.error){ toast(r.error.message,true); return; }
+    toast('Deshecho: el horario vuelve a estar en disputa. Las notas que ya se escribieron se quedan.');
+    await carga();
+  }
+
   function cierraEvt(){evEdit=null;$('cardEditEvt').style.display='none';}
   async function libreSala(espId,ini,fin,mont,desm,excluir){
     if(!espId)return true;
@@ -1242,7 +1413,7 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   }
 
   function pinta(){pintaNav();SECS.forEach(function(s){$('sec-'+s[0]).style.display=s[0]===sec?'':'none';});
-    if(sec==='evt')pintaEvt();if(sec==='cal')pintaCal();if(sec==='esp')pintaEsp();}
+    if(sec==='evt')pintaEvt();if(sec==='cal')pintaCal();if(sec==='dis')pintaDis();if(sec==='esp')pintaEsp();}
 
   async function carga(){
     var r=await Promise.all([
