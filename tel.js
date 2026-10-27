@@ -24,6 +24,36 @@
   /* [dos letras, prefijo, nombre en español, nombre en inglés si cambia] */
   var P = [["AF","93","Afganistán","Afghanistan"],["AL","355","Albania",null],["DE","49","Alemania","Germany"],["AD","376","Andorra",null],["AO","244","Angola",null],["AI","1","Anguila","Anguilla"],["AG","1","Antigua y Barbuda","Antigua & Barbuda"],["SA","966","Arabia Saudí","Saudi Arabia"],["DZ","213","Argelia","Algeria"],["AR","54","Argentina",null],["AM","374","Armenia",null],["AW","297","Aruba",null],["AU","61","Australia",null],["AT","43","Austria",null],["AZ","994","Azerbaiyán","Azerbaijan"],["BS","1","Bahamas",null],["BD","880","Bangladés","Bangladesh"],["BB","1","Barbados",null],["BH","973","Baréin","Bahrain"],["BE","32","Bélgica","Belgium"],["BZ","501","Belice","Belize"],["BJ","229","Benín","Benin"],["BM","1","Bermudas","Bermuda"],["BY","375","Bielorrusia","Belarus"],["BO","591","Bolivia",null],["BA","387","Bosnia y Herzegovina","Bosnia & Herzegovina"],["BW","267","Botsuana","Botswana"],["BR","55","Brasil","Brazil"],["BN","673","Brunéi","Brunei"],["BG","359","Bulgaria",null],["BF","226","Burkina Faso",null],["BI","257","Burundi",null],["BT","975","Bután","Bhutan"],["CV","238","Cabo Verde","Cape Verde"],["KH","855","Camboya","Cambodia"],["CM","237","Camerún","Cameroon"],["CA","1","Canadá","Canada"],["BQ","599","Caribe neerlandés","Caribbean Netherlands"],["QA","974","Catar","Qatar"],["TD","235","Chad",null],["CZ","420","Chequia","Czechia"],["CL","56","Chile",null],["CN","86","China",null],["CY","357","Chipre","Cyprus"],["VA","39","Ciudad del Vaticano","Vatican City"],["CO","57","Colombia",null],["KM","269","Comoras","Comoros"],["CG","242","Congo","Congo - Brazzaville"],["KP","850","Corea del Norte","North Korea"],["KR","82","Corea del Sur","South Korea"],["CR","506","Costa Rica",null],["CI","225","Côte d’Ivoire",null],["HR","385","Croacia","Croatia"],["CU","53","Cuba",null],["CW","599","Curazao","Curaçao"],["DK","45","Dinamarca","Denmark"],["DM","1","Dominica",null],["EC","593","Ecuador",null],["EG","20","Egipto","Egypt"],["SV","503","El Salvador",null],["AE","971","Emiratos Árabes Unidos","United Arab Emirates"],["ER","291","Eritrea",null],["SK","421","Eslovaquia","Slovakia"],["SI","386","Eslovenia","Slovenia"],["ES","34","España","Spain"],["US","1","Estados Unidos","United States"],["EE","372","Estonia",null],["SZ","268","Esuatini","Eswatini"],["ET","251","Etiopía","Ethiopia"],["PH","63","Filipinas","Philippines"],["FI","358","Finlandia","Finland"],["FJ","679","Fiyi","Fiji"],["FR","33","Francia","France"],["GA","241","Gabón","Gabon"],["GM","220","Gambia",null],["GE","995","Georgia",null],["GH","233","Ghana",null],["GI","350","Gibraltar",null],["GD","1","Granada","Grenada"],["GR","30","Grecia","Greece"],["GL","299","Groenlandia","Greenland"],["GP","590","Guadalupe","Guadeloupe"],["GU","1","Guam",null],["GT","502","Guatemala",null],["GF","594","Guayana Francesa","French Guiana"],["GG","44","Guernesey","Guernsey"],["GN","224","Guinea",null],["GQ","240","Guinea Ecuatorial","Equatorial Guinea"],["GW","245","Guinea-Bisáu","Guinea-Bissau"],["GY","592","Guyana",null],["HT","509","Haití","Haiti"],["HN","504","Honduras",null],["HU","36","Hungría","Hungary"],["IN","91","India",null],["ID","62","Indonesia",null],["IQ","964","Irak","Iraq"],["IR","98","Irán","Iran"],["IE","353","Irlanda","Ireland"],["AC","247","Isla de la Ascensión","Ascension Island"],["IM","44","Isla de Man","Isle of Man"],["CX","61","Isla de Navidad","Christmas Island"],["NF","672","Isla Norfolk","Norfolk Island"],["IS","354","Islandia","Iceland"],["AX","358","Islas Aland","Åland Islands"],["KY","1","Islas Caimán","Cayman Islands"],["CC","61","Islas Cocos","Cocos (Keeling) Islands"],["CK","682","Islas Cook","Cook Islands"],["FO","298","Islas Feroe","Faroe Islands"],["FK","500","Islas Malvinas","Falkland Islands"],["MP","1","Islas Marianas del Norte","Northern Mariana Islands"],["MH","692","Islas Marshall","Marshall Islands"],["SB","677","Islas Salomón","Solomon Islands"],["TC","1","Islas Turcas y Caicos","Turks & Caicos Islands"],["VG","1","Islas Vírgenes Británicas","British Virgin Islands"],["VI","1","Islas Vírgenes de EE. UU.","U.S. Virgin Islands"],["IL","972","Israel",null],["IT","39","Italia","Italy"],["JM","1","Jamaica",null],["JP","81","Japón","Japan"],["JE","44","Jersey",null],["JO","962","Jordania","Jordan"],["KZ","7","Kazajistán","Kazakhstan"],["KE","254","Kenia","Kenya"],["KG","996","Kirguistán","Kyrgyzstan"],["KI","686","Kiribati",null],["XK","383","Kosovo",null],["KW","965","Kuwait",null],["LA","856","Laos",null],["LS","266","Lesoto","Lesotho"],["LV","371","Letonia","Latvia"],["LB","961","Líbano","Lebanon"],["LR","231","Liberia",null],["LY","218","Libia","Libya"],["LI","423","Liechtenstein",null],["LT","370","Lituania","Lithuania"],["LU","352","Luxemburgo","Luxembourg"],["MK","389","Macedonia del Norte","North Macedonia"],["MG","261","Madagascar",null],["MY","60","Malasia","Malaysia"],["MW","265","Malaui","Malawi"],["MV","960","Maldivas","Maldives"],["ML","223","Mali",null],["MT","356","Malta",null],["MA","212","Marruecos","Morocco"],["MQ","596","Martinica","Martinique"],["MU","230","Mauricio","Mauritius"],["MR","222","Mauritania",null],["YT","262","Mayotte",null],["MX","52","México","Mexico"],["FM","691","Micronesia",null],["MD","373","Moldavia","Moldova"],["MC","377","Mónaco","Monaco"],["MN","976","Mongolia",null],["ME","382","Montenegro",null],["MS","1","Montserrat",null],["MZ","258","Mozambique",null],["MM","95","Myanmar (Birmania)","Myanmar (Burma)"],["NA","264","Namibia",null],["NR","674","Nauru",null],["NP","977","Nepal",null],["NI","505","Nicaragua",null],["NE","227","Níger","Niger"],["NG","234","Nigeria",null],["NU","683","Niue",null],["NO","47","Noruega","Norway"],["NC","687","Nueva Caledonia","New Caledonia"],["NZ","64","Nueva Zelanda","New Zealand"],["OM","968","Omán","Oman"],["NL","31","Países Bajos","Netherlands"],["PK","92","Pakistán","Pakistan"],["PW","680","Palaos","Palau"],["PA","507","Panamá","Panama"],["PG","675","Papúa Nueva Guinea","Papua New Guinea"],["PY","595","Paraguay",null],["PE","51","Perú","Peru"],["PF","689","Polinesia Francesa","French Polynesia"],["PL","48","Polonia","Poland"],["PT","351","Portugal",null],["PR","1","Puerto Rico",null],["HK","852","RAE de Hong Kong (China)","Hong Kong SAR China"],["MO","853","RAE de Macao (China)","Macao SAR China"],["GB","44","Reino Unido","United Kingdom"],["CF","236","República Centroafricana","Central African Republic"],["CD","243","República Democrática del Congo","Congo - Kinshasa"],["DO","1","República Dominicana","Dominican Republic"],["RE","262","Reunión","Réunion"],["RW","250","Ruanda","Rwanda"],["RO","40","Rumanía","Romania"],["RU","7","Rusia","Russia"],["EH","212","Sáhara Occidental","Western Sahara"],["WS","685","Samoa",null],["AS","1","Samoa Americana","American Samoa"],["BL","590","San Bartolomé","St. Barthélemy"],["KN","1","San Cristóbal y Nieves","St. Kitts & Nevis"],["SM","378","San Marino",null],["MF","590","San Martín","St. Martin"],["PM","508","San Pedro y Miquelón","St. Pierre & Miquelon"],["VC","1","San Vicente y las Granadinas","St. Vincent & Grenadines"],["SH","290","Santa Elena","St. Helena"],["LC","1","Santa Lucía","St. Lucia"],["ST","239","Santo Tomé y Príncipe","São Tomé & Príncipe"],["SN","221","Senegal",null],["RS","381","Serbia",null],["SC","248","Seychelles",null],["SL","232","Sierra Leona","Sierra Leone"],["SG","65","Singapur","Singapore"],["SX","1","Sint Maarten",null],["SY","963","Siria","Syria"],["SO","252","Somalia",null],["LK","94","Sri Lanka",null],["ZA","27","Sudáfrica","South Africa"],["SD","249","Sudán","Sudan"],["SS","211","Sudán del Sur","South Sudan"],["SE","46","Suecia","Sweden"],["CH","41","Suiza","Switzerland"],["SR","597","Surinam","Suriname"],["SJ","47","Svalbard y Jan Mayen","Svalbard & Jan Mayen"],["TH","66","Tailandia","Thailand"],["TW","886","Taiwán","Taiwan"],["TZ","255","Tanzania",null],["TJ","992","Tayikistán","Tajikistan"],["IO","246","Territorio Británico del Océano Índico","British Indian Ocean Territory"],["PS","970","Territorios Palestinos","Palestinian Territories"],["TL","670","Timor-Leste",null],["TG","228","Togo",null],["TK","690","Tokelau",null],["TO","676","Tonga",null],["TT","1","Trinidad y Tobago","Trinidad & Tobago"],["TA","290","Tristán de Acuña","Tristan da Cunha"],["TN","216","Túnez","Tunisia"],["TM","993","Turkmenistán","Turkmenistan"],["TR","90","Turquía","Türkiye"],["TV","688","Tuvalu",null],["UA","380","Ucrania","Ukraine"],["UG","256","Uganda",null],["UY","598","Uruguay",null],["UZ","998","Uzbekistán","Uzbekistan"],["VU","678","Vanuatu",null],["VE","58","Venezuela",null],["VN","84","Vietnam",null],["WF","681","Wallis y Futuna","Wallis & Futuna"],["YE","967","Yemen",null],["DJ","253","Yibuti","Djibouti"],["ZM","260","Zambia",null],["ZW","263","Zimbabue","Zimbabwe"]];
 
+  /* EL IDIOMA. La lista ya trae el nombre en ingles en p[3] desde el primer
+     dia y nunca se pintaba: el buscador si lo miraba -se podia teclear
+     «Germany»- pero lo que se leia era siempre «Alemania». Javi, 27-oct-2026:
+     «traduce todo lo que esta de cara al cliente», y este campo sale en el
+     check-in del huesped, en el alta del ateneista y en «quiero ser Pepe».
+     Lo que cambia es solo la ETIQUETA: el valor sigue siendo el prefijo y
+     data-pais las dos letras del pais. */
+  function idiomaTel() {
+    try {
+      var q = new URLSearchParams(location.search).get('lang');
+      if (q === 'en' || q === 'es') return q;
+    } catch (_) {}
+    try {
+      var ks = ['apepe_ckin_lang', 'apepe_lang', 'sinc_idioma', 'grupo_idioma'];
+      for (var i = 0; i < ks.length; i++) {
+        var v = localStorage.getItem(ks[i]);
+        if (v === 'en' || v === 'es') return v;
+      }
+    } catch (_) {}
+    try { if (String(document.documentElement.lang || '').slice(0, 2) === 'en') return 'en'; } catch (_) {}
+    return 'es';
+  }
+  var ENG = idiomaTel() === 'en';
+  function nom(p) { return (ENG && p[3]) ? p[3] : p[2]; }
+  var TX = ENG
+    ? { elige:'Choose the country', busca:'Search: country or code',
+        buscaAria:'Search for the country', cerrar:'Close', nada:'No country matches that.' }
+    : { elige:'Elige el país', busca:'Busca: país o prefijo',
+        buscaAria:'Busca el país', cerrar:'Cerrar', nada:'Ningún país con eso.' };
+
   var POR_ISO = {};
   P.forEach(function (p) { POR_ISO[p[0]] = p; });
 
@@ -115,9 +145,9 @@
     var capa = document.createElement('div');
     capa.className = 'tlm';
     capa.innerHTML =
-      '<div class="tlm-d" role="dialog" aria-label="Elige el país">' +
+      '<div class="tlm-d" role="dialog" aria-label="' + TX.elige + '">' +
         '<div class="tlm-h"><input type="text" inputmode="search" autocomplete="off" ' +
-          'placeholder="Busca: país o prefijo" aria-label="Busca el país"><button type="button" aria-label="Cerrar">✕</button></div>' +
+          'placeholder="' + TX.busca + '" aria-label="' + TX.buscaAria + '"><button type="button" aria-label="' + TX.cerrar + '">✕</button></div>' +
         '<ul class="tlm-l"></ul>' +
       '</div>';
     document.body.appendChild(capa);
@@ -126,10 +156,10 @@
     var vis = P, foco = 0;
 
     function pinta() {
-      if (!vis.length) { lista.innerHTML = '<li class="tlm-v">Ningún país con eso.</li>'; return; }
+      if (!vis.length) { lista.innerHTML = '<li class="tlm-v">' + TX.nada + '</li>'; return; }
       lista.innerHTML = vis.map(function (p, i) {
         return '<li data-i="' + i + '" class="' + (i === foco ? 'on' : '') + '">' + img(p[0]) +
-               '<b>' + esc(p[2]) + '</b><span>+' + p[1] + '</span></li>';
+               '<b>' + esc(nom(p)) + '</b><span>+' + p[1] + '</span></li>';
       }).join('');
       Array.prototype.forEach.call(lista.children, function (li) {
         li.onclick = function () { cierra(vis[+li.getAttribute('data-i')]); };
@@ -197,7 +227,7 @@
     var bot = document.createElement('button');
     bot.type = 'button';
     bot.className = 'tlw-b';
-    bot.setAttribute('aria-label', 'Elige el país');
+    bot.setAttribute('aria-label', TX.elige);
     el.parentNode.insertBefore(caja, el);
     caja.appendChild(bot);
     caja.appendChild(el);
@@ -221,7 +251,7 @@
     function pintaBoton() {
       var p = POR_ISO[iso] || POR_ISO[DEF];
       bot.innerHTML = img(p[0]) + '<span class="tlw-c">+' + p[1] + '</span><span class="tlw-x">▾</span>';
-      bot.title = p[2];
+      bot.title = nom(p);
       el.dataset.pais = p[0];
       el.dataset.prefijo = p[1];
       /* Si la pantalla dejó un campo oculto <id>-pais, se le llena solo. */

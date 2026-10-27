@@ -26,6 +26,46 @@
     ['ZA', 'Sudáfrica', '27'], ['MA', 'Marruecos', '212']
   ];
 
+  /* LOS PAISES, EN INGLES. Javi, 27-oct-2026: «traduce todo lo que esta de cara
+     al cliente». Este desplegable sale en el alta del ateneista, en la compra
+     de un evento y en el coworking, y era una lista entera en espanol dentro de
+     un formulario en ingles. Solo cambia la ETIQUETA: el valor sigue siendo la
+     lada y el data-iso el codigo del pais, que es lo que se guarda.
+     Los que se escriben igual en los dos idiomas -Costa Rica, Panama, Chile-
+     no tienen entrada: se devuelve el nombre tal cual. */
+  var EN = {
+    'México':'Mexico','Estados Unidos':'United States','Canadá':'Canada',
+    'España':'Spain','Brasil':'Brazil','Colombia':'Colombia','Perú':'Peru',
+    'Ecuador':'Ecuador','R. Dominicana':'Dominican Rep.','Cuba':'Cuba',
+    'Panamá':'Panama','Reino Unido':'United Kingdom','Francia':'France',
+    'Alemania':'Germany','Italia':'Italy','Países Bajos':'Netherlands',
+    'Bélgica':'Belgium','Suiza':'Switzerland','Irlanda':'Ireland',
+    'Suecia':'Sweden','Noruega':'Norway','Dinamarca':'Denmark',
+    'Finlandia':'Finland','Polonia':'Poland','Chequia':'Czechia',
+    'Grecia':'Greece','Rumanía':'Romania','Rusia':'Russia','Turquía':'Türkiye',
+    'Australia':'Australia','Nueva Zelanda':'New Zealand','Japón':'Japan',
+    'Corea del Sur':'South Korea','China':'China','Sudáfrica':'South Africa',
+    'Marruecos':'Morocco'
+  };
+  /* El idioma lo deciden las pantallas, no este archivo: se mira la liga y las
+     llaves que ya usan Sincretico y APePe. */
+  function idioma() {
+    try {
+      var q = new URLSearchParams(location.search).get('lang');
+      if (q === 'en' || q === 'es') return q;
+    } catch (_) {}
+    try {
+      var ks = ['sinc_idioma', 'apepe_lang', 'apepe_ckin_lang'];
+      for (var i = 0; i < ks.length; i++) {
+        var v = localStorage.getItem(ks[i]);
+        if (v === 'en' || v === 'es') return v;
+      }
+    } catch (_) {}
+    try { if (String(document.documentElement.lang || '').slice(0, 2) === 'en') return 'en'; } catch (_) {}
+    return 'es';
+  }
+  function nombre(p) { return (idioma() === 'en' && EN[p]) ? EN[p] : p; }
+
   function bandera(iso) {
     return String.fromCodePoint.apply(null, iso.toUpperCase().split('')
       .map(function (c) { return 127397 + c.charCodeAt(0); }));
@@ -39,10 +79,11 @@
 
     caj.innerHTML =
       '<div class="tp-fila">' +
-        '<select class="tp-pais" id="' + id + '-p" aria-label="País">' +
+        '<select class="tp-pais" id="' + id + '-p" aria-label="' +
+            (idioma() === 'en' ? 'Country' : 'País') + '">' +
           PAISES.map(function (p) {
             return '<option value="' + p[2] + '" data-iso="' + p[0] + '">' +
-                   bandera(p[0]) + ' ' + p[1] + ' +' + p[2] + '</option>';
+                   bandera(p[0]) + ' ' + nombre(p[1]) + ' +' + p[2] + '</option>';
           }).join('') +
         '</select>' +
         '<input class="tp-num" id="' + id + '-n" type="tel" inputmode="tel" ' +
@@ -110,5 +151,5 @@
     };
   }
 
-  global.telPais = { monta: monta, paises: PAISES };
+  global.telPais = { monta: monta, paises: PAISES, nombre: nombre };
 })(window);

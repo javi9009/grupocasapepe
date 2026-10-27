@@ -1057,6 +1057,24 @@
     'Lo que pediste y en qué va.':'What you ordered and how it’s going.',
     'Room Shop Service: artesanía y piezas con alma, para recoger en recepción.':'Room Shop Service: crafts and pieces with a soul, to pick up at the front desk.',
     'Tu app de huésped de Casa Pepe: el mapa de la ciudad, tu check-in, tus experiencias.':'Your Casa Pepe guest app: the city map, your check-in, your experiences.',
+    /* El contador de cartas del Pepe GO! y el lugar de cada comunidad en la portada. 27-oct-2026. */
+    'Ciudad de México':'Mexico City',
+    'Sierra del Nayar, Nayarit':'Sierra del Nayar, Nayarit',
+    'de':'of',
+    /* Las categorias de la tienda y las colecciones del pasaporte del Pepe GO!: catalogos cortos de la base que ninguna pantalla traducia. 27-oct-2026. */
+    'Calzado':'Footwear',
+    'Cinco de Mayo':'Cinco de Mayo',
+    'Escultura':'Sculpture',
+    'Lo mesoamericano':'The Mesoamerican',
+    'Lo nacional':'The national',
+    'Lo virreinal':'The viceregal',
+    'Los mitos':'The myths',
+    'Los pensadores':'The thinkers',
+    'Los políticos e históricos':'The political and the historical',
+    'Los viajeros':'The travellers',
+    'Los íconos':'The icons',
+    'Porta gafete':'Badge holder',
+    'Porta lentes':'Glasses case',
 
   };
 
