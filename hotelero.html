@@ -520,17 +520,43 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     ]};
   var TIPOS=[{k:'experiencia',t:'Experiencias',g:'map'},{k:'evento',t:'Eventos',g:'ticket'},{k:'tienda',t:'Tienda',g:'bag'}];
 
-  var GRUPOS=[],G=null,HOT=[],Hsel=null,nivel='grupo',sec='cuenta';
+  var GRUPOS=[],G=null,GSEL=null,HOT=[],Hsel=null,nivel='grupo',sec='cuenta';
   var CAT={experiencia:[],evento:[],tienda:[],mapa:[]}, SEL={}, vista='foto', filtro='todos';
 
   function destino(){ return nivel==='hotel' && Hsel ? Hsel : G; }
 
   /* ---------- arranque ---------- */
+  /* EL GRUPO ES UNA FILA, NO UNA SUPOSICION. Javi, 27-oct: «el usuario
+     ateneista deberia ser el grupo, no el hotel individual».
+     Hasta hoy esta pantalla no sabia que `hotel_grupos` existia: llamaba
+     «grupo» al primer hotel que abrias y deducia sus hermanas comparando
+     `grupo_id` entre hoteles. Funcionaba de casualidad -y solo cuando el
+     grupo_id estaba puesto, que en Casa Pepe no lo estaba-.
+     Ahora el nombre, el estado y el contrato del nivel de arriba salen de la
+     fila del grupo. Lo operativo (comisiones, Stripe, marca) sigue viviendo en
+     la casa, porque ahi es donde esta. */
+  var GRU=[];
+  function grupoDe(h){
+    if(!h || !h.grupo_id) return null;
+    return GRU.filter(function(g){ return g.id===h.grupo_id; })[0] || null;
+  }
+  /* Como se llama el nivel de arriba: el grupo si lo hay, y si no la casa. */
+  function nombreArriba(h){
+    var g=grupoDe(h);
+    return (g && g.nombre) || (h && h.nombre_comercial) || 'Tu portal';
+  }
+
   async function load(){
+    GRU = await get('hotel_grupos?select=id,nombre,slug,estado,ateneista_id,contrato_firmado_at&order=nombre') || [];
     var hs=await get('hoteles?select=*&order=nombre_comercial');
     if(!hs){ $('sub').textContent='No se pudo cargar. Abre esta pantalla desde el panel.'; return; }
     GRUPOS=hs;
-    $('selGrupo').innerHTML=hs.map(function(h){return '<option value="'+h.id+'">'+esc(h.nombre_comercial||'(sin nombre)')+(h.es_grupo?' · grupo':'')+'</option>';}).join('');
+    /* Cada casa se lee con el apellido de su grupo, que es como las distingue
+       quien lleva varias: «Barrio Bolívar · Barrio», no «Barrio Bolívar». */
+    $('selGrupo').innerHTML=hs.map(function(h){
+      var g=grupoDe(h);
+      return '<option value="'+h.id+'">'+esc(h.nombre_comercial||'(sin nombre)')
+        + (g?' · '+esc(g.nombre):'')+'</option>';}).join('');
     $('selGrupo').onchange=function(){ abre(this.value); };
     /* Se entra desde "Su portal" en la ficha: ?h=<id> fija el hotel y
        esconde el selector, porque el portal es privado de esa casa. */
@@ -569,8 +595,9 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
        suyos: Barrio veia Hotel Catedral y MX Hoteles en su propio portal, con
        sus datos. Un respaldo que adivina mal es peor que no tener respaldo. */
     HOT=GRUPOS.filter(function(h){return h.grupo_id && G.grupo_id && h.grupo_id===G.grupo_id && h.id!==G.id;});
+    GSEL=grupoDe(G);   /* la fila del grupo, si esta casa pertenece a uno */
     Hsel=null; nivel='grupo';
-    $('tit').textContent=G.nombre_comercial||'Portal del hotelero';
+    $('tit').textContent=nombreArriba(G);
     /* pintaNivel() lo reescribe enseguida; esto es solo para que no se quede
        el texto del hotel anterior mientras carga. */
     $('sub').textContent='Cargando…';
@@ -745,10 +772,15 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       ? '<img src="'+esc(logoG)+'" alt="'+esc(G.nombre_comercial||'')+'">'
       : '<span class="ini">'+esc((G.nombre_comercial||'·').trim().slice(0,1).toUpperCase())+'</span>';
     $('tit').textContent = nivel==='hotel' ? (d.nombre_comercial||'Esta casa')
-      : ((G.nombre_comercial||'Tu portal')+(G.es_grupo?' · grupo':''));
+                                            : nombreArriba(G);
+    /* Un grupo de verdad dice cuantas casas tiene; una casa suelta dice su
+       ciudad, porque no hay grupo del que hablar. Antes las dos decian lo
+       mismo y el numero salia de contar hermanas, no de la fila del grupo. */
     $('sub').textContent = nivel==='hotel'
-      ? ('Casa de '+(G.nombre_comercial||'tu grupo')+' · hereda del grupo')
-      : ((HOT.length?HOT.length+' casas · ':'')+(G.ciudad||''));
+      ? ('Casa de '+nombreArriba(G)+' · hereda del grupo')
+      : (GSEL
+         ? ((HOT.length+1)+' casas · grupo'+(GSEL.estado?' · '+GSEL.estado:''))
+         : ((G.ciudad||'')+' · casa suelta, sin grupo'));
     /* NO ES /h/<slug>: eso nunca existio y daba un Not found. La app del
        huesped es /apepe/, y `?h=<slug>` es lo que apepe/marca.js lee para
        vestirla con la marca de esta casa. Javi, 27-oct-2026. */
