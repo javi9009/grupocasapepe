@@ -14,7 +14,9 @@
  *
  *   <script src="/m/cp-ui.js"></script>
  *   CP.pastillas(['experiencias','hotel'])   -> el HTML de las pastillas
- *   CP.capNom('artesania')                   -> «Artesanía»
+ *   CP.capNom('artesania')                   -> «Artesanía» (la cosa)
+ *   CP.capQuien('artesania')                 -> «Artesanos» (quien la trae)
+ *   CP.pastillas(lista, {quien:true})        -> las pastillas con el nombre de quien
  *
  * El CSS se inyecta solo la primera vez que se pide una pastilla: una pantalla
  * que no las use no paga nada por tener el archivo cargado.
@@ -33,6 +35,20 @@
     ['membresia',    'Membresía',    '#E1F0E7', '#1D6B4A']
   ];
 
+  /* LA COSA Y QUIEN LA TRAE NO SE LLAMAN IGUAL. Javi, 27-oct-2026.
+     Una capacidad se llama «Eventos» cuando nombra lo que se vende, y
+     «Productoras» cuando nombra a quien lo trae. En La Comunidad la lista es
+     de gente, asi que decia «Eventos 6» y salian hoteles: el nombre prometia
+     eventos y entregaba personas. Son dos nombres del mismo dato, y los dos
+     viven aqui para que no se separen. */
+  var QUIEN = {
+    experiencias: 'Touroperadoras',
+    eventos:      'Productoras',
+    hotel:        'Hotel',
+    artesania:    'Artesanos',
+    membresia:    'Coworkers'
+  };
+
   var PUESTO = false;
 
   function esc(s) {
@@ -45,6 +61,10 @@
     for (var i = 0; i < CAPS.length; i++) if (CAPS[i][0] === k) return CAPS[i][1];
     return k;
   }
+
+  /* Como se llama QUIEN trae esa capacidad. Usalo en toda pantalla cuya lista
+     sea de personas; `capNom` es para cuando se nombra la cosa. */
+  function capQuien(k) { return QUIEN[k] || capNom(k); }
 
   /* El CSS va con nombre propio —`cp-cap`— y no toca ninguna clase que ya
      exista. Así una pantalla puede migrar hoy y la de al lado mañana, sin que
@@ -74,7 +94,7 @@
     ponEstilo();
     var o = opciones || {};
     return '<span class="cp-cap ' + esc(k) + (o.off ? ' off' : '') + '">' +
-      (o.punto ? '<i></i>' : '') + esc(capNom(k)) + '</span>';
+      (o.punto ? '<i></i>' : '') + esc(o.quien ? capQuien(k) : capNom(k)) + '</span>';
   }
 
   function pastillas(lista, opciones) {
@@ -85,6 +105,7 @@
   raiz.CP = raiz.CP || {};
   raiz.CP.CAPS = CAPS;
   raiz.CP.capNom = capNom;
+  raiz.CP.capQuien = capQuien;
   raiz.CP.pastilla = pastilla;
   raiz.CP.pastillas = pastillas;
 })(window);
