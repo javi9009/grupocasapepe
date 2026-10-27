@@ -1,6 +1,7 @@
 <!doctype html><html lang="es"><head>
 <script src="/cp-guarda.js"></script>
 <script src="/m/cp-marco.js"></script>
+<script src="/cp-acceso.js"></script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Salidas del día · Sincrético</title>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -115,6 +116,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
     <input type="date" id="fecha">
     <button class="btn sm gris" id="sig">Día siguiente ›</button>
     <button class="btn sm" id="hoy">Hoy</button>
+    <select id="ciudad" style="border:1.5px solid var(--linea);border-radius:9px;padding:9px 11px;background:#fff"></select>
     <span class="hoy" id="letra"></span>
   </div>
 
@@ -148,6 +150,32 @@ function enLetra(iso){
 }
 function hhmm(h){ return String(h||'').slice(0,5)||'—'; }
 
+/* El selector se arma con las ciudades que hoy tienen salida y la persona
+   puede ver. Con una sola, se esconde: un desplegable de un elemento no es una
+   eleccion, es un estorbo. */
+function pintaCiudades(){
+  var sel=$('ciudad'); if(!sel) return;
+  var hay=[];
+  (SAL||[]).forEach(function(s){
+    var k=s.ciudad_key||''; if(k && hay.indexOf(k)<0) hay.push(k);
+  });
+  hay.sort();
+  if(hay.length<2){ sel.style.display='none'; CIUDAD=''; return; }
+  sel.style.display='';
+  if(hay.indexOf(CIUDAD)<0) CIUDAD=hay[0];
+  sel.innerHTML=hay.map(function(k){
+      return '<option value="'+k+'"'+(k===CIUDAD?' selected':'')+'>'
+        + esc(NOMBRE_CIUDAD[k]||k) +'</option>'; }).join('')
+    + '<option value="">Todas</option>';
+  sel.onchange=function(){ CIUDAD=this.value; pinta(); };
+}
+
+function deLaCiudad(){
+  if(!SAL) return SAL;
+  if(!CIUDAD) return SAL;
+  return SAL.filter(function(s){ return (s.ciudad_key||'')===CIUDAD; });
+}
+
 function pinta(){
   var caja=$('lista');
   if(FALLO){
@@ -157,17 +185,26 @@ function pinta(){
   }
   if(SAL===null){ caja.innerHTML='<div class="vacio">Cargando…</div>'; return; }
 
+  var LIS=deLaCiudad();
   var pax=0, cobrar=0;
-  SAL.forEach(function(s){ pax+=Number(s.cupo_tomado||0); cobrar+=Number(s.por_cobrar||0); });
-  $('cuenta').innerHTML='<b>'+SAL.length+'</b> salidas · <b>'+pax+'</b> personas'+
-    (cobrar?' · <b>'+cobrar+'</b> por cobrar':'');
+  LIS.forEach(function(s){ pax+=Number(s.cupo_tomado||0); cobrar+=Number(s.por_cobrar||0); });
+  $('cuenta').innerHTML='<b>'+LIS.length+'</b> salidas · <b>'+pax+'</b> personas'+
+    (cobrar?' · <b>'+cobrar+'</b> por cobrar':'')
+    + (CIUDAD?' · '+esc(NOMBRE_CIUDAD[CIUDAD]||CIUDAD):'');
 
-  if(!SAL.length){
-    caja.innerHTML='<div class="vacio"><b>Nada sale este día</b>No hay ninguna salida programada para el '+esc(DIA)+'.</div>';
+  if(!LIS.length){
+    /* Que diga la verdad: no es lo mismo «no sale nada» que «no sale nada
+       aqui, pero en la otra ciudad si». */
+    caja.innerHTML='<div class="vacio"><b>Nada sale este día</b>'
+      + (CIUDAD && SAL.length
+         ? 'No hay salidas en '+esc(NOMBRE_CIUDAD[CIUDAD]||CIUDAD)+' el '+esc(DIA)
+           +'. En las demás ciudades sí: cambia arriba para verlas.'
+         : 'No hay ninguna salida programada para el '+esc(DIA)+'.')
+      +'</div>';
     return;
   }
 
-  caja.innerHTML=SAL.map(function(s){
+  caja.innerHTML=LIS.map(function(s){
     var max=Number(s.cupo_max||0), tom=Number(s.cupo_tomado||0), min=Number(s.cupo_min||0);
     var pct=max?Math.min(100,Math.round(tom*100/max)):0;
     var cl = (max&&tom>=max)?'lleno' : (min&&tom<min)?'flojo':'';
@@ -269,6 +306,18 @@ function pintaPax(caja,lista){
   });
 }
 
+/* CADA UBICACION, SUS SALIDAS. Javi, 27-oct-2026: «quita de CDMX la salida de
+   Malinche. solo centra por cada ubicacion las salidas de cada ciudad».
+   La Malinche sale de Casa Pepe Puebla a las cuatro de la maniana y salia en
+   la lista de CDMX, porque esta pantalla pedia el dia entero sin preguntar de
+   donde era cada salida. Ahora la vista trae `ciudad_key` resuelta -la ciudad
+   vivia en tres columnas distintas y escrita de dos maneras- y aqui se filtra:
+   primero por lo que a cada quien le toca ver (cp-acceso, la misma cascada de
+   todo el panel) y despues por la ciudad que elija de las que le quedan.
+   TODO = ver las dos, para quien puede. */
+var CIUDAD='';
+var NOMBRE_CIUDAD={cdmx:'Ciudad de México', puebla:'Puebla', virreyes:'Virreyes'};
+
 async function carga(){
   FALLO=''; SAL=null; RES={}; pinta();
   $('letra').textContent=enLetra(DIA);
@@ -276,6 +325,13 @@ async function carga(){
     var r=await fetch(SB+'/rest/v1/v_sinc_salidas?select=*&fecha=eq.'+DIA+'&order=hora',{headers:hdr()});
     if(!r.ok) throw new Error('la base respondió '+r.status);
     SAL=await r.json();
+    /* La cascada del panel. Si no hay sesion o la persona es de Direccion,
+       `filtra` devuelve la lista entera: no cierra puertas, solo quita lo que
+       no le toca. */
+    try{
+      if(window.cpAcceso) SAL=await cpAcceso.filtra(SAL,function(x){return x.ciudad_key||x.ciudad;});
+    }catch(_){ /* el filtro nunca debe tumbar la pantalla */ }
+    pintaCiudades();
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   pinta();
   if(ABRIR){ var id=ABRIR; ABRIR=''; setTimeout(function(){
