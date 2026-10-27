@@ -5352,6 +5352,21 @@
       'Se reserva hasta las 12:00 del mismo día.':'Bookable until 12:00 on the day itself.',
       'Se reserva hasta las 20:00 del día anterior.':'Bookable until 20:00 the day before.',
       'Se reserva hasta las 23:59 del día anterior.':'Bookable until 23:59 the day before.',
+      'Cerrar venta':'Close sales',
+      'Deja de admitir gente nueva en esta salida. No la cancela: sale igual con quien ya esté apuntado.':'Stops taking new people on this departure. It does not cancel it: it runs as planned with whoever is already booked.',
+      'Deja de admitir gente nueva. No la cancela: sale igual con quien ya esté apuntado.':'It stops taking new people. It does not cancel it: it runs as planned with whoever is already booked.',
+      'No entra nadie nuevo; los que ya están siguen dentro.':'No one new gets in; those already booked stay.',
+      'No se pudo: la base no dejó tocar esta salida.':'It didn\'t work: the database would not allow changing this departure.',
+      'Sí, cerrar la venta':'Yes, close sales',
+      'Venta':'Sales',
+      'Venta abierta otra vez.':'Sales open again.',
+      'Venta cerrada.':'Sales closed.',
+      'Volver a abrir la venta':'Reopen sales',
+      'esta salida':'this departure',
+      '¿Cerramos la venta de {a} del {b}?':'Close sales for {a} on {b}?',
+      'Cerrada el {a} a las {b}. No entra nadie nuevo; los que ya están siguen dentro.':'Closed on {a} at {b}. No one new gets in; those already booked stay.',
+      'ya dentro {a} de {b}':'{a} of {b} already in',
+      'folio {a}':'ref {a}',
 
     }
   };

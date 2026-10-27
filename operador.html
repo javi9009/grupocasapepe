@@ -1455,7 +1455,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
       PG.salidas=[];
       if(ids.length){
-        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,notas,aviso_enviado_at'+
+        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,notas,aviso_enviado_at,venta_cerrada_at'+
           '&experiencia_id=in.('+ids.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha,hora',{headers:hdr()});
         PG.salidas = rs.ok ? await rs.json() : [];
       }
@@ -1583,6 +1583,20 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
          es el momento: el botón vive en la salida, y se puede volver a
          mandar -la gente pierde correos, y reenviarlo cuesta menos que una
          llamada. */
+      /* CERRAR LA VENTA. Javi, 27-oct-2026: «ponle un boton en programar que
+         diga cerrar venta, para que ya no haya mas venta programada».
+         No cancela nada: la salida sale igual, con su gente y su guia, y lo
+         unico que para es que entre alguien mas. Por eso no es un estado de
+         la salida sino su propia marca, y se puede volver a abrir. */
+      '<div class="pgfila"><div class="et">Venta</div>'+
+        '<button class="btn sm'+(s.venta_cerrada_at?'':' gris')+'" data-venta="'+s.id+'">'+
+          (s.venta_cerrada_at?'Volver a abrir la venta':'Cerrar venta')+'</button>'+
+        '<div class="mini">'+(s.venta_cerrada_at
+          ? 'Cerrada el '+esc(String(s.venta_cerrada_at).slice(0,10).split('-').reverse().join('/'))+
+            ' a las '+esc(String(s.venta_cerrada_at).slice(11,16))+'. No entra nadie nuevo; los que ya están siguen dentro.'
+          : 'Deja de admitir gente nueva en esta salida. No la cancela: sale igual con quien ya esté apuntado.')+'</div>'+
+      '</div>'+
+
       (cl.length
         ? '<div class="pgfila"><div class="et">Avisar</div>'+
           '<button class="btn sm'+(s.aviso_enviado_at?'':' verde')+'" data-avisa="'+s.id+'">'+
@@ -1793,6 +1807,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(){ ponGuia(b.getAttribute('data-s'), b.getAttribute('data-guia')); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-rec]'),function(i){
       i.onchange=function(){ ponRecogida(i.getAttribute('data-rec'), i.value, i); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-venta]'),function(b){
+      b.onclick=function(){ cierraVenta(b.getAttribute('data-venta'), b); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-avisa]'),function(b){
       b.onclick=function(){
         var sid=b.getAttribute('data-avisa');
@@ -1838,6 +1854,38 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
     if(!fila||!fila.length){ toast('No se pudo asignar el guía: la base no dejó tocar esta salida.',true); return; }
     s.guia_id=nuevo; pintaProg();
+  }
+
+  /* El mismo boton abre y cierra: quien se equivoco espera volver a tocarlo,
+     igual que con el guia. Se pregunta antes de cerrar -es lo que apaga la
+     venta- pero no antes de abrir, que no rompe nada. */
+  async function cierraVenta(sid, btn){
+    var s=PG.salidas.filter(function(x){return x.id===sid;})[0]; if(!s) return;
+    var cerrando = !s.venta_cerrada_at;
+    if(cerrando){
+      var e=PG.exps[s.experiencia_id]||{};
+      var ok=await cpPregunta(
+        sincI18n.tn('¿Cerramos la venta de {a} del {b}?', e.nombre||sincI18n.t('esta salida'),
+                    String(s.fecha).slice(8)+'/'+String(s.fecha).slice(5,7))+'\n\n'+
+        sincI18n.t('Deja de admitir gente nueva. No la cancela: sale igual con quien ya esté apuntado.'),
+        {si:sincI18n.t('Sí, cerrar la venta')});
+      if(!ok) return;
+    }
+    var antes=btn.textContent; btn.disabled=true; btn.textContent=sincI18n.t('Un momento…');
+    var r=await fetch(SB+'/rest/v1/sinc_salidas?id=eq.'+sid,{method:'PATCH',
+      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+      body:JSON.stringify(cerrando
+        ? {venta_cerrada_at:new Date().toISOString(),
+           venta_cerrada_por:(ses&&ses.user&&ses.user.email)||null}
+        : {venta_cerrada_at:null, venta_cerrada_por:null})});
+    /* La fila de vuelta: un PATCH que no toca ninguna fila contesta 200 igual,
+       y entonces la pantalla diria que se cerro algo que sigue vendiendose. */
+    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
+    btn.disabled=false; btn.textContent=antes;
+    if(!fila||!fila.length){ toast('No se pudo: la base no dejó tocar esta salida.',true); return; }
+    s.venta_cerrada_at = fila[0].venta_cerrada_at;
+    toast(cerrando?'Venta cerrada.':'Venta abierta otra vez.');
+    pintaProg();
   }
 
   async function ponRecogida(rid, hora, inp){
@@ -5258,8 +5306,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     }
     var quien=esc((j&&j.titular)||'—'), qu=esc((j&&j.experiencia)||'');
     if(j&&j.ok){
+      /* El escaneo ya marca «llegó» en la Programación, asi que se dice aqui
+         cuantos van de esa reserva: es lo que el guia quiere saber cuando le
+         faltan dos del grupo. Javi, 27-oct-2026. */
+      /* Lo de «ya dentro» va en su propio span: el barredor de idioma traduce
+         por nodos de texto, y pegado al resto se quedaria en espanol. */
       cab('ok','✅ Adelante','<b>'+quien+'</b><br>'+qu,
-        'Persona '+esc(j.numero)+' de '+esc(j.de)+(j.tipo?' · '+esc(j.tipo):'')+(j.folio?' · folio '+esc(j.folio):''));
+        '<span>Persona '+esc(j.numero)+' de '+esc(j.de)+(j.tipo?' · '+esc(j.tipo):'')+'</span>'+
+        (j.llegaron!=null?' · <span>ya dentro '+esc(j.llegaron)+' de '+esc(j.de)+'</span>':'')+
+        (j.folio?' · <span>folio '+esc(j.folio)+'</span>':''));
       BHIST.unshift({t:quien,c:'ok',x:'entró'});
     } else if(j&&j.motivo==='ya_usado'){
       cab('warn','⚠️ Ya se usó','<b>'+quien+'</b><br>'+qu,
@@ -5300,6 +5355,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       pintaBoleto(j);
       /* Lo escaneado se ve en Mis ventas; que no haya que recargar para verlo. */
       if(VT.length) cargaVentas();
+      /* Y en Programacion, que es donde se enciende el «llegó». Sin esto el
+         guia escanea, la base lo apunta, y la pantalla que tiene abierta al
+         lado sigue diciendo que no ha llegado nadie. Javi, 27-oct-2026. */
+      if(PG.salidas.length) cargaProg();
     }catch(e){
       if(el){ el.className='resq bad';
         el.innerHTML='<div class="big">No se pudo comprobar</div><div class="pie">'+esc(e.message||e)+'</div>'; }
