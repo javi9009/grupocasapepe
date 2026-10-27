@@ -5251,6 +5251,8 @@
       'qué hace la persona {a}{b}':'what the person does {a}{b}',
       '{a} de 3 tomas.':'{a} of 3 shots.',
       '{a} de {b} pasos completos':'{a} of {b} steps complete',
+      'de lo que pagas se queda en la comunidad':'of what you pay stays in the community',
+      ', de Grupo Casa Pepe':', by Grupo Casa Pepe',
 
     }
   };

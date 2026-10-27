@@ -279,7 +279,11 @@ window.sincVitrina = (function () {
       if (x.cupo_max) d.push('👥 ' + x.cupo_max + T(' lugares'));
       if (x.duracion_min) d.push(dur(x.duracion_min));
     } else if (x.fuente === 'pase') {
-      if (x.resumen) d.push('📅 ' + x.resumen);
+      /* El pase de coworking no tiene tabla de traducciones -su «Por un dia»
+         sale de una vista, no de ateneo_planes-, asi que el resumen se busca
+         en el diccionario de la interfaz, donde si esta. Sin entrada devuelve
+         el espanol, que es el respaldo de siempre. 27-oct-2026. */
+      if (x.resumen) d.push('📅 ' + T(x.resumen));
     }
     return d.length
       ? '<span class="datos">' + d.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('') + '</span>'
