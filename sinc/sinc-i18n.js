@@ -1581,6 +1581,59 @@
       '📸 Tomar con la cámara':'📸 Use the camera',
       '🔗 Copiar link':'🔗 Copy link',
       '🔦 Luz':'🔦 Light',
+      /* El pick up, la cortesia por propina y la tercera figura fiscal. 27-oct-2026. */
+      'Dinos en qué hotel te recogemos.':'Tell us which hotel to pick you up from.',
+      'Este tour es por propina para huéspedes: a ti no se te cobra. Apartas tu lugar y te mandamos el pase.':'This tour is tip-based for guests, so there’s no charge for you. You hold your spot and we send you the pass.',
+      'Hotel y dirección donde te recogemos':'Hotel and address where we pick you up',
+      'No pudimos abrir el evento. Vuelve a intentarlo.':'We couldn’t open the event. Please try again.',
+      'Pasamos por ti':'We come get you',
+      'Persona física sin actividad empresarial':'Individual with no business activity (persona física sin actividad empresarial)',
+      'Pick up en el hotel':'Hotel pick-up',
+      'la hora puede variar ±30 min y te la confirmamos la noche anterior':'the time may shift by ±30 min and we confirm it the night before',
+      'minutos antes de la salida':'minutes before departure',
+      /* Huecos de Sincretico: mapa, coleccion de muertos, el pick up y el porcentaje a la comunidad. 27-oct-2026. */
+      '% de lo que pagas se queda en la comunidad':'% of what you pay stays in the community',
+      'Abriendo la colección…':'Opening the collection…',
+      'Ciudad':'City',
+      'En la Guía':'In the Guide',
+      'Lo que la ciudad hace cuando vuelven.':'What the city does when they come back.',
+      'Pasamos por ti a tu hotel':'We pick you up at your hotel',
+      'Te recogemos en tu hotel. Al reservar nos dices dónde te quedas.':'We pick you up at your hotel. You tell us where you’re staying when you book.',
+      'Versión 1':'Version 1',
+      'así se vería tu evento':'this is how your event would look',
+      '★ Una estrella':'★ One star',
+      '📍 Abrir en Google Maps':'📍 Open in Google Maps',
+      /* Los chips abreviados de impacto en la portada. 27-oct-2026. */
+      'Ambiente':'Environment',
+      'Economía':'Economy',
+      /* El mapa: el contador filtrado y el boton de la lista de Google. 27-oct-2026. */
+      'que recomendamos de eso.':'that we recommend for that.',
+      '» en Google Maps':'» in Google Maps',
+      '📍 Abrir «':'📍 Open «',
+      /* El aviso de cortesia del pago y la ficha de ejemplo del evento. 27-oct-2026. */
+      ', las de tu reserva.':', the ones on your booking.',
+      'Quien te va a reservar':'Whoever is booking',
+      'Vamos dos, uno en silla de ruedas.':'Two of us, one in a wheelchair.',
+      /* Titulos de pestana que se quedaban a medias. 27-oct-2026. */
+      'App del Ateneísta':'Ateneísta App',
+      'Darse de alta':'Sign up',
+      'Firmar el convenio del premio':'Sign the prize agreement',
+      'IR VENIMOS — Colección Día de Muertos':'IR VENIMOS — Day of the Dead collection',
+      'así se ve una página llena':'this is how a full page looks',
+      'la productora':'the producer',
+      'tu app':'your app',
+      /* La descripcion de cada pantalla, que es lo que se lee al compartir la liga. 27-oct-2026. */
+      'Compra tus boletos para eventos en el Ateneo de Virreyes.':'Buy your tickets for events at the Ateneo de Virreyes.',
+      'Coworking del Ateneo de Virreyes: por un día o por una semana.':'Coworking at the Ateneo de Virreyes: for a day or for a week.',
+      'Dónde estás en la Ciudad de México y qué te recomendamos a la vuelta.':'Where you are in Mexico City and what we recommend around the corner.',
+      'Eventos en el Ateneo de Virreyes, Ciudad de México.':'Events at the Ateneo de Virreyes, Mexico City.',
+      'Experiencias con gente de aquí, en la Ciudad de México.':'Experiences with people from here, in Mexico City.',
+      'La puerta del Ateneo de Virreyes: ateneístas, productoras, equipo y residentes.':'The door into the Ateneo de Virreyes: ateneístas, producers, team and residents.',
+      'Lo que la Ciudad de México hace cuando vuelven: desfiles, catrinas, alebrijes y una noche que no se parece a ninguna otra del año.':'What Mexico City does when they come back: parades, catrinas, alebrijes and a night like no other in the year.',
+      'Quién programa en el Ateneo de Virreyes, y qué tiene a la venta.':'Who programmes at the Ateneo de Virreyes, and what they have on sale.',
+      'Talleres, caminatas y encuentros con gente de aquí. Ciudad de México.':'Workshops, walks and encounters with people from here. Mexico City.',
+      'Un ejemplo de ficha de evento en Sincrético.':'A sample event page on Sincrético.',
+      'Un ejemplo de página de productora en Sincrético, llena de arriba a abajo.':'A sample producer page on Sincrético, filled in from top to bottom.',
 
     }
   };
@@ -1632,6 +1685,18 @@
       r.querySelectorAll('[data-i18n-html]').forEach(function(el){
         var k = el.getAttribute('data-i18n-html'); el.innerHTML = t(k);
       });
+      /* EL VALOR DE UN CAMPO. Lo piden las fichas de ejemplo, donde lo que se
+         lee dentro del campo no es un placeholder sino un valor de muestra. */
+      r.querySelectorAll('[data-i18n-val]').forEach(function(el){
+        var k = el.getAttribute('data-i18n-val'); el.value = t(k);
+      });
+      /* LA DESCRIPCION DE LA PAGINA. No la ve el huesped en la pantalla, pero
+         si cuando comparte la liga por WhatsApp, y era lo ultimo que seguia
+         saliendo en espanol en una app puesta en ingles. 27-oct-2026. */
+      if(!raiz) try{
+        var md=document.querySelector('meta[name="description"]');
+        if(md){ var v=t(md.getAttribute('content')||''); if(v) md.setAttribute('content', v); }
+      }catch(_){}
       titulo();
     }catch(_){}
   }

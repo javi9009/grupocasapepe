@@ -1032,6 +1032,31 @@
     '📸 Tomar con la cámara':'📸 Use the camera',
     '🔗 Copiar link':'🔗 Copy link',
     '🔦 Luz':'🔦 Light',
+    /* PepeQuiz: los duelos y la tabla del dia, el Challenge y el Top 10. 27-oct-2026. */
+    'Día de muertos':'Day of the Dead',
+    'Pixel wixáxika':'Wixáxika pixel',
+    'se queda en la comunidad':'stays in the community',
+    /* Los huecos de la app del huesped: ajustes del lector, horarios de las otras casas, chips de PepeQuiz y el ODS en la etiqueta. 27-oct-2026. */
+    'Ajustes':'Settings',
+    'Objetivo de Desarrollo Sostenible':'Sustainable Development Goal',
+    'Opcional':'Optional',
+    'Sus piezas vienen en camino':'Their pieces are on the way',
+    'Todavía no hay nada a la venta de esta comunidad. Mientras, su taller se puede reservar.':'Nothing from this community is on sale yet. In the meantime, their workshop can be booked.',
+    'Vender experiencias a los huéspedes':'Sell experiences to guests',
+    'desde las':'from',
+    'hasta las':'until',
+    'pregúntalo en recepción':'ask at the front desk',
+    'puntos en esta ronda':'points this round',
+    '🇲🇽 Español':'🇲🇽 Spanish',
+    '🇲🇽 México':'🇲🇽 Mexico',
+    /* La descripcion de cada pantalla, que es lo que se lee al compartir la liga. 27-oct-2026. */
+    'Caza anécdotas por la ciudad y desbloquea tu pasaporte de personajes.':'Hunt stories across the city and unlock your passport of characters.',
+    'Don José, el conserje de Casa Pepe, te ayuda con cualquier duda de tu estancia.':'Don José, the Casa Pepe concierge, helps you with anything about your stay.',
+    'Juega PepeQuiz: qué tanto sabes de México y de nuestros tours.':'Play PepeQuiz: how much do you know about Mexico and about our tours.',
+    'La Cósmica: horarios de la casa, desayuno y nuestro bar. Menú próximamente.':'La Cósmica: house hours, breakfast and our bar. Menu coming soon.',
+    'Lo que pediste y en qué va.':'What you ordered and how it’s going.',
+    'Room Shop Service: artesanía y piezas con alma, para recoger en recepción.':'Room Shop Service: crafts and pieces with a soul, to pick up at the front desk.',
+    'Tu app de huésped de Casa Pepe: el mapa de la ciudad, tu check-in, tus experiencias.':'Your Casa Pepe guest app: the city map, your check-in, your experiences.',
 
   };
 
@@ -1070,6 +1095,19 @@
     Array.prototype.forEach.call(r.querySelectorAll('[data-i18n-aria]'), function (e) {
       e.setAttribute('aria-label', t(e.getAttribute('data-i18n-aria')));
     });
+    Array.prototype.forEach.call(r.querySelectorAll('[data-i18n-html]'), function (e) {
+      e.innerHTML = t(e.getAttribute('data-i18n-html'));
+    });
+    Array.prototype.forEach.call(r.querySelectorAll('[data-i18n-val]'), function (e) {
+      e.value = t(e.getAttribute('data-i18n-val'));
+    });
+    /* LA DESCRIPCION DE LA PAGINA. No se lee en la pantalla, pero si cuando el
+       huesped comparte la liga, y era lo ultimo que seguia en espanol en una
+       app puesta en ingles. 27-oct-2026. */
+    if (!raiz) try {
+      var md = document.querySelector('meta[name="description"]');
+      if (md) { var v = t(md.getAttribute('content') || ''); if (v) md.setAttribute('content', v); }
+    } catch (_) {}
   }
   /* EL TITULO DE LA PESTANA. Tambien lo lee el huesped -en la pestana del
      navegador y al guardar la pantalla en la pantalla de inicio-, y era lo
