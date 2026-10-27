@@ -1075,6 +1075,16 @@
     'Los íconos':'The icons',
     'Porta gafete':'Badge holder',
     'Porta lentes':'Glasses case',
+    /* Los mensajes que escriben las funciones del upgrade y de la extension. Los que llevan un numero dentro siguen en espanol: esos hay que traducirlos en la propia funcion. 27-oct-2026. */
+    'Avisado. Recepción decide qué le ofrece y te dice.':'Noted. The front desk decides what to offer and will let you know.',
+    'Esa extensión ya estaba pedida.':'That extension had already been requested.',
+    'Esa oferta aún no alcanza para este upgrade.':'That offer isn’t enough for this upgrade yet.',
+    'Eso ya está pagado.':'That is already paid for.',
+    'Esta reserva ya no está activa.':'This booking is no longer active.',
+    'Guardamos tu firma, pero no pudimos cerrar el cambio automáticamente. Recepción lo termina y te confirma al llegar.':'We saved your signature, but we couldn’t close the change automatically. The front desk will finish it and confirm when you arrive.',
+    'Justo ese cuarto no tiene disponibilidad para tus fechas. Liz, de nuestro equipo, te revisa una opción.':'That particular room isn’t available for your dates. Liz, from our team, is looking at an option for you.',
+    'Ya estaba avisado. Recepción lo tiene.':'Already noted. The front desk has it.',
+    'Ésta es tu nueva habitación. Fírmala para aceptarla y la dejamos hecha.':'This is your new room. Sign it to accept and we’ll have it ready.',
 
   };
 
