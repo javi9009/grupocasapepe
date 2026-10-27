@@ -257,7 +257,7 @@ window.sincVitrina = (function () {
     var d = IMP[String(x.id)]; if (!d) return '';
     var p = Number(d.pct); if (!isFinite(p) || p < 50 || p > 100) return '';
     var pr = p;  /* el mismo numero que el desglose, con su decimal */
-    var n = pr >= 85 ? ' n3' : (pr >= 70 ? ' n2' : '');
+    var n = pr >= 80 ? ' n3' : (pr >= 65 ? ' n2' : '');
     var pe = Number(d.pesos);
     return '<span class="sellimp' + n + '" title="' + esc(pr) + '% '
       + esc(T('de lo que pagas se queda en la comunidad'))
