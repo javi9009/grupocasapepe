@@ -1612,18 +1612,16 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!nom){ toast('Ponle el nombre de la reserva: sin nombre no se la encuentra al llegar.',true); return; }
     if(ad+ni<1){ toast('Tiene que venir alguien: al menos una persona.',true); return; }
     btn.disabled=true; var antes=btn.textContent; btn.textContent='Apuntando…';
-    var r=await fetch(SB+'/rest/v1/sinc_reservas',{method:'POST',
-      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify({salida_id:s.id, experiencia_id:s.experiencia_id, nombre:nom,
-        adultos:ad, menores:ni, pax:ad+ni,
-        email:($('xMail').value||'').trim()||null,
-        restricciones:($('xRes').value||'').trim()||null,
-        pago_estado:$('xPag').value, canal:'otro', estado:'confirmada',
-        notas:'Reserva de otra plataforma · welcoming en Casa Pepe',
-        created_by:(ses&&ses.user&&ses.user.email)||null})});
-    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_apunta_externas',{method:'POST',
+      headers:hdr(), body:JSON.stringify({p_salida:s.id, p_filas:[{
+        nombre:nom, adultos:ad, menores:ni, pax:ad+ni,
+        email:($('xMail').value||'').trim(),
+        restricciones:($('xRes').value||'').trim(),
+        pago_estado:$('xPag').value,
+        notas:'Reserva de otra plataforma · welcoming en Casa Pepe'}]})});
+    var n=null; if(r.ok){ try{ n=await r.json(); }catch(_){} }
     btn.disabled=false; btn.textContent=antes;
-    if(!fila||!fila.length){ toast('La base no dejó apuntarla.',true); return; }
+    if(!n){ toast('La base no dejó apuntarla.',true); return; }
     PG.nueva=null; toast('Apuntada.'); await cargaProg();
   }
 
@@ -1674,24 +1672,20 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(!pax){ fuera++; return; }
       if(!ad && !ni) ad=pax;
       var pg=String(campo(f,['pagado','pago','estadopagado','estado','pagada'])||'').toLowerCase();
-      buenas.push({salida_id:s.id, experiencia_id:s.experiencia_id,
-        nombre:String(nom).trim(), adultos:ad, menores:ni, pax:pax,
+      buenas.push({nombre:String(nom).trim(), adultos:ad, menores:ni, pax:pax,
         email:(String(campo(f,['mail','correo','email','emailaddress'])||'').trim()||null),
         restricciones:(String(campo(f,['restricciones','restriccionesalimenticias','alimenticias','alergias','dieta'])||'').trim()||null),
         pago_estado:(/^(si|s|yes|y|pagad|1|true|x)/.test(pg)?'pagado':(pg?'pendiente':'sin_cobro')),
-        canal:'otro', estado:'confirmada',
-        notas:'Reserva de otra plataforma · cargada desde '+file.name,
-        created_by:(ses&&ses.user&&ses.user.email)||null});
+        notas:'Reserva de otra plataforma · cargada desde '+file.name});
     });
     if(!buenas.length){ toast('Ninguna fila tenía nombre y personas: no se cargó nada.', true); return; }
 
-    var r=await fetch(SB+'/rest/v1/sinc_reservas',{method:'POST',
-      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify(buenas)});
-    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
-    if(!fila||!fila.length){ toast('La base no dejó cargarlas.', true); return; }
-    toast(fuera ? ('Cargadas '+fila.length+', y '+fuera+' se quedaron fuera por no traer nombre o personas.')
-                : ('Cargadas '+fila.length+' reserva'+(fila.length===1?'':'s')+'.'), !!fuera);
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_apunta_externas',{method:'POST',
+      headers:hdr(), body:JSON.stringify({p_salida:s.id, p_filas:buenas})});
+    var n=null; if(r.ok){ try{ n=await r.json(); }catch(_){} }
+    if(!n){ toast('La base no dejó cargarlas.', true); return; }
+    toast(fuera ? ('Cargadas '+n+', y '+fuera+' se quedaron fuera por no traer nombre o personas.')
+                : ('Cargadas '+n+' reserva'+(n===1?'':'s')+'.'), !!fuera);
     await cargaProg();
   }
 
@@ -1700,14 +1694,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      buenos los que venían, y luego se corrige el número, que es lo que pasa
      nueve de cada diez veces. */
   async function marcaLlego(rid, cuantos){
-    var r=await fetch(SB+'/rest/v1/sinc_reservas?id=eq.'+rid,{method:'PATCH',
-      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify({llegaron:cuantos, llego_at:new Date().toISOString(),
-        llego_por:(ses&&ses.user&&ses.user.email)||null, encuentro_estado:'llego'})});
+    /* Por RPC y no por PATCH: la tabla no deja escribir y es lo correcto
+       -ahi viven los totales y las comisiones-. La funcion abre solo esto. */
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_marca_llegada',{method:'POST',
+      headers:hdr(), body:JSON.stringify({p_reserva:rid, p_llegaron:cuantos})});
     var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
-    if(!fila||!fila.length){ toast('No se pudo marcar la llegada.',true); return false; }
+    if(!fila||!fila.id){ toast('No se pudo marcar la llegada.',true); return false; }
     Object.keys(PG.clientes).forEach(function(k){ PG.clientes[k].forEach(function(c){
-      if(c.id===rid){ c.llegaron=cuantos; c.llego_at=fila[0].llego_at; } }); });
+      if(c.id===rid){ c.llegaron=fila.llegaron; c.llego_at=fila.llego_at; } }); });
     return true;
   }
 
@@ -1764,11 +1758,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   }
 
   async function ponRecogida(rid, hora, inp){
-    var r=await fetch(SB+'/rest/v1/sinc_reservas?id=eq.'+rid,{method:'PATCH',
-      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify({pickup_hora: hora||null, pickup:true})});
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_pon_recogida',{method:'POST',
+      headers:hdr(), body:JSON.stringify({p_reserva:rid, p_hora:hora||''})});
     var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
-    if(!fila||!fila.length){ inp.style.borderColor='var(--error,#9E3B2E)'; toast('No se pudo guardar esa hora de recogida.',true); return; }
+    if(!fila||!fila.id){ inp.style.borderColor='var(--error,#9E3B2E)'; toast('No se pudo guardar esa hora de recogida.',true); return; }
     inp.style.borderColor='var(--ok)';
     Object.keys(PG.clientes).forEach(function(k){ PG.clientes[k].forEach(function(c){ if(c.id===rid){ c.pickup_hora=hora; c.pickup=true; } }); });
   }
