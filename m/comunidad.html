@@ -370,8 +370,16 @@ function cajonProductora(a){
 
 /* ---------- D2 · la ficha ---------- */
 var TABS=[['resumen','Resumen'],['datos','Datos y papeles'],['caps','Capacidades'],
+          ['eventos','Eventos'],
           ['productos','Sus productos'],['convenio','Convenio'],['cobro','Cobro'],
           ['equipo','Equipo'],['historia','Historia']];
+/* PASO 2 · UNA SOLA FICHA. La pestaña de eventos sólo existe donde hay
+   eventos que llevar: enseñársela a 103 touroperadoras que no montan ninguno
+   sería la misma pestaña vacía que llevamos toda la noche quitando. */
+function tabSale(t, a){
+  if(t[0]!=='eventos') return true;
+  return !!DET.productora || (a.capacidades||[]).indexOf('eventos')>=0;
+}
 var DET={};
 
 async function abre(id){
@@ -388,11 +396,24 @@ async function abre(id){
     /* Su casa, si la tiene. Hace falta para mandarlo a SU portal y no al de
        touroperadora: el boton llevaba a /operador.html para todo el mundo. */
     get('hoteles?select=id,nombre_comercial,slug&ateneista_id=eq.'+id+'&limit=1'),
-    get('productoras?select=id,nombre_comercial&ateneista_id=eq.'+id+'&limit=1')
+    /* LA COLUMNA NO SE LLAMA ASI. Javi, 27-oct-2026, paso 2 de la unificación.
+       Esto pedía `ateneista_id` y la columna es `tour_operador_id`: PostgREST
+       contesta con un error que nadie leía, `get()` devolvía vacío, y
+       `DET.productora` era null SIEMPRE. Por eso el botón «Su portal de
+       productora» no salió nunca, ni cuando la productora existía. */
+    get('productoras?select=*&tour_operador_id=eq.'+id+'&limit=1'),
+    get('productora_tipos?select=clave,nombre,espacio&order=orden')
   ]);
   DOCS=r[4]||[]; FIRMADAS={};
   DET={caps:r[0]||[],productos:r[1]||[],equipo:r[2]||[],historia:r[3]||[],
-       hotel:(r[5]||[])[0]||null, productora:(r[6]||[])[0]||null};
+       hotel:(r[5]||[])[0]||null, productora:(r[6]||[])[0]||null,
+       tipos:r[7]||[], eventos:[]};
+  /* Sus eventos cuelgan de la productora, no del ateneísta: la llave sigue
+     siendo `productoras.id` y así se queda hasta que no quede nadie usándola. */
+  if(DET.productora){
+    DET.eventos = await get('eventos?select=id,nombre,tipo,estado,fecha_inicio,fecha_fin,espacio&productora_id=eq.'+
+      DET.productora.id+'&order=fecha_inicio.desc&limit=60') || [];
+  }
   ficha();
 }
 
@@ -586,7 +607,7 @@ function ficha(){
       CP.pastillas(a.capacidades||[],{quien:true})+
       ' · '+esc(a.ciudad||'sin ciudad')+'</div></div>'+
       '<div class="der">'+ botonesPortal(a) +'</div></div>'+
-    '<div class="tabs">'+TABS.map(function(t){
+    '<div class="tabs">'+TABS.filter(function(t){return tabSale(t,a);}).map(function(t){
       return '<div class="tab'+(TAB===t[0]?' on':'')+'" data-t="'+t[0]+'">'+esc(t[1])+'</div>';}).join('')+'</div>'+
     '<div id="panelTab">'+(VISTA[TAB]?VISTA[TAB](a):'')+'</div>';
   $('app').innerHTML=h;
@@ -845,6 +866,100 @@ ATA.caps=function(a){
       avisa(quitar?'Quitada · '+capNom(k):'Concedida · '+capNom(k));
       await recarga(); await abre(a.id);
     };});
+};
+
+/* LO QUE SÓLO SABE SU FICHA DE PRODUCTORA, DENTRO DE SU FICHA DE ATENEÍSTA.
+   Javi, 27-oct-2026: «las productoras también son ateneístas y hay que
+   unificarlo». El paso 1 les dio su fila; esto es el paso 2: lo suyo deja de
+   vivir en otra pantalla. El giro, su liga sin contraseña, si puede hacer
+   gratis, el room service y sus eventos se miran y se tocan aquí.
+   La tabla `productoras` sigue siendo la dueña del dato: de su id cuelgan los
+   eventos, los espacios y los tokens. Lo que cambia es dónde se trabaja. */
+VISTA.eventos=function(a){
+  var p=DET.productora;
+  if(!p) return '<div class="vacio"><b>Tiene la capacidad de eventos, pero no su ficha</b>'+
+    '<span>Se le marcó que puede montar eventos y todavía no hay una ficha de productora detrás, '+
+    'que es de donde cuelgan los espacios, su liga y sus eventos.</span></div>';
+
+  var tipo=(DET.tipos||[]).filter(function(t){return t.clave===p.tipo;})[0];
+  var liga=p.portal_token ? (location.origin+'/productora.html?t='+p.portal_token) : '';
+  var EV=DET.eventos||[];
+
+  function fila(et,val){ return '<div class="lin"><div class="t"><b>'+esc(et)+'</b><span>'+val+'</span></div></div>'; }
+
+  var h='<div class="tarj"><h3>Lo que monta</h3>'+
+    '<div class="lin"><div class="t"><b>Giro</b><span>'+
+      '<select id="pTipo">'+'<option value="">— sin elegir —</option>'+
+      (DET.tipos||[]).map(function(t){
+        return '<option value="'+esc(t.clave)+'"'+(p.tipo===t.clave?' selected':'')+'>'+esc(t.nombre)+'</option>';
+      }).join('')+'</select>'+
+      (tipo&&tipo.espacio?' <span class="p">Espacio: '+esc(tipo.espacio)+'</span>':'')+
+      '</span></div></div>'+
+    '<div class="lin"><div class="t"><b>¿Puede hacer eventos gratuitos?</b><span>'+
+      '<select id="pGratis">'+
+        '<option value="false"'+(p.puede_gratis?'':' selected')+'>No</option>'+
+        '<option value="true"'+(p.puede_gratis?' selected':'')+'>Sí</option>'+
+      '</select> <span class="p">Un gratuito no se autopublica: se manda a revisión.</span></span></div></div>'+
+    '<div class="lin"><div class="t"><b>Room service</b><span>'+
+      '<select id="pRS">'+
+        '<option value="false"'+(p.room_service?'':' selected')+'>No lo da</option>'+
+        '<option value="true"'+(p.room_service?' selected':'')+'>Sí</option>'+
+      '</select>'+(p.rs_horario?' <span class="p">'+esc(p.rs_horario)+'</span>':'')+'</span></div></div>'+
+    '<div style="margin-top:12px"><button class="btn" id="bGuardaProd">Guardar</button></div>'+
+    '</div>';
+
+  h+='<div class="tarj"><h3>Su liga para crear eventos</h3>'+
+    (liga
+      ? '<div class="cmini">Personal y sin contraseña. Con ella entra a crear sus eventos; lo que manda queda en revisión. '+
+        'No la pegues en un grupo.</div>'+
+        '<div class="lin"><div class="t"><b>Liga</b><span style="word-break:break-all">'+esc(liga)+'</span></div>'+
+        '<button class="btn sm" id="bCopiaLiga">Copiar</button>'+
+        '<a class="btn sm gris" target="_blank" rel="noopener" href="'+esc(liga)+'">Entrar ↗</a></div>'
+      : '<div class="cmini">Todavía no tiene liga. Se genera en su ficha de productora.</div>')+
+    '</div>';
+
+  h+='<div class="tarj"><h3>'+EV.length+' evento'+(EV.length===1?'':'s')+'</h3>'+
+    (EV.length
+      ? EV.map(function(e){
+          var est=e.estado==='publicado'?['ok','Publicado']:(e.estado==='propuesto'?['avisa','Propuesto']:['amedias',e.estado||'borrador']);
+          return '<div class="lin"><div class="t"><b>'+esc(e.nombre||'(sin nombre)')+'</b>'+
+            '<span><span class="p '+est[0]+'">'+esc(est[1])+'</span>'+
+            (e.fecha_inicio?' · '+esc(String(e.fecha_inicio).slice(0,16).replace("T"," ")):'')+
+            (e.espacio?' · '+esc(e.espacio):'')+'</span></div></div>';
+        }).join('')
+      : '<div class="cmini">Todavía no ha montado ninguno.</div>')+
+    '</div>';
+
+  return h;
+};
+
+ATA.eventos=function(a){
+  var p=DET.productora; if(!p) return;
+  var b=$('bCopiaLiga');
+  if(b) b.onclick=function(){
+    var liga=location.origin+'/productora.html?t='+p.portal_token;
+    try{ navigator.clipboard.writeText(liga); avisa('Liga copiada'); }
+    catch(_){ avisa('No se pudo copiar: está arriba, selecciónala.'); }
+  };
+  var g=$('bGuardaProd');
+  if(g) g.onclick=async function(){
+    g.disabled=true; var antes=g.textContent; g.textContent='Guardando…';
+    var campos={ tipo: $('pTipo').value||null,
+                 puede_gratis: $('pGratis').value==='true',
+                 room_service: $('pRS').value==='true' };
+    var r=await fetch(SB+'/rest/v1/productoras?id=eq.'+p.id,
+      {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+       body:JSON.stringify(campos)});
+    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
+    g.disabled=false; g.textContent=antes;
+    if(!fila||!fila.length){ avisa('La base no dejó guardar eso.'); return; }
+    Object.assign(DET.productora, fila[0]);
+    await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+      body:JSON.stringify({entidad:'ateneista',entidad_id:a.id,que:'editó lo de eventos desde su ficha',
+        quien:YO,detalle:{campos:Object.keys(campos)}})}).catch(function(){});
+    avisa('Guardado · capturó '+(YO||'el equipo'));
+    ficha();
+  };
 };
 
 VISTA.productos=function(a){
