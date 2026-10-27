@@ -212,12 +212,33 @@
       .then(function(L){
         var ciu = ciudadDeAqui();
         COL = (L || []).filter(function(x){ return (x.ciudad || 'CDMX') === ciu; });
+        return traduce();
       })
       /* Si la red falla COL se queda en null, y eso significa «no sé», que no
          es lo mismo que «aquí no hay nada»: con null se pinta la puerta de
          siempre; con lista vacía, nada. */
       .catch(function(){ COL = null; })
       .then(function(){ pintaVitrina(); });
+  }
+
+  /* EL NOMBRE DEL TOUR TAMBIÉN. 27-oct-2026: mis textos ya hablaban inglés
+     —«Live Día de Muertos», «See details»—, pero el nombre y el resumen de
+     cada pieza salían de la vista en español, así que un huésped en inglés
+     veía mi tarjeta en inglés y dentro «Taller de Alebrijes». La traducción
+     vive en la base (tabla i18n) y la aplica sincI18n; la vista trae `tipo`,
+     que es lo que dice en qué tabla buscar. Si sincI18n no está en esta
+     pantalla, no pasa nada: se queda el español, que es el respaldo. */
+  function traduce(){
+    try{
+      if(!ingles() || !COL || !COL.length) return null;
+      if(!(window.sincI18n && sincI18n.aplica && sincI18n.idioma && sincI18n.idioma() !== 'es')) return null;
+      var exp = COL.filter(function(x){ return (x.tipo || 'experiencia') === 'experiencia'; });
+      var evs = COL.filter(function(x){ return x.tipo === 'evento'; });
+      var t = [];
+      if(exp.length) t.push(sincI18n.aplica('op_experiencias', exp, {clave:'id'}));
+      if(evs.length) t.push(sincI18n.aplica('eventos', evs, {clave:'id', campos:{descripcion:'resumen'}}));
+      return Promise.all(t);
+    }catch(_){ return null; }
   }
 
   /* MISMO ORDEN QUE LA GALERÍA: lo que viene primero, de lo más próximo a

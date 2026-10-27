@@ -1085,6 +1085,111 @@
     'Justo ese cuarto no tiene disponibilidad para tus fechas. Liz, de nuestro equipo, te revisa una opción.':'That particular room isn’t available for your dates. Liz, from our team, is looking at an option for you.',
     'Ya estaba avisado. Recepción lo tiene.':'Already noted. The front desk has it.',
     'Ésta es tu nueva habitación. Fírmala para aceptarla y la dejamos hecha.':'This is your new room. Sign it to accept and we’ll have it ready.',
+    /* EL INTERCAMBIO DE 2 DIAS. Lo abre gente que crea contenido de viaje y la mitad no es de aqui. 27-oct-2026. */
+    ', cuéntanoslo y salimos ganando los dos.':', tell us and we both come out ahead.',
+    ', sin editar.':', unedited.',
+    '6 historias durante tu estancia y':'6 stories during your stay and',
+    '6 historias, 1 publicación colaborativa y el material en bruto':'6 stories, 1 collab post and the raw footage',
+    'Ahí te llega la confirmación y con eso recuperas esta liga.':'That is where the confirmation lands, and how you get this link back.',
+    'Aproximado':'Roughly',
+    'Celular, cámara, lo que uses':'Phone, camera, whatever you use',
+    'Centro Historico, Ciudad de Mexico':'Centro Histórico, Mexico City',
+    'Centro Histórico':'Centro Histórico',
+    'Centro, Puebla':'Downtown Puebla',
+    'Ciudad o país':'City or country',
+    'Con lada del país':'With country code',
+    'Dinos tu nombre.':'Tell us your name.',
+    'Dos noches en la casa a cambio de contenido en tus redes. Son cuatro pantallas y se guarda sola.':'Two nights at the house in exchange for content on your channels. Four screens, and it saves itself.',
+    'Ej: me gustaría grabar el desayuno en la azotea a primera hora, y una historia de la calle al patio.':'E.g.: I would like to shoot breakfast on the rooftop first thing, and a story going from the street into the courtyard.',
+    'El servidor no aceptó la petición ({a}). Vuelve a intentarlo en un momento.':'The server did not accept the request ({a}). Try again in a moment.',
+    'El trato':'The deal',
+    'Elige en cuál de las dos casas quieres quedarte.':'Choose which of the two houses you want to stay at.',
+    'Elige una: la reserva se hace ahí.':'Pick one: that is where the booking is made.',
+    'En tus palabras':'In your words',
+    'Enviar mi solicitud':'Send my application',
+    'Es corto y es en':'It is short, and it runs on',
+    'Es {a} noche.':'That is {a} night.',
+    'Esas fechas ya pasaron.':'Those dates have already passed.',
+    'Eso ya no es un intercambio: para una estancia así tenemos el voluntariado de contenido.':'That is no longer an exchange: for a stay that long we have the content volunteering programme.',
+    'Esto es lo que nos va a llegar. Si algo está mal, vuelve atrás y lo cambias.':'This is what reaches us. If something is wrong, go back and change it.',
+    'Esto no es obligatorio.':'This one is optional.',
+    'Fechas':'Dates',
+    'Graba con':'Shoots with',
+    'Historia':'Story',
+    'Hola {a}. Ésta es tu solicitud de intercambio: puedes repasarla y volver a enviarla mientras no la aprobemos.':'Hello {a}. This is your exchange application: you can look it over and send it again as long as we have not approved it.',
+    'Ideas que traes':'Ideas you bring',
+    'Intercambio de 2 días':'2-night content exchange',
+    'Intercambio de 2 días · Casa Pepe':'2-night content exchange · Casa Pepe',
+    'La casa':'The house',
+    'La salida tiene que ser posterior a la llegada.':'Check-out has to come after check-in.',
+    'Las dos están en el centro, y las dos tienen azotea.':'Both are downtown, and both have a rooftop.',
+    'Listo, nos llegó tu solicitud para {a} noche. La revisamos y te escribimos al correo. Guarda esta liga: con ella vuelves a entrar.':'Done, your application for {a} night reached us. We will review it and write to your email. Keep this link: it gets you back in.',
+    'Listo, nos llegó tu solicitud para {a} noches. La revisamos y te escribimos al correo. Guarda esta liga: con ella vuelves a entrar.':'Done, your application for {a} nights reached us. We will review it and write to your email. Keep this link: it gets you back in.',
+    'Llegas el *':'You arrive on *',
+    'Lo justo para localizarte y para ver tus redes, que es con lo que se paga este trato.':'Just enough to reach you and to see your channels, which is what pays for this deal.',
+    'Lo normal son dos noches. Si te hace falta otra cosa, dínoslo en la última pantalla y lo vemos.':'Two nights is the norm. If you need something else, tell us on the last screen and we will look at it.',
+    'Lo normal son dos; si necesitas otra cosa, cuéntanoslo y lo vemos.':'Two is the norm; if you need something else, tell us and we will look at it.',
+    'Lo que publicarías':'What you would post',
+    'No se pudo enviar.':'It could not be sent.',
+    'Nombre y apellido':'First and last name',
+    'Nota de Casa Pepe:':'Note from Casa Pepe:',
+    'Para esas fechas lo tuyo es el voluntariado de contenido, no el intercambio. Escríbenos y te pasamos esa puerta.':'For dates that long, yours is the content volunteering programme, not the exchange. Write to us and we will send you that door.',
+    'Paso {a} de {b}':'Step {a} of {b}',
+    'Pon las dos fechas.':'Fill in both dates.',
+    'Pon un correo válido: es a donde te confirmamos.':'Enter a valid email: that is where we confirm.',
+    'Ponlas y te decimos cuántas noches salen.':'Put them in and we will tell you how many nights that is.',
+    'Ponnos tu Instagram: el intercambio es en tus redes.':'Give us your Instagram: the exchange runs on your channels.',
+    'Portafolio':'Portfolio',
+    'Publicación':'Post',
+    'Quién eres':'Who you are',
+    'Qué harías, en una línea':'What you would do, in one line',
+    'Revisa y envía':'Review and send',
+    'Revisar y enviar':'Review and send',
+    'Si lo que quieres es quedarte una semana o más trabajando en nuestras cuentas, eso es el':'If what you want is to stay a week or more working on our accounts, that is the',
+    'Si quieres, apunta un par de ideas sueltas. Una línea cada una.':'If you like, jot down a couple of loose ideas. One line each.',
+    'Sin conexión con el servidor. Revisa tu internet y vuelve a intentarlo.':'No connection to the server. Check your internet and try again.',
+    'Sin poner':'Not set',
+    'Son dos días: con ver tu contenido ya nos hacemos una idea. Pero si traes algo pensado para':'It is two days: seeing your content already gives us the picture. But if you come with something in mind for',
+    'Son {a} noches.':'That is {a} nights.',
+    'Te vas el *':'You leave on *',
+    'Tu Instagram *':'Your Instagram *',
+    'Tu correo *':'Your email *',
+    'Tu entrega':'What you deliver',
+    'Tu entrega:':'What you deliver:',
+    'Tu nombre *':'Your name *',
+    'Tus fechas':'Your dates',
+    'Tus ideas':'Your ideas',
+    'Tú':'You',
+    'Una liga donde veamos lo que has hecho':'A link where we can see your work',
+    'Una referencia tuya o de quien sea (opcional)':'A reference of yours or anyone else\'s (optional)',
+    'Volver a enviar':'Send it again',
+    'aprobado':'approved',
+    'días de estancia':'nights of your stay',
+    'el material en bruto':'the raw footage',
+    'enviado':'sent',
+    'historias':'stories',
+    'la casa':'the house',
+    'publicación colaborativa':'collab post',
+    'redes, no en las nuestras. Nada de turnos ni de plan de un mes.':'channels, not ours. No shifts, no month-long plan.',
+    'sin enviar':'not sent',
+    'una publicación colaborativa':'one collab post',
+    'voluntariado de contenido':'content volunteering programme',
+    'y es otra puerta: escríbenos y te la pasamos.':'and it is a different door: write to us and we will send it over.',
+    '{a} idea':'{a} idea',
+    '{a} ideas':'{a} ideas',
+    '{a} noche':'{a} night',
+    '{a} noches':'{a} nights',
+    '{a} seguidores':'{a} followers',
+    '¿Con qué grabas?':'What do you shoot with?',
+    '¿Cuántos te siguen?':'How many followers?',
+    '¿De dónde vienes?':'Where are you coming from?',
+    '¿En cuál de las dos casas?':'Which of the two houses?',
+    '¿Qué se te ocurre?':'What do you have in mind?',
+    '—en tu cuenta y la nuestra a la vez— contando tu experiencia y destacando el hotel. Al terminar nos pasas':'—on your account and ours at once— telling your experience and showing off the hotel. When you are done you send us',
+    '＋ Otra idea':'＋ Another idea',
+    'Atrás':'Back',
+    'Continuar':'Continue',
+    'tus':'your',
 
   };
 
@@ -1137,6 +1242,79 @@
       if (md) { var v = t(md.getAttribute('content') || ''); if (v) md.setAttribute('content', v); }
     } catch (_) {}
   }
+  /* TRADUCIR POR NODO DE TEXTO. 27-oct-2026.
+     `barre` sirve cuando el HTML esta marcado trozo por trozo. Hay pantallas
+     donde eso no vale la pena: formularios de varias pantallas que se pintan
+     desde el JS, donde marcar noventa trozos a mano deja fuera el primero que
+     se anada manana sin acordarse de marcarlo.
+
+     Para esas se recorre lo que hay pintado, se busca lo que dice cada nodo en
+     el diccionario y, si esta, se cambia. La llave es la frase en espanol con
+     los espacios normalizados, asi que no se rompe al reindentar el HTML, y lo
+     que no este traducido sale en espanol, nunca en blanco.
+
+     OJO: no toca el valor de los campos -lo que escribe el huesped vive en
+     .value, no en un nodo de texto-, ni entra en script, style ni textarea. */
+  var NO_ENTRAR = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, CODE: 1, PRE: 1 };
+  function normEs(x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); }
+  function tNodo(x) {
+    var k = normEs(x);
+    if (!k) return null;
+    return Object.prototype.hasOwnProperty.call(DIC, k) ? DIC[k] : null;
+  }
+  var ATRS_T = ['alt', 'aria-label', 'title', 'placeholder'];
+  function barreTexto(raiz) {
+    if (LANG !== 'en') return;
+    var r = raiz || document.body;
+    if (!r) return;
+    try {
+      var w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT, {
+        acceptNode: function (n) {
+          var p = n.parentNode;
+          if (!p || NO_ENTRAR[p.nodeName]) return NodeFilter.FILTER_REJECT;
+          return (n.nodeValue && n.nodeValue.trim()) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      });
+      var lista = [], n;
+      while ((n = w.nextNode())) lista.push(n);
+      lista.forEach(function (nd) {
+        var v = tNodo(nd.nodeValue);
+        if (v == null) return;
+        var s = nd.nodeValue;
+        /* Se conservan los espacios de los bordes: hay nodos que son media
+           frase y van pegados a un <b> o a un numero. */
+        nd.nodeValue = s.match(/^\s*/)[0] + v + s.match(/\s*$/)[0];
+      });
+      ATRS_T.forEach(function (a) {
+        Array.prototype.forEach.call(r.querySelectorAll('[' + a + ']'), function (el) {
+          var v = tNodo(el.getAttribute(a));
+          if (v != null) el.setAttribute(a, v);
+        });
+      });
+    } catch (_) {}
+  }
+
+  /* Para las pantallas que se repintan solas: se barre lo que llegue sin que
+     cada paso tenga que acordarse de llamar. Un solo observador, y se agrupa
+     con requestAnimationFrame para no barrer cien veces por pintado. */
+  var VIGILA = null;
+  function vigila(raiz) {
+    if (LANG !== 'en') return;
+    var r = raiz || document.body;
+    if (!r || VIGILA) { try { barre(r); barreTexto(r); } catch (_) {} return; }
+    try { barre(r); barreTexto(r); } catch (_) {}
+    var pendiente = false;
+    VIGILA = new MutationObserver(function () {
+      if (pendiente) return;
+      pendiente = true;
+      requestAnimationFrame(function () {
+        pendiente = false;
+        try { barre(r); barreTexto(r); } catch (_) {}
+      });
+    });
+    try { VIGILA.observe(r, { childList: true, subtree: true, characterData: true }); } catch (_) {}
+  }
+
   /* EL TITULO DE LA PESTANA. Tambien lo lee el huesped -en la pestana del
      navegador y al guardar la pantalla en la pantalla de inicio-, y era lo
      unico que se quedaba siempre en espanol. */
@@ -1158,6 +1336,8 @@
 
   window.apepeT = t;
   window.apepeBarre = barre;
+  window.apepeBarreTexto = barreTexto;
+  window.apepeVigila = vigila;
   window.apepeLang = function () { return LANG; };
 
   function estilo() {
@@ -1176,7 +1356,12 @@
   }
 
   function monta() {
-    var top = document.querySelector('header.top .in .dcha') ||
+    /* `[data-lang-aqui]` es para las pantallas que no son la app y no tienen la
+       cabecera de siempre: el formulario de intercambio, por ejemplo. La
+       pantalla dice donde quiere el conmutador y aqui no hay que saber nada de
+       su maquetacion. 27-oct-2026. */
+    var top = document.querySelector('[data-lang-aqui]') ||
+              document.querySelector('header.top .in .dcha') ||
               document.querySelector('header.top .in') ||
               document.querySelector('header.top');
     if (!top || document.querySelector('.apLang')) return !!top;
