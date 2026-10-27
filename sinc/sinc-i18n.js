@@ -1806,6 +1806,121 @@
       '← Volver a mi portal':'← Back to my portal',
       /* El ejemplo de correo en la puerta de entrar. 27-oct-2026. */
       'tu@correo.com':'you@email.com',
+      /* El alta del ateneista, entera. Se traduce por nodo de texto porque la pantalla se construye desde el JS paso a paso. 27-oct-2026. */
+      '. Cada una lleva su anexo.':'. Each one has its own annex.',
+      '. Si tu convenio dice otra cosa, lo editamos antes de publicarte nada.':'. If your agreement says otherwise, we edit it before publishing anything of yours.',
+      '10% a quien vende · 10% a la plataforma · 5% a la casa':'10% to whoever sells · 10% to the platform · 5% to the house',
+      'ASEGURADORA':'INSURER',
+      'Anticipo y resto contigo':'Deposit with us, the rest with you',
+      'Apúntala y te avisamos cuando se acerque su vencimiento.':'Note it down and we’ll warn you as the expiry date approaches.',
+      'Aquí llegan las reservas y lo de último momento.':'This is where the bookings and the last-minute things arrive.',
+      'Artesanía':'Craft',
+      'CIUDAD':'CITY',
+      'CORREO':'EMAIL',
+      'CORREO PARA LOS AVISOS DE RESERVA · OPCIONAL':'EMAIL FOR BOOKING NOTICES · OPTIONAL',
+      'CURP':'CURP',
+      'CUÁNTOS CUARTOS':'HOW MANY ROOMS',
+      'Centro Histórico, Roma, Condesa, Coyoacán…':'Centro Histórico, Roma, Condesa, Coyoacán…',
+      'Cobramos el anticipo al reservar y el resto lo cobras tú el día del tour. Si eliges esto no te pedimos Stripe.':'We charge the deposit at booking and you charge the rest on the day of the tour. If you choose this, we don’t ask you for Stripe.',
+      'Cómo se cobra':'How it is charged',
+      'Cómo te localizamos':'How we reach you',
+      'Cómo te pagamos':'How we pay you',
+      'Dale a «Darme de alta» aquí abajo.':'Tap «Sign me up» down here.',
+      'De cada venta: 10% para quien la vende, 10% para la plataforma y 5% para la casa que la aloja. Si lo tuyo es distinto, se escribe aquí antes de firmar.':'Out of each sale: 10% to whoever sells it, 10% to the platform and 5% to the house that hosts it. If yours is different, it is written in here before signing.',
+      'De responsabilidad civil. Si no tienes, la de la casa te cubre: esto avisa, nunca bloquea.':'Public liability. If you don’t have one, the house’s policy covers you: this is a heads-up, never a blocker.',
+      'De tu puño y letra: con el dedo si estás en el teléfono, o con el ratón. Es la misma firma que se le pide a todos.':'In your own hand: with your finger on a phone, or with the mouse. It is the same signature everyone is asked for.',
+      'Dinos en qué plaza vendes.':'Tell us which city you sell in.',
+      'Dinos si tienes póliza.':'Tell us whether you have a policy.',
+      'Dónde vendes':'Where you sell',
+      'El convenio':'The agreement',
+      'El de la persona que firma, no el de la empresa.':'The person signing, not the company.',
+      'El dinero cae directo en tu cuenta al cobrarse, y la comisión se retiene sola. Tus datos bancarios y fiscales los escribes tú en Stripe: aquí no se piden ni se guardan.':'The money lands straight in your account when it is charged, and the commission is withheld automatically. You enter your bank and tax details in Stripe yourself: we neither ask for them nor store them here.',
+      'El dinero de lo que vendes te llega en el momento de la venta.':'The money from what you sell reaches you at the moment of the sale.',
+      'Elige cómo te pagamos.':'Choose how we pay you.',
+      'Empresa (persona moral)':'Company (persona moral)',
+      'Eres ateneísta porque produces o porque tienes tu membresía. Las dos valen igual.':'You are an ateneísta either because you produce, or because you hold a membership. Both count the same.',
+      'Es el que va a ver el cliente.':'It is the one the customer will see.',
+      'Experiencias · Eventos · Hotel · Artesanía · Membresía. Cada una lleva su anexo.':'Experiences · Events · Hotel · Craft · Membership. Each one has its own annex.',
+      'Experiencias. Cada una lleva su anexo.':'Experiences. Each one has its own annex.',
+      'Falta el correo.':'The email is missing.',
+      'Falta el nombre de quien firma.':'The name of the person signing is missing.',
+      'Falta el nombre.':'The name is missing.',
+      'Falta mandarlo.':'It still needs to be sent.',
+      'Haces piezas que se pueden vender en la tienda.':'You make pieces that can be sold in the shop.',
+      'INSTAGRAM · OPCIONAL':'INSTAGRAM · OPTIONAL',
+      'La plaza manda: decide quién te atiende y dónde se vende lo tuyo.':'The city decides: who looks after you, and where your work is sold.',
+      'La reserva la tiene Casa Pepe y es quien responde ante el cliente. Las devoluciones, las cancelaciones y el cobro los llevamos nosotros. Tú respondes de que la actividad se dé como la describiste.':'The booking is held by Casa Pepe, and Casa Pepe is who answers to the customer. Refunds, cancellations and payment are handled by us. You answer for the activity happening as you described it.',
+      'Lo normal del Grupo es':'The Group’s standard is',
+      'Lo que marques en el primer paso decide qué te preguntamos después.':'What you tick in the first step decides what we ask you afterwards.',
+      'Lo que nos permite facturarte y responder por lo que vendes.':'What lets us invoice you and answer for what you sell.',
+      'Lo que se reparte':'How it is split',
+      'Marca al menos una.':'Tick at least one.',
+      'Membresía. Cada una lleva su anexo.':'Membership. Each one has its own annex.',
+      'NACIONALIDAD':'NATIONALITY',
+      'NOMBRE CON EL QUE TE CONOCEN':'THE NAME PEOPLE KNOW YOU BY',
+      'No hay cobro: vienes por tu membresía.':'There is nothing to charge: you are here on your membership.',
+      'No tengo y no la quiero por ahora':'I don’t have one and don’t want one for now',
+      'No tengo, quiero que me coticen':'I don’t have one, I’d like a quote',
+      'No tienes póliza propia; te cubre la de la casa.':'You have no policy of your own; the house’s policy covers you.',
+      'NÚMERO':'NUMBER',
+      'Paso 1 de 7':'Step 1 of 7',
+      'Persona física con actividad empresarial':'Individual with business activity (persona física con actividad empresarial)',
+      'Publicar':'Publishing',
+      'Puebla y Cholula':'Puebla and Cholula',
+      'Puedes marcar varias, y añadir más después sin volver a empezar.':'You can tick several, and add more later without starting again.',
+      'QUIÉN FIRMA · NOMBRE COMPLETO':'WHO SIGNS · FULL NAME',
+      'QUIÉN RESPONDE · NOMBRE Y PUESTO':'WHO IS ANSWERABLE · NAME AND ROLE',
+      'Quién eres':'Who you are',
+      'Quién responde ante el cliente':'Who answers to the customer',
+      'Quiénes':'Who',
+      'Qué se reparte':'What is split',
+      'Qué traes':'What you bring',
+      'RAZÓN SOCIAL':'REGISTERED COMPANY NAME',
+      'Si lo dejas vacío usamos el de arriba.':'If you leave it empty we use the one above.',
+      'Si operas en las dos, empieza por una: la otra la abrimos nosotros con una ficha aparte, porque las ventas y los equipos son distintos.':'If you work in both, start with one: we open the other ourselves as a separate record, because the sales and the teams are different.',
+      'Siguiente →':'Next →',
+      'Sí tengo':'I have one',
+      'TU ALTA':'YOUR SIGN-UP',
+      'TU FIRMA':'YOUR SIGNATURE',
+      'Te atiende el equipo de Puebla.':'The Puebla team looks after you.',
+      'Te cubre la de la casa.':'The house’s policy covers you.',
+      'Te pasamos una cotización. Mientras tanto te cubre la de la casa.':'We’ll send you a quote. In the meantime the house’s policy covers you.',
+      'Tienes póliza propia de responsabilidad civil.':'You have your own public liability policy.',
+      'Tienes un hotel o un grupo de hoteles. Das de alta tus espacios y vendes a tus huéspedes.':'You have a hotel, or a group of hotels. You register your spaces and sell to your guests.',
+      'Tours, talleres, recorridos. Tú los guías, nosotros te traemos clientes.':'Tours, workshops, walks. You guide them, we bring you the customers.',
+      'Tu Stripe':'Your Stripe',
+      'Tu hotel':'Your hotel',
+      'Tu lugar en el espacio común del Ateneo de Virreyes. Sin costo.':'Your spot in the shared space at the Ateneo de Virreyes. Free of charge.',
+      'Tu póliza':'Your insurance',
+      'Tú creas lo tuyo cuando quieras. Publicarlo lo aprobamos nosotros: revisamos que lo que ve el cliente coincida con lo que va a recibir.':'You create your own things whenever you like. Publishing them is approved by us: we check that what the customer sees matches what they are going to get.',
+      'Un grupo de hoteles no es un hotel. Si tienes varias casas, da de alta el grupo: después cuelgas cada una.':'A group of hotels is not a hotel. If you have several houses, register the group: you hang each one off it afterwards.',
+      'Un grupo o cadena':'A group or chain',
+      'Un hotel':'One hotel',
+      'Una función, un concierto, una noche. En tu espacio o en el nuestro.':'A show, a concert, one night. In your space or in ours.',
+      'Una persona física sin actividad empresarial no tiene RFC. No te lo pedimos.':'An individual with no business activity has no RFC. We don’t ask you for one.',
+      'Uno solo, con un anexo por cada cosa que traes. Se arma con lo que acabas de escribir.':'Just one, with an annex for each thing you bring. It is built from what you have just written.',
+      'VIGENTE HASTA':'VALID UNTIL',
+      'WEB · OPCIONAL':'WEBSITE · OPTIONAL',
+      'WHATSAPP':'WHATSAPP',
+      'Ya casi':'Almost there',
+      '¿CÓMO FACTURAS?':'HOW DO YOU INVOICE?',
+      '¿Cómo te localizamos?':'How do we reach you?',
+      '¿Cómo te pagamos?':'How do we pay you?',
+      '¿Dónde vendes?':'Where do you sell?',
+      '¿QUÉ DAS DE ALTA?':'WHAT ARE YOU REGISTERING?',
+      '¿Qué traes a la comunidad?':'What do you bring to the community?',
+      '—, con los datos de arriba, y el Ateneo Turístico / Sincrético, del Grupo Casa Pepe.':'—, with the details above, and Ateneo Turístico / Sincrético, of Grupo Casa Pepe.',
+      '← Atrás':'← Back',
+      /* Titulos de pestana de las altas. 27-oct-2026. */
+      'Mi comunidad':'My community',
+      'Sube tus experiencias':'Upload your experiences',
+      'Sé parte del Ateneo':'Be part of the Ateneo',
+      'Tu ficha de guía':'Your guide page',
+      'Vende tus piezas':'Sell your pieces',
+      /* El contador de pasos y los botones del alta. 27-oct-2026. */
+      'Darme de alta':'Register me',
+      'Firmar y darme de alta':'Sign and register me',
+      'Paso':'Step',
 
     }
   };
@@ -1871,6 +1986,84 @@
       }catch(_){}
       titulo();
     }catch(_){}
+  }
+
+  /* ------------------------------------------------------------------------
+     BARRIDO POR NODO DE TEXTO.
+
+     El barrido de arriba necesita que alguien haya marcado el HTML con
+     data-i18n. Hay pantallas donde eso no se puede pedir: el alta del
+     ateneista, por ejemplo, se construye entera desde el JS, paso a paso, y
+     marcar ciento cuarenta trozos de innerHTML a mano habria dejado fuera el
+     primero que se anada manana sin acordarse de marcarlo.
+
+     Para esas, se traduce por NODO DE TEXTO: se recorre lo que hay pintado, se
+     busca lo que dice cada nodo en el diccionario y, si esta, se cambia. La
+     llave es la frase en espanol con los espacios normalizados, asi que no se
+     rompe cuando alguien reindenta el HTML, y lo que no este traducido sale en
+     espanol, nunca en blanco. Javi, 27-oct-2026.
+
+     OJO: esto NO toca el valor de los campos -lo que escribe la persona vive en
+     .value, no en un nodo de texto-, ni entra en script, style ni textarea. */
+  var NO_ENTRAR = { SCRIPT:1, STYLE:1, TEXTAREA:1, CODE:1, PRE:1 };
+  function normEs(x){ return String(x==null?'':x).replace(/\s+/g,' ').trim(); }
+  function tNodo(x){
+    var d = UI[resuelve()]; if(!d) return null;
+    var k = normEs(x);
+    if(!k) return null;
+    return Object.prototype.hasOwnProperty.call(d,k) ? d[k] : null;
+  }
+  var ATRS_T = ['alt','aria-label','title','placeholder'];
+  function barreTexto(raiz){
+    if(resuelve()==='es') return;
+    var r = raiz || document.body;
+    if(!r) return;
+    try{
+      var w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT, {
+        acceptNode:function(n){
+          var p=n.parentNode;
+          if(!p || NO_ENTRAR[p.nodeName]) return NodeFilter.FILTER_REJECT;
+          return (n.nodeValue && n.nodeValue.trim()) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      });
+      var lista=[], n;
+      while((n=w.nextNode())) lista.push(n);
+      lista.forEach(function(nd){
+        var v = tNodo(nd.nodeValue);
+        if(v==null) return;
+        var s = nd.nodeValue;
+        /* Se conservan los espacios de los bordes: hay nodos que son media
+           frase y van pegados a un <b> o a un numero. */
+        nd.nodeValue = s.match(/^\s*/)[0] + v + s.match(/\s*$/)[0];
+      });
+      ATRS_T.forEach(function(a){
+        r.querySelectorAll('['+a+']').forEach(function(el){
+          var v = tNodo(el.getAttribute(a));
+          if(v!=null) el.setAttribute(a, v);
+        });
+      });
+    }catch(_){}
+  }
+
+  /* Para las pantallas que se repintan solas: se barre lo que llegue, sin que
+     cada paso tenga que acordarse de llamar. Un solo observador, y se agrupa
+     con requestAnimationFrame para no barrer cien veces por pintado. */
+  var VIGILA = null;
+  function vigila(raiz){
+    if(resuelve()==='es') return;
+    var r = raiz || document.body;
+    if(!r || VIGILA) { try{ barre(r); barreTexto(r); }catch(_){} return; }
+    try{ barre(r); barreTexto(r); }catch(_){}
+    var pendiente = false;
+    VIGILA = new MutationObserver(function(){
+      if(pendiente) return;
+      pendiente = true;
+      requestAnimationFrame(function(){
+        pendiente = false;
+        try{ barre(r); barreTexto(r); }catch(_){}
+      });
+    });
+    try{ VIGILA.observe(r, {childList:true, subtree:true, characterData:true}); }catch(_){}
   }
 
   /* Dias y meses. No se usa Intl porque el front ya tiene sus arrays cortos y
@@ -1962,6 +2155,8 @@
     apunta: apunta,
     t: t,
     barre: barre,
+    barreTexto: barreTexto,
+    vigila: vigila,
     titulo: titulo,
     fechas: fechas,
     /* Para que el <html lang> diga la verdad desde el primer pintado. */

@@ -71,7 +71,17 @@
     if (!caja) return null;
 
     var soloVer = !!opts.soloVer;
-    var pista = opts.pista || 'Firma aquí con el dedo o el ratón';
+    /* EN EL IDIOMA DE LA PANTALLA. 27-oct-2026: este recuadro de firma lo usan
+       el alta del ateneista y el contrato, y los firma gente de fuera. Si la
+       pantalla pasa un texto propio en `opts`, manda el suyo. */
+    var _en = (function(){
+      try{ if(window.sincI18n && sincI18n.idioma()==='en') return true; }catch(_){}
+      try{ if(window.apepeLang && apepeLang()==='en') return true; }catch(_){}
+      try{ return String(document.documentElement.lang||'').slice(0,2)==='en'; }catch(_){}
+      return false;
+    })();
+    var pista = opts.pista || (_en ? 'Sign here with your finger or the mouse'
+                                   : 'Firma aquí con el dedo o el ratón');
 
     caja.innerHTML =
       '<div class="cp-firma' + (soloVer ? ' cp-firma-ver' : '') + '">' +
@@ -81,9 +91,10 @@
       (soloVer ? '' :
         '<div class="cp-firma-pie">' +
           '<span class="cp-firma-ayuda">' +
-            (opts.ayuda || 'Vale tu firma de puño y letra. Queda registrada con la fecha.') +
+            (opts.ayuda || (_en ? 'Your own handwritten signature counts. It is recorded with the date.'
+                                : 'Vale tu firma de puño y letra. Queda registrada con la fecha.')) +
           '</span>' +
-          '<button type="button" class="cp-firma-borra">Borrar</button>' +
+          '<button type="button" class="cp-firma-borra">' + (_en ? 'Clear' : 'Borrar') + '</button>' +
         '</div>');
 
     var marco = caja.querySelector('.cp-firma');
