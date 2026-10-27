@@ -210,6 +210,58 @@ function sesionPanel(){try{for(var i=0;i<localStorage.length;i++){var k=localSto
   var s=v&&(v.currentSession||v); if(s&&s.access_token)return s;}}}catch(_){}return null;}
 function tok(){return ses&&ses.access_token||KEY;}
 function hdr(){return {apikey:KEY,Authorization:'Bearer '+tok(),'Content-Type':'application/json'};}
+
+/* LA SESIÓN CADUCA Y HAY QUE RENOVARLA. Javi, 26-oct-2026: «JWT expired».
+   El token dura una hora; esta pantalla lo leía una vez al abrirla y lo usaba
+   para siempre. Pasada esa hora, todo fallaba con un 401 -incluidos los
+   candados, que al no cargar dejaban el botón de publicar verde cuando no
+   debía-. La ficha larga ya sabía renovarlo; aquí no. Mismo mecanismo. */
+var refrescando=null, ultimoFalloRef=0, ESPERA_REF=60000, caduco=false;
+function guardaSes(s){
+  ses=s;
+  try{
+    for(var i=0;i<localStorage.length;i++){
+      var k=localStorage.key(i);
+      if(k&&/sb-.*-auth-token/.test(k)){
+        var v=null; try{ v=JSON.parse(localStorage.getItem(k)||'null'); }catch(_e){}
+        if(v&&v.currentSession){ v.currentSession=s; localStorage.setItem(k,JSON.stringify(v)); }
+        else localStorage.setItem(k,JSON.stringify(s));
+        return;
+      }
+    }
+  }catch(_){}
+}
+function refresca(){
+  if(refrescando) return refrescando;
+  if(Date.now()-ultimoFalloRef<ESPERA_REF) return Promise.resolve(false);
+  var rt=ses&&ses.refresh_token;
+  if(!rt) return Promise.resolve(false);
+  refrescando=fetch(SB+'/auth/v1/token?grant_type=refresh_token',{
+      method:'POST',headers:{'apikey':KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({refresh_token:rt})})
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(s){ if(!s||!s.access_token) return false; guardaSes(s); return true; })
+    .catch(function(){ return false; })
+    .then(function(ok){ refrescando=null; if(!ok) ultimoFalloRef=Date.now(); return ok; });
+  return refrescando;
+}
+/* Todas las llamadas pasan por aquí: si vuelve un 401, se renueva y se repite
+   una vez. Si tampoco entonces, se dice en castellano y se recarga, en vez de
+   enseñar «JWT expired». */
+async function api(url,o){
+  o=o||{};
+  function tira(){
+    return fetch(url, Object.assign({}, o, {headers:Object.assign(hdr(), o.headers||{})}));
+  }
+  var r=await tira();
+  if(r.status===401){ if(await refresca()) r=await tira(); }
+  if(r.status===401 && !caduco){
+    caduco=true;
+    avisa('Tu sesión caducó. Vuelvo a abrir la pantalla…');
+    setTimeout(function(){ location.reload(); },2200);
+  }
+  return r;
+}
 function avisa(t){var e=$('toast');e.textContent=t;e.style.display='block';setTimeout(function(){e.style.display='none';},2600);}
 function dinero(n){ if(n==null||n==='') return '—';
   return '$'+Number(n).toLocaleString('es-MX',{maximumFractionDigits:0}); }
@@ -531,7 +583,7 @@ async function cambiaEstado(id, que, btn){
   var antes=btn?btn.textContent:'';
   if(btn){ btn.disabled=true; btn.textContent=que==='publicar'?'Publicando…':'Quitando…'; }
   try{
-    var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
+    var r=await api(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
       {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
        body:JSON.stringify(cuerpo)});
     if(!r.ok){
@@ -545,7 +597,7 @@ async function cambiaEstado(id, que, btn){
     var fila=await r.json().catch(function(){return null;});
     if(!fila || !fila.length) throw new Error('la base no dejó cambiar esto');
     try{
-      await fetch(SB+'/rest/v1/historia',{method:'POST',
+      await api(SB+'/rest/v1/historia',{method:'POST',
         headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
         body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,
           que:que==='publicar'?'publicada':'despublicada',quien:YO||'el equipo',
@@ -604,7 +656,7 @@ async function mandaRevision(id, btn){
   var tabla = p._ev ? 'eventos' : 'op_experiencias';
   var nuevo = p._ev ? {estado:'propuesto'} : {estado:'en_revision'};
   try{
-    var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
+    var r=await api(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
       {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
        body:JSON.stringify(nuevo)});
     if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
@@ -613,7 +665,7 @@ async function mandaRevision(id, btn){
        dejó pasar pero no dejó tocar esta ficha. Decirlo, no cantar victoria. */
     if(!fila || !fila.length) throw new Error('la base no dejó cambiar esta ficha');
     try{
-      await fetch(SB+'/rest/v1/historia',{method:'POST',
+      await api(SB+'/rest/v1/historia',{method:'POST',
         headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
         body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,
           que:'mandada a revisión',quien:YO||'el equipo',
@@ -648,14 +700,14 @@ async function borra(id, motivo, acc){
   var res=0, sal=0;
   try{
     if(p._ev){
-      var r1=await fetch(SB+'/rest/v1/evento_reservas?select=id&evento_id=eq.'+id+'&limit=1',
+      var r1=await api(SB+'/rest/v1/evento_reservas?select=id&evento_id=eq.'+id+'&limit=1',
         {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
       if(!r1.ok) throw new Error('no pudimos contar sus boletos ('+r1.status+')');
       res=Number((r1.headers.get('content-range')||'/0').split('/')[1]||0);
-      var r2=await fetch(SB+'/rest/v1/ev_ocupaciones?select=id&evento_id=eq.'+id,{headers:hdr()});
+      var r2=await api(SB+'/rest/v1/ev_ocupaciones?select=id&evento_id=eq.'+id);
       sal=r2.ok?(await r2.json()).length:0;
     }else{
-      var e1=await fetch(SB+'/rest/v1/sinc_reservas?select=id&op_experiencia_id=eq.'+id+'&limit=1',
+      var e1=await api(SB+'/rest/v1/sinc_reservas?select=id&op_experiencia_id=eq.'+id+'&limit=1',
         {headers:Object.assign(hdr(),{Prefer:'count=exact',Range:'0-0'})});
       if(!e1.ok) throw new Error('no pudimos contar sus reservas ('+e1.status+')');
       res=Number((e1.headers.get('content-range')||'/0').split('/')[1]||0);
@@ -665,7 +717,7 @@ async function borra(id, motivo, acc){
          siempre cero salidas, así que se podía borrar una ficha con salidas
          programadas sin que nadie avisara. Javi, 26-oct-2026. */
       if(p.experiencia_id){
-        var e2=await fetch(SB+'/rest/v1/sinc_salidas?select=id&experiencia_id=eq.'+encodeURIComponent(p.experiencia_id),{headers:hdr()});
+        var e2=await api(SB+'/rest/v1/sinc_salidas?select=id&experiencia_id=eq.'+encodeURIComponent(p.experiencia_id));
         sal=e2.ok?(await e2.json()).length:0;
       }
     }
@@ -682,7 +734,7 @@ async function borra(id, motivo, acc){
   }
 
   try{
-    await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+    await api(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
       body:JSON.stringify({entidad:p._ev?'evento':'experiencia',entidad_id:id,que:'borrada',
         quien:YO||'el equipo',
         detalle:{nombre:p.nombre,estado:p._estadoReal||p.estado,formato:p.formato,
@@ -692,11 +744,11 @@ async function borra(id, motivo, acc){
       /* Y al borrarlas, el mismo id con el que se contaron. */
       var tsal=p._ev ? 'ev_ocupaciones?evento_id=eq.'+encodeURIComponent(id)
                      : 'sinc_salidas?experiencia_id=eq.'+encodeURIComponent(p.experiencia_id);
-      var rs=await fetch(SB+'/rest/v1/'+tsal,{method:'DELETE',headers:hdr()});
+      var rs=await api(SB+'/rest/v1/'+tsal,{method:'DELETE',headers:hdr()});
       if(!rs.ok) throw new Error('no se pudo soltar lo que tenía apartado ('+rs.status+')');
     }
     var tab=p._ev?'eventos':'op_experiencias';
-    var rr=await fetch(SB+'/rest/v1/'+tab+'?id=eq.'+id,{method:'DELETE',headers:hdr()});
+    var rr=await api(SB+'/rest/v1/'+tab+'?id=eq.'+id,{method:'DELETE',headers:hdr()});
     if(!rr.ok) throw new Error('la base respondió '+rr.status+' · '+(await rr.text()).slice(0,140));
     TODOS=TODOS.filter(function(x){return String(x.id)!==String(id);});
     avisa('Borrada · la quitó '+(YO||'el equipo'));
@@ -708,10 +760,10 @@ async function carga(){
   FALLO=''; TODOS=null; pinta();
   try{
     var campos='id,experiencia_id,nombre,formato,estado,tipo,operador_id,precio_adulto,neto_adulto,apepe_gratuito,duracion_min,sku,ciudad,cer_inicio_lugar,punto_encuentro,updated_at';
-    var r=await fetch(SB+'/rest/v1/op_experiencias?select='+campos+'&order=updated_at.desc&limit=2000',{headers:hdr()});
+    var r=await api(SB+'/rest/v1/op_experiencias?select='+campos+'&order=updated_at.desc&limit=2000');
     if(!r.ok) throw new Error('la base respondió '+r.status);
     TODOS=await r.json();
-    var o=await fetch(SB+'/rest/v1/tour_operadores?select=id,nombre_comercial&limit=1000',{headers:hdr()});
+    var o=await api(SB+'/rest/v1/tour_operadores?select=id,nombre_comercial&limit=1000',{headers:hdr()});
     if(o.ok){ (await o.json()).forEach(function(x){ OPS[x.id]=x.nombre_comercial; }); }
     /* EL CANDADO DEL ALIADO, ANTES DE INTENTARLO. La base ya frena a quien no
        puede publicar -«a Kari Costa le falta un teléfono o WhatsApp»- y lo dice
@@ -719,12 +771,12 @@ async function carga(){
        botón. Son las mismas palabras de La comunidad: aquí se enseñan antes.
        Javi, 26-oct-2026. */
     CANDADO={};
-    var ca=await fetch(SB+'/rest/v1/v_ateneistas?select=id,candado&limit=2000',{headers:hdr()});
+    var ca=await api(SB+'/rest/v1/v_ateneistas?select=id,candado&limit=2000',{headers:hdr()});
     if(ca.ok){ (await ca.json()).forEach(function(x){ if(x.id) CANDADO[x.id]=x.candado||null; }); }
     /* Las fotos viven en sinc_media desde la unificación de la galería. Se
        traen sólo los ids: aquí no se pintan, sólo hace falta saber si hay. */
     MEDIA={};
-    var m=await fetch(SB+'/rest/v1/sinc_media?select=experiencia_id,url,orden&tipo=eq.foto&estado=eq.listo&order=orden.asc&limit=5000',{headers:hdr()});
+    var m=await api(SB+'/rest/v1/sinc_media?select=experiencia_id,url,orden&tipo=eq.foto&estado=eq.listo&order=orden.asc&limit=5000',{headers:hdr()});
     if(m.ok){ (await m.json()).forEach(function(x){
       /* La primera por orden es la principal: se guarda su liga, que es la que
          se enseña, en vez de un simple «sí tiene». */
@@ -739,7 +791,7 @@ async function carga(){
        la de eventos al idioma de la lista. Si un día los eventos se mudan, lo
        único que cambia es de dónde se leen. */
     try{
-      var ev=await fetch(SB+'/rest/v1/eventos?select=id,nombre,estado,clase,espacio,fecha_inicio,'+
+      var ev=await api(SB+'/rest/v1/eventos?select=id,nombre,estado,clase,espacio,fecha_inicio,'+
         'es_gratis,precio,precio_por_hora,duracion_min,fotos,productora_id,created_at,updated_at&order=updated_at.desc&limit=1000',
         {headers:hdr()});
       if(ev.ok){
@@ -747,12 +799,12 @@ async function carga(){
         /* Un evento con boletos tiene el precio en ellos, no en su campo: el
            más barato es el «desde» que se enseña. */
         var BOL={};
-        var bp=await fetch(SB+'/rest/v1/evento_precios?select=evento_id,precio&limit=2000',{headers:hdr()});
+        var bp=await api(SB+'/rest/v1/evento_precios?select=evento_id,precio&limit=2000',{headers:hdr()});
         if(bp.ok){ (await bp.json()).forEach(function(b){
           var n=Number(b.precio||0); if(!(n>0)) return;
           if(!BOL[b.evento_id] || n<BOL[b.evento_id]) BOL[b.evento_id]=n; }); }
         var PROD={};
-        var pr=await fetch(SB+'/rest/v1/productoras?select=id,nombre_comercial&limit=1000',{headers:hdr()});
+        var pr=await api(SB+'/rest/v1/productoras?select=id,nombre_comercial&limit=1000',{headers:hdr()});
         if(pr.ok){ (await pr.json()).forEach(function(x){ PROD[x.id]=x.nombre_comercial; }); }
         TODOS=TODOS.concat(EVS.map(function(e){
           return normalizaEvento(e, PROD[e.productora_id], BOL[e.id]);
