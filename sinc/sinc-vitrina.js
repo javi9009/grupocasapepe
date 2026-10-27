@@ -1,3 +1,20 @@
+/* SI LA MINIATURA NO ESTÁ, LA FOTO ENTERA. Javi, 27-oct-2026: «no se ve esta
+   foto de este tour». mini() cambia _v.jpg por _t.jpg dando por hecho que la
+   miniatura existe, y había 31 verticales que nunca la tuvieron: el navegador
+   pedía un archivo que no está y dejaba el hueco roto, sin aviso ninguno.
+   Desde la url no se puede saber si está, así que se corrige cuando falla: si
+   una _t.jpg no carga, se pide la vertical, que siempre está. Cuesta una
+   petición fallida y no cuesta ni un hueco. */
+if(!window.__miniRespaldo){ window.__miniRespaldo=1;
+  document.addEventListener('error',function(e){
+    var t=e.target;
+    if(!t||t.tagName!=='IMG'||!t.src||t.getAttribute('data-respaldo'))return;
+    if(!/_t\.jpg($|\?|#)/i.test(t.src))return;
+    t.setAttribute('data-respaldo','1');
+    t.src=t.src.replace(/_t\.jpg/i,'_v.jpg');
+  },true);
+}
+
 /* LA GALERÍA, UNA SOLA VEZ.
  *
  * Javi, 3-oct-2026: «ok a tener dos salidas, la de clientes en general y la de
