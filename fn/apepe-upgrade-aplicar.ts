@@ -10,12 +10,37 @@
 // cargo es la firma del huésped aceptando su nueva habitación. Javi, 28-sep.
 // Reglas: misma pax, mismo tipo de tarifa (mismo rateID). No sube a un cuarto que no le cabe a la reserva. Precios POR NOCHE (monto = por_noche x noches). Idempotente por (reserva + target).
 // body: {reservation_id|resv, prop, target_id, monto?, op?:'plan'|'aplicar', via?}
+//
+// 29-sep — EL FALLO QUE ESCONDÍA A TODOS LOS DEMÁS.
+// Esta función deja su rastro en apepe_upgrade_aplicado con un upsert. Pero el upsert
+// iba sin `on_conflict=op_key`, y PostgREST, cuando no se lo dices, resuelve el
+// conflicto por la clave primaria (id). Como el id se genera nuevo cada vez, nunca
+// chocaba por id: intentaba INSERTAR, y ahí reventaba contra el índice único de
+// op_key con un 23505 que un `catch{}` vacío se tragaba entero.
+// Consecuencia: la PRIMERA escritura de cada op_key entraba y NINGUNA de las
+// siguientes. La fila se quedaba congelada en su primer estado para siempre. Por eso
+// la reserva de Liz seguía en 'por_firmar' con la firma puesta: el upgrade estaba
+// bloqueado (la reserva está cancelada en Cloudbeds) y no había manera de enterarse.
+// Ahora los upserts llevan on_conflict y los errores de escritura se devuelven en la
+// respuesta en vez de desaparecer.
+//
+// 27-oct-2026 — EL UPGRADE NUNCA SE CERRÓ SOLO, Y EL RASTRO LO DECÍA DESDE SEPTIEMBRE.
+// Aranza: «se hizo un upgrade en la página pero no se vio reflejado en CB». No era
+// de ese huésped: TODAS las firmas desde el 29-sep acabaron igual, con un 502 en el
+// paso putReservation y el mismo mensaje de Cloudbeds —"Parameter checkinDate is
+// required"—. Se mandaba checkoutDate y no checkinDate. Cloudbeds, cuando le tocas
+// `rooms`, exige LAS DOS fechas: con una sola no sabe qué tramo estás reescribiendo
+// y rechaza la llamada entera.
+// Las dos salen de la propia reserva (d.startDate / d.endDate), así que mandarlas no
+// cambia nada de la estancia: lo único que cambia es el tipo de cuarto, que es lo que
+// veníamos a hacer. Y si alguna viniera vacía no se manda, que mandar una fecha en
+// blanco sí movería la reserva.
 const CB = "https://hotels.cloudbeds.com/api/v1.2";
 const SB = Deno.env.get("SUPABASE_URL")!;
 const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const H = { apikey: SRK, Authorization: "Bearer " + SRK, "Content-Type": "application/json" };
 const PROP: Record<string,{keyEnv:string;id?:string;idEnv?:string}> = { cdmx:{keyEnv:"CLOUDBEDS_API_KEY",id:"10668"}, puebla:{keyEnv:"CLOUDBEDS_API_KEY_PUEBLA",idEnv:"CLOUDBEDS_PROPERTY_ID_PUEBLA"} };
-const cors = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS" };
+const cors = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type, x-apepe-interno", "Access-Control-Allow-Methods":"POST, OPTIONS" };
 const J = (o: unknown, s=200) => new Response(JSON.stringify(o), { status:s, headers:{ ...cors, "Content-Type":"application/json" } });
 async function rest(path: string, init: RequestInit = {}) { const r=await fetch(SB+"/rest/v1/"+path,{ ...init, headers:{ ...H, ...(init.headers||{}) } }); const t=await r.text(); if(!r.ok) throw new Error(path+" "+r.status+" "+t.slice(0,160)); return t?JSON.parse(t):null; }
 async function rpc(fn: string, b: unknown){ const r=await fetch(SB+"/rest/v1/rpc/"+fn,{method:"POST",headers:H,body:JSON.stringify(b)}); return r.ok?await r.json():null; }
@@ -25,6 +50,18 @@ async function tokenLookup(tok: string){ try{ const j=await rest(`apepe_reserva_
 async function cbGet(key: string, path: string){ const r=await fetch(`${CB}/${path}`,{headers:{Authorization:`Bearer ${key}`}}); return await r.json().catch(()=>({})); }
 // OJO con el verbo: cada endpoint de Cloudbeds acepta el suyo. Por eso `method` es un parámetro y no una constante.
 async function cbForm(key: string, endpoint: string, form: Record<string,string>, method = "POST"){ const body=new URLSearchParams(form).toString(); const r=await fetch(`${CB}/${endpoint}`,{method,headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/x-www-form-urlencoded"},body}); const t=await r.text(); let j:any={}; try{ j=JSON.parse(t); }catch{ j={raw:t.slice(0,200)}; } return {status:r.status, ok:r.ok&&j?.success!==false, j}; }
+
+/* El rastro. on_conflict=op_key es lo que hace que la fila se ACTUALICE en vez de
+   intentar nacer otra vez; y si aun así falla, se dice, no se esconde. */
+async function rastro(row: any){
+  try{
+    await rest(`apepe_upgrade_aplicado?on_conflict=op_key`, { method:"POST",
+      headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
+      body: JSON.stringify({ ...row, updated_at:new Date().toISOString() }) });
+    return null;
+  }catch(e){ return String((e as Error)?.message ?? e).slice(0,200); }
+}
+
 function cfgRoom(cfg:any,id:string){ const s=String(id); if(cfg.privada_entrada&&String(cfg.privada_entrada.id)===s) return {...cfg.privada_entrada, clase:"privada"}; const su=(cfg.suites||[]).find((x:any)=>String(x.id)===s); if(su) return {...su, clase:"suite"}; if((cfg.dorms||{})[s]) return {...cfg.dorms[s], id:s, clase:"dorm"}; return null; }
 
 async function contexto(rid:string, prop:string){
@@ -54,10 +91,11 @@ Deno.serve(async (req)=>{
   try{
     const b = await req.json().catch(()=>({} as any));
     const authTok=(req.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"").trim();
+    const cabInterna=(req.headers.get("x-apepe-interno")||"").trim();
     /* La service key sólo la tienen nuestras propias funciones, y sólo apepe-upgrade
        la usa aquí —después de validar el token de la reserva y guardar la firma—, así
        que esta puerta no la puede empujar nadie desde fuera. */
-    const interno = authTok===SRK && String(b.via||"")==="firma_huesped";
+    const interno = (authTok===SRK || cabInterna===SRK) && String(b.via||"")==="firma_huesped";
     const em = interno ? "app · firma del huésped" : await quien(req);
     if(!em) return J({ok:false,error:"necesitas sesión"},401);
     if(!interno){
@@ -94,28 +132,41 @@ Deno.serve(async (req)=>{
     const op_key = `${rid}:${target_id}`;
     try{ const ya=await rest(`apepe_upgrade_aplicado?op_key=eq.${encodeURIComponent(op_key)}&estado=in.(aplicado,aplicado_sin_cargo)&select=id,to_room,monto,estado,created_at&limit=1`); if(Array.isArray(ya)&&ya[0]) return J({ok:true, ya_aplicado:true, registro:ya[0]}); }catch{}
 
+    /* Un upgrade por reserva: si esta reserva ya subió de cuarto una vez, no sube otra,
+       aunque sea a un target distinto. */
+    try{ const otro=await rest(`apepe_upgrade_aplicado?reservation_id=eq.${encodeURIComponent(rid)}&estado=in.(aplicado,aplicado_sin_cargo)&select=to_room,monto,estado&limit=1`); if(Array.isArray(otro)&&otro[0]) return J({ok:false, ejecutado:false, error:"esta reserva ya tiene un upgrade aplicado", registro:otro[0]},409); }catch{}
+
     const plan = { reservation_id:rid, property:prop, clase, from_room:ctx.cur, from_room_nombre:ctx.curName, from_unit:ctx.curUnit, to_room:target_id, to_room_nombre:tgt.nombre||ctx.nameOf[target_id]||"", monto, monto_noche, noches:N, rate_id:ctx.rateID, mantiene_pax:ctx.paxParty, mantiene_tarifa:ctx.rateID||"(sin cambio)", desde:ctx.desde, hasta:ctx.hasta };
 
     const activo = String(await cfgv("apepe_upgrade_activo")).toLowerCase()==="true";
 
     if(op!=="aplicar" || !activo || problemas.length){
       const estado = problemas.length? "bloqueado" : "simulado";
-      try{ await rest(`apepe_upgrade_aplicado`, { method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body: JSON.stringify({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, monto, rate_id:ctx.rateID, estado, detalle:{plan,problemas}, aplicado_por:em, updated_at:new Date().toISOString() }) }); }catch{}
-      return J({ ok:problemas.length===0, modo: activo?"prueba_op":"prueba", ejecutado:false, problemas, plan, nota: problemas.length? "no se puede aplicar todavía" : (activo? "op=plan: no ejecuté nada" : "MODO PRUEBA (apepe_upgrade_activo=false): esto es lo que aplicaría, sin tocar Cloudbeds") });
+      const fallo = await rastro({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, monto, rate_id:ctx.rateID, estado, detalle:{plan,problemas}, aplicado_por:em });
+      return J({ ok:problemas.length===0, modo: activo?"prueba_op":"prueba", ejecutado:false, problemas, plan, rastro_fallo:fallo, nota: problemas.length? "no se puede aplicar todavía" : (activo? "op=plan: no ejecuté nada" : "MODO PRUEBA (apepe_upgrade_activo=false): esto es lo que aplicaría, sin tocar Cloudbeds") });
     }
 
     // === EJECUCIÓN REAL ===
-    const form:Record<string,string> = { propertyID:String(ctx.pid), reservationID:rid, "rooms[0][roomTypeID]":target_id, "rooms[0][quantity]":"1", "rooms[0][adults]":String(ctx.adults), "rooms[0][children]":String(ctx.children), checkoutDate:ctx.hasta };
+    const form:Record<string,string> = { propertyID:String(ctx.pid), reservationID:rid, "rooms[0][roomTypeID]":target_id, "rooms[0][quantity]":"1", "rooms[0][adults]":String(ctx.adults), "rooms[0][children]":String(ctx.children) };
+    /* LAS DOS FECHAS, O NINGUNA. Cloudbeds rechaza la llamada entera con
+       "Parameter checkinDate is required" si le tocas `rooms` y sólo le mandas
+       checkoutDate: es lo que llevaba rompiendo todos los upgrades desde el 29-sep.
+       Salen de la propia reserva, así que no mueven la estancia; lo único que cambia
+       es el tipo de cuarto. Vacías no se mandan: una fecha en blanco sí la movería. */
+    if(ctx.desde) form.checkinDate = ctx.desde;
+    if(ctx.hasta) form.checkoutDate = ctx.hasta;
     if(ctx.rateID) form["rooms[0][rateID]"]=ctx.rateID;
     // NO LO CAMBIES A POST: putReservation de Cloudbeds solo contesta al verbo PUT. Llamado por POST devuelve {"error":"Unknown method.","status":false} y el cuarto se queda como estaba (nos pasó en una prueba real).
     const mv = await cbForm(ctx.key, "putReservation", form, "PUT");
-    if(!mv.ok){ const detalle={paso:"putReservation", status:mv.status, resp:mv.j}; try{ await rest(`apepe_upgrade_aplicado`, { method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body: JSON.stringify({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, monto, rate_id:ctx.rateID, estado:"error", detalle, aplicado_por:em, updated_at:new Date().toISOString() }) }); }catch{} return J({ok:false, ejecutado:false, error:"no se pudo mover el cuarto", detalle},502); }
+    if(!mv.ok){ const detalle={paso:"putReservation", status:mv.status, resp:mv.j, enviado:{checkinDate:ctx.desde, checkoutDate:ctx.hasta, roomTypeID:target_id}};
+      const fallo = await rastro({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, monto, rate_id:ctx.rateID, estado:"error", detalle, aplicado_por:em });
+      return J({ok:false, ejecutado:false, error:"no se pudo mover el cuarto", detalle, rastro_fallo:fallo},502); }
 
     const desc = `Upgrade a ${plan.to_room_nombre||target_id} (APePe)`;
     // postAdjustment sí es POST.
     const adj = await cbForm(ctx.key, "postAdjustment", { propertyID:String(ctx.pid), reservationID:rid, amount:String(monto), description:desc });
     const estadoFinal = adj.ok? "aplicado" : "aplicado_sin_cargo";
-    try{ await rest(`apepe_upgrade_aplicado`, { method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body: JSON.stringify({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, to_room_unit:null, monto, rate_id:ctx.rateID, estado:estadoFinal, detalle:{plan, mover:mv.j, cargo:adj.j}, aplicado_por:em, updated_at:new Date().toISOString() }) }); }catch{}
-    return J({ ok:true, ejecutado:true, modo:"real", estado:estadoFinal, plan, cargo_ok:adj.ok, cargo_detalle:adj.ok?"":adj.j });
+    const fallo = await rastro({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, to_room_unit:null, monto, rate_id:ctx.rateID, estado:estadoFinal, detalle:{plan, mover:mv.j, cargo:adj.j}, aplicado_por:em });
+    return J({ ok:true, ejecutado:true, modo:"real", estado:estadoFinal, plan, cargo_ok:adj.ok, cargo_detalle:adj.ok?"":adj.j, rastro_fallo:fallo });
   }catch(e){ console.error(e); return J({ok:false,error:String(e)},500); }
 });
