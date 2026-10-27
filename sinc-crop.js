@@ -27,6 +27,14 @@
 (function(){
   var VASP=3/4, HASP=16/9;
   var OUT_V={w:900,h:1200}, OUT_H={w:1600,h:900};
+  /* LA MINIATURA. Javi, 27-oct-2026. El mismo encuadre vertical a 600 px, que
+     es lo más grande que pide una tarjeta del sitio. Se guarda al recortar en
+     vez de pedírsela al redimensionador de Supabase, que se cobra por imagen
+     distinta al mes -368 de 100 incluidas- y que llevaba meses resolviendo un
+     problema que el recortador ya resolvía: estas fotos no pesan tres megas,
+     pesan 245 kB. Sesenta kilobytes más por foto a cambio de la factura
+     entera, y las tarjetas más ligeras que con la transformación. */
+  var OUT_T={w:600,h:800};
   var FV={w:258,h:344}, FH={w:344,h:194};
   var FONDO='#F4EFE8';               /* hueso: el fondo que queda al ver la foto entera */
 
@@ -272,12 +280,17 @@
            que medirlos no dice nada: el aviso de «⚠ Pequeña» tiene que mirar
            lo que subió la persona. Se mide aquí, que es el único sitio donde
            la foto original está delante. */
-        var res={vName:base+'_v.jpg', hName:base+'_h.jpg',
+        var res={vName:base+'_v.jpg', hName:base+'_h.jpg', tName:base+'_t.jpg',
                  srcW:img.naturalWidth||null, srcH:img.naturalHeight||null};
-        var faltan=(fv?1:0)+(fh?1:0);
+        /* La miniatura sale del mismo marco vertical, así que es el mismo
+           encuadre: si alguien mueve la foto, la tarjeta pequeña se mueve con
+           ella. Dos encuadres distintos para la misma forma sería un error
+           esperando a que alguien lo note. */
+        var faltan=(fv?2:0)+(fh?1:0);
         function listo(){ if(--faltan<=0){ cierra(); cb(res); } }
         try{
           if(fv) fv.aBlob(OUT_V,function(x){ res.vBlob=x; listo(); });
+          if(fv) fv.aBlob(OUT_T,function(x){ res.tBlob=x; listo(); });
           if(fh) fh.aBlob(OUT_H,function(x){ res.hBlob=x; listo(); });
         }catch(err){
           b.disabled=false; b.textContent='Guardar';
@@ -323,6 +336,7 @@
 
     var pasos=[];
     if(r.vBlob)pasos.push(function(n){pon(r.vBlob,r.vName||'foto_v.jpg','vUrl','vPath',n);});
+    if(r.tBlob)pasos.push(function(n){pon(r.tBlob,r.tName||'foto_t.jpg','tUrl','tPath',n);});
     if(r.hBlob)pasos.push(function(n){pon(r.hBlob,r.hName||'foto_h.jpg','hUrl','hPath',n);});
     (function corre(i){
       if(i>=pasos.length){ cb(fallo, fallo?null:out); return; }
@@ -370,8 +384,12 @@
         var raiz=nm.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9._-]/g,'_')
                    .replace(/^\d+-/,'').replace(/_[vh]$/,'').slice(0,48)||'foto';
         corta(OUT_V,VASP,function(vb){
-          corta(OUT_H,HASP,function(hb){
-            subeBlobs({vBlob:vb,vName:raiz+'_v.jpg',hBlob:hb,hName:raiz+'_h.jpg'},cfg,cb);
+          corta(OUT_T,VASP,function(tb){
+            corta(OUT_H,HASP,function(hb){
+              subeBlobs({vBlob:vb,vName:raiz+'_v.jpg',
+                         tBlob:tb,tName:raiz+'_t.jpg',
+                         hBlob:hb,hName:raiz+'_h.jpg'},cfg,cb);
+            });
           });
         });
       };
