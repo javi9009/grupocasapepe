@@ -92,6 +92,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .p.bloquea{background:var(--error-bg);color:var(--error)}
 .p.avisa{background:var(--alerta-bg);color:var(--alerta)}
 .p.ok{background:var(--ok-bg);color:var(--ok)}
+.p.prodf{background:#F2E7F2;color:#7A4E7A}
 
 .vacio{background:#fff;border:1px dashed var(--linea);border-radius:12px;padding:30px 20px;text-align:center;color:var(--gris)}
 .vacio b{display:block;font:600 15px Inter;color:var(--tinta);margin-bottom:5px}
@@ -301,7 +302,8 @@ function repinta(){
             '<div class="nom"><b>'+esc(a.nombre_comercial||'(sin nombre)')+'</b>'+
               '<span class="p '+cv[0]+'">'+cv[1]+'</span></div>'+
             '<div class="pills">'+(a.capacidades||[]).map(function(k){
-              return CP.pastilla(k,{quien:true});}).join(' ')+'</div>'+
+              return CP.pastilla(k,{quien:true});}).join(' ')+
+              (a._prod?' <span class="p prodf">ficha de productora</span>':'')+'</div>'+
             '<div class="donde">'+esc(a.ciudad||'sin ciudad')+'</div>'+
           '</div>'+
           '<div class="num">'+(a.publicados||0)+' publicada'+((a.publicados||0)===1?'':'s')+'</div>'+
@@ -326,6 +328,27 @@ function enlazaFiltros(){
     var liga=location.origin+'/ateneista';
     try{ navigator.clipboard.writeText(liga); avisa('Liga copiada · '+liga); }
     catch(_){ prompt('Pásale esta liga:', liga); }};
+}
+
+function cajonProductora(a){
+  $('cNom').textContent=a.nombre_comercial||'(sin nombre)';
+  $('cDon').innerHTML='<span class="p '+(a.estado==='activo'?'activo':'amedias')+'">'+
+    (a.estado==='activo'?'Activa':'Alta sin terminar')+'</span> '+
+    CP.pastillas(['eventos'],{quien:true})+' <span>· '+esc(a.ciudad||'sin ciudad')+'</span>';
+  $('cCuerpo').innerHTML=
+    '<div class="cmini" style="margin-bottom:12px">Esta ficha vive en <b>Productoras</b>, no en la comunidad '+
+      'de ateneístas. Se ve aquí para que no falte nadie, pero se edita en su propio módulo.</div>'+
+    '<div class="lin"><div class="t"><b>Correo</b><span>'+esc(a.email||'sin correo')+'</span></div></div>'+
+    '<div class="lin"><div class="t"><b>WhatsApp</b><span>'+esc(a.whatsapp||'sin teléfono')+'</span></div></div>'+
+    '<div class="lin"><div class="t"><b>RFC</b><span>'+esc(a.rfc||'sin RFC')+'</span></div></div>'+
+    (a.tipo?'<div class="lin"><div class="t"><b>Qué hace</b><span>'+esc(a.tipo)+'</span></div></div>':'')+
+    '<div class="lin"><div class="t"><b>Dada de alta</b><span>'+esc(String(a.created_at||'').slice(0,10))+'</span></div></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">'+
+      '<a class="btn" target="_top" href="/m/ateneo-productoras.html">Abrir Productoras ↗</a>'+
+    '</div>';
+  $('cajon').classList.add('on'); $('velo').classList.add('on');
+  $('cajon').setAttribute('aria-hidden','false');
+  $('cajon').scrollTop=0;
 }
 
 /* ---------- D2 · la ficha ---------- */
@@ -394,6 +417,11 @@ function cierraCajon(){
 async function abreCajon(id){
   var a=TODOS.filter(function(x){return x.id===id;})[0]; if(!a) return;
   CAJ=a;
+  /* Una productora no tiene capacidades, ni equipo, ni convenio en estas
+     tablas: todo eso cuelga de `tour_operadores` y su id no está ahí. Abrirle
+     la ficha de ateneísta enseñaría secciones vacías y, peor, el botón de
+     guardar escribiría contra una fila que no existe y contestaría que sí. */
+  if(a._prod){ cajonProductora(a); return; }
   var cv=comoVa(a), blo=bloquea(a), avi=avisos(a);
 
   $('cNom').textContent=a.nombre_comercial||'(sin nombre)';
@@ -1173,8 +1201,34 @@ VISTA.historia=function(a){
 };
 
 /* ---------- arranque ---------- */
+/* LAS PRODUCTORAS VIVEN EN OTRA TABLA. Javi, 27-oct-2026: «no veo en
+   comunidad a ninguna productora... ¿dónde están?».
+   Estaban en `productoras`, veinte de ellas, y esta pantalla sólo leía
+   `v_ateneistas`, que se arma sobre `tour_operadores`. El chip que decía
+   «PRODUCTORAS 5» no las contaba a ellas: contaba los cinco ateneístas con la
+   casilla de eventos puesta. La vista intenta emparejarlas por correo, y de
+   las veinte sólo coinciden tres.
+   Aquí se LEEN y se enseñan; no se fusiona nada. Mezclar las dos tablas es
+   una decisión de datos que toca eventos, espacios, contratos y tokens de
+   portal, y se toma despierto. Mientras tanto, al menos se ven, que es la
+   diferencia entre una lista incompleta y una lista mentirosa. */
 async function recarga(){
-  TODOS=await get('v_ateneistas?select=*&order=nombre_comercial');
+  var r=await Promise.all([
+    get('v_ateneistas?select=*&order=nombre_comercial'),
+    get('productoras?select=id,nombre_comercial,ciudad,estado,email,whatsapp,rfc,tipo,rol_ateneo,tour_operador_id,created_at&order=nombre_comercial')
+  ]);
+  var ate=r[0]||[], pro=r[1]||[];
+  /* La que ya está ligada a un ateneísta no se repite: sería la misma persona
+     dos veces y con dos fichas distintas. */
+  var ligadas={}; pro.forEach(function(p){ if(p.tour_operador_id) ligadas[p.tour_operador_id]=true; });
+  var sueltas=pro.filter(function(p){ return !p.tour_operador_id; }).map(function(p){
+    return { id:p.id, _prod:true, nombre_comercial:p.nombre_comercial, ciudad:p.ciudad,
+             estado:(p.estado==='activo'?'activo':'borrador'), email:p.email, whatsapp:p.whatsapp,
+             rfc:p.rfc, tipo:p.tipo, created_at:p.created_at,
+             capacidades:['eventos'], productos:0, publicados:0,
+             candado:{bloquea: p.estado==='activo' ? [] : [{clave:'alta', que:'su alta sin terminar'}]} };
+  });
+  TODOS = ate.concat(sueltas);
 }
 (async function(){
   ses=sesionPanel();
