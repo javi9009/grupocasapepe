@@ -5326,6 +5326,10 @@
       '🌐 Su web':'🌐 Their website',
       'Los retratos son fotos de archivo: quienes aparecen no tienen relación con esta página ni con los nombres inventados que la acompañan.':'The portraits are stock photos: the people in them have no connection to this page or to the invented names beside it.',
       'ejemplo':'sample',
+      'Cocina Global':'Global cuisine',
+      'Compras':'Shopping',
+      '★★ Dos estrellas':'★★ Two stars',
+      '🌿 Estrella Verde':'🌿 Green Star',
 
     }
   };
