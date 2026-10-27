@@ -1,6 +1,8 @@
 <!doctype html><html lang="es"><head>
 <script src="/cp-guarda.js"></script>
 <script src="/m/cp-marco.js"></script>
+<!-- El recortador, el mismo de la ficha y de los portales: una sola copia. -->
+<script src="/sinc-crop.js"></script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Productos · Sincrético</title>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -600,7 +602,7 @@ function abreCajon(id){
   var fo=FORMATOS[p.formato||'tour']||['🧾',p.formato||'—'];
   if(p._clase==='espacio') fo=['🏛','Espacio'];
   var es=ESTADOS[p.estado]||['ne',p.estado||'—'];
-  var falta=leFalta(p), frena=frenaAlAliado(p), f=fotoDe(p);
+  var falta=leFalta(p), frena=frenaAlAliado(p), fh=fotoDe(p,'h');
   var dueno=p._dueno||OPS[p.operador_id]||(p.tipo==='propio'?'Casa Pepe':'sin dueño');
 
   $('cNom').textContent=p.nombre||'(sin nombre)';
@@ -610,7 +612,7 @@ function abreCajon(id){
     '<div class="dato"><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></div>'; }
 
   var h='';
-  if(f) h+='<img class="portada" src="'+esc(f)+'" alt="" onerror="this.remove()">';
+  if(fh) h+='<img class="portada" src="'+esc(fh)+'" alt="" onerror="this.remove()">';
 
   /* Lo primero, lo que lo detiene. Es la razón por la que alguien abre esto. */
   if(falta.length||frena){
@@ -654,13 +656,129 @@ function abreCajon(id){
   acc += (p.estado==='publicada')
     ? gris('Borrar','Quítala de la venta primero')
     : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>';
+  h+=bloqueFotos(p);
   h+='<div class="bloque"><h3>Qué hacer con esto</h3><div class="acc">'+acc+'</div></div>';
 
   $('cCuerpo').innerHTML=h;
   engancha($('cCuerpo'));
+  enganchaFotos(p);
   $('cajon').classList.add('on'); $('velo').classList.add('on');
   $('cajon').setAttribute('aria-hidden','false');
   $('cajon').scrollTop=0;
+}
+
+/* ---------- LAS DOS FOTOS, CADA UNA CON SU RECORTE ----------
+   Javi, 27-oct-2026: «¿puedes que no tome la horizontal de cualquier lugar
+   sino del recorte horizontal, y que en la barra lateral nos permitas editar y
+   subir fotos para la horizontal y para la vertical?».
+   Una foto vive recortada dos veces: 900×1200 para las tarjetas y 1600×900
+   para lo ancho. Son dos encuadres distintos de la misma imagen, no la misma
+   imagen estirada, y por eso se editan por separado: lo que se salva en una
+   vertical —la cara, el cartel— no es lo que se salva en una horizontal.
+   Un evento no entra aquí: sus fotos viven en su propia tabla y se tocan en su
+   pantalla, con su galería. */
+function bloqueFotos(p){
+  if(p._ev){
+    return '<div class="bloque"><h3>Fotos</h3>'+
+      '<div class="dato"><span class="v">Las fotos de un evento se cambian en su pantalla, '+
+      'que es donde está su galería. <a target="_top" href="/m/eventos.html?ev='+
+      encodeURIComponent(p.id)+'#evt">Abrirla ↗</a></span></div></div>';
+  }
+  var m=MEDIA[p.id];
+  function hueco(forma){
+    var url = m ? (forma==='h' ? m.url_h : m.url) : '';
+    var alto = forma==='h' ? 'aspect-ratio:16/9' : 'aspect-ratio:3/4';
+    var nom  = forma==='h' ? 'Horizontal · portada y cabeceras' : 'Vertical · tarjetas';
+    return '<div style="flex:1;min-width:130px">'+
+      '<div class="mini" style="color:var(--gris);margin-bottom:5px">'+nom+'</div>'+
+      '<div style="'+alto+';background:var(--hueso);border-radius:9px;overflow:hidden;display:grid;place-items:center">'+
+        (url ? '<img src="'+esc(url)+'" alt="" style="width:100%;height:100%;object-fit:cover" onerror="this.remove()">'
+             : '<span class="mini" style="color:var(--tenue);padding:8px;text-align:center">'+
+               (m?'Sin recorte horizontal':'Sin foto')+'</span>')+
+      '</div>'+
+      '<div class="acc" style="margin-top:6px">'+
+        (url?'<button class="btn sm" data-recorta="'+forma+'">Reencuadrar</button>':'')+
+        '<button class="btn sm" data-cambia="'+forma+'">'+(url?'Cambiar':'Subir')+'</button>'+
+      '</div></div>';
+  }
+  return '<div class="bloque"><h3>Fotos</h3>'+
+    '<div style="display:flex;gap:11px;align-items:flex-start">'+hueco('v')+hueco('h')+'</div>'+
+    '<div class="mini" id="fotoDice" style="margin-top:8px;color:var(--gris)">'+
+      (m?'Cada una se encuadra aparte: lo que se salva en la vertical no es lo que se salva en la ancha.'
+        :'Esta ficha no tiene fotos. Súbelas aquí o en su ficha completa.')+'</div>'+
+    '<div class="mini" style="margin-top:4px;color:var(--tenue)">La galería entera se maneja en la ficha, en «Fotos y video».</div>'+
+    '</div>';
+}
+
+/* Recorta y guarda una de las dos. `fuente` es un archivo del disco, o la liga
+   de la que ya hay para reencuadrarla sin volver a subir nada. */
+function guardaFoto(p, forma, fuente){
+  var m=MEDIA[p.id];
+  function di(t,mal){ var d=$('fotoDice'); if(d){ d.textContent=t; d.style.color=mal?'var(--error)':'var(--gris)'; } }
+  if(!m && typeof fuente==='string'){ di('No hay foto que reencuadrar.',true); return; }
+  di('Abriendo el recortador…');
+  var ruta=(p.operador_id?('op-'+p.operador_id):'casa-pepe')+'/'+p.id;
+  sincCrop.subir(fuente,{sb:SB,key:KEY,token:tok(),bucket:'sincretico',ruta:ruta,
+      only:forma, titulo: forma==='h'?'Encuadra la horizontal':'Encuadra la vertical'},
+    async function(err,r){
+      if(err||!r){ di('No se guardó: '+((err&&err.message)||'cerraste el recortador'),true); return; }
+      var url = forma==='h' ? r.hUrl : r.vUrl;
+      var pat = forma==='h' ? r.hPath : r.vPath;
+      if(!url){ di('El almacén no aceptó la foto.',true); return; }
+      di('Guardando…');
+      var cuerpo = forma==='h'
+        ? {url_h:url, storage_path_h:pat}
+        : {url:url, storage_path:pat, foco_x:0.5, foco_y:0.5};
+      try{
+        var destino='sinc_media?id=eq.'+encodeURIComponent(m?m.id:''), metodo='PATCH';
+        if(!m){
+          /* Primera foto de la ficha: se crea la fila. Una horizontal suelta no
+             sirve de nada —la vertical es la que se enseña en todos lados—, así
+             que la primera nace siempre como vertical. */
+          metodo='POST'; destino='sinc_media';
+          cuerpo=Object.assign({operador_id:p.operador_id||null, experiencia_id:p.id,
+            tipo:'foto', etiqueta:'general', origen:'subida', estado:'listo', orden:0,
+            ancho:r.srcW||null, alto:r.srcH||null}, cuerpo);
+        }
+        var rr=await api(SB+'/rest/v1/'+destino,{method:metodo,
+          headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+          body:JSON.stringify(cuerpo)});
+        if(!rr.ok) throw new Error('la base respondió '+rr.status+' · '+(await rr.text()).slice(0,160));
+        /* La fila de vuelta: un PATCH que no toca ninguna fila también contesta
+           que todo fue bien, y entonces se canta un guardado que no ocurrió. */
+        var fila=await rr.json().catch(function(){return null;});
+        if(!fila||!fila.length) throw new Error('la base no dejó tocar esta foto; suele ser la cuenta con la que entraste');
+        MEDIA[p.id]=fila[0];
+        avisa(forma==='h'?'Horizontal guardada':'Vertical guardada');
+        abreCajon(p.id);     /* se repinta con lo que acaba de pasar */
+        pinta();
+      }catch(e){ di('No se guardó: '+((e&&e.message)||e), true); }
+    });
+}
+
+function enganchaFotos(p){
+  var cc=$('cCuerpo');
+  Array.prototype.forEach.call(cc.querySelectorAll('[data-recorta]'),function(b){
+    b.onclick=function(){
+      var forma=b.getAttribute('data-recorta'), m=MEDIA[p.id];
+      /* Se reencuadra desde el recorte que ya hay de esa forma; si no lo hay
+         —una ficha vieja sin horizontal— se parte de la vertical. */
+      var de = forma==='h' ? (m&&(m.url_h||m.url)) : (m&&m.url);
+      if(de) guardaFoto(p, forma, de);
+    };});
+  Array.prototype.forEach.call(cc.querySelectorAll('[data-cambia]'),function(b){
+    b.onclick=function(){
+      var forma=b.getAttribute('data-cambia');
+      var inp=document.createElement('input');
+      inp.type='file'; inp.accept='image/*'; inp.style.display='none';
+      document.body.appendChild(inp);
+      inp.onchange=function(){
+        var f=inp.files&&inp.files[0];
+        document.body.removeChild(inp);
+        if(f) guardaFoto(p, forma, f);
+      };
+      inp.click();
+    };});
 }
 
 function engancha(caja){
@@ -683,10 +801,14 @@ function engancha(caja){
 
 /* La foto principal: la primera de su galería. En una experiencia vive en
    sinc_media; en un evento, en su propio campo. */
-function fotoDe(p){
+/* `forma` dice qué recorte se quiere: 'h' para un hueco ancho, 'v' o nada para
+   uno alto. Si la horizontal no existe todavía -fotos de antes de que se
+   guardaran las dos- se cae a la vertical, que es feo pero no es un hueco. */
+function fotoDe(p, forma){
   if(p._ev) return p._foto||'';
   var m=MEDIA[p.id];
-  return (m && m!=='1') ? m : '';
+  if(!m) return '';
+  return forma==='h' ? (m.url_h||m.url||'') : (m.url||'');
 }
 
 /* LA VISTA DE FOTOS. La misma información, puesta para mirar en vez de para
@@ -952,11 +1074,17 @@ async function carga(){
     /* Las fotos viven en sinc_media desde la unificación de la galería. Se
        traen sólo los ids: aquí no se pintan, sólo hace falta saber si hay. */
     MEDIA={};
-    var m=await api(SB+'/rest/v1/sinc_media?select=experiencia_id,url,orden&tipo=eq.foto&estado=eq.listo&order=orden.asc&limit=5000',{headers:hdr()});
+    var m=await api(SB+'/rest/v1/sinc_media?select=id,experiencia_id,url,url_h,storage_path,storage_path_h,orden&tipo=eq.foto&estado=eq.listo&order=orden.asc&limit=5000',{headers:hdr()});
     if(m.ok){ (await m.json()).forEach(function(x){
       /* La primera por orden es la principal: se guarda su liga, que es la que
          se enseña, en vez de un simple «sí tiene». */
-      if(x.experiencia_id && !MEDIA[x.experiencia_id]) MEDIA[x.experiencia_id]=x.url||'1'; }); }
+      /* LA HORIZONTAL NO SE SACA DE LA VERTICAL. Javi, 27-oct-2026: «tu sistema
+         toma la foto vertical igual que para la horizontal». Cada foto se
+         guarda recortada dos veces -900x1200 para las tarjetas, 1600x900 para
+         lo ancho- y aquí sólo se traía la vertical, así que al meterla en un
+         hueco ancho se le cortaba la cabeza. Ahora viaja la fila entera y cada
+         sitio pide la forma que necesita. */
+      if(x.experiencia_id && !MEDIA[x.experiencia_id]) MEDIA[x.experiencia_id]=x; }); }
 
     /* LOS EVENTOS DEL ATENEO, EN LA MISMA LISTA. Javi, 26-oct-2026. Viven en su
        propia tabla y se venden por su propio camino, así que esta pantalla no
