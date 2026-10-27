@@ -186,15 +186,6 @@ window.sincVitrina = (function () {
   + '.sv-f .eti{position:absolute;left:7px;top:7px;background:var(--magenta);color:#fff;'
   +   'font-family:Oswald,sans-serif;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;'
   +   'padding:3px 7px;border-radius:999px;box-shadow:0 2px 8px rgba(0,0,0,.3)}'
-  + '.sv-f .sellimp{position:absolute;top:7px;right:7px;display:inline-flex;align-items:center;'
-  +   'gap:4px;background:#A9784F;color:#fff;font-family:Oswald,sans-serif;font-weight:700;'
-  +   'font-size:10px;letter-spacing:.03em;padding:3px 7px 3px 5px;border-radius:999px;'
-  +   'box-shadow:0 1px 1px rgba(30,26,22,.18),0 6px 14px -8px rgba(30,26,22,.6)}'
-  + '.sv-f .sellimp svg{width:11px;height:11px;flex:none;display:block}'
-  + '.sv-f .sellimp b{font-weight:700;color:#fff}'
-  + '.sv-f .sellimp i{font-style:normal;color:rgba(255,255,255,.85);font-weight:500}'
-  + '.sv-f .sellimp.n2{background:#2F6B3C}'
-  + '.sv-f .sellimp.n3{background:#1C4E80}'
   + '.sv-f .cu{padding:9px 10px 11px;display:flex;flex-direction:column;gap:3px;flex:1}'
   + '.sv-f .nm{font-weight:700;font-size:13px;line-height:1.25}'
   + '.sv-f .datos{display:flex;flex-wrap:wrap;gap:3px 8px;color:var(--gris);font-size:11px;'
@@ -227,44 +218,10 @@ window.sincVitrina = (function () {
     } catch (_) {}
   }
 
-  /* EL SELLO DE IMPACTO VIVE AQUI, no solo en la portada de la tienda. Javi,
-     27-oct-2026: «no veo los iconos en las fotos». Y tenia razon: el sello
-     estaba puesto en `marco()` de sinc/index.html, que construye la promo, la
-     grande y la de rejilla -pero las filas de tours de la portada, y las de la
-     APePe, son ESTA vitrina, que es otro componente. El dato es el mismo:
-     v_sinc_impacto_producto, que sale de sinc_desglose_precio, el mismo
-     reparto que la ficha ensena al huesped.
-     Solo las experiencias: un evento o un pase no tienen desglose. */
-  var IMP = {};
-  async function cargaImpacto() {
-    try {
-      var r = await fetch(SB + '/rest/v1/v_sinc_impacto_producto?select=producto_id,pct,pesos',
-        { headers: { apikey: KEY, Authorization: 'Bearer ' + KEY } });
-      if (r.ok) (await r.json()).forEach(function (x) { IMP[String(x.producto_id)] = x; });
-    } catch (_) {}
-  }
-  function mundo() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-      + '<circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path>'
-      + '<path d="M12 3c2.6 2.6 2.6 15.4 0 18M12 3c-2.6 2.6-2.6 15.4 0 18"></path></svg>';
-  }
-  /* Arranca en 50 (Javi, 27-oct) y se calla por encima de 100: un 157% no es
-     un tour generosisimo, es un costeo mal puesto. El color se decide con el
-     MISMO numero redondeado que se ensena, o el sello se contradice solo. */
-  function selloImp(x) {
-    if (!x || x.fuente !== 'experiencia') return '';
-    var d = IMP[String(x.id)]; if (!d) return '';
-    var p = Number(d.pct); if (!isFinite(p) || p < 50 || p > 100) return '';
-    var pr = Math.round(p);
-    var n = pr >= 85 ? ' n3' : (pr >= 70 ? ' n2' : '');
-    var pe = Number(d.pesos);
-    return '<span class="sellimp' + n + '" title="' + esc(pr) + '% '
-      + esc(T('de lo que pagas se queda en la comunidad'))
-      + (isFinite(pe) && pe > 0 ? ', ' + esc(money(pe)) + ' ' + esc(T('por persona')) : '') + '">'
-      + mundo() + '<b>' + esc(pr) + '%</b>'
-      + (isFinite(pe) && pe > 0 ? '<i>' + esc(money(pe)) + '</i>' : '') + '</span>';
-  }
+  /* EL SELLO DE IMPACTO NO VA EN LA VITRINA. Estuvo aqui unas horas el
+     27-oct-2026 y Javi lo quito: «solo quiero verlo en la portada de la
+     experiencia». A 172px la tarjeta, el sello era un confeti ilegible. Vive
+     en sinc/exp.html, grande y con su detalle detras. */
 
   function chips(x) {
     var d = [];
@@ -318,7 +275,7 @@ window.sincVitrina = (function () {
               ? '<s>' + money(x.precio_lista) + '</s>' : '')
           : '');
     return '<a class="sv-f" href="' + esc(liga) + '">'
-      + '<span class="im">' + tapa(x.nombre, x.portada) + badge + selloImp(x) + '</span>'
+      + '<span class="im">' + tapa(x.nombre, x.portada) + badge + '</span>'
       + '<span class="cu">'
       +   '<span class="nm">' + esc(x.nombre || '') + '</span>'
       +   chips(x) + odsChips(x)
@@ -404,7 +361,7 @@ window.sincVitrina = (function () {
       } catch (_) { /* nunca romper la vitrina por el idioma */ }
     }
 
-    await Promise.all([cargaOds(), cargaImpacto()]);
+    await cargaOds();
 
     /* Se agrupa por categoría respetando el orden que manda la base, y las del
        Ateneo se van al final sean las que sean. */
