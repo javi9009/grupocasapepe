@@ -267,7 +267,13 @@
         var b=this; b.disabled=true; b.textContent='Guardando…';
         var nm=esArchivo?(fuente.name||'foto'):((fuente.split('/').pop()||'foto').split('?')[0]);
         var base=nm.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,48)||'foto';
-        var res={vName:base+'_v.jpg', hName:base+'_h.jpg'};
+        /* EL TAMAÑO DEL ORIGINAL, QUE ES EL QUE IMPORTA. Los dos recortes
+           salen siempre de 900 y de 1600 px venga de donde venga la foto, así
+           que medirlos no dice nada: el aviso de «⚠ Pequeña» tiene que mirar
+           lo que subió la persona. Se mide aquí, que es el único sitio donde
+           la foto original está delante. */
+        var res={vName:base+'_v.jpg', hName:base+'_h.jpg',
+                 srcW:img.naturalWidth||null, srcH:img.naturalHeight||null};
         var faltan=(fv?1:0)+(fh?1:0);
         function listo(){ if(--faltan<=0){ cierra(); cb(res); } }
         try{
@@ -302,7 +308,7 @@
     var base=(cfg.sb||'')+'/storage/v1/object/'+(cfg.bucket||'sincretico')+'/';
     var pub =(cfg.sb||'')+'/storage/v1/object/public/'+(cfg.bucket||'sincretico')+'/';
     var sello=Date.now();
-    var out={}, fallo=null;
+    var out={srcW:r.srcW||null, srcH:r.srcH||null}, fallo=null;
 
     function pon(blob,nombre,claveUrl,clavePath,next){
       if(!blob){next();return;}
