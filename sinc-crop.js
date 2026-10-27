@@ -16,9 +16,14 @@
    y nadie entiende por qué. Se recorta una vez, se guardan las dos, y cada
    sitio pide la que le toca.
 
-   La casilla "Mostrar la foto completa" viene marcada a propósito: el reclamo
-   numero uno de cualquier operador es "me cortaste la foto". Con ella se ve
-   entera y con fondo alrededor; quien quiera que llene el marco, la desmarca. */
+   La casilla "Mostrar la foto completa" VIENE DESMARCADA. Javi, 26-oct-2026:
+   «¿puedes hacer que al subirlas las centres automáticamente? ¿podrías ajustar
+   el sistema de fotos para que no haya ninguna con los bordes blancos?».
+   Antes venía marcada para que nadie dijera "me cortaste la foto", y el precio
+   fue el contrario: tarjetas con franjas color hueso arriba y abajo -una foto
+   de Mixquic llegó a tener 278 píxeles de banda a cada lado- en el escaparate
+   y en la app. Ahora la foto llena el marco y sale centrada sola; quien de
+   verdad necesite verla entera, marca la casilla. */
 (function(){
   var VASP=3/4, HASP=16/9;
   var OUT_V={w:900,h:1200}, OUT_H={w:1600,h:900};
@@ -67,6 +72,44 @@
     document.head.appendChild(s);
   }
 
+  /* Devuelve la misma foto sin las franjas de fondo que le pusiera un recorte
+     anterior, o null si no tiene ninguna -o si el navegador no deja leerla, que
+     pasa cuando la imagen viene de otro sitio sin permiso-. Sólo mira el color
+     exacto del fondo del recortador: una playa clara o un cielo plano no se
+     confunden con una franja, porque el tono tiene que ser ése. */
+  function sinBordes(img){
+    var w=img.naturalWidth, h=img.naturalHeight;
+    if(!w||!h) return null;
+    var cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+    var cx=cv.getContext('2d');
+    var dat;
+    try{
+      cx.drawImage(img,0,0);
+      dat=cx.getImageData(0,0,w,h).data;
+    }catch(_){ return null; }          /* canvas manchado: se deja como está */
+
+    var R=parseInt(FONDO.substr(1,2),16), G=parseInt(FONDO.substr(3,2),16), B=parseInt(FONDO.substr(5,2),16);
+    var paso=Math.max(1,Math.floor(w/40)), pasoY=Math.max(1,Math.floor(h/40));
+    function esFondo(x,y){
+      var i=(y*w+x)*4;
+      return Math.abs(dat[i]-R)<=14 && Math.abs(dat[i+1]-G)<=14 && Math.abs(dat[i+2]-B)<=14;
+    }
+    function filaFondo(y){ for(var x=0;x<w;x+=paso){ if(!esFondo(x,y)) return false; } return true; }
+    function colFondo(x){ for(var y=0;y<h;y+=pasoY){ if(!esFondo(x,y)) return false; } return true; }
+
+    var arr=0; while(arr<h/2 && filaFondo(arr)) arr++;
+    var aba=0; while(aba<h/2 && filaFondo(h-1-aba)) aba++;
+    var izq=0; while(izq<w/2 && colFondo(izq)) izq++;
+    var der=0; while(der<w/2 && colFondo(w-1-der)) der++;
+    if(arr+aba<6 && izq+der<6) return null;   /* no tenía bordes */
+
+    var nw=w-izq-der, nh=h-arr-aba;
+    if(nw<80 || nh<80) return null;           /* no dejar nada raro */
+    var cv2=document.createElement('canvas'); cv2.width=nw; cv2.height=nh;
+    cv2.getContext('2d').drawImage(img, izq, arr, nw, nh, 0, 0, nw, nh);
+    return cv2.toDataURL('image/jpeg',0.92);
+  }
+
   function marco(img, frame, asp){
     var natW=img.naturalWidth, natH=img.naturalHeight;
     var eCubre=Math.max(frame.w/natW, frame.h/natH);
@@ -102,7 +145,7 @@
     var lbl=document.createElement('div'); lbl.className='sc-lbl';
     lbl.textContent=(asp===VASP?'Vertical · tarjetas':'Horizontal · portada y galería');
     var opt=document.createElement('label'); opt.className='sc-fit';
-    opt.innerHTML='<input type="checkbox" checked> Mostrar la foto completa';
+    opt.innerHTML='<input type="checkbox"> Mostrar la foto completa (deja bordes)';
     var chk=opt.querySelector('input');
     var ctr=document.createElement('button');
     ctr.type='button'; ctr.className='sc-ctr'; ctr.textContent='Centrar';
@@ -169,13 +212,26 @@
     if(!esArchivo) img.crossOrigin='anonymous';
 
     img.onload=function(){
+      /* QUITARLE LOS BORDES A UNA FOTO QUE YA LOS TRAE. Cuando se reacomoda una
+         foto ya subida, la fuente es el recorte anterior, y si aquél se guardó
+         con franjas de fondo -71 de las 155 fotos publicadas las tienen, alguna
+         con 391 píxeles arriba y abajo de 1200- volver a recortar sería recortar
+         sobre el fondo: o se cuela la franja otra vez, o hay que ampliar la foto
+         y se pierde. Así que antes de enseñarla se le quitan, y lo que se
+         encuadra es la foto de verdad. Javi, 26-oct-2026. */
+      if(!img.__sinbordes){
+        img.__sinbordes=1;
+        var limpia=sinBordes(img);
+        if(limpia){ img.crossOrigin=null; img.src=limpia; return; }  /* vuelve aquí ya limpia */
+      }
+
       var ov=document.createElement('div'); ov.className='sc-ov';
       var box=document.createElement('div'); box.className='sc-box';
       box.innerHTML='<h3>'+(opts.titulo||'Acomoda la foto')+'</h3>'+
         '<div class="sc-hint">Arrástrala para encuadrarla y usa el zoom (o la rueda del ratón). '+
-        'Viene marcada <b>«Mostrar la foto completa»</b>: así no se corta nada y puedes centrarla. '+
-        'Si prefieres que llene el marco, desmárcala. Guardamos una versión vertical para las '+
-        'tarjetas y una horizontal para la portada.</div>';
+        'La foto <b>llena el marco</b> y sale centrada, sin bordes. Si necesitas que se vea '+
+        'entera aunque queden franjas a los lados, marca «Mostrar la foto completa». '+
+        'Guardamos una versión vertical para las tarjetas y una horizontal para la portada.</div>';
 
       var frames=document.createElement('div'); frames.className='sc-frames';
       var solo=opts.only;
