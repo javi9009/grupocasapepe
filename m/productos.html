@@ -73,7 +73,12 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .btn.sm{padding:6px 11px;font-size:11.5px}
 .btn.gris{border-color:var(--linea);color:var(--gris)}
 .btn[disabled]{opacity:.5;cursor:default}
-.filtros{display:grid;grid-template-columns:minmax(0,1.6fr) 1fr 1fr;gap:10px;margin-bottom:10px;align-items:start}
+.filtros{display:grid;grid-template-columns:minmax(0,1.6fr) 1fr 1fr minmax(0,1.3fr);gap:10px;margin-bottom:10px;align-items:start}
+.fate{position:relative;min-width:0}
+.fate input{width:100%;padding-right:30px}
+.fate button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;
+  cursor:pointer;font-size:19px;line-height:1;color:var(--muted,#6E665C);padding:0 4px}
+.fate button:hover{color:var(--ink,#1E1A16)}
 .filtros input,.filtros select{border:1.5px solid var(--linea);border-radius:9px;padding:9px 12px;background:#fff;width:100%;height:38px;box-sizing:border-box}
 @media(max-width:700px){.filtros{grid-template-columns:1fr}}
 .estados{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 12px}
@@ -159,6 +164,18 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
       <option value="propio">Propias</option>
       <option value="tercero">De terceros</option>
     </select>
+    <!-- POR ATENEISTA. Javi, 27-oct-2026: «permite filtrar por ateneísta con
+         un desplegable con buscador para encontrarlo».
+         Es un <input list> y no un <select>: con ciento y pico de
+         touroperadoras, un desplegable obliga a bajar a ciegas buscando un
+         nombre que ya sabes. Escribiendo tres letras aparece. El buscador es
+         del navegador, sin librería. -->
+    <div class="fate">
+      <input id="fateneista" list="dlAteneistas" autocomplete="off"
+             placeholder="Cualquier ateneísta">
+      <datalist id="dlAteneistas"></datalist>
+      <button type="button" id="fateX" aria-label="Quitar el filtro de ateneísta" hidden>&times;</button>
+    </div>
   </div>
 
   <!-- Los estados ya no son una lista de una sola opción: casi nunca se
@@ -215,8 +232,9 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ses=null, TODOS=null, FALLO='', OPS={}, MEDIA={}, YO='';
-var F={q:'',formato:'',estados:[],tipo:''};
+var F={q:'',formato:'',estados:[],tipo:'',ateneista:''};
 var CANDADO={};   /* operador_id -> lo que la base dice que le falta para vender */
+var ATE_ID={};    /* nombre exacto -> operador_id, para el filtro de ateneista */
 
 /* Lo que le falta al ALIADO -no a la ficha- para poder publicar. Las palabras
    vienen de la base, no se reinventan aquí. */
@@ -346,6 +364,16 @@ function pasa(p){
   if(F.formato && String(p.formato||'tour')!==F.formato) return false;
   if(F.estados.length && F.estados.indexOf(String(p.estado||''))<0) return false;
   if(F.tipo && String(p.tipo||'')!==F.tipo) return false;
+  /* El ateneista se compara por id cuando el nombre escrito coincide con uno
+     de la lista; si no, por texto, para que escribir «barrio» a medias siga
+     acotando en vez de no devolver nada. */
+  if(F.ateneista){
+    if(ATE_ID[F.ateneista]){ if(p.operador_id!==ATE_ID[F.ateneista]) return false; }
+    else {
+      var d=String(p._dueno||OPS[p.operador_id]||'').toLowerCase();
+      if(d.indexOf(F.ateneista.toLowerCase())<0) return false;
+    }
+  }
   if(F.q){
     var t=(String(p.nombre||'')+' '+String(p.sku||'')+' '+
            String(p._dueno||OPS[p.operador_id]||'')).toLowerCase();
@@ -1064,6 +1092,7 @@ async function carga(){
     TODOS=await r.json();
     var o=await api(SB+'/rest/v1/tour_operadores?select=id,nombre_comercial&limit=1000',{headers:hdr()});
     if(o.ok){ (await o.json()).forEach(function(x){ OPS[x.id]=x.nombre_comercial; }); }
+    pintaAteneistas();
     /* EL CANDADO DEL ALIADO, ANTES DE INTENTARLO. La base ya frena a quien no
        puede publicar -«a Kari Costa le falta un teléfono o WhatsApp»- y lo dice
        con buenas palabras, pero lo decía con un 403 después de apretar el
@@ -1129,6 +1158,40 @@ async function carga(){
   var k={fq:'q',fformato:'formato',ftipo:'tipo'}[id];
   $(id).addEventListener(id==='fq'?'input':'change',function(){ F[k]=this.value; pinta(); });
 });
+
+/* La lista sale de QUIEN TIENE PRODUCTOS AQUI, no del censo entero de
+   ateneistas: un desplegable con ciento y pico de nombres de los que la
+   mitad no tiene nada que enseñar es un desplegable que estorba. Se recalcula
+   al cargar, asi que sigue a la casa que esté elegida arriba. */
+function pintaAteneistas(){
+  var dl=$('dlAteneistas'); if(!dl) return;
+  var vistos={};
+  (TODOS||[]).forEach(function(p){
+    var n=p._dueno||OPS[p.operador_id]||'';
+    if(!n) return;
+    if(!vistos[n]) vistos[n]={n:n, id:p.operador_id||null, cuantos:0};
+    vistos[n].cuantos++;
+  });
+  ATE_ID={};
+  var L=Object.keys(vistos).map(function(k){return vistos[k];})
+        .sort(function(a,b){ return a.n.localeCompare(b.n,'es'); });
+  dl.innerHTML = L.map(function(x){
+    if(x.id) ATE_ID[x.n]=x.id;
+    return '<option value="'+esc(x.n)+'">'+x.cuantos+'</option>';
+  }).join('');
+}
+
+(function(){
+  var i=$('fateneista'), x=$('fateX'); if(!i) return;
+  function aplica(){
+    F.ateneista=(i.value||'').trim();
+    x.hidden = !F.ateneista;
+    pinta();
+  }
+  i.addEventListener('input', aplica);
+  i.addEventListener('change', aplica);
+  x.onclick=function(){ i.value=''; aplica(); i.focus(); };
+})();
 
 /* Los estados se suman: tocar uno lo enciende, tocarlo otra vez lo apaga, y
    ninguno encendido quiere decir todos. */
