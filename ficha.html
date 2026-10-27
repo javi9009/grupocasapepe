@@ -876,6 +876,10 @@ gmp-place-autocomplete,.gmpac{
           <div class="fld" style="display:flex;align-items:flex-end"><button class="btn fantasma" id="btnLigas">Traer de las ligas</button></div>
         </div>
         <div class="galeria" id="galeria"></div>
+        <div id="zonaBordes" style="display:none;margin-top:12px;gap:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="btn fantasma" id="btnBordes">Quitar bordes a todas</button>
+          <div class="mini" id="avisoBordes" style="flex:1;min-width:200px">Repasa las fotos de arriba: a las que traigan franjas de un recorte viejo se les quitan y se vuelven a encuadrar llenando el marco. Las que ya estén limpias no se tocan.</div>
+        </div>
       </div>
 
       <div class="card" id="cardFotosRef" style="display:none">
@@ -3757,8 +3761,66 @@ gmp-place-autocomplete,.gmpac{
         await patch('sinc_media',id,{foco_x:Math.round(m.foco_x*1000)/1000,foco_y:Math.round(m.foco_y*1000)/1000});
       });
     });
+    zonaBordes();
   }
   async function recargaMedia(){MED=await get('sinc_media?select=*&experiencia_id=eq.'+ID+'&order=etiqueta,orden');pintaMedia();pintaFotosRef();}
+
+  /* QUITAR LOS BORDES A TODAS DE UNA. Javi, 26-oct-2026: «si, ponle el botón».
+     De las 155 fotos publicadas, 71 llevan franjas color hueso de cuando el
+     recortador guardaba la foto entera -la peor, 391 píxeles arriba y otros 391
+     abajo de 1200-. Pasarlas una a una por el ⤢ es media tarde, y no hay nada
+     que decidir en cada una: se le quitan las franjas, se encuadra centrada
+     llenando el marco y se sube. Eso es lo que hace esto, foto por foto y
+     contando en voz alta, sin un solo pop-up del navegador. */
+  function zonaBordes(){
+    var z=document.getElementById('zonaBordes'); if(!z)return;
+    var hay=MED.filter(function(m){return m.tipo!=='video' && m.url;}).length;
+    z.style.display=hay?'flex':'none';
+  }
+
+  async function limpiaTodasLasFotos(){
+    var b=document.getElementById('btnBordes'), av=document.getElementById('avisoBordes');
+    var fotos=MED.filter(function(m){return m.tipo!=='video' && m.url;});
+    if(!fotos.length)return;
+    b.disabled=true; var dice=b.textContent;
+    var cfg={sb:SB,key:KEY,token:tok(),bucket:'sincretico',ruta:carpetaMedia()};
+    var limpias=0, yaEstaban=0, fallos=[];
+
+    for(var i=0;i<fotos.length;i++){
+      var m=fotos[i];
+      av.textContent='Repasando foto '+(i+1)+' de '+fotos.length+'…';
+      var r=await new Promise(function(res){
+        try{ sincCrop.limpiaBordes(m.url,cfg,function(err,x){ res(err?{err:err}:x); }); }
+        catch(e){ res({err:e}); }
+      });
+      if(r&&r.err){ fallos.push((m.etiqueta||'foto')+': '+(r.err.message||'no se pudo abrir')); continue; }
+      if(!r||r.sinBordes){ yaEstaban++; continue; }
+      if(!r.vUrl){ fallos.push((m.etiqueta||'foto')+': el almacén no la aceptó'); continue; }
+      /* La fila de vuelta, como en reacomoda: un PATCH que no toca nada
+         también contesta 200, y entonces parecería guardado y no lo está. */
+      var p=await req('sinc_media?id=eq.'+m.id,{method:'PATCH',
+        headers:{'Prefer':'return=representation'},
+        body:JSON.stringify({url:r.vUrl,storage_path:r.vPath,
+          url_h:r.hUrl||null,storage_path_h:r.hPath||null,foco_x:0.5,foco_y:0.5})});
+      var fila=null; if(p.ok){ try{ fila=await p.json(); }catch(_){} }
+      if(!p.ok||!fila||!fila.length){
+        fallos.push((m.etiqueta||'foto')+': la base no dejó guardarla'); continue; }
+      limpias++;
+    }
+
+    b.disabled=false; b.textContent=dice;
+    var parte=[];
+    if(limpias) parte.push(limpias+(limpias===1?' foto arreglada':' fotos arregladas'));
+    if(yaEstaban) parte.push(yaEstaban+' ya estaba'+(yaEstaban===1?'':'n')+' limpia'+(yaEstaban===1?'':'s'));
+    if(fallos.length) parte.push(fallos.length+' se quedó'+(fallos.length===1?'':'n')+' sin tocar');
+    av.innerHTML=parte.join(' · ')+
+      (fallos.length?'<br><span style="color:var(--rojo,#B03A2E)">'+fallos.join('<br>')+'</span>':'');
+    if(limpias){ toast(limpias+(limpias===1?' foto sin bordes':' fotos sin bordes')); await recargaMedia(); }
+    else if(!fallos.length) toast('Ninguna tenía bordes');
+  }
+
+  (function(){ var b=document.getElementById('btnBordes');
+    if(b) b.onclick=function(){ limpiaTodasLasFotos(); }; })();
 
   $('zona').onclick=function(){$('file').click();};
   $('zona').ondragover=function(e){e.preventDefault();this.classList.add('hot');};

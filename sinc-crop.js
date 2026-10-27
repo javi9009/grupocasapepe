@@ -296,33 +296,84 @@
 
   /* Recorta y sube. cfg: {sb, key, token, bucket, ruta, only, titulo}
      'ruta' es la carpeta destino sin barra final. Devuelve cb(err,{vUrl,hUrl,...}). */
-  function subir(fuente, cfg, cb){
-    open(fuente, {only:cfg.only, titulo:cfg.titulo}, function(r){
-      var base=(cfg.sb||'')+'/storage/v1/object/'+(cfg.bucket||'sincretico')+'/';
-      var pub =(cfg.sb||'')+'/storage/v1/object/public/'+(cfg.bucket||'sincretico')+'/';
-      var sello=Date.now();
-      var out={}, faltan=0, fallo=null;
+  /* Sube los dos recortes a Storage. Es la segunda mitad de subir(), suelta
+     aparte porque limpiaBordes() hace lo mismo sin pasar por el recortador. */
+  function subeBlobs(r, cfg, cb){
+    var base=(cfg.sb||'')+'/storage/v1/object/'+(cfg.bucket||'sincretico')+'/';
+    var pub =(cfg.sb||'')+'/storage/v1/object/public/'+(cfg.bucket||'sincretico')+'/';
+    var sello=Date.now();
+    var out={}, fallo=null;
 
-      function pon(blob,nombre,claveUrl,clavePath,next){
-        if(!blob){next();return;}
-        var ruta=(cfg.ruta||'suelto').replace(/\/+$/,'')+'/'+sello+'-'+nombre;
-        fetch(base+ruta,{method:'POST',headers:{
-          'apikey':cfg.key,'Authorization':'Bearer '+(cfg.token||cfg.key),'Content-Type':'image/jpeg'
-        },body:blob}).then(function(res){
-          if(!res.ok)return res.text().then(function(t){throw new Error(t.slice(0,140)||('http '+res.status));});
-          out[claveUrl]=pub+ruta; out[clavePath]=ruta; next();
-        }).catch(function(e){ fallo=e; next(); });
-      }
+    function pon(blob,nombre,claveUrl,clavePath,next){
+      if(!blob){next();return;}
+      var ruta=(cfg.ruta||'suelto').replace(/\/+$/,'')+'/'+sello+'-'+nombre;
+      fetch(base+ruta,{method:'POST',headers:{
+        'apikey':cfg.key,'Authorization':'Bearer '+(cfg.token||cfg.key),'Content-Type':'image/jpeg'
+      },body:blob}).then(function(res){
+        if(!res.ok)return res.text().then(function(t){throw new Error(t.slice(0,140)||('http '+res.status));});
+        out[claveUrl]=pub+ruta; out[clavePath]=ruta; next();
+      }).catch(function(e){ fallo=e; next(); });
+    }
 
-      var pasos=[];
-      if(r.vBlob)pasos.push(function(n){pon(r.vBlob,r.vName,'vUrl','vPath',n);});
-      if(r.hBlob)pasos.push(function(n){pon(r.hBlob,r.hName,'hUrl','hPath',n);});
-      (function corre(i){
-        if(i>=pasos.length){ cb(fallo, fallo?null:out); return; }
-        pasos[i](function(){ corre(i+1); });
-      })(0);
-    });
+    var pasos=[];
+    if(r.vBlob)pasos.push(function(n){pon(r.vBlob,r.vName||'foto_v.jpg','vUrl','vPath',n);});
+    if(r.hBlob)pasos.push(function(n){pon(r.hBlob,r.hName||'foto_h.jpg','hUrl','hPath',n);});
+    (function corre(i){
+      if(i>=pasos.length){ cb(fallo, fallo?null:out); return; }
+      pasos[i](function(){ corre(i+1); });
+    })(0);
   }
 
-  window.sincCrop={open:open, subir:subir};
+  function subir(fuente, cfg, cb){
+    open(fuente, {only:cfg.only, titulo:cfg.titulo}, function(r){ subeBlobs(r, cfg, cb); });
+  }
+
+  /* ---------- quitar bordes sin preguntar nada ----------
+     Javi, 26-oct-2026: «ponle el botón». Setenta y una fotos ya publicadas
+     llevan franjas de fondo de cuando el recortador las guardaba enteras, y
+     pasarlas una a una por el ⤢ es media tarde. Esto hace lo mismo que haría
+     una persona que abre el recortador, desmarca la casilla y le da a guardar:
+     le quita las franjas viejas, llena el marco centrado y sube las dos
+     versiones. Sin pop-up y sin decisiones, porque no hay ninguna que tomar.
+
+     Devuelve cb(err, res):
+       res.sinBordes = true  -> la foto no tenía franjas y no se tocó nada
+       res.vUrl/.hUrl        -> las versiones nuevas, ya subidas */
+  function limpiaBordes(url, cfg, cb){
+    var img=new Image();
+    img.crossOrigin='anonymous';
+    img.onerror=function(){ cb(new Error('no se pudo abrir la foto'), null); };
+    img.onload=function(){
+      var recorte=sinBordes(img);
+      if(!recorte){ cb(null,{sinBordes:true}); return; }   /* ya estaba limpia */
+      var limpia=new Image();
+      limpia.onload=function(){
+        /* Centrado y llenando: exactamente el modo «cubre» del recortador. */
+        function corta(out,asp,cb2){
+          var nw=limpia.naturalWidth, nh=limpia.naturalHeight;
+          var e=Math.max(out.w/nw, out.h/nh);
+          var sw=out.w/e, sh=out.h/e;
+          var sx=(nw-sw)/2, sy=(nh-sh)/2;
+          var cv=document.createElement('canvas'); cv.width=out.w; cv.height=out.h;
+          var ctx=cv.getContext('2d');
+          ctx.fillStyle=FONDO; ctx.fillRect(0,0,out.w,out.h);
+          ctx.drawImage(limpia, sx,sy,sw,sh, 0,0,out.w,out.h);
+          cv.toBlob(function(b){ cb2(b); },'image/jpeg',0.9);
+        }
+        var nm=(url.split('/').pop()||'foto').split('?')[0];
+        var raiz=nm.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9._-]/g,'_')
+                   .replace(/^\d+-/,'').replace(/_[vh]$/,'').slice(0,48)||'foto';
+        corta(OUT_V,VASP,function(vb){
+          corta(OUT_H,HASP,function(hb){
+            subeBlobs({vBlob:vb,vName:raiz+'_v.jpg',hBlob:hb,hName:raiz+'_h.jpg'},cfg,cb);
+          });
+        });
+      };
+      limpia.onerror=function(){ cb(new Error('no se pudo rehacer la foto'), null); };
+      limpia.src=recorte;
+    };
+    img.src=url+((url.indexOf('?')<0?'?':'&')+'r='+Date.now());
+  }
+
+  window.sincCrop={open:open, subir:subir, limpiaBordes:limpiaBordes};
 })();
