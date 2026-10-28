@@ -5385,6 +5385,13 @@
       'esta reserva':'this booking',
       'para que entre a Soy Pepe':'so they can sign in to Soy Pepe',
       '＋ Nuevo guía':'＋ New guide',
+      'El panel de la casa':'The house panel',
+      'Elige tu país y escribe el número. Lo guardamos con su lada.':'Pick your country and type the number. We save it with its dialling code.',
+      'Falta el WhatsApp, con su lada.':'The WhatsApp number is missing, with its dialling code.',
+      'Mi ficha de ateneísta':'My ateneísta profile',
+      'TIKTOK · OPCIONAL':'TIKTOK · OPTIONAL',
+      'Tienes más de un sitio con nosotros. Elige y te llevamos.':'You have more than one place with us. Pick one and we will take you there.',
+      '¿A dónde entras?':'Where are you going in?',
 
     }
   };
