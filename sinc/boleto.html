@@ -207,12 +207,53 @@ body{margin:0;background:var(--ground);color:var(--ink);
      o en nada. Esto NO devuelve dinero ni cancela la reserva: la deja marcada
      para que alguien la mire, y le dice al huésped en qué consiste esa revisión
      para que no espere una cifra que a lo mejor no sale. */
-  function devolucion(b){
+  /* ANTES DE PEDIRLA, SABER SI APLICA. Javi, 29-oct-2026: «revisar en pedir
+     devolución si aplica o no según los criterios de la reserva. La devolución
+     se hará al 95% por los gastos financieros».
+     Hasta hoy el que cancelaba con tres días de margen y el que avisaba una
+     hora antes leían exactamente el mismo texto —«lo miramos caso por caso»— y
+     los dos se quedaban esperando. Ahora la base contesta de qué lado del plazo
+     está y cuánto le tocaría, y se le dice antes de que escriba.
+     Lo que NO cambia: se puede pedir igual estando fuera de plazo. Eso lo pidió
+     Javi el 15-oct y sigue en pie; lo que no se hace es dejarle creer que está
+     dentro cuando no lo está. */
+  async function devolucion(b){
     var c=$('dev'); if(!c||!b||!b.folio) return;
     if(b.motivo==='cancelada') return;
+
+    var e=null;
+    try{ e=await rpc('sinc_devolucion_evalua',{p_folio:b.folio}); }catch(_){}
+
+    /* Un tour gratuito no tiene devolución que pedir: ofrecerla sería ofrecer
+       la devolución de cero pesos. */
+    if(e && e.ok===true && e.motivo==='sin_cobro') return;
+
+    var cab, dice;
+    if(e && e.aplica===true){
+      cab  = T('Estás en plazo para cancelar');
+      dice = T('Tu tarifa deja cancelar hasta')+' '+e.ventana_horas+' '+T('horas antes, y todavía faltan')+' '+
+             Math.floor(e.horas_faltan)+'. '+
+             T('Te devolvemos el 95%:')+' '+money(e.devolveria)+' '+T('de los')+' '+money(e.pagado)+' '+
+             T('que pagaste. El 5% son las comisiones del cobro, que el banco no nos devuelve.');
+    }else if(e && e.ok===true){
+      cab = T('¿Ya no puedes venir?');
+      var porque =
+        e.motivo==='no_reembolsable' ? T('Tu tarifa no es reembolsable.')
+      : e.motivo==='ya_paso'         ? T('Tu experiencia ya pasó.')
+      : e.motivo==='fuera_de_plazo'  ? (T('Tu tarifa dejaba cancelar hasta')+' '+e.ventana_horas+' '+
+                                        T('horas antes, y ya faltan menos de')+' '+e.ventana_horas+'.')
+      : e.motivo==='sin_pagar'       ? T('Esta reserva todavía no está pagada.')
+      : '';
+      dice = (porque?porque+' ':'')+
+             T('Puedes pedirnos la devolución igual: la miramos caso por caso, y si no hemos gastado nada todavía, te devolvemos lo que se pueda liberar.');
+    }else{
+      cab  = T('¿Ya no puedes venir?');
+      dice = T('Puedes pedirnos que te lo devolvamos. Aunque tu tarifa no sea reembolsable, lo miramos caso por caso.');
+    }
+
     c.innerHTML='<div class="devolucion">'+
-      '<h2>'+esc(T('¿Ya no puedes venir?'))+'</h2>'+
-      '<p>'+esc(T('Puedes pedirnos que te lo devolvamos. Aunque tu tarifa no sea reembolsable, lo miramos caso por caso.'))+'</p>'+
+      '<h2>'+esc(cab)+'</h2>'+
+      '<p>'+esc(dice)+'</p>'+
       '<button class="bdev" id="devAbre">'+esc(T('Pedir la devolución'))+'</button></div>';
     $('devAbre').onclick=function(){
       c.querySelector('.devolucion').innerHTML=
@@ -227,8 +268,16 @@ body{margin:0;background:var(--ground);color:var(--ink);
         try{
           var r=await rpc('sinc_pide_devolucion',{p_folio:b.folio,p_motivo:($('devTxt').value||'').slice(0,500)});
           if(r&&r.ok){
-            c.innerHTML='<div class="aviso warn"><b>'+esc(T('Tenemos tu solicitud'))+'</b>'+
-              esc(T('Vamos a revisar si ya tuvimos que gastar algo por tu reserva —boletos, apartar el lugar, alimentos o la nómina del día—. Si todavía no hemos incurrido en ese gasto, te devolvemos la parte que se pueda liberar. Te escribimos a tu correo en cuanto lo tengamos.'))+'</div>';
+            /* El acuse dice lo que de verdad va a pasar, que no es lo mismo
+               dentro de plazo que fuera: prometerle lo mismo a los dos es como
+               se acaba discutiendo por correo una semana después. */
+            var fin = (e && e.aplica===true)
+              ? '<b>'+esc(T('Tenemos tu solicitud'))+'</b>'+
+                esc(T('Estás en plazo, así que te devolvemos')+' '+money(e.devolveria)+' '+
+                    T('—el 95% de lo que pagaste—. El 5% restante son las comisiones del cobro, que el banco no nos devuelve. Lo verás en tu tarjeta en unos días hábiles y te escribimos a tu correo en cuanto salga.'))
+              : '<b>'+esc(T('Tenemos tu solicitud'))+'</b>'+
+                esc(T('Vamos a revisar si ya tuvimos que gastar algo por tu reserva —boletos, apartar el lugar, alimentos o la nómina del día—. Si todavía no hemos incurrido en ese gasto, te devolvemos la parte que se pueda liberar. Te escribimos a tu correo en cuanto lo tengamos.'));
+            c.innerHTML='<div class="aviso warn">'+fin+'</div>';
           } else {
             btn.disabled=false;
             $('devMsg').textContent=(r&&r.mensaje)||T('No pudimos enviarla. Inténtalo otra vez en un momento.');
