@@ -157,6 +157,17 @@ window.sincVitrina = (function () {
   +   'border:1px solid var(--linea);border-radius:14px;overflow:hidden;text-decoration:none;'
   +   'color:var(--tinta);box-shadow:var(--sombra);display:flex;flex-direction:column}'
   + '.sv-f:active{transform:scale(.99)}'
+  /* LA PUERTA, AL FINAL DEL RIEL. Javi, 29-oct-2026: «en estas galerías pon el
+     estilo de ver colección completa, quita lo de ver todo». El enlace gris de
+     la cabecera competía con el nombre de la sección y nadie lo leía; el
+     cartón oscuro del final llega solo, empujado por el dedo, justo cuando se
+     acabó lo que hay. Mismo gesto que la vitrina de temporada. */
+  + '.sv-fin{flex:0 0 clamp(128px,38vw,160px);scroll-snap-align:center;display:flex;'
+  +   'align-items:center;justify-content:center;text-align:center;padding:18px 14px;'
+  +   'border-radius:14px;background:var(--tinta);color:#FDF6EA;text-decoration:none;'
+  +   'font-family:Oswald,sans-serif;font-weight:600;font-size:12.5px;letter-spacing:.05em;'
+  +   'text-transform:uppercase;line-height:1.3}'
+  + '.sv-fin:active{transform:scale(.99)}'
   /* LA FILA DE FIESTA. Javi, 19-oct-2026: «pon la tarjeta de estas fiestas al
      doble de grande y pura foto y fecha y hora».
      Un cartel de concierto ya trae dentro el nombre, el grupo y la noche: la
@@ -341,13 +352,17 @@ window.sincVitrina = (function () {
        «0 de 8». Javi, 19-oct-2026: «¿quién dijo fiesta es un nuevo filtro?».
        Mientras no haya cartelera de eventos, la fila no manda a ningún sitio
        vacío: lo que hay es lo que se ve. */
+    /* Javi, 29-oct-2026: el «Ver todas →» sale de la cabecera y se convierte en
+       el cartón del final del riel. Mismas reglas de antes sobre quién lo
+       tiene y quién no. */
     var ver = (!cat.es_ateneo && cat.slug !== 'shows' && o.verTodas)
-      ? '<a href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">' + esc(T('Ver todas')) + ' &rarr;</a>'
+      ? '<a class="sv-fin" href="' + esc(o.verTodas + '?cat=' + encodeURIComponent(cat.slug) + (o.qs || '')) + '">'
+        + '<span>' + esc(T('Ver todas')) + '</span></a>'
       : '';
     return '<div class="sv-fila" data-cat="' + esc(cat.slug) + '">'
-      + '<div class="sv-lab"><b>' + (cat.icono ? esc(cat.icono) + ' ' : '') + esc(T(cat.nombre)) + '</b>' + ver + '</div>'
+      + '<div class="sv-lab"><b>' + (cat.icono ? esc(cat.icono) + ' ' : '') + esc(T(cat.nombre)) + '</b></div>'
       + (cat.dice ? '<p class="sv-dice">' + esc(T(cat.dice)) + '</p>' : '')
-      + '<div class="sv-carr">' + items.map(function (x) { return ficha(x, o.qs, o.base); }).join('') + '</div>'
+      + '<div class="sv-carr">' + items.map(function (x) { return ficha(x, o.qs, o.base); }).join('') + ver + '</div>'
       + '</div>';
   }
 

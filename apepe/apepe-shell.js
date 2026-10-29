@@ -250,9 +250,14 @@
       mapa:   { t:'mapa', label:'Mapa', href:ligaApp(SINCB+'mapa.html'), img:IMG+'diana-reforma.webp', match:[SINCB+'mapa'] },
       yo:     { t:'yo', label:'Yo', href:liga(APB+'yo.html'), img:IMG+'teotihuacan.webp', match:[APB+'yo'] }
     };
-    var ORDEN = MODO==='publico' ? ['pepego','exp','vnums','mapa']
+    /* LAS CARTAS SON ALGO TUYO, NO UNA SECCIÓN. Javi, 29-oct-2026: «saca mis
+       cartas de Vnums y déjalas en Yo». La moneda tenía pestaña propia en la
+       barra de abajo, al lado de Inicio y Experiencias, como si fuera un sitio
+       a donde ir; es un monedero, y el monedero está donde el huésped busca lo
+       suyo. En «Yo» ya tiene su fila, con la liga de la reserva. */
+    var ORDEN = MODO==='publico' ? ['pepego','exp','mapa','yo']
               : MODO==='colab'  ? ['mapa','pepego','exp']
-              : ['inicio','vnums','exp','mapa','yo'];
+              : ['inicio','exp','mapa','yo'];
     var tabs = ORDEN.map(function(k){ return CAT[k]; });
     var ruta = location.pathname.replace(/\.html$/,'');
     var nav = document.createElement('nav');

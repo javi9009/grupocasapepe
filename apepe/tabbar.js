@@ -111,7 +111,7 @@
   /* El mapa sale de la barra: ahora es un botón flotante encima de ella, como
      el de Fever. Y los Vnums se van dentro de «Yo», que es donde el huésped
      busca lo suyo. Javi, 29-oct-2026. */
-  if (MODO==='publico')    ORDEN=['pepego','exp','vnums'];
+  if (MODO==='publico')    ORDEN=['pepego','exp','yo'];
   else if (MODO==='colab') ORDEN=['pepego','exp'];
   else                     ORDEN=['inicio','hotel','exp','yo'];
   var TABS = ORDEN.map(function(k){ return CAT[k]; });
