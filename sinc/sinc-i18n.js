@@ -445,6 +445,7 @@
       'Precio reducido':'Reduced price',
       /* la ficha: la tarjeta del impacto, su hoja y el botón de seguir */
       'se queda en el barrio':'stays in the neighborhood',
+      'el tope es 75%':'the cap is 75%',
       'De lo que pagas, ':'Of what you pay, ',
       ' va a la comunidad':' goes to the community',
       'A dónde va tu dinero':'Where your money goes',
