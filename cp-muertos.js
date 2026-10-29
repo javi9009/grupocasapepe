@@ -111,6 +111,11 @@
       if(!soloPicado){
         cab.classList.add('dm-cab-tenida');
         b.className += ' dm-dentro';
+        /* Donde hay vitrina de la colección, el lema ya es su título: la banda
+           de la cabecera sobra y se marca para que el CSS la apague. Javi,
+           29-oct-2026: «ahorrar el espacio donde ahora está el amor ir
+           venimos». */
+        if(document.getElementById('dmColeccion')) b.className += ' dm-cede';
         cab.appendChild(b);
       }else{
         cab.parentNode.insertBefore(b, cab.nextSibling);
@@ -205,7 +210,20 @@
 
   function donde(){
     var h = document.getElementById('dmColeccion');
-    if(h) return h;
+    /* PEGADA AL HEADER, LITERAL. Javi, 29-oct-2026: «quiero que el módulo de la
+       galería esté pegado al header literal, que no se vean los bordes del
+       fondo». El hueco vivía dentro de .wrap, que tiene 16px a los lados y deja
+       el papel de fondo asomando por los costados y por arriba. Sacándolo de
+       .wrap y colgándolo justo detrás de la cabecera, la franja de cempasúchil
+       arranca donde acaba el naranja y va de borde a borde sin pelear con
+       ningún padding. */
+    if(h){
+      var cab = cabecera();
+      if(cab && cab.parentNode && h.previousElementSibling !== cab){
+        cab.parentNode.insertBefore(h, cab.nextSibling);
+      }
+      return h;
+    }
     var ref = document.querySelector('.wrap nav, .wrap .bolitas, main nav');
     if(!ref) return null;
     h = document.createElement('div');
@@ -319,10 +337,15 @@
       return;
     }
     var flor = '<span class="dm-flor" aria-hidden="true">&#10048;</span>';
-    s.className = 'dm-vitrina';
+    /* EL LEMA ES EL TÍTULO. Javi, 29-oct-2026: «pon el AMOR IR VENIMOS donde
+       ahora está el Vive el Día de Muertos». Eran dos renglones diciendo lo
+       mismo —la temporada— uno debajo del otro: el lema en su banda bajo la
+       cabecera y el título de la vitrina al entrar. Ahora es uno solo, y la
+       banda de la cabecera desaparece. */
+    s.className = 'dm-vitrina dm-pegada';
     s.innerHTML =
       '<div class="dm-vit-cab">'+
-        '<b>'+flor+' '+(en?'Live D\u00eda de Muertos':'Vive el D\u00eda de Muertos')+' '+flor+'</b>'+
+        '<b>'+cartelHTML()+'</b>'+
         '<a class="dm-vit-todo" href="/sinc/muertos.html">'+(en?'See all':'Ver todo')+'</a>'+
       '</div>'+
       '<div class="dm-riel">'+

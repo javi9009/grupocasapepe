@@ -90,7 +90,9 @@
        bolitas en lo alto de la portada, robándole el sitio a lo que el
        huésped viene a ver. Son de la casa, no del descubrir: ahora viven
        detrás de un botón de la barra, que es donde se busca lo propio. */
-    hotel:  { id:'hotel', txt:'Mi hotel', hoja:true, img:IMG+'hola-perrito.webp',
+    /* El globo y no el xolo: el xolo ya es Inicio, y dos iconos iguales en la
+       misma barra no distinguen nada. Javi, 29-oct-2026. */
+    hotel:  { id:'hotel', txt:'Mi hotel', hoja:true, img:IMG+'globo.webp',
               base:'#', caeEn:['/apepe/welcome','/apepe/cosmica','/apepe/extender'] },
     yo:     { id:'yo', txt:'Yo', base:'/apepe/yo.html', img:IMG+'teotihuacan.webp',
               caeEn:['/apepe/yo','/apepe/vnums'] }
