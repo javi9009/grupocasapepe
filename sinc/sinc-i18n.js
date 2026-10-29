@@ -5464,6 +5464,18 @@
       'desde {a}':'since {a}',
       'Leer más':'Read more',
       'Leer menos':'Read less',
+      /* Las pastillas de la ficha y el recorte de «De qué va». 29-oct-2026.
+         El botón se arma después del barrido del idioma —sólo existe cuando
+         sobra texto, y eso hay que medirlo—, así que se traduce por T() y no
+         por el barrido: sin estas entradas sale en español con la página en
+         inglés, que es lo que pasaba. */
+      'Leer todo':'Read all',
+      'Lo que dura, de principio a fin.':'How long it lasts, start to finish.',
+      'La edad mínima para participar: desde ':'The minimum age to join: from ',
+      'Los días de la semana en que sale: ':'The days of the week it runs: ',
+      'Las lenguas en las que se guía: ':'The languages it is guided in: ',
+      'Cuántas personas van como mucho. Si se llena, no entra nadie más.':
+        'How many people go at most. Once it is full, nobody else gets in.',
       'Hospedaje':'Lodging',
       'Hospedaje y viáticos':'Lodging and travel costs',
       'Venta de artesanías':'Craft sales',
