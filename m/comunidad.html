@@ -81,6 +81,10 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
   padding:2px 1px;margin:-2px 0;color:var(--linea,#E6DFD6);flex:0 0 auto;transition:color .12s}
 .fila .nom .fav:hover{color:#C9A227}
 .fila .nom .fav.on{color:#E3A008}
+/* El padrino va en la misma linea que la ciudad: es el mismo tipo de dato
+   -donde esta y de quien es-, y no merece un renglon propio en 128 filas. */
+.fila .donde .pad{color:var(--tinta-2,#3C3630);font-weight:600}
+.fila .donde .padno{color:var(--bad,#9E3B2E)}
 .fila .nom b{font:600 15px Inter;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fila .pills{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .fila .donde{font:400 12px Inter;color:var(--tenue);margin-top:4px}
@@ -386,7 +390,14 @@ function repinta(){
             '<div class="pills">'+(a.capacidades||[]).map(function(k){
               return CP.pastilla(k,{quien:true});}).join(' ')+
               (a._prod?' <span class="p prodf">ficha de productora</span>':'')+'</div>'+
-            '<div class="donde">'+esc(a.ciudad||'sin ciudad')+'</div>'+
+            /* QUIEN LA LLEVA, EN LA FILA. Javi, 29-oct-2026: «pon el padrino en
+               la ficha principal». La lista ya decia que le falta a cada uno;
+               lo que no decia era de quien es, que es la otra mitad de la
+               pregunta: un bloqueo sin dueño no lo levanta nadie. */
+            '<div class="donde">'+esc(a.ciudad||'sin ciudad')+
+              (a.padrino_email
+                ? ' · <span class="pad">'+esc(((padrinoDe(a.padrino_email)||{}).nombre)||a.padrino_email)+'</span>'
+                : ' · <span class="padno">sin padrino</span>')+'</div>'+
           '</div>'+
           '<div class="num">'+(a.publicados||0)+' publicada'+((a.publicados||0)===1?'':'s')+'</div>'+
           '<div class="estado">'+(blo.length
@@ -612,6 +623,32 @@ async function abreCajon(id){
     + (prod?dato('Su productora', esc(prod.nombre_comercial)+' · ficha aparte'):'')
     + '</div>';
 
+  /* QUIEN LE DA SEGUIMIENTO, AQUI MISMO. Javi, 29-oct-2026: «permite asignarlo
+     en la ficha de la derecha». Repartir cincuenta fichas abriendo la ficha
+     completa de cada una son tres clics por persona; aqui es uno: se ve quien
+     la lleva y se cambia sin salir del cajon. */
+  var pad=padrinoDe(a.padrino_email);
+  var tratoC=a.padrino_trato||(pad&&pad.trato)||'padrino';
+  h+='<div class="cbloque"><h3>Quién le da seguimiento</h3>'
+    + (a.padrino_email
+        ? '<div class="cdato"><span class="k">'+esc(tratoC==='madrina'?'Madrina':'Padrino')+'</span>'
+          + '<span class="v">'+esc((pad&&pad.nombre)||a.padrino_email)
+          + (a.padrino_desde?' · desde el '+esc(String(a.padrino_desde).slice(0,10)):'')+'</span></div>'
+        : '<div class="cmini" style="color:var(--bad,#9E3B2E)">Nadie. Una ficha que no es de nadie se queda donde está.</div>')
+    + '<div class="cacc" style="margin-top:9px;gap:7px;flex-wrap:wrap">'
+    + '<select id="cPadSel" style="flex:1 1 150px;padding:7px 9px;border:1px solid var(--linea,#E6DFD6);border-radius:8px;font:inherit;font-size:13px">'
+    +   '<option value="">— nadie —</option>'
+    +   PADRINOS.map(function(x){
+          return '<option value="'+esc(x.email)+'"'+(String(x.email).toLowerCase()===String(a.padrino_email||'').toLowerCase()?' selected':'')+'>'+
+            esc(x.nombre||x.email)+(x.cuantos?' ('+x.cuantos+')':'')+'</option>';}).join('')
+    + '</select>'
+    + '<select id="cPadTra" style="flex:0 0 102px;padding:7px 9px;border:1px solid var(--linea,#E6DFD6);border-radius:8px;font:inherit;font-size:13px">'
+    +   '<option value="padrino"'+(tratoC!=='madrina'?' selected':'')+'>Padrino</option>'
+    +   '<option value="madrina"'+(tratoC==='madrina'?' selected':'')+'>Madrina</option>'
+    + '</select>'
+    + '<button class="btn sm" type="button" id="cPadOk">Guardar</button>'
+    + '</div></div>';
+
   /* UNA PUERTA, NO DOS. Si tiene casa, su portal es el del hotel, y desde
      ahí llega a sus experiencias; si no, el de experiencias. */
   var acc='';
@@ -641,6 +678,26 @@ async function abreCajon(id){
   $('cCuerpo').innerHTML=h;
 
   $('cFicha').onclick=function(){ cierraCajon(); abre(a.id); };
+  if($('cPadSel')) $('cPadSel').onchange=function(){
+    var pp=padrinoDe(this.value); if(pp&&pp.trato) $('cPadTra').value=pp.trato; };
+  if($('cPadOk')) $('cPadOk').onclick=async function(){
+    var mail=($('cPadSel').value||'').toLowerCase();
+    this.disabled=true; this.textContent='Guardando…';
+    var cuerpo = mail
+      ? {padrino_email:mail, padrino_trato:$('cPadTra').value, padrino_desde:new Date().toISOString()}
+      : {padrino_email:null, padrino_trato:null, padrino_desde:null};
+    var r=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+a.id,{method:'PATCH',
+      headers:Object.assign(hdr(),{Prefer:'return=minimal'}), body:JSON.stringify(cuerpo)});
+    if(!r.ok){ this.disabled=false; this.textContent='Guardar';
+      avisa('No se pudo: '+(await r.text()).slice(0,100)); return; }
+    /* Se escribe en la fila que ya está en memoria para que la lista de atrás
+       lo enseñe al momento, sin recargar las 128. */
+    a.padrino_email=cuerpo.padrino_email; a.padrino_trato=cuerpo.padrino_trato;
+    a.padrino_desde=cuerpo.padrino_desde;
+    PADRINOS=[]; await cargaPadrinos();
+    avisa(mail?('Le da seguimiento '+((padrinoDe(mail)||{}).nombre||mail)):'Sin padrino ni madrina.');
+    repinta(); abreCajon(a.id);
+  };
   if($('cBaja'))   $('cBaja').onclick=function(){ cambiaEstado(a,'baja'); };
   if($('cAlta'))   $('cAlta').onclick=function(){ cambiaEstado(a,'activo'); };
   if($('cBorrar')) $('cBorrar').onclick=function(){ borraAteneista(a); };
