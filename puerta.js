@@ -96,6 +96,10 @@
       +'</div>';
     caja.innerHTML=html;
 
+    /* Si viene de un correo de recuperación, la puerta se convierte en «pon tu
+       contraseña nueva» y no se engancha nada más: lo otro no le sirve ahora. */
+    if(recuperando(caja, url, key, sb)) return;
+
     /* --- entrar con proveedor --- */
     caja.querySelectorAll('.soc').forEach(function(b){
       b.onclick=async function(){
@@ -127,7 +131,15 @@
       var i=rec.querySelector('input'), correo=(i.value||'').trim().toLowerCase();
       if(!/.+@.+\..+/.test(correo)){ dice('Ese correo no parece válido.',true); return; }
       this.disabled=true; this.textContent='Mandando…';
-      var destino = location.origin + '/';   // el panel es quien sabe pedir la nueva contraseña
+      /* VUELVE A SU PUERTA, NO AL PANEL. Javi, 29-oct-2026: «Gerardo entró a su
+         correo, recuperó contraseña, le mandó a un lugar dentro de dashboard».
+         Y eso hacía: el enlace apuntaba siempre a la raíz, que es el panel de
+         la casa. Para quien trabaja aquí daba igual; para un ateneísta es
+         aparecer dentro de una pantalla que no es suya, con una barra que no
+         conoce, sin su portal por ningún lado. Ahora vuelve a la misma puerta
+         por la que pidió el enlace, y ahí mismo se le pide la contraseña
+         nueva -ver `recuperando` más abajo-. */
+      var destino = (o.vuelta || location.href.split('#')[0]);
       try{
         if(sb){ await sb.auth.resetPasswordForEmail(correo,{redirectTo:destino}); }
         else{
@@ -139,6 +151,55 @@
       dice('Te mandamos un enlace a <b>'+correo+'</b>. Ábrelo y pones tu contraseña nueva.');
       this.textContent='Enviado';
     };
+  }
+
+  /* LA SEGUNDA MITAD DE «OLVIDÉ MI CONTRASEÑA». Hasta hoy esta puerta sabía
+     mandar el enlace y no sabía recibirlo: el correo devolvía a la persona al
+     panel porque era el único sitio que pedía la contraseña nueva. Pedirla es
+     parte de la puerta, así que vive aquí y la tienen todas de golpe.
+
+     Se habla con GoTrue a pelo -un PUT a /auth/v1/user con el token que viene
+     en la almohadilla- porque no todas las páginas que usan esta puerta cargan
+     supabase-js; operador.html, sin ir más lejos, le pasa sólo la url y la
+     llave. */
+  function recuperando(caja, url, key, sb){
+    var h=(location.hash||'');
+    if(h.indexOf('type=recovery')<0) return false;
+    var q;
+    try{ q=new URLSearchParams(h.replace(/^#/,'')); }catch(e){ return false; }
+    var tok=q.get('access_token');
+    if(!tok) return false;
+    var x=caja.querySelector('.cpp-x'); if(!x) return false;
+    x.innerHTML='<div class="sep"><span>tu contraseña nueva</span></div>'+
+      '<div class="rec on">'+
+        '<input type="password" placeholder="Al menos 8 caracteres" autocomplete="new-password">'+
+        '<button type="button">Guardar y entrar</button><div class="dice"></div></div>';
+    var i=x.querySelector('input'), b=x.querySelector('button'), d=x.querySelector('.dice');
+    try{ i.focus(); }catch(_){}
+    b.onclick=async function(){
+      var pass=i.value||'';
+      if(pass.length<8){ d.style.color='#b03434'; d.textContent='Al menos 8 caracteres.'; return; }
+      b.disabled=true; b.textContent='Guardando…';
+      try{
+        var r=await fetch(url+'/auth/v1/user',{method:'PUT',
+          headers:{apikey:key,'Authorization':'Bearer '+tok,'Content-Type':'application/json'},
+          body:JSON.stringify({password:pass})});
+        if(!r.ok){ throw new Error(((await r.json().catch(function(){return{};})).msg)||('la base respondió '+r.status)); }
+        /* La sesión de recuperación ya es una sesión: si la página trae
+           supabase-js se le entrega, y si no, se recarga sin la almohadilla y
+           entra con su contraseña nueva. */
+        if(sb && sb.auth && sb.auth.setSession){
+          try{ await sb.auth.setSession({access_token:tok, refresh_token:q.get('refresh_token')||''}); }catch(_){}
+        }
+        d.style.color=''; d.textContent='Listo. Entrando…';
+        setTimeout(function(){ location.replace(location.pathname+location.search); }, 600);
+      }catch(e){
+        b.disabled=false; b.textContent='Guardar y entrar';
+        d.style.color='#b03434'; d.textContent='No se pudo: '+((e&&e.message)||e);
+      }
+    };
+    i.onkeydown=function(ev){ if(ev.key==='Enter') b.click(); };
+    return true;
   }
 
   /* Vuelta del proveedor en las paginas que no usan supabase-js: GoTrue
