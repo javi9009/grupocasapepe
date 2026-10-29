@@ -354,15 +354,34 @@ $('form').addEventListener('submit',function(e){
 $('olvide').addEventListener('click',()=>modo('recuperar'));
 $('volver').addEventListener('click',()=>{ aviso(''); modo('entrar'); });
 
+/* EL CLIENTE SE COME EL HASH ANTES QUE NOSOTROS. Javi, 29-oct-2026: «me manda
+   a esta pantalla un segundo pero no me deja poner contraseña y ya me manda al
+   portal».
+   supabase-js trae `detectSessionInUrl` encendido: en cuanto carga, lee el
+   token del hash, abre la sesión y LIMPIA la barra. Si nuestra comprobación de
+   `type=recovery` llega después —y llega después, porque el cliente arranca
+   solo—, ya no hay nada que mirar: la pantalla ve una sesión normal, decide
+   que la persona ya estaba dentro y la manda a su portal. De ahí el parpadeo.
+   Por eso ahora no se mira la barra: se escucha al cliente. `PASSWORD_RECOVERY`
+   es el aviso que da cuando la sesión que acaba de abrir viene de una liga de
+   contraseña, y ése no se pierde por llegar tarde. La barra se sigue mirando
+   como respaldo, para el caso en que el aviso no llegue. */
+var ENRECUPERACION=false;
+function pideContrasena(){
+  if(ENRECUPERACION) return;
+  ENRECUPERACION=true;
+  modo('nueva');
+  aviso('Pon tu contraseña nueva. Después te pedimos que entres con ella una vez.','info');
+}
+try{
+  sb.auth.onAuthStateChange(function(ev){
+    if(ev==='PASSWORD_RECOVERY') pideContrasena();
+  });
+}catch(_){}
+
 /* Si llega con sesion abierta, no se le pregunta otra vez: se le lleva. */
 (async function(){
-  /* Volviendo del correo de recuperacion Supabase deja el token en el hash;
-     ahi SI hay que quedarse para que escriba la contrasena nueva. */
-  if(location.hash.indexOf('type=recovery')>=0){
-    modo('nueva');
-    aviso('Pon tu contraseña nueva y entra.','info');
-    return;
-  }
+  if(location.hash.indexOf('type=recovery')>=0){ pideContrasena(); return; }
   /* LA LIGA GASTADA NO DECIA NADA. Javi, 29-oct-2026, enseñando una pantalla
      con `#error=access_denied&error_code=otp_expired` en la barra: la liga del
      correo caduca —y se gasta al primer clic, que a veces lo da solo el
@@ -373,7 +392,7 @@ $('volver').addEventListener('click',()=>{ aviso(''); modo('entrar'); });
      no tiene, sin saber por qué.
      Ahora se lee el motivo y se le deja listo lo único que le sirve: pedir
      otra liga. */
-  if(location.hash.indexOf('error')>=0){
+  if(!ENRECUPERACION && location.hash.indexOf('error=')>=0){
     var h=new URLSearchParams(location.hash.replace(/^#/,''));
     var cod=h.get('error_code')||h.get('error')||'';
     history.replaceState(null,'',location.pathname+location.search);
@@ -384,8 +403,13 @@ $('volver').addEventListener('click',()=>{ aviso(''); modo('entrar'); });
       : '<b>No pudimos abrir esa liga.</b> Escribe tu correo y te mandamos una nueva.','mal');
     return;
   }
+  /* El aviso del cliente puede tardar un instante en llegar. Si se mira la
+     sesión antes que él, volvemos al parpadeo: se le da ese instante. */
+  await new Promise(function(r){ setTimeout(r,400); });
+  if(ENRECUPERACION) return;
   try{
     const {data}=await sb.auth.getSession();
+    if(ENRECUPERACION) return;
     if(data && data.session){
       $('sub').textContent='Ya tenías sesión abierta. Un momento…';
       var d2=await aDonde(); if(d2) location.href=d2;
