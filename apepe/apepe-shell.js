@@ -258,6 +258,18 @@
     var ORDEN = MODO==='publico' ? ['pepego','exp','mapa','yo']
               : MODO==='colab'  ? ['mapa','pepego','exp']
               : ['inicio','exp','mapa','yo'];
+    /* LOS RÓTULOS DE LA BARRA, EN EL IDIOMA DEL HUÉSPED. Esta barra -la que
+       visten las pantallas de Sincrético cuando se abren dentro de APePe- los
+       escribía a pelo, así que «Inicio» y «Mapa» se quedaban en español en
+       medio de una pantalla ya traducida. Javi, 29-oct-2026. */
+    /* Esta barra vive en los dos mundos: en las pantallas de APePe manda el
+       diccionario de idioma.js, y en las de Sincrético el de sinc-i18n.js. Se
+       pregunta al que haya. */
+    var rotulo = function(t){
+      try{ if(window.apepeT) return window.apepeT(t); }catch(_){}
+      try{ if(window.sincI18n && sincI18n.t) return sincI18n.t(t); }catch(_){}
+      return t;
+    };
     var tabs = ORDEN.map(function(k){ return CAT[k]; });
     var ruta = location.pathname.replace(/\.html$/,'');
     var nav = document.createElement('nav');
@@ -266,7 +278,7 @@
       var on = x.match.some(function (m) { return ruta.indexOf(m.replace(/\.html$/,'')) === 0 || ruta === m; });
       return '<a class="' + (on ? 'on' : '') + '" href="' + x.href + '">'
         + '<span class="ti"><img src="' + x.img + '" alt="" '
-        + 'onerror="this.replaceWith(document.createTextNode(\'•\'))"></span>' + x.label + '</a>';
+        + 'onerror="this.replaceWith(document.createTextNode(\'•\'))"></span>' + rotulo(x.label) + '</a>';
     }).join('');
     document.body.appendChild(nav);
     /* El marco cambió la altura útil: que cualquier mapa (Leaflet) recalcule su tamaño. */
