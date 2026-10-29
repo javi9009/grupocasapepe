@@ -98,9 +98,23 @@
     b.className = 'dm-banda' + (soloPicado ? ' dm-solo' : ''); b.id = 'dmCartel';
     b.innerHTML = '<span class="dm-lema">' + cartelHTML() + '</span>';
 
+    /* LA BANDA SE METE DENTRO DE LA CABECERA. Javi, 29-oct-2026: «une el
+       detalle de la temporada con el header para que se ahorre espacio y evita
+       doble efecto de papel picado; deja el de la galería».
+       Iba justo DEBAJO, como bloque aparte, y entre su papel picado y el de la
+       vitrina de Muertos había dos grecas a tres dedos de distancia. Ahora el
+       lema vive dentro de la cabecera teñida —se lee igual, y el bloque de 46px
+       deja de ser un escalón— y su greca se apaga: la única que queda es la de
+       la galería. En SoyPepe no cambia nada: ahí la banda es SOLO la greca, y
+       esa es justamente la que sí se quiere. */
     if(cab && cab.parentNode){
-      if(!soloPicado) cab.classList.add('dm-cab-tenida');
-      cab.parentNode.insertBefore(b, cab.nextSibling);
+      if(!soloPicado){
+        cab.classList.add('dm-cab-tenida');
+        b.className += ' dm-dentro';
+        cab.appendChild(b);
+      }else{
+        cab.parentNode.insertBefore(b, cab.nextSibling);
+      }
     }else{
       document.body.insertBefore(b, document.body.firstChild);
     }
