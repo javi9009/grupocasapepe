@@ -724,7 +724,7 @@
     'No pudimos crear tu pedido.': 'We couldn\'t create your order.',
     'Ahora mismo no pudimos abrir el pago con tarjeta. Inténtalo en un minuto, o pídelo en efectivo contra entrega.': 'We couldn\'t open card payment right now. Try again in a minute, or order it cash on delivery.',
     'Nuestras comunidades': 'Our communities',
-    'Comunidades Aliadas de Sincrético': 'Sincrético Allied Communities',
+    'Comunidades Aliadas': 'Allied Communities',
     'CDMX por ti mismo': 'CDMX by yourself',
     'Puebla por ti mismo': 'Puebla by yourself',
     'Todavía no tenemos recomendaciones aquí.': "We don't have recommendations here yet.",
