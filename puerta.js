@@ -208,6 +208,16 @@
     try{
       var h=(location.hash||'').replace(/^#/,'');
       if(!h || h.indexOf('access_token=')<0) return null;
+      /* UN ENLACE DE RECUPERACIÓN NO ES UNA SESIÓN, aunque traiga un token.
+         Javi, 29-oct-2026: a Gerardo, al abrir el enlace del correo, le salía
+         «esta cuenta no está dada de alta como touroperadora». Y era esto: la
+         página tomaba el token de recuperación por una sesión normal, se
+         preguntaba de qué touroperadora era y lo echaba, y de paso se llevaba
+         la almohadilla por delante, así que `recuperando` ya no encontraba
+         nada que pedir. Quien llega con `type=recovery` sólo tiene derecho a
+         una cosa: poner su contraseña nueva. Eso lo hace `recuperando`; aquí
+         se le deja pasar de largo. */
+      if(h.indexOf('type=recovery')>=0) return null;
       var q=new URLSearchParams(h), t=q.get('access_token');
       if(!t) return null;
       var s={access_token:t, refresh_token:q.get('refresh_token')||'',
