@@ -648,6 +648,11 @@
     /* Las dos colecciones de la tienda. «Wixárika» es el nombre de un pueblo y
        no se toca; «Rótulos» es el oficio, y en inglés tiene el suyo. */
     'Rótulos': 'Sign Painting',
+    /* Tallas de playera, que vienen en el campo de medidas. */
+    'CHICA': 'SMALL',
+    'MEDIANA': 'MEDIUM',
+    'GRANDE': 'LARGE',
+    'EXTRA GRANDE': 'EXTRA LARGE',
     'Lo de la casa, a mano.': 'The house, within reach.',
     'Tu bienvenida: lo que incluye tu estancia y cómo funciona la casa.':
       'Your welcome: what your stay includes and how the house works.',
