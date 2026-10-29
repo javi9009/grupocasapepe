@@ -411,17 +411,25 @@ window.sincVitrina = (function () {
     /* Idioma del huésped: se le pisan encima los textos de la base por fuente
        (experiencia→op_experiencias, evento→eventos). aplica nunca lanza y sólo
        pisa lo que la fila ya trae (x.nombre); si falta la traducción, queda el
-       español. Los pases de coworking no tienen tabla i18n propia aún. */
+       español.
+
+       Y los pases del Ateneo SÍ tienen traducción: vive en `ateneo_planes`,
+       con el slug por llave -«semanal» → «Weekly Plan»-, que es justo el `id`
+       que sirve el escaparate. Sin esta línea el huésped en inglés leía «Plan
+       Semanal» y «Plan Day Pass» en mitad de una fila ya traducida.
+       Javi, 29-oct-2026. */
     if (EN() && window.sincI18n && sincI18n.aplica) {
       try {
-        var exps = [], evts = [];
+        var exps = [], evts = [], pases = [];
         items.forEach(function (x) {
           if (x.fuente === 'experiencia') exps.push(x);
           else if (x.fuente === 'evento') evts.push(x);
+          else if (x.fuente === 'pase') pases.push(x);
         });
         await Promise.all([
           exps.length ? sincI18n.aplica('op_experiencias', exps, { clave: 'id' }) : null,
-          evts.length ? sincI18n.aplica('eventos', evts, { clave: 'id' }) : null
+          evts.length ? sincI18n.aplica('eventos', evts, { clave: 'id' }) : null,
+          pases.length ? sincI18n.aplica('ateneo_planes', pases, { clave: 'id' }) : null
         ]);
       } catch (_) { /* nunca romper la vitrina por el idioma */ }
     }

@@ -2780,6 +2780,7 @@
       'se queda como tú lo dejes.':'it stays as you leave it.',
       'se quedan en la comunidad local ·':'stay in the local community ·',
       'se quedan en la comunidad':'stay in the community',
+      'Rótulos':'Sign Painting',
       'son para':'go to',
       'son para comprar a':'go to buying from',
       'ODS':'SDG',

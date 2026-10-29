@@ -645,6 +645,9 @@
        así que el huésped en inglés veía «Mi hotel» en TODAS las pantallas.
        Javi, 29-oct-2026: «que no quede nada en español». */
     'Mi hotel': 'My hotel',
+    /* Las dos colecciones de la tienda. «Wixárika» es el nombre de un pueblo y
+       no se toca; «Rótulos» es el oficio, y en inglés tiene el suyo. */
+    'Rótulos': 'Sign Painting',
     'Lo de la casa, a mano.': 'The house, within reach.',
     'Tu bienvenida: lo que incluye tu estancia y cómo funciona la casa.':
       'Your welcome: what your stay includes and how the house works.',
