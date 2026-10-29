@@ -138,7 +138,7 @@
     'Sin fotos': 'No photos',
     'Tu cuarto': 'Your room',
     'Ver menos': 'See less',
-    'Virreinal': 'Virreinal',
+    'Virreinal': 'Viceregal',
     'sin cargo': 'no charge',
     'sin fecha': 'no date',
     '{n} noche': '{n} night',
@@ -641,6 +641,21 @@
     'Estos días no queda nada que alcanzar.': 'Nothing left to catch in the next few days.',
     'Pasado': 'In 2 days',
     'Mis pedidos': 'My orders',
+    /* LA BARRA DE ABAJO Y LA HOJA DE «MI HOTEL». Estaban fuera del diccionario,
+       así que el huésped en inglés veía «Mi hotel» en TODAS las pantallas.
+       Javi, 29-oct-2026: «que no quede nada en español». */
+    'Mi hotel': 'My hotel',
+    'Lo de la casa, a mano.': 'The house, within reach.',
+    'Tu bienvenida: lo que incluye tu estancia y cómo funciona la casa.':
+      'Your welcome: what your stay includes and how the house works.',
+    'La terraza. Carta, horarios y lo que se cocina hoy.':
+      'The rooftop. Menu, hours and what we are cooking today.',
+    'Alarga tu estancia o súbete de cuarto.': 'Stay longer, or move up a room.',
+    /* El saludo de la portada: cp-muertos le quita el «a Casa Pepe» ANTES de
+       que pase el traductor, así que la palabra suelta también tiene que estar. */
+    'Bienvenido': 'Welcome',
+    '¿Vas a llegar?': 'Are you going to make it?',
+    'Pregunta 1': 'Question 1',
     'Ver todas las experiencias': 'See every experience',
     'Ver la tienda completa': 'See the whole shop',
     'Tus Vnums': 'Your Vnums',
