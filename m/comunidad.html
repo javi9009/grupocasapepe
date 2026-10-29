@@ -205,7 +205,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 <script>
 var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
-var ses=null, TODOS=[], F={q:'',estados:[],ciudad:'',falta:'',cap:''}, ABIERTA=null, TAB='resumen', YO='';
+var ses=null, TODOS=[], F={q:'',estados:[],ciudad:'',falta:'',cap:'',padrino:''}, ABIERTA=null, TAB='resumen', YO='';
 
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -274,6 +274,11 @@ function pasa(a){
   if(F.estados.length && F.estados.indexOf(comoVa(a)[0])<0) return false;
   if(F.ciudad && String(a.ciudad||'')!==F.ciudad) return false;
   if(F.falta && !bloquea(a).some(function(b){return b.clave===F.falta;})) return false;
+  if(F.padrino){
+    var pe=String(a.padrino_email||'').toLowerCase();
+    if(F.padrino==='__sin'){ if(pe) return false; }
+    else if(pe!==String(F.padrino).toLowerCase()) return false;
+  }
   if(F.q){
     var t=(a.nombre_comercial+' '+(a.rfc||'')+' '+(a.curp||'')+' '+(a.email||'')).toLowerCase();
     if(t.indexOf(F.q.toLowerCase())<0) return false;
@@ -310,6 +315,16 @@ function listado(){
       [['activo','Activos'],['amedias','A medias'],['cartera','En cartera'],['baja','Baja']].map(function(e){
         return '<button type="button" data-e="'+e[0]+'"'+(F.estados.indexOf(e[0])>=0?' class="on"':'')+'>'+e[1]+'</button>';
       }).join('')+'</div>'+
+    /* FILTRAR POR QUIEN LE DA SEGUIMIENTO. «Los míos» es la pregunta que se
+       hace cada mañana quien tiene fichas a su cargo, y «sin padrino» es la
+       que se hace quien reparte. */
+    '<div class="campo" style="min-width:210px"><span class="et">PADRINO O MADRINA</span>'+
+      '<select id="fp"><option value="">Quien sea</option>'+
+      '<option value="__sin"'+(F.padrino==='__sin'?' selected':'')+'>Sin padrino ni madrina</option>'+
+      PADRINOS.map(function(x){
+        return '<option value="'+esc(x.email)+'"'+(F.padrino===x.email?' selected':'')+'>'+
+          esc(x.nombre||x.email)+(x.cuantos?' ('+x.cuantos+')':'')+'</option>';}).join('')+
+      '</select></div>'+
     '<div class="caps">'+CAPS.map(function(c){
       var n=TODOS.filter(function(a){return (a.capacidades||[]).indexOf(c[0])>=0;}).length;
       /* Esta lista es de GENTE, asi que el chip dice como se llama quien trae
@@ -414,6 +429,7 @@ function enlazaFiltros(){
       repinta(); };});
   $('fc').onchange=function(){F.ciudad=this.value;repinta();};
   $('ff').onchange=function(){F.falta=this.value;repinta();};
+  if($('fp')) $('fp').onchange=function(){F.padrino=this.value;repinta();};
   Array.prototype.forEach.call(document.querySelectorAll('.capf'),function(d){
     d.onclick=function(){ var k=d.getAttribute('data-k'); F.cap = F.cap===k?'':k; repinta(); };});
   $('bLiga').onclick=function(){
@@ -461,6 +477,9 @@ async function abre(id){
   ABIERTA=TODOS.filter(function(a){return a.id===id;})[0];
   if(!ABIERTA) return;
   TAB='resumen'; DET={};
+  /* La lista de padrinos antes de pintar: el resumen la necesita para el
+     desplegable, y se pide una sola vez por sesión. */
+  await cargaPadrinos();
   ficha();
   var r=await Promise.all([
     get('ateneista_capacidades?select=*&ateneista_id=eq.'+id),
@@ -697,6 +716,78 @@ function ficha(){
 
 var VISTA={}, ATA={};
 
+/* ---------- padrino / madrina ----------
+   La lista sale de `sinc_padrinos()`, que son los de la casa -ni voluntarios
+   ni bajas: un padrino que ya no esta es peor que ninguno-. La palabra se
+   hereda de la ultima vez que se asigno a esa persona, asi que a Ale se le
+   elige «madrina» una vez y no veinte. */
+var PADRINOS=[];
+async function cargaPadrinos(){
+  if(PADRINOS.length) return PADRINOS;
+  try{ PADRINOS = await get('rpc/sinc_padrinos') || []; }catch(_){ PADRINOS=[]; }
+  return PADRINOS;
+}
+function padrinoDe(mail){
+  mail=String(mail||'').toLowerCase();
+  return PADRINOS.filter(function(x){return String(x.email||'').toLowerCase()===mail;})[0]||null;
+}
+function pintaPadrino(a){
+  var p=padrinoDe(a.padrino_email);
+  var trato=a.padrino_trato||(p&&p.trato)||'padrino';
+  var quien=p?p.nombre:(a.padrino_email||'');
+  return (a.padrino_email
+    ? '<div class="lin"><div class="t"><b>'+esc(trato==='madrina'?'Madrina':'Padrino')+': '+esc(quien)+'</b>'+
+      '<span>'+esc(a.padrino_email)+(p&&p.puesto?' · '+esc(p.puesto):'')+
+      (a.padrino_desde?' · desde el '+esc(String(a.padrino_desde).slice(0,10)):'')+'</span></div>'+
+      '<button class="btn sm gris" id="bPadQuita">Quitar</button></div>'
+    : '<div class="aviso err" style="margin:0 0 10px">Nadie le da seguimiento. Una ficha que no es de nadie se queda donde está.</div>')+
+    '<div class="g2" style="margin-top:10px">'+
+      '<div class="campo"><span class="et">'+(a.padrino_email?'CAMBIAR A':'ASIGNAR A')+'</span>'+
+        '<select id="selPadrino"><option value="">—</option>'+
+        PADRINOS.map(function(x){
+          return '<option value="'+esc(x.email)+'"'+(String(x.email).toLowerCase()===String(a.padrino_email||'').toLowerCase()?' selected':'')+'>'+
+            esc(x.nombre||x.email)+(x.cuantos?' ('+x.cuantos+')':'')+'</option>';}).join('')+
+        '</select><span class="ay">Entre paréntesis, a cuántos apadrina ya.</span></div>'+
+      '<div class="campo"><span class="et">CÓMO SE LE LLAMA</span>'+
+        '<select id="selTrato">'+
+          '<option value="padrino"'+(trato!=='madrina'?' selected':'')+'>Padrino</option>'+
+          '<option value="madrina"'+(trato==='madrina'?' selected':'')+'>Madrina</option>'+
+        '</select><span class="ay">Se recuerda para esa persona.</span></div>'+
+    '</div>'+
+    '<button class="btn naranja sm" id="bPadGuarda" style="margin-top:4px">Guardar</button>';
+}
+function ataPadrino(a){
+  var sel=$('selPadrino'), tra=$('selTrato');
+  /* Al elegir persona se trae su palabra, que es la que casi siempre vale. */
+  if(sel&&tra) sel.onchange=function(){
+    var p=padrinoDe(sel.value); if(p&&p.trato) tra.value=p.trato; };
+  if($('bPadGuarda')) $('bPadGuarda').onclick=async function(){
+    var mail=(sel&&sel.value)||'';
+    if(!mail){ avisa('Elige a quien le da seguimiento.'); return; }
+    this.disabled=true;
+    var ok=await guarda({padrino_email:mail.toLowerCase(), padrino_trato:tra.value,
+                         padrino_desde:new Date().toISOString()});
+    if(!ok){ this.disabled=false; return; }
+    await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+      body:JSON.stringify({entidad:'ateneista',entidad_id:a.id,
+        que:(tra.value==='madrina'?'madrina':'padrino')+': '+mail,quien:YO})}).catch(function(){});
+    PADRINOS=[];                    /* los contadores cambiaron */
+    await cargaPadrinos();
+    avisa('Le da seguimiento '+((padrinoDe(mail)||{}).nombre||mail));
+    await recarga(); await abre(a.id);
+  };
+  if($('bPadQuita')) $('bPadQuita').onclick=async function(){
+    if(!confirm('¿Quitarle el seguimiento? La ficha se queda sin nadie encima.')) return;
+    this.disabled=true;
+    var ok=await guarda({padrino_email:null, padrino_trato:null, padrino_desde:null});
+    if(!ok){ this.disabled=false; return; }
+    PADRINOS=[]; await cargaPadrinos();
+    avisa('Sin padrino ni madrina.');
+    await recarga(); await abre(a.id);
+  };
+}
+
+ATA.resumen=function(a){ ataPadrino(a); };
 VISTA.resumen=function(a){
   var blo=bloquea(a), avi=avisos(a);
   return (blo.length
@@ -704,6 +795,16 @@ VISTA.resumen=function(a){
         blo.map(function(b){return esc(b.que);}).join(', y ')+'.</div>'
     : '<div class="aviso ok"><b>Puede vender.</b> Lo que tenga publicado está a la venta.</div>')+
     (avi.length?'<div class="aviso alerta">⚠ '+avi.map(function(b){return esc(b.que);}).join(' · ')+'</div>':'')+
+    /* QUIEN LE DA SEGUIMIENTO. Javi, 29-oct-2026: «necesito que pongas en las
+       fichas de las touroperadoras padrino o madrina para que le den
+       seguimiento, y que se pueda filtrar».
+       Va PRIMERO y no dentro de «De un vistazo»: lo que decide si una ficha
+       avanza no es cuántos productos tiene, es si hay alguien con nombre y
+       apellido encima. Sin padrino se dice en rojo, porque una ficha que no
+       es de nadie se queda donde está para siempre. */
+    '<div class="tarj"><h3>Quién le da seguimiento</h3>'+
+      '<div id="cajaPadrino">'+pintaPadrino(a)+'</div>'+
+    '</div>'+
     '<div class="tarj"><h3>De un vistazo</h3>'+
       '<div class="lin"><div class="t"><b>Productos</b><span>'+(a.productos||0)+' en total · '+(a.publicados||0)+' publicados</span></div></div>'+
       '<div class="lin"><div class="t"><b>Cómo cobra</b><span>'+
@@ -1597,7 +1698,7 @@ async function recarga(){
     /* `favorita` y `origen` viven en la tabla y la vista no los sirve. Se piden
        aparte en vez de ensanchar la vista: una columna mas en v_ateneistas la
        tocan cinco pantallas, y esto lo usa una. */
-    get('tour_operadores?select=id,favorita,origen')
+    get('tour_operadores?select=id,favorita,origen,padrino_email,padrino_trato,padrino_desde')
   ]);
   var ate=r[0]||[], pro=r[1]||[], extra={};
   (r[2]||[]).forEach(function(x){ extra[String(x.id)]=x; });
@@ -1605,6 +1706,9 @@ async function recarga(){
     var e=extra[String(x.id)]||{};
     x.favorita = !!e.favorita;
     x.origen   = e.origen || null;
+    x.padrino_email = e.padrino_email || null;
+    x.padrino_trato = e.padrino_trato || null;
+    x.padrino_desde = e.padrino_desde || null;
   });
   /* La que ya está ligada a un ateneísta no se repite: sería la misma persona
      dos veces y con dos fichas distintas. */
@@ -1621,7 +1725,9 @@ async function recarga(){
 (async function(){
   ses=sesionPanel();
   try{ YO=(ses&&ses.user&&ses.user.email)||''; }catch(_){}
-  await recarga();
+  /* Los padrinos, antes de pintar nada: el filtro de arriba los necesita, y
+     pedirlos después dejaría el desplegable vacío hasta el primer clic. */
+  await Promise.all([recarga(), cargaPadrinos()]);
   if(!TODOS.length){
     $('app').innerHTML='<div class="vacio"><b>No pudimos traer la comunidad</b>'+
       '<span>Puede ser tu sesión. Vuelve a entrar al panel y abre otra vez esta pantalla.<br>'+
