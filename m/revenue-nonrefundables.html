@@ -105,6 +105,8 @@ a.cb:hover{text-decoration:underline}
         <option value="no_paso">El cobro no pasó</option>
         <option value="avisado">Avisadas, esperando</option>
         <option value="perdonado">Perdonadas</option>
+        <option value="no_show">No show · no vino</option>
+        <option value="cancelado">Canceladas</option>
         <option value="todas">Todo, incluso lo cerrado</option>
       </select>
       <button class="btn" id="bCorrer">Correr el estudio ahora</button>
@@ -115,6 +117,7 @@ a.cb:hover{text-decoration:underline}
            ese aviso no llega, el dinero entra y de este lado no se entera
            nadie. Esto le pregunta a Stripe al revés, una por una. -->
       <button class="btn" id="bBarrido">Revisar los cobros contra Stripe</button>
+      <button class="btn" id="bVencidas">Poner al día las vencidas</button>
     </div>
     <div id="aviso"></div>
   </div>
@@ -223,7 +226,7 @@ function pinta(){
   if(!FILAS.length){ tb.innerHTML='<tr><td colspan="7" class="vacio">Nada pendiente. Buena señal.</td></tr>'; return; }
 
   tb.innerHTML=FILAS.map(f=>{
-    const cerrada=["cobrado","perdonado"].includes(f.estado);
+    const cerrada=["cobrado","perdonado","no_show","cancelado"].includes(f.estado);
     const et = f.motivo==="de_origen"
       ? '<span class="et org">No reembolsable</span>'
       : '<span class="et noche">Cierra esta noche</span>';
@@ -231,6 +234,8 @@ function pinta(){
              : f.estado==="no_paso" ? '<span class="et no">No pasó</span>'
              : f.estado==="avisado" ? '<span class="et av">Avisado</span>'
              : f.estado==="perdonado" ? '<span class="et av">Perdonado</span>'
+             : f.estado==="no_show" ? '<span class="et no">No show</span>'
+             : f.estado==="cancelado" ? '<span class="et av">Cancelada</span>'
              : '';
     const quien = f.tocado_por ? '<div class="plan">'+esc(f.tocado_por)+'</div>' : '';
     const liga="https://hotels.cloudbeds.com/connect/"+CB_PID[f.property]+"#/reservations/"+encodeURIComponent(f.reservation_id);
@@ -249,7 +254,8 @@ function pinta(){
         (cerrada?'':
           '<button class="btn pri" data-a="cobrado">Cobrado</button>'+
           '<button class="btn mal" data-a="no_paso">No pasó</button>'+
-          '<button class="btn" data-a="avisar">Avisarle</button>')+
+          '<button class="btn" data-a="avisar">Avisarle</button>'+
+          '<button class="btn mal" data-a="cancelar">Cancelar</button>')+
       '</div></td></tr>';
   }).join("");
 
@@ -283,6 +289,24 @@ async function accion(id, que, btn){
       if(r&&r.ok){ di("Aviso enviado a "+r.a+"."); }
       else if(r&&r.motivo==="sin_correo"){ di("Esa reserva no tiene correo. Hay que escribirle por otro lado.",true); }
       else { di((r&&r.error)||"No se pudo mandar el aviso.",true); }
+    } else if(que==="cancelar"){
+      /* Ya avisamos y no contestó: se cancela en Cloudbeds y se le avisa. Dos
+         toques, porque esto libera el cuarto y manda un correo de verdad. */
+      if(btn.getAttribute("data-conf")!=="1"){
+        btn.setAttribute("data-conf","1");
+        btn.textContent="Cancelar de verdad";
+        di("Vas a CANCELAR en Cloudbeds la reserva de "+(fila.huesped||"—")+" y mandarle el correo de cancelación. Toca otra vez para confirmar; cualquier otro botón lo deja.");
+        btn.disabled=false;
+        setTimeout(function(){ if(btn.getAttribute("data-conf")==="1"){
+          btn.removeAttribute("data-conf"); btn.textContent=old; di(""); } }, 8000);
+        return;
+      }
+      btn.removeAttribute("data-conf");
+      btn.textContent="Cancelando…";
+      const r=await fetch(SB+"/functions/v1/revenue-nonref-cancelar",{method:"POST",headers:H(),
+        body:JSON.stringify({id:id})}).then(x=>x.json());
+      if(r&&r.ok){ di("Reserva cancelada."+(r.ota?(" Es de "+r.canal+": avisamos a ecommerce@ para cancelarla también en el canal."):"")+(r.correo_huesped==="ok"?" Correo al huésped enviado.":"")); }
+      else { di((r&&r.error)||"No se pudo cancelar.",true); }
     } else {
       btn.textContent="…";
       const r=await fetch(SB+"/rest/v1/nonref_dia?id=eq."+encodeURIComponent(id),{method:"PATCH",
@@ -296,8 +320,29 @@ async function accion(id, que, btn){
   carga();
 }
 
+/* Poner al día las vencidas: lee Cloudbeds de las de fecha pasada que siguen
+   abiertas. Dos toques. No corre solo. */
+async function vencidas(){
+  const b=document.getElementById("bVencidas"); const old=b.textContent;
+  if(b.getAttribute("data-conf")!=="1"){
+    b.setAttribute("data-conf","1"); b.textContent="Sí, revisar las vencidas";
+    di("Leeré en Cloudbeds las reservas de fecha pasada que siguen abiertas: las de saldo 0 las descarto y las que no llegaron las marco No show. Toca otra vez.");
+    setTimeout(function(){ if(b.getAttribute("data-conf")==="1"){ b.removeAttribute("data-conf"); b.textContent=old; di(""); } },8000);
+    return;
+  }
+  b.removeAttribute("data-conf"); b.disabled=true; b.textContent="Revisando…";
+  try{
+    const r=await fetch(SB+"/functions/v1/revenue-nonref-vencidas",{method:"POST",headers:H(),
+      body:JSON.stringify({})}).then(x=>x.json());
+    if(r&&r.ok){ di(r.revisadas+" revisadas · "+r.saldadas+" saldadas (saldo 0) · "+r.no_show+" no show · "+r.canceladas+" canceladas"+(r.sin_cloudbeds?(" · "+r.sin_cloudbeds+" sin leer en Cloudbeds"):"")+"."); }
+    else { di((r&&r.error)||"No se pudo poner al día.",true); }
+  }catch(e){ di("Error de conexión.",true); }
+  b.disabled=false; b.textContent=old; carga();
+}
+
 document.getElementById("fCasa").onchange=carga;
 document.getElementById("fEstado").onchange=carga;
+document.getElementById("bVencidas").onclick=vencidas;
 
 /* BUSCAR LOS CORREOS QUE FALTAN.
    Javi, 25-oct-2026: «me dio un error al mandar un mail, dice que no hay, pero
