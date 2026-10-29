@@ -713,6 +713,8 @@
       /* ficha de experiencia (exp.html) */
       'Al llegar, al operador':'On arrival, to the operator',
       'Ampliar':'Expand',
+      'leer más':'read more',
+      'leer menos':'read less',
       'Ver menos':'Show less',
       'Aplican nuestras condiciones generales.':'Our general terms apply.',
       'Cancelar y reservar':'Cancel and book',
