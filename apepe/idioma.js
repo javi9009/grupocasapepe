@@ -647,6 +647,8 @@
     'Lo que has juntado y en qué puedes gastarlo.': 'What you have collected and what you can spend it on.',
     'Tus pedidos': 'Your orders',
     'Lo que has comprado en la tienda y cómo va cada envío.': 'What you bought in the shop and how each delivery is going.',
+    'Tus cartas': 'Your cards',
+    'Cortesías y premios de la casa. Tócala y enseña el QR.': 'Courtesies and prizes from the house. Tap one and show the QR.',
     'Pídelo ahora, recíbelo en tu cuarto.': 'Order now, we bring it to your room.',
     'lo que te espera en recepción': 'waiting for you at the front desk',
     'Cargando tus pedidos…': 'Loading your orders…',
