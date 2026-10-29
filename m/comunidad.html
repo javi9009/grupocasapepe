@@ -75,6 +75,12 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
   font:700 13px Oswald;letter-spacing:.04em;color:var(--gris)}
 .fila .mid{flex:1;min-width:0}
 .fila .nom{display:flex;gap:9px;align-items:center;min-width:0}
+/* La estrella apagada es un hueco que se nota pero no grita: tiene que verse
+   que se puede pulsar sin competir con el nombre. Encendida, manda. */
+.fila .nom .fav{border:0;background:none;cursor:pointer;font-size:16px;line-height:1;
+  padding:2px 1px;margin:-2px 0;color:var(--linea,#E6DFD6);flex:0 0 auto;transition:color .12s}
+.fila .nom .fav:hover{color:#C9A227}
+.fila .nom .fav.on{color:#E3A008}
 .fila .nom b{font:600 15px Inter;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fila .pills{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .fila .donde{font:400 12px Inter;color:var(--tenue);margin-top:4px}
@@ -326,13 +332,30 @@ function repinta(){
       ? '<div class="vacio"><b>Nadie cuadra con ese filtro</b><span>Hay '+TODOS.length+' en la comunidad. Quita algún filtro y vuelven a salir.</span></div>'
       : '<div class="vacio"><b>Todavía no hay nadie</b><span>En cuanto alguien se dé de alta por su liga, aparece aquí.</span></div>';
   } else {
-    h=L.sort(function(a,b){return String(a.nombre_comercial||'').localeCompare(String(b.nombre_comercial||''),'es');})
+    /* LA CARTERA SE ORDENA POR GANAS, NO POR ALFABETO. Javi, 29-oct-2026:
+       «me puedes poner en los de En Cartera un asterisco de favoritos».
+       La cartera son ochenta y pico con los que todavia no hay nada firmado:
+       en orden alfabetico, los cuatro que de verdad queremos traer estan
+       perdidos entre Chilangueando y Tepito Chido Tour. La estrella los sube
+       arriba y se queda marcada, que es lo que hace que la lista sirva la
+       semana que viene y no solo hoy. */
+    h=L.sort(function(a,b){
+        var ca=comoVa(a)[0]==='cartera', cb=comoVa(b)[0]==='cartera';
+        if(ca&&cb&&!!a.favorita!==!!b.favorita) return a.favorita?-1:1;
+        return String(a.nombre_comercial||'').localeCompare(String(b.nombre_comercial||''),'es');})
       .map(function(a){
         var cv=comoVa(a), blo=bloquea(a);
+        /* Solo en la cartera: en un activo la estrella no decide nada, y una
+           estrella que no decide nada es ruido en ciento veintiocho filas. */
+        var estrella = cv[0]==='cartera'
+          ? '<button type="button" class="fav'+(a.favorita?' on':'')+'" data-fav="'+a.id+'" '+
+            'title="'+(a.favorita?'Quitar de favoritos':'Marcar como favorito')+'" '+
+            'aria-label="'+(a.favorita?'Quitar de favoritos':'Marcar como favorito')+'">★</button>'
+          : '';
         return '<div class="fila" data-id="'+a.id+'">'+
           '<div class="ini">'+esc(ini(a.nombre_comercial))+'</div>'+
           '<div class="mid">'+
-            '<div class="nom"><b>'+esc(a.nombre_comercial||'(sin nombre)')+'</b>'+
+            '<div class="nom">'+estrella+'<b>'+esc(a.nombre_comercial||'(sin nombre)')+'</b>'+
               '<span class="p '+cv[0]+'">'+cv[1]+'</span></div>'+
             '<div class="pills">'+(a.capacidades||[]).map(function(k){
               return CP.pastilla(k,{quien:true});}).join(' ')+
@@ -348,6 +371,26 @@ function repinta(){
   caja.innerHTML=h;
   Array.prototype.forEach.call(caja.querySelectorAll('.fila'),function(d){
     d.onclick=function(){ abreCajon(d.getAttribute('data-id')); };});
+  /* La estrella NO abre la ficha: `stopPropagation` antes de nada, o marcar un
+     favorito te mete en el cajon de esa persona y hay que cerrarlo para seguir
+     marcando. Se pinta el cambio al momento y se guarda detras; si la base
+     dice que no, se devuelve a como estaba y se dice. */
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-fav]'),function(b){
+    b.onclick=async function(ev){
+      ev.stopPropagation(); ev.preventDefault();
+      var id=b.getAttribute('data-fav');
+      var a=TODOS.filter(function(x){return String(x.id)===id;})[0];
+      if(!a) return;
+      var antes=!!a.favorita, ahora=!antes;
+      a.favorita=ahora; b.classList.toggle('on',ahora);
+      var r=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+id,{method:'PATCH',
+        headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+        body:JSON.stringify({favorita:ahora})});
+      if(!r.ok){ a.favorita=antes; b.classList.toggle('on',antes);
+        avisa('No se pudo guardar: '+(await r.text()).slice(0,90)); return; }
+      avisa(ahora?('★ '+a.nombre_comercial+' a favoritos'):(a.nombre_comercial+' fuera de favoritos'));
+      repinta();
+    };});
 }
 
 function enlazaFiltros(){
@@ -1539,9 +1582,15 @@ VISTA.historia=function(a){
 async function recarga(){
   var r=await Promise.all([
     get('v_ateneistas?select=*&order=nombre_comercial'),
-    get('productoras?select=id,nombre_comercial,ciudad,estado,email,whatsapp,rfc,tipo,rol_ateneo,tour_operador_id,created_at&order=nombre_comercial')
+    get('productoras?select=id,nombre_comercial,ciudad,estado,email,whatsapp,rfc,tipo,rol_ateneo,tour_operador_id,created_at&order=nombre_comercial'),
+    /* `favorita` vive en la tabla y la vista no la sirve. Se pide aparte en vez
+       de ensanchar la vista: una columna mas en v_ateneistas la tocan cinco
+       pantallas, y esto lo usa una. */
+    get('tour_operadores?select=id,favorita&favorita=is.true')
   ]);
-  var ate=r[0]||[], pro=r[1]||[];
+  var ate=r[0]||[], pro=r[1]||[], fav={};
+  (r[2]||[]).forEach(function(x){ fav[String(x.id)]=true; });
+  ate.forEach(function(x){ x.favorita = !!fav[String(x.id)]; });
   /* La que ya está ligada a un ateneísta no se repite: sería la misma persona
      dos veces y con dos fichas distintas. */
   var ligadas={}; pro.forEach(function(p){ if(p.tour_operador_id) ligadas[p.tour_operador_id]=true; });
