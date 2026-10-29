@@ -241,6 +241,11 @@ async function diccionario(rv: any, rid: string, prop: string, idioma: "es" | "e
      apepe-pago, que lee el saldo en Cloudbeds y abre Stripe Checkout.
      Sin token no hay cobro posible: se le deja la app, como antes. */
   const ligaPago = tok ? `${SB_URL}/functions/v1/apepe-pago?t=${encodeURIComponent(tok)}` : `${PANEL}/apepe/index.html`;
+  /* Javi, 29-oct-2026: el correo de "no pasó tu tarjeta" ya no manda a pagar
+     (duplicaba cargos cuando Cloudbeds ya había cobrado el saldo). Ahora va a
+     llego.html, donde el huésped deja su celular para que recepción le llame y
+     tome una tarjeta nueva. */
+  const ligaLlego = tok ? `${PANEL}/apepe/llego.html?resv=${encodeURIComponent(tok)}` : `${PANEL}/apepe/index.html`;
   const red = await config(`wifi_red_${prop}`);
   const clv = await config(`wifi_clave_${prop}`);
   const personas = rv.pax === 1
@@ -264,6 +269,7 @@ async function diccionario(rv: any, rid: string, prop: string, idioma: "es" | "e
     "{{liga_checkin}}": liga,
     "{{liga_app}}": `${PANEL}/apepe/index.html`,
     "{{liga_pago}}": ligaPago,
+    "{{liga_llego}}": ligaLlego,
     "{{liga_upgrade}}": `${PANEL}/apepe/upgrade.html`,
     "{{liga_extender}}": `${PANEL}/apepe/extender.html`,
     "{{liga_resena}}": `${PANEL}/apepe/resena.html`,
@@ -349,7 +355,8 @@ function armar(c: any, dic: Record<string, string>, prop: string, liga: string, 
 
 function ligaBoton(clave: string, dic: Record<string, string>) {
   if (/documento|confirmacion|llegas/.test(clave)) return dic["{{liga_checkin}}"];
-  if (clave === "tarjeta" || clave === "pendiente") return dic["{{liga_pago}}"];
+  if (clave === "tarjeta") return dic["{{liga_llego}}"];
+  if (clave === "pendiente") return dic["{{liga_pago}}"];
   if (clave === "cancelacion") return dic["{{liga_volver}}"];
   if (clave === "upgrade") return dic["{{liga_upgrade}}"];
   if (clave === "noche_mas") return dic["{{liga_extender}}"];
