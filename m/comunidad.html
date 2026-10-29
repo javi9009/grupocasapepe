@@ -642,10 +642,6 @@ async function abreCajon(id){
           return '<option value="'+esc(x.email)+'"'+(String(x.email).toLowerCase()===String(a.padrino_email||'').toLowerCase()?' selected':'')+'>'+
             esc(x.nombre||x.email)+(x.cuantos?' ('+x.cuantos+')':'')+'</option>';}).join('')
     + '</select>'
-    + '<select id="cPadTra" style="flex:0 0 102px;padding:7px 9px;border:1px solid var(--linea,#E6DFD6);border-radius:8px;font:inherit;font-size:13px">'
-    +   '<option value="padrino"'+(tratoC!=='madrina'?' selected':'')+'>Padrino</option>'
-    +   '<option value="madrina"'+(tratoC==='madrina'?' selected':'')+'>Madrina</option>'
-    + '</select>'
     + '<button class="btn sm" type="button" id="cPadOk">Guardar</button>'
     + '</div></div>';
 
@@ -678,13 +674,18 @@ async function abreCajon(id){
   $('cCuerpo').innerHTML=h;
 
   $('cFicha').onclick=function(){ cierraCajon(); abre(a.id); };
-  if($('cPadSel')) $('cPadSel').onchange=function(){
-    var pp=padrinoDe(this.value); if(pp&&pp.trato) $('cPadTra').value=pp.trato; };
   if($('cPadOk')) $('cPadOk').onclick=async function(){
     var mail=($('cPadSel').value||'').toLowerCase();
     this.disabled=true; this.textContent='Guardando…';
+    /* LA PALABRA NO SE ELIGE: SE SABE. Javi, 29-oct-2026: «no hace falta que
+       escoja padrino o madrina, tú ya sabes si es mujer u hombre».
+       Y es verdad: son cinco personas y la palabra que le toca a cada una no
+       cambia de una ficha a otra, así que preguntarlo en cada asignación era
+       pedir que confirmara algo que ya sabemos. Va con la persona, en la
+       lista de padrinos, y aquí sólo se copia. */
     var cuerpo = mail
-      ? {padrino_email:mail, padrino_trato:$('cPadTra').value, padrino_desde:new Date().toISOString()}
+      ? {padrino_email:mail, padrino_trato:((padrinoDe(mail)||{}).trato)||'padrino',
+         padrino_desde:new Date().toISOString()}
       : {padrino_email:null, padrino_trato:null, padrino_desde:null};
     var r=await fetch(SB+'/rest/v1/tour_operadores?id=eq.'+a.id,{method:'PATCH',
       headers:Object.assign(hdr(),{Prefer:'return=minimal'}), body:JSON.stringify(cuerpo)});
@@ -804,30 +805,24 @@ function pintaPadrino(a){
         PADRINOS.map(function(x){
           return '<option value="'+esc(x.email)+'"'+(String(x.email).toLowerCase()===String(a.padrino_email||'').toLowerCase()?' selected':'')+'>'+
             esc(x.nombre||x.email)+(x.cuantos?' ('+x.cuantos+')':'')+'</option>';}).join('')+
-        '</select><span class="ay">Entre paréntesis, a cuántos apadrina ya.</span></div>'+
-      '<div class="campo"><span class="et">CÓMO SE LE LLAMA</span>'+
-        '<select id="selTrato">'+
-          '<option value="padrino"'+(trato!=='madrina'?' selected':'')+'>Padrino</option>'+
-          '<option value="madrina"'+(trato==='madrina'?' selected':'')+'>Madrina</option>'+
-        '</select><span class="ay">Se recuerda para esa persona.</span></div>'+
+        '</select><span class="ay">Entre paréntesis, a cuántas fichas lleva ya. '+
+        'La palabra —padrino o madrina— va con la persona, no se elige aquí.</span></div>'+
     '</div>'+
     '<button class="btn naranja sm" id="bPadGuarda" style="margin-top:4px">Guardar</button>';
 }
 function ataPadrino(a){
-  var sel=$('selPadrino'), tra=$('selTrato');
-  /* Al elegir persona se trae su palabra, que es la que casi siempre vale. */
-  if(sel&&tra) sel.onchange=function(){
-    var p=padrinoDe(sel.value); if(p&&p.trato) tra.value=p.trato; };
+  var sel=$('selPadrino');
   if($('bPadGuarda')) $('bPadGuarda').onclick=async function(){
-    var mail=(sel&&sel.value)||'';
+    var mail=((sel&&sel.value)||'').toLowerCase();
     if(!mail){ avisa('Elige a quien le da seguimiento.'); return; }
+    var tr=((padrinoDe(mail)||{}).trato)||'padrino';
     this.disabled=true;
-    var ok=await guarda({padrino_email:mail.toLowerCase(), padrino_trato:tra.value,
+    var ok=await guarda({padrino_email:mail, padrino_trato:tr,
                          padrino_desde:new Date().toISOString()});
     if(!ok){ this.disabled=false; return; }
     await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
       body:JSON.stringify({entidad:'ateneista',entidad_id:a.id,
-        que:(tra.value==='madrina'?'madrina':'padrino')+': '+mail,quien:YO})}).catch(function(){});
+        que:tr+': '+mail,quien:YO})}).catch(function(){});
     PADRINOS=[];                    /* los contadores cambiaron */
     await cargaPadrinos();
     avisa('Le da seguimiento '+((padrinoDe(mail)||{}).nombre||mail));
@@ -1114,27 +1109,49 @@ ATA.datos=function(){
    paga y no se edita aquí —sale de lo que pague la experiencia que vendió—.
    La membresía no tiene costo. */
 var COM = {
-  experiencias: {col:'comision_pct',       def:25, min:10, fijo:'10% plataforma'},
-  eventos:      {col:'com_eventos_pct',    def:35, min:20, fijo:'10% plataforma · 10% limpieza, seguridad y renta'},
-  artesania:    {col:'com_artesania_pct',  def:35, min:20, fijo:'15% plataforma · 5% al fondo de viajes'}
+  experiencias: {col:'comision_pct',      def:25, min:3, base:{vendedor:10, hotel:5,      plataforma:10}},
+  eventos:      {col:'com_eventos_pct',   def:35, min:3, base:{vendedor:15, servicios:10, plataforma:10}},
+  artesania:    {col:'com_artesania_pct', def:35, min:3, base:{vendedor:15, viajes:5,     plataforma:15}}
 };
 function comTotal(a,k){
   var d=COM[k]; if(!d) return null;
   var v=a[d.col]; return (v==null||v==='') ? d.def : Number(v);
 }
-/* El desglose, con el total que haya. Lo fijo se respeta y quien vende absorbe
-   la diferencia: si Javi baja el total, lo que cede es la venta, no el costo
-   de la plataforma ni el de limpiar la sala. */
+/* EL DESGLOSE, CON DOS REGLAS DISTINTAS SEGUN HACIA DONDE SE MUEVA. Javi,
+   29-oct-2026: «la comisión extra sobre el 25% que cobres va para la
+   plataforma, y si la comisión es menor se descuenta proporcionalmente entre
+   los 3».
+   No es lo mismo subir que bajar, y tiene su lógica: lo que se cobra DE MAS
+   no se lo gana nadie en el campo —el concierge hizo la misma venta y el
+   hotel puso la misma cama—, así que se queda en la casa. Lo que se cobra de
+   MENOS es una rebaja que concedimos entre todos, y la pagan los tres a
+   partes iguales de lo suyo.
+   Antes esto estaba al revés de las dos maneras: la plataforma tenía 10 fijo
+   y el vendedor absorbía todo, para arriba y para abajo. Por eso un 30% daba
+   13% al concierge, que es cobrarle de más al cliente para pagarle de más a
+   quien no hizo nada distinto. */
 function comDesglose(k,total){
+  var d=COM[k]; if(!d) return null;
   total=Number(total)||0;
-  if(k==='experiencias'){
-    var resto=Math.max(0,total-10);
-    var vend=Math.round(resto*2/3);
-    return {plataforma:10, vendedor:vend, hotel:resto-vend};
+  var b=d.base, suma=0, r={};
+  for(var kk in b) suma+=b[kk];
+  if(total>=suma){
+    /* Lo que sobre del estándar, entero a la plataforma. */
+    for(var k1 in b) r[k1]=b[k1];
+    r.plataforma = b.plataforma + (total-suma);
+    return r;
   }
-  if(k==='eventos')   return {plataforma:10, servicios:10, vendedor:Math.max(0,total-20)};
-  if(k==='artesania') return {plataforma:15, viajes:5,     vendedor:Math.max(0,total-20)};
-  return null;
+  /* Por debajo del estándar: a prorrata, y el redondeo lo absorbe la
+     plataforma para que las partes sumen EXACTAMENTE el total. Si cuadrara
+     sola cada parte, tres redondeos hacia arriba convertirían un 20% en un
+     21% que nadie pidió. */
+  var f=total/suma, usado=0;
+  for(var k2 in b){
+    if(k2==='plataforma') continue;
+    r[k2]=Math.round(b[k2]*f*10)/10; usado+=r[k2];
+  }
+  r.plataforma=Math.round((total-usado)*10)/10;
+  return r;
 }
 function comFrase(k,total){
   var d=comDesglose(k,total); if(!d) return '';
@@ -1222,11 +1239,16 @@ ATA.caps=function(a){
         '<span class="comdes" id="comOut_'+k+'">'+comFrase(k,tot)+'</span>'+
         '<button class="btn sm naranja" id="comOk_'+k+'">Guardar</button>'+
         '<button class="btn sm gris" id="comNo_'+k+'">Cancelar</button></div>'+
-        '<div class="comdes" style="width:100%">Fijo: '+d.fijo+'. Lo que suba o baje lo pone quien vende.</div>';
+        '<div class="comdes" style="width:100%">Lo normal es '+
+          (function(){var t=0;for(var z in d.base)t+=d.base[z];return t;})()+
+          '%. Lo que cobres de más va entero a la plataforma; lo que cobres de menos '+
+          'se descuenta a prorrata entre los tres.</div>';
       var inp=document.getElementById('comIn_'+k), out=document.getElementById('comOut_'+k);
       inp.oninput=function(){
         var v=Number(inp.value);
-        out.textContent = (!isFinite(v)||v<d.min) ? ('No puede bajar de '+d.min+'%: eso es lo fijo.') : comFrase(k,v);
+        /* Ya no hay suelo «fijo»: por debajo del estándar bajan los tres, así
+           que lo único que no vale es un número que no es un número. */
+        out.textContent = (!isFinite(v)||v<d.min) ? ('Escribe un porcentaje de '+d.min+'% o más.') : comFrase(k,v);
       };
       inp.focus();
       document.getElementById('comNo_'+k).onclick=function(){ abre(a.id); };
