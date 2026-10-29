@@ -66,6 +66,12 @@ window.eventoCompra = (function () {
       '.ecT .cupo{font:400 11px/1.3 Inter,sans-serif;color:var(--gris);margin-top:4px}'+
       '.ecU{display:flex;align-items:flex-start;border:1.5px solid var(--linea);border-radius:11px;padding:12px 13px;background:var(--hueso)}'+
       '.ecSep{border:0;border-top:1px solid var(--linea);margin:16px 0}'+
+      /* La línea que abre el código: pequeña, sin caja y debajo del botón. */
+      '.ecCodAbre{display:block;margin:9px auto 0;background:none;border:0;padding:4px 6px;'+
+      '  font:600 12.5px/1.3 inherit;color:var(--gris);text-decoration:underline;'+
+      '  text-underline-offset:3px;cursor:pointer}'+
+      '.ecCodAbre:hover{color:var(--naranja-oscuro)}'+
+      '.ecCodCaja{margin-top:9px}'+
       '.ecCod{display:flex;gap:8px}'+
       '.ecCod input{text-transform:uppercase}'+
       '.ecBc{flex:none;width:auto;font:600 12px/1 Oswald,sans-serif;letter-spacing:.04em;text-transform:uppercase;padding:0 16px;border-radius:9px;border:1.5px solid var(--naranja);background:#fff;color:var(--naranja-oscuro);cursor:pointer}'+
@@ -153,14 +159,21 @@ window.eventoCompra = (function () {
       +'<p class="ecP">'+esc(unico?T('Tu boleto'):T('¿Qué boleto?'))+'</p>'
       + elegir
       +'<hr class="ecSep">'
-      +'<label for="ecCod">'+esc(T('¿Tienes un código de pago?'))+'</label>'
-      +'<div class="ecCod"><input type="text" id="ecCod" placeholder="Ej. ATENEO2X1" autocomplete="off">'
-        +'<button type="button" class="ecBc" id="ecAplicar">'+esc(T('Aplicar'))+'</button></div>'
-      +'<div class="ecCm" id="ecCm"></div>'
-      +'<hr class="ecSep">'
       +'<div class="ecD" id="ecD"></div>'
       +'<button class="ecBt" id="ecPagar">'+esc(T('Pagar'))+'</button>'
       +'<div class="ecMsg" id="ecMsg"></div>'
+      /* EL CÓDIGO, ESCONDIDO Y DEBAJO. Javi, 29-oct-2026: «esconde el payment
+         code con un texto ¿tienes un código? en chiquito debajo del botón de
+         pagar». Ocupaba un campo entero y un botón en medio de la compra, con
+         su ejemplo en mayúsculas, y lo usa uno de cada cien: al resto le pedía
+         algo que no tiene justo antes de pagar. Ahora es una línea pequeña que
+         sólo se abre a quien sí lo trae. */
+      +'<button type="button" class="ecCodAbre" id="ecCodAbre">'+esc(T('¿Tienes un código?'))+'</button>'
+      +'<div class="ecCodCaja" id="ecCodCaja" hidden>'
+        +'<div class="ecCod"><input type="text" id="ecCod" placeholder="Ej. ATENEO2X1" autocomplete="off">'
+          +'<button type="button" class="ecBc" id="ecAplicar">'+esc(T('Aplicar'))+'</button></div>'
+        +'<div class="ecCm" id="ecCm"></div>'
+      +'</div>'
       +'<div class="ecPie">'+esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))
         +(conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'')+'</div>';
 
@@ -177,6 +190,12 @@ window.eventoCompra = (function () {
     $('ecMenos').onclick = function(){ if(CANT>1){ CANT--; pintaCant(); recalcula(); } };
     $('ecMas').onclick   = function(){ var max = SEL==null?20:disponibles(tiers[SEL]); if(CANT<max){ CANT++; pintaCant(); recalcula(); } };
     $('ecAplicar').onclick = recalcula;
+    /* Se abre una vez y se queda: quien lo abrió es porque trae uno. */
+    $('ecCodAbre').onclick = function(){
+      $('ecCodCaja').hidden = false;
+      this.style.display = 'none';
+      try{ $('ecCod').focus(); }catch(_){ }
+    };
     $('ecCod').onkeydown = function(e){ if(e.key==='Enter'){ e.preventDefault(); recalcula(); } };
     $('ecPagar').onclick = aPagar;
 
@@ -253,9 +272,15 @@ window.eventoCompra = (function () {
           : '<div class="l tot"><span>'+esc(T('Total a pagar'))+'</span><b>'+mx(total)+'</b></div>');
       $('ecPagar').disabled = false;
       $('ecPagar').textContent = libre ? T('Apartar mi lugar') : (T('Pagar ')+mx(total));
+      /* FUERA EL «NO SE COBRA NADA». Javi, 29-oct-2026: «sí que se carga».
+         La frase salía cuando el total era cero, pero la lee también quien
+         llega con un boleto de pago en el mismo bloque, y prometer que no se
+         cobra nada en una pantalla que cobra es la clase de frase por la que
+         alguien discute un cargo después. Lo que sí se dice es lo que pasa
+         después: que le llega su pase con su QR. */
       var _pie = caja.querySelector('.ecPie');
       if(_pie) _pie.innerHTML = libre
-        ? esc(T('No se cobra nada: apartas tu lugar y te mandamos el pase con tu QR.'))
+        ? esc(T('Apartas tu lugar y te mandamos el pase con tu QR.'))
         : esc(T('Pago seguro con Stripe. El cobro cae en la cuenta del productor.'))+
           (conIva?'<br>'+esc(T('Precios al público, IVA incluido.')):'');
       guarda();

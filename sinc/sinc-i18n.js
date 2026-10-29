@@ -912,6 +912,9 @@
       '¿Qué boleto?':'Which ticket?',
       '¿Qué día lo necesitas?':'Which day do you need it?',
       '¿Tienes un código de pago?':'Have a payment code?',
+      '¿Tienes un código?':'Have a code?',
+      'Apartas tu lugar y te mandamos el pase con tu QR.':
+        'You hold your spot and we send you your pass with its QR.',
       '← Volver al evento':'← Back to the event',
       'Abriendo el evento…':'Opening the event…',
       'Abriendo el espacio…':'Opening the space…',
