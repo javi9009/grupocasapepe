@@ -1040,6 +1040,7 @@
     'Ajustes':'Settings',
     'Objetivo de Desarrollo Sostenible':'Sustainable Development Goal',
     'Opcional':'Optional',
+    'Ir a su tienda':'Go to their shop',
     'Sus piezas vienen en camino':'Their pieces are on the way',
     'Todavía no hay nada a la venta de esta comunidad. Mientras, su taller se puede reservar.':'Nothing from this community is on sale yet. In the meantime, their workshop can be booked.',
     'Vender experiencias a los huéspedes':'Sell experiences to guests',
