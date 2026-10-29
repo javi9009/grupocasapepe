@@ -889,17 +889,79 @@ ATA.datos=function(){
   };
 };
 
+/* LA COMISIÓN, POR LÍNEA DE NEGOCIO. Lo que se teclea es UN número: el total
+   que le cobramos sobre esa venta. El reparto lo hace la pantalla con las
+   proporciones del Grupo, porque son nuestras y no se negocian una a una:
+   lo que se negocia con el ateneísta es el total.
+
+     experiencias · 25% → 10 plataforma · el resto entre concierge y hotel (2:1)
+     eventos      · 35% → 10 plataforma · 10 limpieza, seguridad y renta · resto a quien vende
+     artesanía    · 35% → 15 plataforma · 5 al fondo de viajes · resto a quien vende
+
+   El hotel no paga comisión: la COBRA. Por eso su renglón enseña lo que se le
+   paga y no se edita aquí —sale de lo que pague la experiencia que vendió—.
+   La membresía no tiene costo. */
+var COM = {
+  experiencias: {col:'comision_pct',       def:25, min:10, fijo:'10% plataforma'},
+  eventos:      {col:'com_eventos_pct',    def:35, min:20, fijo:'10% plataforma · 10% limpieza, seguridad y renta'},
+  artesania:    {col:'com_artesania_pct',  def:35, min:20, fijo:'15% plataforma · 5% al fondo de viajes'}
+};
+function comTotal(a,k){
+  var d=COM[k]; if(!d) return null;
+  var v=a[d.col]; return (v==null||v==='') ? d.def : Number(v);
+}
+/* El desglose, con el total que haya. Lo fijo se respeta y quien vende absorbe
+   la diferencia: si Javi baja el total, lo que cede es la venta, no el costo
+   de la plataforma ni el de limpiar la sala. */
+function comDesglose(k,total){
+  total=Number(total)||0;
+  if(k==='experiencias'){
+    var resto=Math.max(0,total-10);
+    var vend=Math.round(resto*2/3);
+    return {plataforma:10, vendedor:vend, hotel:resto-vend};
+  }
+  if(k==='eventos')   return {plataforma:10, servicios:10, vendedor:Math.max(0,total-20)};
+  if(k==='artesania') return {plataforma:15, viajes:5,     vendedor:Math.max(0,total-20)};
+  return null;
+}
+function comFrase(k,total){
+  var d=comDesglose(k,total); if(!d) return '';
+  if(k==='experiencias') return d.vendedor+'% concierge · '+d.hotel+'% hotel · '+d.plataforma+'% plataforma';
+  if(k==='eventos')      return d.vendedor+'% quien vende · '+d.plataforma+'% plataforma · '+d.servicios+'% limpieza, seguridad y renta';
+  return d.vendedor+'% quien vende · '+d.plataforma+'% plataforma · '+d.viajes+'% fondo de viajes';
+}
+
 VISTA.caps=function(a){
   var tiene=(DET.caps||[]);
   return '<div class="aviso info">Marcar una capacidad le deja <b>crear</b> desde ese momento. Publicar lo seguimos aprobando nosotros.</div>'+
     '<div class="tarj"><h3>Qué trae</h3>'+CAPS.map(function(cc){
-      var f=tiene.filter(function(x){return x.capacidad===cc[0];})[0];
+      var k=cc[0];
+      var f=tiene.filter(function(x){return x.capacidad===k;})[0];
       var act=f&&f.estado==='activa';
-      return '<div class="lin"><div class="t"><b><span class="p '+cc[0]+'">'+esc(cc[1])+'</span></b>'+
+      var cob=COM[k], tot=cob?comTotal(a,k):null;
+      /* La comisión sólo se enseña de lo que de verdad trae: ofrecerla en una
+         capacidad que no tiene es invitar a fijar el precio de algo que no
+         vende. */
+      var linCom = (act && cob)
+        ? '<div class="comlin" data-comk="'+k+'">'+
+            '<span class="comtot">'+tot+'%</span>'+
+            '<span class="comdes">'+esc(comFrase(k,tot))+'</span>'+
+            '<button class="btn sm gris" data-comedit="'+k+'">Editar comisión</button>'+
+          '</div>'
+        : (act && k==='hotel'
+            ? '<div class="comlin"><span class="comdes">Cobra, no paga: se le liquida su parte de cada venta que acerque.</span></div>'
+            : (act && k==='membresia'
+                ? '<div class="comlin"><span class="comdes">Sin costo.</span></div>' : ''));
+      return '<div class="lin cap"><div class="t"><b><span class="p '+k+'">'+esc(cc[1])+'</span></b>'+
         '<span>'+(act?('desde '+String(f.concedida_at||'').slice(0,10)+(f.motivo?' · '+esc(f.motivo):''))
-                     :(f?('retirada · '+esc(f.motivo||'')):'no la tiene'))+'</span></div>'+
-        '<button class="btn sm '+(act?'gris':'naranja')+'" data-cap="'+cc[0]+'" data-act="'+(act?'quitar':'dar')+'">'+
-          (act?'Quitar':'Conceder')+'</button></div>';}).join('')+'</div>';
+                     :(f?('retirada · '+esc(f.motivo||'')):'no la tiene'))+'</span>'+linCom+'</div>'+
+        '<button class="btn sm '+(act?'gris':'naranja')+'" data-cap="'+k+'" data-act="'+(act?'quitar':'dar')+'">'+
+          (act?'Quitar':'Conceder')+'</button></div>';}).join('')+'</div>'+
+    '<style>.lin.cap .t{flex:1}.comlin{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:7px}'+
+    '.comtot{font:700 17px Oswald,sans-serif;color:var(--naranja-oscuro)}'+
+    '.comdes{font-size:12.5px;color:var(--gris)}'+
+    '.comcaja{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px}'+
+    '.comcaja input{width:82px;padding:8px 10px;border:1.5px solid var(--linea);border-radius:8px;font:inherit}</style>';
 };
 ATA.caps=function(a){
   Array.prototype.forEach.call(document.querySelectorAll('[data-cap]'),function(b){
@@ -932,6 +994,52 @@ ATA.caps=function(a){
           que:(quitar?'capacidad retirada: ':'capacidad concedida: ')+k,quien:YO,detalle:{motivo:motivo}})}).catch(function(){});
       avisa(quitar?'Quitada · '+capNom(k):'Concedida · '+capNom(k));
       await recarga(); await abre(a.id);
+    };});
+
+  /* EDITAR LA COMISIÓN, EN SU RENGLÓN. Se escribe el total y el desglose se
+     recalcula a cada tecla: así no se guarda un número cuyo reparto nadie vio.
+     Al guardar se escriben las dos cosas —el total y las tres columnas del
+     reparto— porque el motor de cobro lee las columnas, no el total. */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-comedit]'),function(b){
+    b.onclick=function(){
+      var k=b.getAttribute('data-comedit'), d=COM[k], tot=comTotal(a,k);
+      var lin=document.querySelector('.comlin[data-comk="'+k+'"]');
+      if(!lin||!d) return;
+      lin.innerHTML='<div class="comcaja">'+
+        '<input type="number" min="'+d.min+'" max="90" step="1" id="comIn_'+k+'" value="'+tot+'">'+
+        '<span class="comdes" id="comOut_'+k+'">'+comFrase(k,tot)+'</span>'+
+        '<button class="btn sm naranja" id="comOk_'+k+'">Guardar</button>'+
+        '<button class="btn sm gris" id="comNo_'+k+'">Cancelar</button></div>'+
+        '<div class="comdes" style="width:100%">Fijo: '+d.fijo+'. Lo que suba o baje lo pone quien vende.</div>';
+      var inp=document.getElementById('comIn_'+k), out=document.getElementById('comOut_'+k);
+      inp.oninput=function(){
+        var v=Number(inp.value);
+        out.textContent = (!isFinite(v)||v<d.min) ? ('No puede bajar de '+d.min+'%: eso es lo fijo.') : comFrase(k,v);
+      };
+      inp.focus();
+      document.getElementById('comNo_'+k).onclick=function(){ abre(a.id); };
+      document.getElementById('comOk_'+k).onclick=async function(){
+        var v=Number(inp.value);
+        if(!isFinite(v)||v<d.min||v>90){ avisa('La comisión de '+capNom(k)+' va entre '+d.min+'% y 90%.'); return; }
+        var cuerpo={}; cuerpo[d.col]=v;
+        /* El reparto de EXPERIENCIAS vive en tres columnas propias, que son las
+           que lee el cobro. Si se cambia el total y no se tocan, la ficha dice
+           una cosa y el cobro hace otra. */
+        if(k==='experiencias'){
+          var g=comDesglose('experiencias',v);
+          cuerpo.com_plataforma_pct=g.plataforma;
+          cuerpo.com_vendedor_pct=g.vendedor;
+          cuerpo.com_hotel_pct=g.hotel;
+        }
+        this.disabled=true;
+        var ok=await guarda(cuerpo);
+        if(!ok){ this.disabled=false; return; }
+        await fetch(SB+'/rest/v1/historia',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),
+          body:JSON.stringify({entidad:'ateneista',entidad_id:a.id,
+            que:'comisión de '+k+': '+v+'%',quien:YO,detalle:{reparto:comFrase(k,v)}})}).catch(function(){});
+        avisa('Comisión de '+capNom(k)+': '+v+'%');
+        await recarga(); await abre(a.id);
+      };
     };});
 };
 
@@ -1237,12 +1345,17 @@ VISTA.cobro=function(a){
     '</div>'+
   '</div>'+
 
-  '<div class="tarj"><h3>El reparto</h3>'+
-    '<div class="aviso alerta">Lo normal del Grupo es <b>10 / 10 / 5</b>. Si su convenio dice otra cosa, se cambia aquí.</div>'+
-    '<div class="g2">'+c('com_vendedor_pct','% QUIEN VENDE',a.com_vendedor_pct)+
-      c('com_plataforma_pct','% PLATAFORMA',a.com_plataforma_pct)+'</div>'+
-    '<div class="g2" style="margin-top:13px">'+c('com_hotel_pct','% LA CASA',a.com_hotel_pct)+'</div>'+
-  '</div>'+
+  /* EL REPARTO SE FUE A «QUÉ TRAE». Javi, 29-oct-2026: «Papi Tours tiene
+     experiencias y eventos pero sólo me has puesto la comisión para
+     experiencias. Mejor quita lo de la comisión de cobro y en la parte de Qué
+     trae pon al lado editar comisión con comisión total que les cobramos. Y tú
+     ya distribuyes la comisión con los %s que hablamos según la venta».
+     Aquí había UN reparto —10/10/5— para alguien que puede traer cuatro cosas
+     que no se cobran igual: una experiencia es 25%, un evento 35%, una pieza
+     35%. Un solo trío de casillas no podía ser verdad para los tres, y lo que
+     se veía en esta pestaña contradecía lo que el convenio le prometió.
+     Ahora la comisión vive donde vive la capacidad, y el reparto lo calcula la
+     pantalla. */
   '<button class="btn naranja" id="bGuardaCobro">Guardar</button>';
 };
 ATA.cobro=function(){
