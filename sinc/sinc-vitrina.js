@@ -282,7 +282,10 @@ window.sincVitrina = (function () {
     if (x.fuente === 'experiencia') {
       if (x.duracion_min) d.push(dur(x.duracion_min));
       if (Array.isArray(x.idiomas) && x.idiomas.length)
-        d.push('💬 ' + x.idiomas.map(function (i) { return String(i).slice(0,3); }).join('/'));
+        /* «Esp/Ing» se quedaba igual en inglés: el recorte a tres letras se
+           hacía sobre el nombre en español. Ahora se traduce y luego se
+           recorta, así que en inglés sale «Spa/Eng». Javi, 29-oct-2026. */
+        d.push('💬 ' + x.idiomas.map(function (i) { return String(T(i)).slice(0,3); }).join('/'));
       /* El cupo sólo si es chico: Javi —«no pongas grupo máximo si supera las
          10 personas»—, porque un tope de 20 no promete un grupo pequeño. */
       if (x.cupo_max && x.cupo_max <= 10) d.push('👥 ' + T('máx ') + x.cupo_max);

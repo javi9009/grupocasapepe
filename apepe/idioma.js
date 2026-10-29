@@ -867,7 +867,11 @@
     'Confirmar y pagar':'Confirm and pay',
     'Hola, Pepe Huésped':'Hi, Pepe Guest',
     'La Cósmica':'La Cósmica',
-    'La gente ya no lee':'La gente ya no lee',
+    /* Javi, 29-oct-2026: «que no quede nada en español». Era el único nombre
+       de módulo que es una frase entera y no una marca: a un huésped en
+       inglés no le decía nada. Pepe GO!, PepeQuiz, Vnums y La Cósmica sí se
+       quedan, que ésos son nombres. */
+    'La gente ya no lee':'People don\u2019t read any more',
     'Pepe GO!':'Pepe GO!',
     'Quédate más':'Stay longer',
     'Recepción':'Reception',
