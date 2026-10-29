@@ -5091,7 +5091,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      que vea a cuánto se vende antes de guardar; quien manda es el disparador
      de la base. Si algún día cambia el margen, cambia en un sitio. */
   var AR={piezas:[], creadores:[], edita:null, cats:[], margen:35, iva:16,
-          taller:null, donde:{}, creaEdita:null};
+          taller:null, donde:{}, creaEdita:null, series:[]};
 
   function arMoney(n){ return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0}); }
   /* Cuántas hay de esta pieza en el taller de quien mira. */
@@ -5156,6 +5156,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         AR.donde[p.id] = d.ok ? (await d.json()||[]) : [];
       }catch(_){ AR.donde[p.id]=[]; }
     }));
+
+    try{
+      var se=await fetch(SB+'/rest/v1/arte_series?select=id,nombre,descripcion&ateneista_id=eq.'+cur.id+'&order=nombre',{headers:hdr()});
+      AR.series = se.ok ? await se.json() : [];
+    }catch(_){ AR.series=[]; }
 
     var vistas={};
     AR.piezas.forEach(function(p){ if(p.categoria) vistas[p.categoria]=1; });
@@ -5235,6 +5240,18 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         '<label>Año · opcional<input id="arAnio" type="number" min="1900" max="2100" step="1" '+
           'value="'+esc(p.anio==null?'':p.anio)+'" placeholder="2026"></label>'+
       '</div>'+
+      /* LA SERIE ES DE LA SERIE. «EXQUISITA» no es un dato de una pieza: es un
+         conjunto con su propia explicación, y escrita a mano en cada pieza, al
+         tercer rótulo ya no dice lo mismo en todas. Se elige una que exista o
+         se escribe una nueva, igual que la categoría. */
+      '<div class="g2">'+
+        '<label>Serie · opcional<input id="arSerie" list="arSeries" value="'+
+          esc(serieNombre(p))+'" placeholder="EXQUISITA">'+
+          '<datalist id="arSeries">'+AR.series.map(function(x){return '<option value="'+esc(x.nombre)+'">';}).join('')+'</datalist>'+
+          '<span class="mini">Si no está, escríbela y se crea.</span></label>'+
+        '<label>De qué va la serie · opcional<input id="arSerieInfo" value="'+esc(serieDesc(p))+'" '+
+          'placeholder="Por qué se llama así"><span class="mini">Se guarda una vez y vale para todas las de esa serie.</span></label>'+
+      '</div>'+
       '<div class="g2">'+
         '<label>Lo que quieres recibir · sin IVA y sin comisión'+
           '<input id="arNeto" type="number" min="0" step="1" value="'+esc(p.precio_artesana==null?'':p.precio_artesana)+'"></label>'+
@@ -5246,6 +5263,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       arDondeMas(p)+
       '<div id="arCuenta" class="ccdesglose" style="margin:12px 0">'+arDesglose(c)+'</div>'+
       '<label class="campo">Descripción · opcional<textarea id="arDes" rows="3" placeholder="Qué representa, cómo se hizo, cuánto tardó.">'+esc(p.descripcion||'')+'</textarea></label>'+
+      /* Las observaciones de la hoja de Óscar: con quién se hizo, qué aportó
+         cada uno. Van a `significado`, que es el campo que la tienda del
+         huésped ya enseña debajo de la pieza. */
+      '<label class="campo">Observaciones · opcional<textarea id="arObs" rows="3" '+
+        'placeholder="Con quién se hizo, qué aportó cada quien, de dónde viene la idea.">'+
+        esc(p.significado||'')+'</textarea></label>'+
       '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">'+
         '<button class="btn" id="arGuarda">Guardar</button>'+
         '<button class="btn gris" id="arCancela">Cancelar</button>'+
@@ -5287,6 +5310,39 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     return '<div class="mini" style="margin:2px 0 10px">También tienes '+
       l.map(function(x){ return '<b>'+Number(x.unidades)+'</b> en '+esc(x.almacen); }).join(' · ')+
       '. Eso lo lleva ese hotel.</div>';
+  }
+
+  function serieNombre(p){
+    if(!p||!p.serie_id) return '';
+    var s=AR.series.filter(function(x){return x.id===p.serie_id;})[0];
+    return s?s.nombre:'';
+  }
+  function serieDesc(p){
+    if(!p||!p.serie_id) return '';
+    var s=AR.series.filter(function(x){return x.id===p.serie_id;})[0];
+    return (s&&s.descripcion)||'';
+  }
+  /* Devuelve el id de la serie, creándola si hace falta. */
+  async function serieId(nombre, desc){
+    nombre=(nombre||'').trim();
+    if(!nombre) return null;
+    var y=AR.series.filter(function(x){return x.nombre.toLowerCase()===nombre.toLowerCase();})[0];
+    if(y){
+      if(desc && desc!==y.descripcion){
+        await fetch(SB+'/rest/v1/arte_series?id=eq.'+y.id,{method:'PATCH',headers:hdr(),
+          body:JSON.stringify({descripcion:desc})});
+        y.descripcion=desc;
+      }
+      return y.id;
+    }
+    var r=await fetch(SB+'/rest/v1/arte_series',{method:'POST',
+      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+      body:JSON.stringify({nombre:nombre, descripcion:desc||null, ateneista_id:cur.id})});
+    if(!r.ok) return null;
+    var fila=null; try{ fila=await r.json(); }catch(_){}
+    if(!fila||!fila.length) return null;
+    AR.series.push(fila[0]);
+    return fila[0].id;
   }
 
   function arDesglose(c){
@@ -5371,6 +5427,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
             materiales:($('arMat').value||'').trim()||null,
             medidas:($('arMed').value||'').trim()||null,
             anio:Number($('arAnio').value||0)||null,
+            significado:($('arObs').value||'').trim()||null,
+            serie_id:await serieId($('arSerie').value, ($('arSerieInfo').value||'').trim()),
             descripcion:($('arDes').value||'').trim()||null,
             precio_artesana:neto,
             ateneista_id:cur.id };
