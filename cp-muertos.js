@@ -211,7 +211,13 @@
       .then(function(r){ if(!r.ok) throw 0; return r.json(); })
       .then(function(L){
         var ciu = ciudadDeAqui();
-        COL = (L || []).filter(function(x){ return (x.ciudad || 'CDMX') === ciu; });
+        /* SIN CIUDAD NO ES CDMX. Aquí también se inventaba: a una ficha sin
+           ciudad se le ponía CDMX antes de comparar, igual que hacía la vista.
+           Por eso el Walking Tour Panteón, que sale de Casa Pepe Puebla,
+           aparecía en la app de CDMX. Javi, 29-oct-2026.
+           Si de verdad no se sabe de qué ciudad es, no se enseña en ninguna:
+           en la app el huésped la ve y la quiere reservar. */
+        COL = (L || []).filter(function(x){ return x.ciudad === ciu; });
         return traduce();
       })
       /* Si la red falla COL se queda en null, y eso significa «no sé», que no

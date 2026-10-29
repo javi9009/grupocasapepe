@@ -524,6 +524,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       {k:'vender',   t:'Vender experiencias', g:'tag', d:'Lo que se ofrece en esta casa.'},
       {k:'conc',     t:'Sus concierges',      g:'users',d:'Quién vende en esta casa.'},
       {k:'ventas',   t:'Sus ventas',          g:'cash',d:'Lo vendido en esta casa.'},
+      {k:'artes',    t:'Su artesanía',        g:'bag', d:'Las piezas que tienes guardadas en esta casa, pieza por pieza. La tienda del huésped suma lo que hay en la ciudad; esto es lo que hay en TU estante.'},
       {k:'app',      t:'Su app',              g:'plug',d:'La portada de esta casa, qué va en cada caja y su liga.'}
     ]};
   var TIPOS=[{k:'experiencia',t:'Experiencias',g:'map'},{k:'evento',t:'Eventos',g:'ticket'},{k:'tienda',t:'Tienda',g:'bag'}];
@@ -846,6 +847,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     if(sec==='exps')      return vExps(w);
     if(sec==='eventos')   return vEventos(w);
     if(sec==='ventas')    return vVentas(w);
+    if(sec==='artes')     return vArtesania(w);
     if(sec==='conc')      return vConcierges(w);
     if(sec==='app')       return vApp(w);
     if(sec==='vender')    return w.innerHTML=vVender();
@@ -1950,6 +1952,94 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
      has vendido nada». Montar la pantalla encima habría sido construir un cero
      que miente. */
   var VTAS=null, VTAS_ERR=false;
+
+  /* ======================= SU ARTESANÍA ===========================
+     Javi, 29-oct-2026: «el almacén de artesanías debe estar en Sincrético,
+     pero cada hotel de Sincrético debe tener su propio stock en Ficha
+     Ateneísta / Ficha Hotel».
+     Esta casa cuenta SU estante. No ve lo que hay en el taller del ateneísta
+     ni en otro hotel; la tienda del huésped es la que suma la ciudad. Lo que
+     se escribe aquí son unidades que están, no unidades que se piden: por eso
+     la caja dice «cuántas hay» y no «cuántas quiero». */
+  async function vArtesania(w){
+    var d=destino();
+    w.innerHTML='<div class="card"><h3>Su artesanía</h3><div class="mini">Abriendo el estante…</div></div>';
+
+    var alm=null;
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/mis_almacenes_arte',{method:'POST',headers:hdr(),body:'{}'});
+      var l=r.ok?await r.json():[];
+      alm=(Array.isArray(l)?l:[]).filter(function(a){ return a.tipo==='hotel'; })[0]||null;
+    }catch(_){}
+
+    if(!alm){
+      w.innerHTML='<div class="card"><h3>Su artesanía</h3>'+
+        '<div class="mini">Esta casa todavía no tiene estante de artesanía. '+
+        'Escríbenos y lo abrimos: es un momento.</div></div>';
+      return;
+    }
+
+    var piezas=await get('arte_productos?select=id,nombre,sku,categoria,precio_mxn,foto_url,activo'+
+                         '&activo=eq.true&order=nombre') || [];
+    var hay={};
+    try{
+      var e=await get('arte_stock?select=producto_id,unidades&almacen_id=eq.'+alm.id) || [];
+      e.forEach(function(x){ hay[x.producto_id]=Number(x.unidades||0); });
+    }catch(_){}
+
+    /* Primero lo que tiene; lo demás, debajo y plegado: un estante con tres
+       piezas no debe abrirse con sesenta ceros delante. */
+    var conmigo=piezas.filter(function(p){ return hay[p.id]>0; });
+    var resto  =piezas.filter(function(p){ return !hay[p.id]; });
+
+    function fila(p){
+      return '<tr><td style="width:46px">'+
+        (p.foto_url?'<img src="'+esc(p.foto_url)+'" alt="" style="width:38px;height:50px;object-fit:cover;border-radius:5px">':'')+
+        '</td><td><b>'+esc(p.nombre)+'</b><div class="mini">'+esc(p.categoria||'')+'</div></td>'+
+        '<td style="text-align:right">'+(p.precio_mxn!=null?('$'+Number(p.precio_mxn).toLocaleString('es-MX')):'—')+'</td>'+
+        '<td style="width:96px"><input type="number" min="0" step="1" data-pz="'+esc(p.id)+'" '+
+          'value="'+(hay[p.id]||0)+'" style="width:100%"></td></tr>';
+    }
+
+    w.innerHTML='<div class="card"><h3>Su artesanía</h3>'+
+      '<div class="mini">Lo que tienes guardado en <b>'+esc(alm.nombre)+'</b>. '+
+      'Escribe cuántas hay de cada pieza; la tienda del huésped suma lo que haya en la ciudad.</div>'+
+      (conmigo.length
+        ? '<table style="margin-top:12px"><tbody>'+conmigo.map(fila).join('')+'</tbody></table>'
+        : '<div class="mini" style="margin-top:12px">Ahora mismo no tienes ninguna pieza aquí.</div>')+
+      (resto.length
+        ? '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:13px">'+
+          'Añadir otra pieza del catálogo ('+resto.length+')</summary>'+
+          '<table style="margin-top:8px"><tbody>'+resto.map(fila).join('')+'</tbody></table></details>'
+        : '')+
+      '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap">'+
+        '<button class="btn" id="artGuarda">Guardar el estante</button>'+
+        '<span class="mini" id="artNota"></span>'+
+      '</div></div>';
+
+    var b=document.getElementById('artGuarda');
+    if(b) b.onclick=async function(){
+      var cajas=Array.prototype.slice.call(w.querySelectorAll('input[data-pz]'));
+      b.disabled=true; b.textContent='Guardando…';
+      var cambios=0, fallos=0;
+      for(var i=0;i<cajas.length;i++){
+        var pid=cajas[i].getAttribute('data-pz');
+        var n=Math.max(0,Number(cajas[i].value||0));
+        if(n===(hay[pid]||0)) continue;
+        cambios++;
+        try{
+          var rr=await fetch(SB+'/rest/v1/rpc/arte_stock_poner',{method:'POST',headers:hdr(),
+            body:JSON.stringify({p_producto:pid,p_almacen:alm.id,p_unidades:n,p_nota:'Desde la ficha del hotel'})});
+          if(!rr.ok) fallos++;
+        }catch(_){ fallos++; }
+      }
+      b.disabled=false; b.textContent='Guardar el estante';
+      var nota=document.getElementById('artNota');
+      if(nota) nota.textContent = !cambios ? 'No había nada que cambiar.'
+        : (fallos ? (fallos+' no se pudieron guardar.') : 'Estante guardado.');
+      if(cambios && !fallos) vArtesania(w);
+    };
+  }
 
   async function vVentas(w){
     var d=destino();

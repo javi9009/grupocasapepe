@@ -139,6 +139,8 @@
   .apila i{display:block;height:100%} .apila .lim{background:var(--accent)} .apila .tra{background:var(--none)}
   .apila .obl{background:repeating-linear-gradient(45deg,var(--warn),var(--warn) 4px,#a8770f 4px,#a8770f 8px)}
   .apila .limcd{background:#2b6cb0}
+  .apila .lim.scdmx{background:#137A56} .apila .lim.spuebla{background:#2b6cb0} .apila .lim.svirreyes{background:#8c3b4a}
+  .apila.warn .lim.scdmx,.apila.bad .lim.scdmx{background:#137A56} .apila.warn .lim.spuebla,.apila.bad .lim.spuebla{background:#2b6cb0} .apila.warn .lim.svirreyes,.apila.bad .lim.svirreyes{background:#8c3b4a}
   .sq.cd{background:#e6effa;color:#2b6cb0;border-color:#2b6cb0;cursor:grab} .sq.cd:active{cursor:grabbing}
   .sedebadge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:5px;margin-left:4px;white-space:nowrap}
   .acol.jefe{border-color:#b9cbe6;box-shadow:0 0 0 1px #dbe6f4, var(--shadow)} .acol.jefe .ahd .flotachip{background:#e6effa;color:#2b6cb0}
@@ -279,6 +281,17 @@ const PROP_ALL=[
   {id:"febfbef6-7fd1-4b45-84d9-13533e8dcb72",n:"Puebla",proj:"puebla"},
 ];
 let PROPS=PROP_ALL.slice(), PROP=PROP_ALL[0], USER=null, TECS=[];
+// ===== Sedes de mantenimiento: color por propiedad (Javi oct-2026) =====
+// Obligatorios = naranja · CDMX = verde · Puebla = azul · Virreyes = granate
+const SEDE_COL={cdmx:'#137A56',puebla:'#2b6cb0',virreyes:'#8c3b4a'};
+const SEDE_CLS={cdmx:'scdmx',puebla:'spuebla',virreyes:'svirreyes'};
+const OBL_COL='#C8792B';
+function projOf(pid){const p=PROP_ALL.find(x=>x.id===pid);return p?p.proj:null;}
+function sedeNom(pid){const p=PROP_ALL.find(x=>x.id===pid);return p?p.n:'—';}
+function sedeCol(pid){return SEDE_COL[projOf(pid)]||'#8a8278';}
+function sedeBadge(pid){const col=sedeCol(pid);return `<span class="sedebadge" style="background:${col}1f;color:${col};border:1px solid ${col}">${esc(sedeNom(pid))}</span>`;}
+window.PROG_SEDE=window.PROG_SEDE||'all';   // filtro de sede SOLO del bloque "Sin asignar"
+function setProgSede(v){window.PROG_SEDE=v;renderProg();}
 const PER_F={semanal:52,quincenal:26,mensual:12,bimestral:6,trimestral:4,semestral:2,anual:1,"n/a":0};
 const PER_DAYS={diaria:1,diario:1,semanal:7,quincenal:15,mensual:30,bimestral:60,trimestral:90,cuatrimestral:120,semestral:180,anual:365};
 const PER_MES={diaria:1,diario:1,semanal:1,quincenal:1,mensual:1,bimestral:2,trimestral:3,cuatrimestral:4,semestral:6,anual:12};
@@ -1426,23 +1439,29 @@ function urTitle(u){if(!u||!u.urgencia_detalle)return 'Sin señales de urgencia'
   return p.join(' · ')||'Sin señales de urgencia';}
 
 async function renderProg(){
-  const [cfgR,tkR,profR,urgR,catR]=await Promise.all([
-    sb.from('mtto_config').select('*').eq('property_id',PROP.id).maybeSingle(),
-    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('property_id',PROP.id).in('estado',['nuevo','validado','programado','en_proceso','pausado']),
-    sb.from('mtto_profundo_plan').select('*, ubic:ubicacion_id(nombre,codigo)').eq('property_id',PROP.id).eq('estado','pendiente'),
-    sb.rpc('mtto_urgencias',{p_property:PROP.id}),
-    sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('property_id',PROP.id).eq('activo',true)
+  // Panel GENERAL cross-sede (candados rotos): se cargan las 3 sedes a la vez, sin filtro de
+  // propiedad. El filtro de sede vive SOLO en el bloque "Sin asignar" (window.PROG_SEDE).
+  // Cada técnico se muestra siempre y su cajón lleva tareas de cualquier sede, coloreadas por propiedad.
+  const [tkR,profR,catR,puRr,plansRes,cfgRr,lanzRr,uCdmx,uVirr,uPue]=await Promise.all([
+    sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').in('estado',['nuevo','validado','programado','en_proceso','pausado']),
+    sb.from('mtto_profundo_plan').select('*, ubic:ubicacion_id(nombre,codigo)').eq('estado','pendiente'),
+    sb.from('mtto_preventivos_catalogo').select('*, ubic:ubicacion_id(nombre,orden)').eq('activo',true),
+    sb.from('mtto_puesto').select('*'),
+    sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre,area_negocio), cat:catalogo_id(tarea,critico), sub:subtarea_id(descripcion)').eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada'),
+    sb.from('mtto_config').select('*'),
+    sb.from('mtto_semana_lanzada').select('property_id,lanzado_at,veces,lanzado_por').eq('semana',PROG_WK),
+    sb.rpc('mtto_urgencias',{p_property:PROP_ALL[0].id}),
+    sb.rpc('mtto_urgencias',{p_property:PROP_ALL[1].id}),
+    sb.rpc('mtto_urgencias',{p_property:PROP_ALL[2].id})
   ]);
-  const {data:planR}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre,area_negocio), cat:catalogo_id(tarea,critico), sub:subtarea_id(descripcion)').eq('property_id',PROP.id).eq('estado','pendiente').lte('semana_programada',PROG_WK).order('semana_programada');
-  const {data:lanzRow}=await sb.from('mtto_semana_lanzada').select('lanzado_at,veces,lanzado_por').eq('property_id',PROP.id).eq('semana',PROG_WK).maybeSingle();
-  const c=cfgR.data||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
-  // Config por puesto (48h base) para cada técnico
-  const {data:puR}=await sb.from('mtto_puesto').select('*');
-  const PUESTOS={}; (puR||[]).forEach(p=>PUESTOS[p.employee_id]=p);
-  const tks=tkR.data||[]; const urg={}; (urgR.data||[]).forEach(u=>urg[u.id]=u);
+  const cfgByProp={}; (cfgRr.data||[]).forEach(x=>cfgByProp[x.property_id]=x);
+  const c=cfgByProp[PROP.id]||cfgByProp[PROP_ALL[0].id]||{horas_dia:8,dias_semana:6,reserva_reactivo_h:12,admin_h:4,consumos_h:1.5,pct_correctivo:70,pct_preventivo:30};
+  const PUESTOS={}; (puRr.data||[]).forEach(p=>PUESTOS[p.employee_id]=p);
+  const urg={}; [uCdmx,uVirr,uPue].forEach(r=>((r&&r.data)||[]).forEach(u=>{urg[u.id]=u;}));
+  const tks=tkR.data||[];
+  const SEDE=window.PROG_SEDE||'all';
+  const inSede=pid=>SEDE==='all'||projOf(pid)===SEDE;
   // "Asignado para ESTA semana" = tiene técnico + semana de esta semana + no está pausado.
-  // Todo lo demás (sin técnico, sin semana, semana pasada no hecha, o pausado en espera de compra)
-  // regresa automáticamente a "Sin asignar" y se mantiene ahí hasta que se haga y lo acepten.
   const asignadoWk=r=>r.asignado_a&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK&&r.estado!=='pausado';
   const enSemana=tks.filter(asignadoWk);
   const pend=tks.filter(r=>!asignadoWk(r))
@@ -1453,50 +1472,38 @@ async function renderProg(){
   const RANK={venc:0,pend:1,ok:2};
   const yaTk=new Set(tks.filter(r=>r.preventivo_catalogo_id&&r.semana_programada&&mondayOf(r.semana_programada)===PROG_WK).map(r=>r.preventivo_catalogo_id));
   const prevCat=(catR.data||[]).filter(r=>!yaTk.has(r.id)).map(r=>Object.assign({},r,{_est:prevEstado(r)})).sort((a,b)=>RANK[a._est.k]-RANK[b._est.k]);
-  const prevPlan=(planR||[]).slice().sort((a,b)=>planUrg(b)-planUrg(a));
-  const local=TECS.filter(t=>t.property_id===PROP.id);
-  const jefe=TECS.find(t=>/juan/i.test(t.nombre_display||t.nombre||''));
-  const board=local.slice();
-  if(jefe&&!board.some(t=>t.id===jefe.id)) board.push(Object.assign({},jefe,{_flota:true}));
+  const prevPlan=(plansRes.data||[]).slice().sort((a,b)=>planUrg(b)-planUrg(a));
+  const board=TECS.slice();   // TODOS los técnicos, siempre
   window.PROG_SQREG=[]; window.PROG_SQPLAN=[];
-  // Preventivos del CALENDARIO: los de ESTA semana entran al cajón; los vencidos (semanas pasadas, no realizados) a SIN ASIGNAR.
   const isVenc=s=>new Date((s||'2999-01-01')+'T12:00:00Z')<new Date(PROG_WK+'T12:00:00Z');
-  const planWk=(prevPlan||[]).filter(p=>!isVenc(p.semana_programada));   // semana_programada == PROG_WK (lo agendado en calendario para esta semana)
-  const planVenc=(prevPlan||[]).filter(p=>isVenc(p.semana_programada));  // semana_programada < PROG_WK (atrasados)
-  const primario=(jefe&&board.some(x=>x.id===jefe.id&&!x._flota))?jefe:(board.find(t=>!t._flota)||board[0]);  // Puebla = Juan; el jefe los lleva en su ficha única
-  const planWkByTec={}; if(primario){planWkByTec[primario.id]=planWk;}
-  // ==== Juan Jefe Regional: FICHA ÚNICA cross-sede (CDMX + Puebla) ====
-  const JUAN_HOME='febfbef6-7fd1-4b45-84d9-13533e8dcb72', SEDE_VIRR='3e10a9ea-4913-4f7c-86ef-0c829caa851d';
-  let jefeHomeTk=[], jefeCdmxTk=[], jefePlan=[];
-  if(jefe){
-    const {data:jt}=await sb.from('mtto_tickets').select('*, ubic:ubicacion_id(nombre,area_negocio)').eq('asignado_a',jefe.id).eq('semana_programada',PROG_WK).in('estado',['nuevo','validado','programado','en_proceso']);
-    const jall=(jt||[]).filter(r=>r.origen!=='rutina');
-    jefeHomeTk=jall.filter(r=>r.property_id===JUAN_HOME);
-    jefeCdmxTk=jall.filter(r=>r.property_id!==JUAN_HOME && r.property_id!==SEDE_VIRR);   // CDMX (excluye Virreyes)
-    if(PROP.id===JUAN_HOME){ jefePlan=planWk; }
-    else { const {data:ph}=await sb.from('mtto_preventivo_plan').select('*, ubic:ubicacion_id(nombre), cat:catalogo_id(tarea,critico), sub:subtarea_id(descripcion)').eq('property_id',JUAN_HOME).eq('estado','pendiente').eq('semana_programada',PROG_WK); jefePlan=ph||[]; }
-  }
-  const jefeTotal=[...jefeHomeTk,...jefeCdmxTk].reduce((s,r)=>s+(r.minutos_estimados||0),0)+jefePlan.reduce((s,p)=>s+(p.minutos_estimados||0),0);
-  const jefeTks=[...jefeHomeTk,...jefeCdmxTk];
-  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,jefe,PUESTOS,planWk,planWkByTec,jefeTks,jefePlan};
-  const enSemanaVis=enSemana.filter(r=>r.origen!=='rutina');  // lecturas/briefing (rutina) son el bloque obligatorio, no se listan sueltos
-  const cols=board.map(t=>(jefe&&t.id===jefe.id)
-    ? cajonJefeHtml(t,puestoCap(PUESTOS[t.id]),c,jefeTotal,jefeHomeTk,jefeCdmxTk,jefePlan)
-    : cajonHtml(t,enSemanaVis,puestoCap(PUESTOS[t.id]),c,jefe,jefeTotal,planWkByTec[t.id]||[])).join('');
-  // --- SIN ASIGNAR (derecha): reactivos, correctivos y preventivos vencidos (no realizados) ---
-  const reactivos=pend.filter(r=>r.clasificacion==='reactivo');
-  const correctivos=pend.filter(r=>r.clasificacion==='correctivo');
-  const otrosPend=pend.filter(r=>r.clasificacion!=='reactivo'&&r.clasificacion!=='correctivo');
-  const profN=(prof||[]).map(r=>normItem(r,'prof'));
-  const catN=(prevCat||[]).map(r=>normItem(r,'cat'));
+  const planWk=(prevPlan||[]).filter(p=>!isVenc(p.semana_programada));
+  const planVenc=(prevPlan||[]).filter(p=>isVenc(p.semana_programada));
+  // Preasignación base del CALENDARIO por sede → técnico "de casa" (CDMX→Manu, Puebla→Juan).
+  // Virreyes no tiene técnico de casa: su preventivo de la semana cae en "Sin asignar" (manual).
+  const homeTecOf={}; TECS.forEach(t=>{const pr=projOf(t.property_id); if(pr&&!homeTecOf[pr])homeTecOf[pr]=t.id;});
+  const planWkByTec={}; const planWkHuerfano=[];
+  planWk.forEach(p=>{const tid=homeTecOf[projOf(p.property_id)];
+    if(tid){(planWkByTec[tid]=planWkByTec[tid]||[]).push(p);} else {planWkHuerfano.push(p);}});
+  PROG_STATE={enSemana,pend,prof,prevCat,prevPlan,board,c,cfgByProp,PUESTOS,planWk,planWkByTec,jefeTks:[],jefePlan:[]};
+  const enSemanaVis=enSemana.filter(r=>r.origen!=='rutina');  // lecturas/briefing (rutina) = bloque obligatorio, no se listan sueltos
+  const cols=board.map(t=>cajonHtml(t,enSemanaVis,puestoCap(PUESTOS[t.id]),cfgByProp,planWkByTec[t.id]||[])).join('');
+  // --- SIN ASIGNAR (derecha): filtrado por la sede elegida en este bloque (Todas por defecto) ---
+  const reactivos=pend.filter(r=>r.clasificacion==='reactivo'&&inSede(r.property_id));
+  const correctivos=pend.filter(r=>r.clasificacion==='correctivo'&&inSede(r.property_id));
+  const otrosPend=pend.filter(r=>r.clasificacion!=='reactivo'&&r.clasificacion!=='correctivo'&&inSede(r.property_id));
+  const profN=(prof||[]).filter(r=>inSede(r.property_id)).map(r=>normItem(r,'prof'));
+  const catN=(prevCat||[]).filter(r=>inSede(r.property_id)).map(r=>normItem(r,'cat'));
   const otrosN=otrosPend.map(r=>normItem(r,'tk'));
-  const vencItems=[...planVenc.map(r=>normItem(r,'pp')),
+  const huerfN=planWkHuerfano.filter(p=>inSede(p.property_id)).map(r=>normItem(r,'pp'));
+  const vencItems=[...planVenc.filter(p=>inSede(p.property_id)).map(r=>normItem(r,'pp')),
                    ...profN.filter(n=>isVenc(n.raw.semana_programada)),
-                   ...catN.filter(n=>n.raw._est.k==='venc'), ...otrosN];
+                   ...catN.filter(n=>n.raw._est.k==='venc'), ...otrosN, ...huerfN];
   const totPA=reactivos.length+correctivos.length+vencItems.length;
   const allPA=[...reactivos.map(r=>normItem(r,'tk')),...correctivos.map(r=>normItem(r,'tk')),...vencItems];  // para el aging
-  const lanzHtml = lanzRow ? `<span class="lanzchip" title="Lanzado ${esc(new Date(lanzRow.lanzado_at).toLocaleString('es-MX'))}${lanzRow.lanzado_por?' por '+esc(lanzRow.lanzado_por):''}${lanzRow.veces>1?' · '+lanzRow.veces+' veces':''}">🚀 Lanzado a mto</span>` : '';
-  const lanzBtn = lanzRow ? '🚀 Re-lanzar (avisar cambios)' : '🚀 Lanzar asignación';
+  const anyLanz=(lanzRr.data||[]).length>0; const lanz0=(lanzRr.data||[])[0];
+  const lanzHtml = anyLanz ? `<span class="lanzchip" title="Lanzado ${esc(new Date(lanz0.lanzado_at).toLocaleString('es-MX'))}${lanz0.lanzado_por?' por '+esc(lanz0.lanzado_por):''}">🚀 Lanzado a mto</span>` : '';
+  const lanzBtn = anyLanz ? '🚀 Re-lanzar (avisar cambios)' : '🚀 Lanzar asignación';
+  const sedeSel=`<select id="progSede" style="width:auto;font-size:12px" onchange="setProgSede(this.value)"><option value="all"${SEDE==='all'?' selected':''}>Todas las sedes</option>${PROP_ALL.map(p=>`<option value="${p.proj}"${SEDE===p.proj?' selected':''}>${esc(p.n)}</option>`).join('')}</select>`;
   $('#view').innerHTML=`
     <div class="card"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div><label style="margin:0">Semana (lunes)</label><div style="display:flex;align-items:center;gap:6px"><button class="btn ghost sm" type="button" onclick="shiftWk(-1)">◀</button><select id="wk" style="width:auto" onchange="PROG_WK=this.value;renderProg()">${weekOpts(PROG_WK)}</select><button class="btn ghost sm" type="button" onclick="shiftWk(1)">▶</button></div></div>
@@ -1505,11 +1512,11 @@ async function renderProg(){
       ${lanzHtml}
       <button class="btn" onclick="lanzarAsignacion()">${lanzBtn}</button>
     </div>
-    <div class="pad" style="padding:0 14px 10px"><div class="sqleg"><span><i style="background:var(--bad)"></i>Reactivo</span><span><i style="background:var(--warn)"></i>Correctivo</span><span><i style="background:var(--ok)"></i>Preventivo</span><span class="muted" style="margin-left:auto">Cuadros por color = tipo de trabajo</span></div></div></div>
+    <div class="pad" style="padding:0 14px 10px"><div class="sqleg"><span><i style="background:${SEDE_COL.cdmx}"></i>CDMX</span><span><i style="background:${SEDE_COL.puebla}"></i>Puebla</span><span><i style="background:${SEDE_COL.virreyes}"></i>Virreyes</span><span><i style="background:${OBL_COL}"></i>Obligatorio</span><span class="muted" style="margin-left:auto">La barra va por propiedad · el tipo (reactivo/correctivo/preventivo) es el punto de cada tarjeta</span></div></div></div>
     <div class="progwrap">
       <div class="cols">${cols}</div>
       <div class="pend">
-        <div class="hd">🗂️ Sin asignar (no realizados) · ${totPA}</div>
+        <div class="hd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🗂️ Sin asignar (no realizados) · ${totPA}<span style="flex:1"></span><span style="font-size:11px;color:var(--muted);font-weight:600">Sede:</span>${sedeSel}</div>
         ${totPA?agingSummary(allPA):''}
         ${grpFlat('react','🔔 Reactivos',reactivos,'tk')}
         ${grpFlat('correc','🔧 Correctivos',correctivos,'tk')}
@@ -1518,6 +1525,7 @@ async function renderProg(){
     </div>`;
   wireDrag();
 }
+function sedeNom2(proj){const p=PROP_ALL.find(x=>x.proj===proj);return p?p.n:proj;}
 // ===== Normalización + render de la lista "por asignar" (4 grupos) =====
 window.PROG_SORT=window.PROG_SORT||{};
 window.PROG_GOPEN=window.PROG_GOPEN||new Set(['react','correc','venc','prev']);
@@ -1545,7 +1553,7 @@ function normRowHtml(n){
   const da={tk:'data-tk',prof:'data-prof',pp:'data-prevplan',cat:'data-prev'}[n.type];
   const fn={tk:'tkMenu',prof:'profMenu',pp:'prevPlanMenu',cat:'prevMenu'}[n.type];
   return `<div class="pitem" ${da}="${n.id}" draggable="true" onclick="${fn}('${n.id}')">
-    <div class="t">${clsChip(n.cls)} <span>${esc(n.nombre)}</span>${n.crit?' <span class="chip c-react">crítico</span>':''}${n.raw&&n.raw.estado==='pausado'?' <span class="chip" style="background:var(--warn-bg);color:var(--warn)" title="En espera de compra o material — sigue pendiente">⏸ espera</span>':''}</div>
+    <div class="t">${clsChip(n.cls)} <span>${esc(n.nombre)}</span>${n.raw&&n.raw.property_id?' '+sedeBadge(n.raw.property_id):''}${n.crit?' <span class="chip c-react">crítico</span>':''}${n.raw&&n.raw.estado==='pausado'?' <span class="chip" style="background:var(--warn-bg);color:var(--warn)" title="En espera de compra o material — sigue pendiente">⏸ espera</span>':''}</div>
     <div class="m"><span class="chip" style="background:${ageBucket(n.dias||0).c};color:#fff" title="pendiente desde hace ${n.dias||0} días">⏳ ${n.dias||0}d</span><span class="ur ${urCls(n.urg)}" title="urgencia">⚡${n.urg}</span><span${n.areaInf&&n.area!=='sin área'?' title="Tomado del texto del reporte — confirma la ubicación al asignar" style="border-bottom:1px dotted var(--rule2)"':''}>📍 ${esc(n.area)}${n.areaInf&&n.area!=='sin área'?' ~':''}</span><span>${n.min} min</span><span class="chip c-info">${esc(ofNombre(n.oficio))}</span></div></div>`;
 }
 function sortNorm(list,key){
@@ -1584,20 +1592,27 @@ function slugK(s){return String(s||'').replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
 function togGrp(k){PROG_GOPEN.has(k)?PROG_GOPEN.delete(k):PROG_GOPEN.add(k);renderProg();}
 function togArea(ak){PROG_AOPEN.has(ak)?PROG_AOPEN.delete(ak):PROG_AOPEN.add(ak);renderProg();}
 function setSort(k,s){PROG_SORT[k]=s;renderProg();}
-function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal,planMine){
-  planMine=planMine||[];
+function cajonHtml(t,enSemana,cap,cfgByProp,planMine){
+  planMine=planMine||[]; cfgByProp=cfgByProp||{};
   const mineTk=enSemana.filter(r=>r.asignado_a===t.id);
   const tkMin=mineTk.reduce((s,r)=>s+(r.minutos_estimados||0),0);
   const planMin=planMine.reduce((s,p)=>s+(p.minutos_estimados||0),0);   // preventivos del calendario de esta semana
   const workMin=tkMin+planMin;
   const nTrab=mineTk.length+planMine.length;
-  const TRAS_H=6;   // traslado del jefe entre sedes = 6 h (cuando tiene ≥1 trabajo itinerante)
-  const travelMin=(t._flota&&nTrab)?TRAS_H*60:0;
-  // Obligatorio (lecturas/briefing) SOLO para el colaborador designado de ESTA sede (CDMX: Juan no las hace).
-  const esMedi=(c&&c.medidores_emp_id)?c.medidores_emp_id===t.id:true;
-  const esBrief=(c&&c.briefing_emp_id)?c.briefing_emp_id===t.id:true;
+  const TRAS_H=6;   // traslado entre sedes = 6 h si tiene trabajo fuera de su sede base
+  // Minutos por propiedad (tickets + preventivos del calendario preasignados a este técnico)
+  const bySede={cdmx:0,puebla:0,virreyes:0}; let otrosMin=0;
+  const addSede=(pid,min)=>{const k=projOf(pid); if(bySede[k]!=null)bySede[k]+=(min||0); else otrosMin+=(min||0);};
+  mineTk.forEach(r=>addSede(r.property_id,r.minutos_estimados||0));
+  planMine.forEach(p=>addSede(p.property_id,p.minutos_estimados||0));
+  // Obligatorio (lecturas/briefing) de las sedes donde ESTE técnico es el designado en config
+  let esMedi=false, esBrief=false;
+  Object.keys(cfgByProp).forEach(pid=>{const cf=cfgByProp[pid]||{}; if(cf.medidores_emp_id===t.id)esMedi=true; if(cf.briefing_emp_id===t.id)esBrief=true;});
   const lectH=esMedi?(+cap.lect||0):0, adminH=esBrief?(+cap.admin||0):0, ndEff=esMedi?(cap.lectDias||0):0;
   const oblMin=Math.round((lectH+adminH)*60);
+  const homeProj=projOf(t.property_id);
+  const awayWork=['cdmx','puebla','virreyes'].some(k=>k!==homeProj&&bySede[k]>0)||otrosMin>0;
+  const travelMin=awayWork?TRAS_H*60:0;
   const objetivo=cap.sem;   // horas del turno (48h), lo define ⚙️ Turnos
   const total=oblMin+workMin+travelMin, capMin=objetivo*60||1;
   const prevMin=mineTk.filter(r=>r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0)+planMin;
@@ -1609,16 +1624,17 @@ function cajonHtml(t,enSemana,cap,c,jefe,jefeTotal,planMine){
   const chips=(nTrab)?(mineTk.map(achipHtml).join('')+planMine.map(planChipHtml).join('')):vacio;
   const open=window.PROG_OPEN&&window.PROG_OPEN.has(t.id);
   const col=pct>=95?'var(--bad)':pct>=75?'var(--warn)':'var(--accent)';
+  const segs=['cdmx','puebla','virreyes'].filter(k=>bySede[k]>0).map(k=>`<i class="lim ${SEDE_CLS[k]}" style="width:${w(bySede[k])}%" title="${esc(sedeNom2(k))} ${(bySede[k]/60).toFixed(1)}h"></i>`).join('');
+  const subt=['cdmx','puebla','virreyes'].filter(k=>bySede[k]>0).map(k=>`<b style="color:${SEDE_COL[k]}">${esc(sedeNom2(k))} ${(bySede[k]/60).toFixed(1)}h</b>`).join(' · ');
   return `<div class="acol" data-tec="${t.id}">
     <div class="ahd"><b>${esc(t.nombre_display||t.nombre)}</b>
-      ${t._flota?`<span class="flotachip">itinerante · +${TRAS_H}h traslado</span>`:`<span class="flotachip" style="background:var(--surface-2);color:var(--muted)">${esc(PROP.n)} · fijo</span>`}
+      <span class="flotachip" style="background:${sedeCol(t.property_id)}1f;color:${sedeCol(t.property_id)};border:1px solid ${sedeCol(t.property_id)}">base ${esc(sedeNom(t.property_id))} · multi-sede</span>
       <span class="mono" style="margin-left:auto;color:${col}">${(total/60).toFixed(1)} / ${objetivo.toFixed(1)} h</span></div>
-    <div class="apila ${nv}">${oblMin?`<i class="obl" style="width:${w(oblMin)}%" title="Obligatorio fijo: lecturas ${lectH.toFixed(1)}h + briefing ${adminH.toFixed(1)}h"></i>`:''}<i class="lim" style="width:${w(workMin)}%"></i>${travelMin?`<i class="tra" style="width:${w(travelMin)}%" title="Traslado entre sedes ${TRAS_H}h"></i>`:''}
+    <div class="apila ${nv}">${oblMin?`<i class="obl" style="width:${w(oblMin)}%" title="Obligatorio fijo: lecturas ${lectH.toFixed(1)}h + briefing ${adminH.toFixed(1)}h"></i>`:''}${segs}${travelMin?`<i class="tra" style="width:${w(travelMin)}%" title="Traslado entre sedes ${TRAS_H}h"></i>`:''}
       <span class="marca" style="left:75%"></span><span class="marca" style="left:95%"></span></div>
     <div class="afila"><span class="apct" style="color:${col}">${pct}%</span>
-      <span class="muted">${nTrab} trabajos${planMine.length?` · ${planMine.length} del calendario`:''}${travelMin?` · +${TRAS_H}h traslado`:''}</span></div>
+      <span class="muted">${nTrab} trabajos${subt?' · '+subt:''}${travelMin?` · +${TRAS_H}h traslado`:''}</span></div>
     ${oblMin?`<div class="afila" style="margin-top:-2px"><span style="font-size:11px;color:var(--ink-2)">🔒 Obligatorio: lecturas + briefing · ${(oblMin/60).toFixed(1)}h</span></div>`:''}
-    ${(t._flota&&jefe&&t.id===jefe.id)?`<div class="afila" style="margin-top:-2px"><span class="muted" style="font-size:11px">Total todas las sedes: ${(jefeTotal/60).toFixed(1)} h · ⚠ máx 3 días seguidos en CDMX / 2 sem</span></div>`:''}
     <div class="afila" style="margin-top:-2px"><span style="font-size:11.5px">Preventivos ${(prevMin/60).toFixed(1)}h / ${minPrevH}h ${prevOk?'<span style="color:var(--ok)">✓</span>':'<b style="color:var(--bad)" title="Dedica menos del mínimo a preventivos esta semana">∗ bajo</b>'}</span><span class="muted" style="font-size:10.5px">turno ${objetivo.toFixed(0)}h</span></div>
     <div class="afila sqrow" style="margin-top:6px;flex-wrap:wrap;gap:5px">${cajonSquares(mineTk,ndEff,adminH,t.id,planMine)}</div>
     ${nTrab?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn ghost sm" style="flex:1" onclick="toggleCajon('${t.id}')">${open?'▴ ocultar lista':'▾ ver los '+nTrab+' trabajos'}</button>${(open&&(mineTk.length||planMine.length))?`<button class="btn ghost sm" title="Quitar de la semana lo que marques con ✓ (reactivos, correctivos y preventivos)" onclick="quitarSeleccionados('${t.id}')">☑️ Quitar selección</button>`:''}${mineTk.length?`<button class="btn ghost sm" title="Quitar los reactivos/correctivos de la semana" onclick="quitarGrupoSemana('${t.id}')">🗑️ Vaciar</button>`:''}</div>`:''}
@@ -1723,22 +1739,24 @@ function cajonSquares(mine,ndEff,adminH,tecId,planMine){
   Object.keys(byP).sort((a,b)=>byP[b].length-byP[a].length).forEach(u=>{const arr=byP[u];const idx=window.PROG_SQPLAN.length;
     window.PROG_SQPLAN.push({ids:arr.map(p=>p.id),items:arr,lugar:u});
     const hp=Math.round(arr.reduce((s,p)=>s+(p.minutos_estimados||0),0)/60*10)/10;
-    const plbl=(gk==='lugar'?'📅 '+arr.length+' en '+esc(u):'📅 '+esc(u)+' · '+arr.length)+(hp?` · ${hp}h`:'');
-    sq.push(`<span class="sq cal" draggable="true" data-sqplan="${idx}" onclick="sqPlanMenu(${idx})" title="Preventivos del calendario · clic para ficha o quitar · arrástralo a la derecha para quitarlos de la semana">${plbl}</span>`);});
+    const dot=`<i style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${sedeCol(arr[0].property_id)};margin-right:3px;vertical-align:middle"></i>`;
+    const plbl=dot+(gk==='lugar'?'📅 '+arr.length+' en '+esc(u):'📅 '+esc(u)+' · '+arr.length)+(hp?` · ${hp}h`:'');
+    sq.push(`<span class="sq cal" draggable="true" data-sqplan="${idx}" onclick="sqPlanMenu(${idx})" title="${esc(sedeNom(arr[0].property_id))} · preventivos del calendario · clic para ficha o quitar · arrástralo a la derecha para quitarlos de la semana">${plbl}</span>`);});
   const byU={}; mine.forEach(r=>{const k=sqKeyOf(r);(byU[k]=byU[k]||[]).push(r);});
   Object.keys(byU).sort((a,b)=>byU[b].length-byU[a].length).forEach(u=>{const arr=byU[u];const ids=arr.map(r=>r.id);
     window.PROG_SQREG=window.PROG_SQREG||[]; const idx=window.PROG_SQREG.length; window.PROG_SQREG.push({ids,tec:tecId,lugar:u});
     const cls=sqTipoCls(arr);
     const hh=Math.round(arr.reduce((s,r)=>s+(r.minutos_estimados||estimMin(r).min),0)/60*10)/10;
-    const lbl=(gk==='lugar'?arr.length+' en '+esc(u):esc(u)+' · '+arr.length)+(hh?` · ${hh}h`:'');
-    sq.push(`<span class="sq mv ${cls}" draggable="true" data-sq="${idx}" onclick="sqMenu(${idx})" title="Arrastra a otro colaborador para pasárselos, o a la lista para desasignar · o toca para elegir">${lbl}</span>`);});
+    const dot=`<i style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${sedeCol(arr[0].property_id)};margin-right:3px;vertical-align:middle"></i>`;
+    const lbl=dot+(gk==='lugar'?arr.length+' en '+esc(u):esc(u)+' · '+arr.length)+(hh?` · ${hh}h`:'');
+    sq.push(`<span class="sq mv ${cls}" draggable="true" data-sq="${idx}" onclick="sqMenu(${idx})" title="${esc(sedeNom(arr[0].property_id))} · arrastra a otro colaborador para pasárselos, o a la lista para desasignar · o toca para elegir">${lbl}</span>`);});
   if(!sq.length) sq.push('<span class="muted" style="font-size:11px">Sin trabajos asignados</span>');
   return sq.join('');
 }
 function achipHtml(r){return `<div class="achip ${r.es_para_dos?'dos':''}" data-tk="${r.id}" draggable="true">
   <input type="checkbox" class="asel" data-tk="${r.id}" title="Seleccionar para quitar" onclick="event.stopPropagation()">
   ${clsDot(r.clasificacion)}<span style="cursor:pointer;flex:1" onclick="tkMenu('${r.id}')">${esc(r.titulo||'—')}${r.ubic&&r.ubic.nombre?` <span class="muted">· ${esc(r.ubic.nombre)}</span>`:''} <span class="muted">· ${r.minutos_estimados||'?'}m</span></span>
-  <span class="x" title="Sacar de la semana" onclick="quitarSemana('${r.id}')">✕</span></div>`;}
+  ${sedeBadge(r.property_id)}<span class="x" title="Sacar de la semana" onclick="quitarSemana('${r.id}')">✕</span></div>`;}
 async function quitarSeleccionados(tecId){
   const acol=document.querySelector('.acol[data-tec="'+tecId+'"]'); if(!acol)return;
   const tkIds=[...acol.querySelectorAll('.asel:checked')].map(b=>b.getAttribute('data-tk'));
@@ -1820,7 +1838,7 @@ function setOficio(id){modal(`<h3>Oficio / competencia</h3><div class="pad"><div
 async function saveOficio(id,of){const {error}=await sb.from('mtto_tickets').update({oficio:of}).eq('id',id);if(error)return toast(error.message);closeModal();toast('Oficio: '+ofNombre(of));renderProg();}
 async function genProfundo(planId,tec){const p=PROG_STATE.prof.find(x=>x.id===planId);if(!p)return;
   const nom=p.ubic?p.ubic.nombre:'cuarto';
-  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'mto_profundo',clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:p.property_id||PROP.id,origen:'mto_profundo',clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,
     titulo:('Mto profundo · '+nom).slice(0,80),descripcion:'Mantenimiento profundo del cuarto '+nom,oficio:'limpieza_profunda',es_para_dos:true,
     minutos_estimados:p.minutos_estimados,asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true}).select('id').single();
   if(error)return toast(error.message);
@@ -1841,7 +1859,7 @@ function prevPlanMenu(id){const p=PROG_STATE.prevPlan.find(x=>x.id===id);if(!p)r
     <div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
 async function genPrevPlan(planId,tec){const p=PROG_STATE.prevPlan.find(x=>x.id===planId);if(!p)return;
   const nom=planNom(p); const lugar=p.ubic?p.ubic.nombre:'';
-  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:p.property_id||PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
     preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
     oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
     metadata:{prev_plan_id:p.id}}).select('id').single();
@@ -1869,7 +1887,7 @@ function prevMenu(id){const r=PROG_STATE.prevCat.find(x=>x.id===id);if(!r)return
     ${reco?`<details class="reco" style="margin-top:10px"><summary>ver ficha / recomendación</summary><div class="txt">${esc(reco)}</div></details>`:''}
     </div><div class="foot"><button class="btn ghost sm" onclick="closeModal()">Cerrar</button></div>`);}
 async function genPrevUno(catId,tec){const r=PROG_STATE.prevCat.find(x=>x.id===catId);if(!r)return;
-  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:catId,
+  const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:r.property_id||PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:catId,
     clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,
     titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:r.minutos_estimados,
     asignado_a:tec,asignado_nombre:tecName(tec),semana_programada:PROG_WK,estado:'programado',eloy_completo:true}).select('id').single();
@@ -1916,7 +1934,7 @@ async function moverGrupo(idx,tec){const s=(window.PROG_SQREG||[])[idx];if(!s||!
 async function desasignarGrupo(idx){const s=(window.PROG_SQREG||[])[idx];if(!s)return;
   const {error}=await sb.from('mtto_tickets').update({semana_programada:null,estado:'validado'}).in('id',s.ids);
   if(error)return toast(error.message); closeModal(); toast(s.ids.length+' regresado(s) a «por asignar»'); renderProg();}
-function prevInsert(r,tecId,min){return {property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
+function prevInsert(r,tecId,min){return {property_id:r.property_id||PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||guessOficio(r),titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true};}
 async function autoAsignarSemana(){
   if(!PROG_STATE)return; const board=PROG_STATE.board; if(!board.length)return toast('No hay técnicos');
   const capMinOf=t=>puestoCap(PROG_STATE.PUESTOS[t.id]).sem*60;
@@ -1953,7 +1971,7 @@ async function lanzarAsignacion(){
     for(const p of (pbt[tecId]||[])){
       if(p.ticket_id) continue;
       const nom=planNom(p); const lugar=p.ubic?p.ubic.nombre:'';
-      const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
+      const {data:ins,error}=await sb.from('mtto_tickets').insert({property_id:p.property_id||PROP.id,origen:'preventivo_programado',clasificacion:'preventivo',
         preventivo_catalogo_id:p.catalogo_id,ubicacion_id:p.ubicacion_id,titulo:(nom+' · '+lugar).slice(0,80),descripcion:nom+' en '+lugar,
         oficio:p.oficio||null,minutos_estimados:p.minutos_estimados,asignado_a:tecId,asignado_nombre:tecName(tecId),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,
         metadata:{prev_plan_id:p.id}}).select('id').single();
@@ -1977,8 +1995,15 @@ async function lanzarAsignacion(){
   // Marca la semana como lanzada (para el 🚀 y para saber si ya se lanzó). No bloquea: se puede seguir asignando y re-lanzar.
   try{
     const {data:{user}}=await sb.auth.getUser();
-    const {data:prevL}=await sb.from('mtto_semana_lanzada').select('veces').eq('property_id',PROP.id).eq('semana',PROG_WK).maybeSingle();
-    await sb.from('mtto_semana_lanzada').upsert({property_id:PROP.id,semana:PROG_WK,lanzado_at:new Date().toISOString(),lanzado_por:(user&&user.email)||null,veces:((prevL&&prevL.veces)||0)+1},{onConflict:'property_id,semana'});
+    // Marca como lanzada CADA sede que tenga trabajo esta semana (el panel es cross-sede).
+    const sedesConTrabajo=new Set();
+    (PROG_STATE.enSemana||[]).forEach(r=>{if(r.property_id)sedesConTrabajo.add(r.property_id);});
+    Object.values(PROG_STATE.planWkByTec||{}).forEach(arr=>arr.forEach(p=>{if(p.property_id)sedesConTrabajo.add(p.property_id);}));
+    if(!sedesConTrabajo.size&&PROP&&PROP.id)sedesConTrabajo.add(PROP.id);
+    for(const pid of sedesConTrabajo){
+      const {data:prevL}=await sb.from('mtto_semana_lanzada').select('veces').eq('property_id',pid).eq('semana',PROG_WK).maybeSingle();
+      await sb.from('mtto_semana_lanzada').upsert({property_id:pid,semana:PROG_WK,lanzado_at:new Date().toISOString(),lanzado_por:(user&&user.email)||null,veces:((prevL&&prevL.veces)||0)+1},{onConflict:'property_id,semana'});
+    }
   }catch(_){}
   toast('Asignación lanzada a '+notifs.length+' técnico(s)'); renderProg();
 }
@@ -1992,10 +2017,10 @@ async function autoPrevAssign(){
   for(const t of PROG_STATE.board){ const need=puestoCap(PROG_STATE.PUESTOS[t.id]).minPrev*60;
     let cur=PROG_STATE.enSemana.filter(r=>r.asignado_a===t.id&&r.clasificacion==='preventivo').reduce((s,r)=>s+(r.minutos_estimados||0),0);
     while(cur<need && pi<duePlan.length){ const p=duePlan[pi++]; const min=p.minutos_estimados||30; const nom=planNom(p); const lug=p.ubic?p.ubic.nombre:'';
-      inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:p.catalogo_id,clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,oficio:p.oficio||null,titulo:(nom+' · '+lug).slice(0,80),descripcion:nom+' en '+lug,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,metadata:{prev_plan_id:p.id}});
+      inserts.push({property_id:p.property_id||PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:p.catalogo_id,clasificacion:'preventivo',ubicacion_id:p.ubicacion_id,oficio:p.oficio||null,titulo:(nom+' · '+lug).slice(0,80),descripcion:nom+' en '+lug,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true,metadata:{prev_plan_id:p.id}});
       planUsed.push(p.id); cur+=min; }
     while(cur<need && ci<dueCat.length){ const r=dueCat[ci++]; const min=r.minutos_estimados||estimMin(r).min;
-      inserts.push({property_id:PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
+      inserts.push({property_id:r.property_id||PROP.id,origen:'preventivo_programado',preventivo_catalogo_id:r.id,clasificacion:'preventivo',ubicacion_id:r.ubicacion_id,equipo_id:r.equipo_id,oficio:r.oficio||null,titulo:(r.tarea||'Preventivo').slice(0,80),descripcion:r.tarea,minutos_estimados:min,asignado_a:t.id,asignado_nombre:tecName(t.id),semana_programada:PROG_WK,estado:'programado',eloy_completo:true});
       cur+=min; }
   }
   if(!inserts.length)return toast('No hay preventivos pendientes por preasignar');
