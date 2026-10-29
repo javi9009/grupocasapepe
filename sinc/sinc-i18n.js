@@ -5429,6 +5429,30 @@
       '＋ Nueva pieza':'＋ New piece',
       '＋ Nuevo creador':'＋ New maker',
 
+      /* El menu del ateneista, 29-oct-2026. El orden lo puso Javi, y de paso
+         se cierra un hueco de esta misma manana: los apartados de Artesania
+         -el desplegable, Stock, Artesanos- se subieron sin pasar por aqui,
+         asi que a quien mira su portal en ingles le salia media barra en
+         espanol. */
+      'Artesanías ▾':'Crafts ▾',
+      'Mi cuenta ▾':'My account ▾',
+      'Mis datos':'My details',
+      'Artesanos':'Makers',
+      'Tu stock':'Your stock',
+      'Tus artesanos':'Your makers',
+
+      /* Los eventos, dentro de Programacion. Javi, 29-oct-2026. */
+      'Abrir en Eventos':'Open in Events',
+      'Lo que se cambia de un evento se cambia ahí: su sala, su precio, su montaje y sus boletos.':
+        'Whatever changes about an event changes there: its room, its price, its setup and its tickets.',
+      'Todavía no hay nadie apuntado a este evento.':'Nobody has signed up for this event yet.',
+      '(evento sin nombre)':'(event with no name)',
+      '✓ pagado':'✓ paid',
+      '✓ ya entró':'✓ already in',
+      'no llegó a pagar':'never paid',
+      'sin pago':'unpaid',
+      'gratis':'free',
+
     }
   };
 

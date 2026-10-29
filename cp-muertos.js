@@ -247,18 +247,25 @@
     }catch(_){ return null; }
   }
 
-  /* MISMO ORDEN QUE LA GALERÍA: lo que viene primero, de lo más próximo a
-     lo más lejano; luego lo que aún no tiene fecha; al final lo vivido. */
+  /* LO VIVIDO NO SE QUEDA EN EL ESCAPARATE. Javi, 29-oct-2026: «cuando ya no
+     tengamos más tours en la galería no pongas los pasados, vete recortando».
+     Hasta hoy, lo que ya había pasado seguía en la fila, en gris y con un
+     «Fue el 25 de octubre» debajo. Al huésped que llega el 29 eso no le sirve
+     de nada: le ofrece algo que no puede comprar, y al final de la temporada
+     la fila entera era pasado.
+     Ahora la fila se encoge sola: primero lo que viene, de lo más próximo a
+     lo más lejano, y luego lo que aún no tiene fecha. Cuando no quede nada
+     por delante, el bloque desaparece — que es lo mismo que ya hacía una
+     colección vacía. La colección completa sigue en /sinc/muertos.html, que
+     es donde lo vivido sí tiene sitio. */
   function ordenada(){
-    var hoy = hoyCDMX(), prox=[], sin=[], pas=[];
+    var hoy = hoyCDMX(), prox=[], sin=[];
     (COL||[]).forEach(function(x){
-      if(x.proxima)                        prox.push(x);
-      else if(x.ultima && x.ultima < hoy)  pas.push(x);
-      else                                 sin.push(x);
+      if(x.proxima)                             prox.push(x);
+      else if(!(x.ultima && x.ultima < hoy))    sin.push(x);
     });
     prox.sort(function(a,b){ return a.proxima < b.proxima ? -1 : a.proxima > b.proxima ? 1 : 0; });
-    pas .sort(function(a,b){ return a.ultima  > b.ultima  ? -1 : a.ultima  < b.ultima  ? 1 : 0; });
-    return prox.concat(sin, pas);
+    return prox.concat(sin);
   }
 
   function cuando(x){
