@@ -223,7 +223,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
 /* Lo que se va llenando. Vive en memoria y se guarda de una vez al firmar: si
    alguien abandona a la mitad no dejamos una ficha a medias en el padrón. */
 var D={capacidades:[],dedica:'',tipo_persona:'',forma_pago:'',pago_experiencias:'',tiene_poliza:null,poliza_cotizar:false,instagram:'',tiktok:''};
-var paso=0, enviado=null;
+var paso=0, enviado=null, INVITA=null;
 
 var CAPS=[
  {k:'experiencias',t:'Experiencias',d:'Tours, talleres, recorridos. Tú los guías, nosotros te traemos clientes.'},
@@ -1125,7 +1125,16 @@ function pinta(){
   if(paso>=L.length) paso=L.length-1;
   var k=L[paso].k, f=P[k], o=f();
   $('tit').textContent=o.t; $('sub').textContent=o.s||''; $('sub').style.display=o.s?'':'none';
-  $('cuerpo').innerHTML=o.h;
+  /* Quien llega por invitación tiene que saber POR QUÉ el formulario ya sabe
+     cosas de él: si no, lo primero que piensa es que alguien le creó una
+     cuenta a sus espaldas. */
+  $('cuerpo').innerHTML =
+    (INVITA && !enviado && paso===0
+      ? '<div class="aviso info" style="margin-bottom:14px">Ya te teníamos apuntado como '+
+        '<b>'+esc(INVITA.nombre_comercial||'')+'</b>'+
+        ((INVITA.productos||0)?(', con '+INVITA.productos+' experiencia'+(INVITA.productos===1?'':'s')+' que leímos de tus anuncios'):'')+
+        '. Esto no crea una ficha nueva: completa la tuya, y lo que ya esté lo puedes corregir.</div>'
+      : '') + o.h;
   if(f.ata) f.ata();
   $('bAtras').style.visibility = paso===0||enviado ? 'hidden':'visible';
   $('bSig').textContent = enviado ? 'Entendido'
@@ -1146,7 +1155,9 @@ $('bSig').onclick=async function(){
      lleva el «Log in». Ahí es donde tiene sentido soltar a quien acaba de
      firmar: su contraseña la pone con la liga del correo, y esa página es la
      puerta por la que va a entrar cada día a partir de mañana. */
-  if(enviado){ location.href='/sincretico'; return; }
+  /* El invitado ya tiene ficha y acaba de firmar: lo suyo es su portal, no la
+     casa de Sincrético, que es para el que llega de cero. */
+  if(enviado){ location.href = INVITA ? '/acceso.html?a=/operador.html' : '/sincretico'; return; }
   if(k!=='convenio' && k!=='listo'){ paso++; pinta(); return; }
 
   this.disabled=true; this.textContent='Dando de alta…';
@@ -1202,6 +1213,42 @@ $('bSig').onclick=async function(){
     window.scrollTo(0,0);
   }
 };
-pinta();
+/* LA LIGA DE INVITACIÓN. Javi, 29-oct-2026: «si quiero que se den de alta y
+   recuperen su cuenta vamos a tener que generar un alta asociada a su cuenta.
+   ¿Podrías generar un link en su ficha completa para que se den de alta y al
+   terminar entren directo a su ficha?».
+   Las ochenta y pico de la cartera YA EXISTEN, con su nombre, su web y sus
+   tours leídos de sus anuncios. Si el alta normal les creara ficha nueva,
+   cada una estaría dos veces y la vieja —con sus productos colgando— se
+   quedaría huérfana. Con `?inv=` se rellena lo que ya sabemos de ella y, al
+   firmar, se escribe encima de su ficha de siempre.
+   Si la liga no vale se dice y se sigue con el alta normal: quedarse en una
+   pantalla muerta por un token caducado sería perder a quien ya venía. */
+(async function(){
+  var inv=null;
+  try{ inv=new URLSearchParams(location.search).get('inv'); }catch(_){}
+  if(!inv){ pinta(); return; }
+  try{
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_alta_invitacion',{method:'POST',
+      headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({p_token:inv})});
+    var f=r.ok?await r.json():null;
+    if(f && f.id){
+      D.invitacion=inv;
+      D.nombre_comercial = D.nombre_comercial || f.nombre_comercial || '';
+      D.email            = D.email            || f.email            || '';
+      D.whatsapp         = D.whatsapp         || f.whatsapp         || '';
+      D.web              = D.web              || f.web              || '';
+      D.instagram        = D.instagram        || f.instagram        || '';
+      D.ciudad           = D.ciudad           || f.ciudad           || '';
+      if(f.sede) D.sede = String(f.sede).toLowerCase()==='puebla'?'puebla':'cdmx';
+      /* Lo que ya trae marcado no se pierde por volver a pasar por el alta. */
+      if(Array.isArray(f.capacidades) && f.capacidades.length && !D.capacidades.length)
+        D.capacidades = f.capacidades.slice();
+      INVITA = f;
+    }
+  }catch(_){}
+  pinta();
+})();
 </script>
 </body></html>
