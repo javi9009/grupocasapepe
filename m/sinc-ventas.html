@@ -46,6 +46,12 @@ tbody tr:hover{background:var(--surface-3)}
 .tag.none{background:var(--none-bg);color:var(--none)}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .mini{color:var(--muted);font-size:12px}
+/* Los dos rangos de fecha. Van en grupo y con su etiqueta encima porque dos
+   pares de campos sueltos uno al lado del otro no dicen cual es cual. */
+.rango{display:inline-flex;flex-direction:column;gap:2px}
+.rango .et{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700}
+.rango .cajas{display:flex;gap:4px;align-items:center}
+.rango input{font-size:12.5px;padding:6px 8px}
 .note{font-size:12px;color:var(--muted);padding:10px 14px;line-height:1.55}
 .cuenta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted)}
 .quien{font-weight:600}
@@ -75,15 +81,21 @@ tbody tr:hover{background:var(--surface-3)}
       <option value="a la cuenta de Casa Pepe">A la cuenta de Casa Pepe</option>
     </select>
     <input id="fBusca" placeholder="Folio, huésped o experiencia">
+    <span class="rango"><span class="et">Reservada</span><span class="cajas">
+      <input id="fRdesde" type="date" title="Reservas hechas desde"><input id="fRhasta" type="date" title="Reservas hechas hasta"></span></span>
+    <span class="rango"><span class="et">Sale</span><span class="cajas">
+      <input id="fSdesde" type="date" title="Tours que salen desde"><input id="fShasta" type="date" title="Tours que salen hasta"></span></span>
+    <button class="btn ghost sm" id="btnLimpia">Quitar filtros</button>
     <button class="btn ghost" id="btnCsv">Bajar en CSV</button>
     <button class="btn ghost" id="btnRef">Actualizar</button>
   </div>
 
+  <div class="mini" id="notaFiltro" style="margin:-4px 0 10px;display:none"></div>
   <div class="kpis" id="kpis"></div>
 
   <div class="card tablewrap">
     <table><thead><tr>
-      <th>Folio</th><th>Cuándo</th><th>Experiencia</th><th>Quién la opera</th>
+      <th>Folio</th><th>Reservada</th><th>Sale</th><th>Experiencia</th><th>Quién la opera</th>
       <th>Pago</th><th>A dónde cayó</th>
       <th class="n">Cobrado</th><th class="n">Nuestra comisión</th><th class="n">Para el operador</th>
     </tr></thead><tbody id="tb"></tbody></table>
@@ -117,6 +129,13 @@ tbody tr:hover{background:var(--surface-3)}
   function money(n){return n==null?'—':'$'+Math.round(Number(n)).toLocaleString('es-MX');}
   function fecha(x){return x?new Date(x).toLocaleDateString('es-MX',
     {day:'numeric',month:'short',year:'numeric'}):'—';}
+  /* El dia de una reserva en AAAA-MM-DD, leido en hora de Mexico. Con toISOString
+     una reserva de las 7 de la tarde se iria al dia siguiente y se caeria del
+     filtro de su propio dia. La fecha de salida ya viene como dia, sin hora. */
+  function dia(x){ if(!x)return ''; var d=new Date(x);
+    return isNaN(d) ? String(x).slice(0,10)
+      : d.toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'}); }
+  function soloDia(x){ return x?String(x).slice(0,10):''; }
 
   var V=[];
 
@@ -142,11 +161,23 @@ tbody tr:hover{background:var(--surface-3)}
 
   function visibles(){
     var e=$('fEstado').value, o=$('fOper').value, d=$('fDonde').value,
-        q=$('fBusca').value.trim().toLowerCase();
+        q=$('fBusca').value.trim().toLowerCase(),
+        rd=$('fRdesde').value, rh=$('fRhasta').value,
+        sd=$('fSdesde').value, sh=$('fShasta').value;
     return V.filter(function(v){
       if(e && v.pago_estado!==e)return false;
       if(o && v.operador!==o)return false;
       if(d && v.donde_cayo!==d)return false;
+      /* LOS DOS CALENDARIOS SON INDEPENDIENTES, y en eso esta la gracia: una
+         cosa es cuando entro la venta y otra cuando sale el tour. «Lo que se
+         reservo esta semana» y «lo que sale en noviembre» son dos preguntas
+         distintas, y a veces se hacen juntas. */
+      var fr=dia(v.reservada_at);
+      if(rd && (!fr || fr<rd))return false;
+      if(rh && (!fr || fr>rh))return false;
+      var fs=soloDia(v.fecha_salida);
+      if(sd && (!fs || fs<sd))return false;
+      if(sh && (!fs || fs>sh))return false;
       if(q){
         var t=[v.folio,v.huesped,v.experiencia,v.operador].join(' ').toLowerCase();
         if(t.indexOf(q)<0)return false;
@@ -157,6 +188,14 @@ tbody tr:hover{background:var(--surface-3)}
 
   function pinta(){
     var l=visibles();
+    /* Con un filtro puesto, las tarjetas de arriba dejan de ser «todo» y pasan a
+       ser «esto». Si no se dice, se lee un total que no es el total. */
+    var n=$('notaFiltro');
+    if(l.length!==V.length){
+      n.style.display='';
+      n.innerHTML='Estás viendo <b>'+l.length+'</b> de '+V.length+' reservas. '+
+        'Las cifras de abajo son solo de estas.';
+    } else { n.style.display='none'; }
     var pagadas=l.filter(function(v){return v.pago_estado==='pagado';});
     var suma=function(a,k){return a.reduce(function(s,v){return s+Number(v[k]||0);},0);};
     var alOper=pagadas.filter(function(v){return v.stripe_destino;});
@@ -174,8 +213,11 @@ tbody tr:hover{background:var(--surface-3)}
       return '<tr>'+
         '<td><b>'+esc(v.folio)+'</b><div class="mini">'+esc(v.huesped||'—')+
           (v.pax?' · '+v.pax+' pax':'')+'</div></td>'+
-        '<td>'+fecha(v.pagado_at||v.reservada_at)+
-          '<div class="mini">sale '+fecha(v.fecha_salida)+'</div></td>'+
+        '<td>'+fecha(v.reservada_at)+
+          (v.pagado_at && dia(v.pagado_at)!==dia(v.reservada_at)
+            ? '<div class="mini">pagada '+fecha(v.pagado_at)+'</div>' : '')+'</td>'+
+        '<td>'+fecha(v.fecha_salida)+
+          (v.hora_salida?'<div class="mini">'+esc(String(v.hora_salida).slice(0,5))+'</div>':'')+'</td>'+
         '<td>'+esc(v.experiencia||'—')+'</td>'+
         '<td><span class="quien">'+esc(v.operador||'—')+
           '<small>'+esc(v.clase||'')+'</small></span></td>'+
@@ -236,8 +278,14 @@ tbody tr:hover{background:var(--surface-3)}
     a.click(); URL.revokeObjectURL(a.href);
   };
 
-  ['fEstado','fOper','fDonde'].forEach(function(i){$(i).onchange=pinta;});
+  ['fEstado','fOper','fDonde','fRdesde','fRhasta','fSdesde','fShasta']
+    .forEach(function(i){$(i).onchange=pinta;});
   $('fBusca').oninput=pinta;
+  $('btnLimpia').onclick=function(){
+    ['fEstado','fOper','fDonde','fRdesde','fRhasta','fSdesde','fShasta','fBusca']
+      .forEach(function(i){$(i).value='';});
+    pinta();
+  };
   $('btnRef').onclick=carga;
   carga();
 })();
