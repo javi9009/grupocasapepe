@@ -207,14 +207,25 @@ window.sincVitrina = (function () {
   + '.sv-f .sellimp.n2{background:#2F6B3C}'
   + '.sv-f .sellimp.n3{background:#1C4E80}'
   + '.sv-f .cu{padding:9px 10px 11px;display:flex;flex-direction:column;gap:3px;flex:1}'
-  + '.sv-f .nm{font-weight:700;font-size:13px;line-height:1.25}'
+  /* El nombre no pasa de dos renglones: el que tenga `nombre_corto` cabe en
+     uno, y el que no, al menos no empuja el precio fuera de sitio. */
+  + '.sv-f .nm{font-weight:700;font-size:13px;line-height:1.25;overflow:hidden;'
+  +   'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}'
   + '.sv-f .datos{display:flex;flex-wrap:wrap;gap:3px 8px;color:var(--gris);font-size:11px;'
   +   'line-height:1.3;margin-top:1px}'
   + '.sv-f .pie{margin-top:auto;padding-top:6px;display:flex;align-items:center;'
   +   'justify-content:space-between;gap:8px;min-height:23px}'
-  + '.sv-f .pr{font-family:Oswald,sans-serif;font-size:13.5px;color:var(--naranja-oscuro)}'
+  /* EL PRECIO, EN UN RENGLÓN. Javi, 29-oct-2026: «el free entry ponlo en 1
+     fila no en 2». «Entrada libre» son dos palabras y el pie las partía en
+     dos renglones porque el nombre del sitio le robaba el ancho. Ahora el
+     precio no se parte nunca y quien cede es el de la derecha, que es un dato
+     de apoyo: cabe en dos renglones y, si no cabe, se corta con puntos. */
+  + '.sv-f .pr{font-family:Oswald,sans-serif;font-size:13.5px;color:var(--naranja-oscuro);'
+  +   'white-space:nowrap;flex:none}'
   + '.sv-f .pr s{color:var(--tenue);font-size:11.5px;margin-left:4px}'
-  + '.sv-f .qn{font-size:10.5px;color:var(--tenue);text-align:right;line-height:1.2}'
+  + '.sv-f .qn{font-size:10.5px;color:var(--tenue);text-align:right;line-height:1.2;'
+  +   'min-width:0;flex:1 1 auto;overflow:hidden;display:-webkit-box;'
+  +   '-webkit-line-clamp:2;-webkit-box-orient:vertical}'
   + '.sv-ods{display:flex;gap:3px;flex-wrap:wrap;margin-top:2px}'
   + '.sv-ods i{width:19px;height:19px;border-radius:5px;font-style:normal;'
   +   'font-family:Oswald,sans-serif;font-size:10.5px;color:#fff;display:flex;'
@@ -254,6 +265,24 @@ window.sincVitrina = (function () {
       if (r.ok) (await r.json()).forEach(function (x) { IMP[String(x.producto_id)] = x; });
     } catch (_) {}
   }
+  /* EL NOMBRE CORTO DE LA PORTADA. Javi, 29-oct-2026: «permite que solo haya
+     una línea de texto en el nombre corto de la portada, en la descripción
+     pongamos el título completo» y, sobre la inauguración de Rubén Puerto,
+     «pon de título corto Mundomón by Rubén Puerto».
+     El nombre entero sigue viviendo en la base y manda en la ficha; lo que se
+     guarda en `nombre_corto` es cómo se llama la pieza cuando sólo caben tres
+     palabras. Se pide aparte en vez de ensanchar `sinc_escaparate` -que es el
+     mismo gesto que los ODS y el sello de impacto-, y se pega a la fila ANTES
+     de traducir, porque el traductor sólo pisa campos que la fila ya trae. */
+  var CORTO = {};
+  async function cargaCortos() {
+    try {
+      var r = await fetch(SB + '/rest/v1/v_sinc_nombre_corto?select=id,nombre_corto',
+        { headers: { apikey: KEY, Authorization: 'Bearer ' + KEY } });
+      if (r.ok) (await r.json()).forEach(function (x) { CORTO[String(x.id)] = x.nombre_corto; });
+    } catch (_) {}
+  }
+
   function mundo() {
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -324,11 +353,20 @@ window.sincVitrina = (function () {
        Sin esto la tarjeta salia muda arriba y con el precio a secas, como si
        200 fuera lo que cuesta entrar. 14-oct-2026. */
     var porHoras = (x.fuente === 'evento' && !x.proxima_fecha);
+    /* «Free Walking Tour» son tres palabras que no distinguen nada —hay cuatro
+       que empiezan igual— y parten el nombre de verdad en dos renglones. Se
+       abrevia solo en la tarjeta; la ficha conserva su nombre entero. */
+    var corto = function(n){
+      return String(n||'').replace(/^\s*free\s+walking\s+tour\s*[·:\-–—]?\s*/i,'FWT ')
+                          .replace(/\s{2,}/g,' ').trim();
+    };
     var badge = x.fuente === 'pase'
       ? (x.precio_lista ? '<span class="eti">' + esc(T('Lanzamiento')) + '</span>' : '')
       : (x.proxima_fecha ? '<span class="hora">' + esc(cuando(x.proxima_fecha, x.proxima_hora)) + '</span>'
          : (porHoras ? '<span class="hora">' + esc(T('Por horas')) + '</span>' : ''));
-    var pr = x.gratis
+    /* Cero pesos es entrada libre, no «$0»: el precio en cero se lee como un
+       fallo de la pantalla. Javi, 29-oct-2026. */
+    var pr = (x.gratis || Number(x.precio) === 0)
       ? T('Entrada libre')
       : (x.precio != null
           ? money(x.precio) + (porHoras ? T(' la hora') : '')
@@ -338,7 +376,7 @@ window.sincVitrina = (function () {
     return '<a class="sv-f" href="' + esc(liga) + '">'
       + '<span class="im">' + tapa(x.nombre, x.portada) + badge + selloImp(x) + '</span>'
       + '<span class="cu">'
-      +   '<span class="nm">' + esc(x.nombre || '') + '</span>'
+      +   '<span class="nm">' + esc(x.nombre_corto || corto(x.nombre)) + '</span>'
       +   chips(x) + odsChips(x)
       +   '<span class="pie">'
       +     (pr ? '<span class="pr">' + pr + '</span>' : '<span></span>')
@@ -407,6 +445,15 @@ window.sincVitrina = (function () {
       caja.innerHTML = '<div class="sv-vacio">' + esc(T('Todavía no hay nada publicado por aquí.')) + '</div>';
       return { filas: 0, items: 0 };
     }
+
+    /* El nombre corto se pega ANTES del traductor: `aplica` sólo pisa campos
+       que la fila ya trae, así que si llegara después, el huésped en inglés
+       vería el corto en español. */
+    await cargaCortos();
+    items.forEach(function (x) {
+      var c = CORTO[String(x.id)];
+      if (c) x.nombre_corto = c;
+    });
 
     /* Idioma del huésped: se le pisan encima los textos de la base por fuente
        (experiencia→op_experiencias, evento→eventos). aplica nunca lanza y sólo

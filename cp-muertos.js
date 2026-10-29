@@ -306,15 +306,32 @@
     if(x.ultima && x.ultima < hoy) return (en?'Was on ':'Fue el ')+dia(x.ultima);
     return en ? 'Date to be confirmed' : 'Fecha por confirmar';
   }
+  /* «FREE WALKING TOUR» SE COME EL RENGLÓN. Javi, 29-oct-2026: «quita del
+     nombre Free Walking Tour, pon solo FWT».
+     Son tres palabras que no distinguen nada —hay cuatro tours que empiezan
+     igual— y dejaban el nombre de verdad partido en dos renglones. Se abrevia
+     SOLO en la tarjeta: la ficha sigue llamándose como se llama, que es donde
+     el huésped ya sabe qué está mirando. */
+  function corto(n){
+    return String(n||'').replace(/^\s*free\s+walking\s+tour\s*[·:\-–—]?\s*/i,'FWT ')
+                        .replace(/\s{2,}/g,' ').trim();
+  }
+  /* CERO PESOS NO ES UN PRECIO, ES UNA INVITACIÓN. «$0» se lee como un error
+     de la pantalla; «Entrada libre» se lee como lo que es. */
+  function precioTxt(v){
+    if(v==null||v==='') return null;
+    return Number(v)===0 ? (ingles()?'Free entry':'Entrada libre') : money(v);
+  }
+
   function tarjeta(x){
     var hoy = hoyCDMX();
     var ida = !!(x.ultima && x.ultima < hoy && !x.proxima);
-    var pr  = money(x.precio);
+    var pr  = precioTxt(x.precio);
     return '<a class="dm-tarj'+(ida?' pasada':'')+'" href="'+esc(x.liga||'/sinc/muertos.html')+'">'+
       '<span class="dm-tfoto"'+(x.foto?' style="background-image:url(&quot;'+esc(x.foto)+'&quot;)"':'')+'></span>'+
       '<span class="dm-tcuerpo">'+
         '<span class="dm-tcuando">'+esc(cuando(x))+'</span>'+
-        '<h4>'+esc(x.nombre)+'</h4>'+
+        '<h4>'+esc(corto(x.nombre))+'</h4>'+
         /* SIN PRECIO NO SE DICE \u00abentrada libre\u00bb. Cinco de las seis piezas
            vienen sin precio en la base y no todas son gratis: inventarlo le
            miente al hu\u00e9sped. Mientras no tengan precio, la tarjeta invita a
