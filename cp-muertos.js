@@ -345,8 +345,11 @@
     s.className = 'dm-vitrina dm-pegada';
     s.innerHTML =
       '<div class="dm-vit-cab">'+
+        /* Javi, 29-oct-2026: «quita lo de ver todo». Aquí había dos puertas al
+           mismo sitio -el enlace de la cabecera y el cartón del final del
+           riel- y la de arriba se leía antes que el lema. Se queda la de
+           abajo, que es la que llega empujando el dedo. */
         '<b>'+cartelHTML()+'</b>'+
-        '<a class="dm-vit-todo" href="/sinc/muertos.html">'+(en?'See all':'Ver todo')+'</a>'+
       '</div>'+
       '<div class="dm-riel">'+
         L.slice(0,8).map(tarjeta).join('')+
