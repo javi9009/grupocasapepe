@@ -1044,6 +1044,7 @@
     /* La ficha de comunidad de la Apepe, 29-oct-2026: la pila del año, el
        adelanto de su tienda, la ficha del artesano y las demás comunidades. */
     'Su tienda':'Their shop',
+    'Sus experiencias':'Their experiences',
     'de {a} en {b}':'of {a} in {b}',
     'Lo que ha hecho':'What they have made',
     'Escríbeles':'Write to them',
