@@ -588,7 +588,7 @@ if(!window.__miniRespaldo){ window.__miniRespaldo=1;
         ((FICHA&&FICHA.room_service)?'<div class="pane" id="pane-rs"></div>':'')+
         '<div class="pane" id="pane-cuenta"></div></div>';
     Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){ve(b.getAttribute('data-p'));};});
-    pintaCaps();
+    pintaCaps(); pintaSede();
     pintaEventos(); pintaReservas(); pintaEscaner(); pintaPagina(); pintaHospedaje(); pintaCuenta(); guia();
     if(FICHA&&FICHA.room_service) pintaRS();
     /* Vuelta del alta de Stripe: cae en Mi cuenta para ver el estado. */
@@ -610,6 +610,130 @@ if(!window.__miniRespaldo){ window.__miniRespaldo=1;
       (cs.indexOf('experiencias')>=0
         ? '<a class="cap liga" href="/operador.html">Mis experiencias ↗</a>'
         : '<span class="cap nota">¿También traes tours? Dínoslo y te abrimos experiencias.</span>');
+  }
+
+
+  /* LA COLA DE TU SEDE. Javi, 30-oct-2026: «Todos aquellos eventos, sean de
+     Ana o no, que se den en Cumbre o Speakeasy/Galería los pasamos a cola de
+     aprobación para que Ana acepte los eventos que se van a dar en su lugar».
+     Son dos permisos distintos y conviene no mezclarlos: la casa dice «este
+     evento está bien» y la sede dice «este evento cabe en mi sitio». Aceptar
+     aquí solo saca a la venta lo que la casa ya validó; si todavía no lo ha
+     validado, la tarjeta lo dice en lugar de fingir que ya está.
+     La pestaña se pinta sola y solo para quien lleva alguna sala: quien no
+     lleva ninguna no la ve, ni vacía. */
+  function sedeChip(t,bg,co){
+    return '<span style="font:600 10.5px Oswald;letter-spacing:.08em;text-transform:uppercase;'+
+      'border-radius:999px;padding:3px 9px;background:'+bg+';color:'+co+'">'+esc(t)+'</span>';
+  }
+  function sedeTarjeta(e){
+    var falta = !e.validado;
+    var dec = e.decision||'';
+    var cab = '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">'+
+      '<b class="osw" style="font-size:16px">'+esc(e.nombre||'(sin nombre)')+'</b>'+
+      sedeChip(e.espacio||'', '#E4F1FA', '#2F6E93')+
+      (e.mio? sedeChip('tuyo','#E1F0E7','#1D6B4A') : sedeChip('de '+(e.quien||'—'),'#F4EFE8','#6E6A5C'))+
+      '</div>';
+    var meta = '<div style="color:var(--gris);font-size:12.5px;margin-top:4px">'+
+      esc(cuandoRes(e.inicia)||'sin fecha')+
+      (e.cupo? ' · cupo '+e.cupo : '')+
+      (e.es_gratis? ' · entrada libre' : (e.precio? ' · '+dinero(e.precio) : ''))+
+      (Number(e.boletos)>0? ' · <b>'+e.boletos+' boleto(s) vendido(s)</b>' : '')+
+      '</div>';
+    var est = falta
+      ? '<div style="margin-top:8px;font-size:12.5px;color:var(--alerta);background:var(--alerta-bg);'+
+        'border-radius:8px;padding:7px 10px">La casa todavía no lo ha validado. Puedes decir ya si lo quieres en tu sitio; saldrá a la venta cuando la casa lo valide.</div>'
+      : '';
+    var pie;
+    if(dec){
+      pie = '<div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+        (dec==='acepta'
+          ? sedeChip('aceptado','#E1F0E7','#1D6B4A')
+          : sedeChip('no lo quieres','#F6E1DD','#9E3B2E'))+
+        (e.motivo? '<span style="font-size:12.5px;color:var(--gris)">'+esc(e.motivo)+'</span>' : '')+
+        '<span style="flex:1"></span>'+
+        '<button class="btn ghost sm" data-sede-otra="'+e.id+'">Cambiar</button></div>';
+    } else {
+      pie = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn sm" data-sede-si="'+e.id+'">Lo acepto</button>'+
+        '<button class="btn ghost sm" data-sede-no="'+e.id+'">No en mi sitio</button></div>'+
+        '<div id="sedeNo-'+e.id+'" style="display:none;margin-top:8px">'+
+          '<input id="sedeMot-'+e.id+'" placeholder="¿Por qué no? (se lo pasamos a la casa)" '+
+            'style="width:100%;padding:9px 11px;border:1.5px solid var(--linea);border-radius:9px;font:400 13.5px Inter">'+
+          '<div style="margin-top:7px;display:flex;gap:8px">'+
+            '<button class="btn sm" style="border-color:var(--bad);background:var(--bad)" data-sede-nook="'+e.id+'">Mandar</button>'+
+            '<button class="btn ghost sm" data-sede-cancel="'+e.id+'">Dejarlo</button></div></div>';
+    }
+    return '<div class="card">'+cab+meta+est+pie+'</div>';
+  }
+  async function pintaSede(){
+    var j=null;
+    try{ j=await rpc('ev_sede_cola',{p_token:TOK}); }catch(_){ return; }
+    if(!j || j.error || !(j.espacios||[]).length) return;
+    var pane=$('pane-sede');
+    if(!pane){
+      var b=document.createElement('button');
+      b.setAttribute('data-p','sede'); b.setAttribute('aria-selected','false');
+      b.innerHTML='✅ Cola de aprobación';
+      b.onclick=function(){ ve('sede'); };
+      var tabs=$('tabs');
+      tabs.insertBefore(b, tabs.children[1]||null);
+      pane=document.createElement('div');
+      pane.className='pane'; pane.id='pane-sede';
+      document.querySelector('.wrap').appendChild(pane);
+    }
+    var cola=j.cola||[];
+    var pend=cola.filter(function(e){ return !e.decision; });
+    var hechos=cola.filter(function(e){ return !!e.decision; });
+    var cual=(j.espacios||[]).map(function(x){return x.nombre;}).join(' y ');
+    pane.innerHTML =
+      '<div class="card" style="background:var(--crema)">'+
+        '<b class="osw" style="font-size:15px">Lo que quieren hacer en '+esc(cual)+'</b>'+
+        '<div style="color:var(--gris);font-size:13px;margin-top:5px;line-height:1.55">'+
+        'Aquí cae todo evento programado en tu sitio, sea tuyo o de otra productora. '+
+        'Tú dices si lo quieres ahí; la casa valida el evento por su lado. '+
+        'Hacen falta las dos cosas para que salga a la venta.</div></div>'+
+      (pend.length
+        ? '<h3 style="margin:16px 0 8px;font-size:13px;color:var(--gris)">Esperan tu respuesta ('+pend.length+')</h3>'+
+          pend.map(sedeTarjeta).join('')
+        : '<div class="card" style="color:var(--gris)">Nada esperando. Todo lo que hay en tu sitio ya lo contestaste.</div>')+
+      (hechos.length
+        ? '<h3 style="margin:18px 0 8px;font-size:13px;color:var(--gris)">Ya contestados</h3>'+
+          hechos.map(sedeTarjeta).join('')
+        : '');
+    pane.querySelectorAll('[data-sede-si]').forEach(function(b){
+      b.onclick=function(){ sedeDecide(b.getAttribute('data-sede-si'), true, null, b); }; });
+    pane.querySelectorAll('[data-sede-no]').forEach(function(b){
+      b.onclick=function(){ var c=$('sedeNo-'+b.getAttribute('data-sede-no')); if(c) c.style.display='block'; }; });
+    pane.querySelectorAll('[data-sede-cancel]').forEach(function(b){
+      b.onclick=function(){ var c=$('sedeNo-'+b.getAttribute('data-sede-cancel')); if(c) c.style.display='none'; }; });
+    pane.querySelectorAll('[data-sede-nook]').forEach(function(b){
+      b.onclick=function(){ var id=b.getAttribute('data-sede-nook');
+        var m=$('sedeMot-'+id); sedeDecide(id, false, m?m.value:'', b); }; });
+    pane.querySelectorAll('[data-sede-otra]').forEach(function(b){
+      b.onclick=function(){ sedeBorraDecision(b.getAttribute('data-sede-otra'), b); }; });
+  }
+  async function sedeDecide(id, acepta, motivo, boton){
+    if(boton){ boton.disabled=true; boton.textContent='…'; }
+    try{
+      var j=await rpc('ev_sede_decide',{p_token:TOK,p_evento:id,p_acepta:!!acepta,p_motivo:motivo||null});
+      if(j && j.error) throw new Error(j.error);
+      await pintaSede();
+      if(j && j.dice) toast(j.dice, Number(j.boletos)>0);
+      /* Si el estado cambió, el listado de eventos ya no dice la verdad. */
+      try{ pintaEventos(); }catch(_){}
+    }catch(e){
+      if(boton){ boton.disabled=false; boton.textContent='Reintentar'; }
+      toast('No se pudo guardar: '+((e&&e.message)||e), true);
+    }
+  }
+  async function sedeBorraDecision(id, boton){
+    if(boton){ boton.disabled=true; }
+    try{
+      await fetch(SB+'/rest/v1/ev_sede_decision?evento_id=eq.'+id,
+        {method:'DELETE',headers:Object.assign({'Content-Type':'application/json'},hdrs())});
+    }catch(_){}
+    await pintaSede();
   }
 
   function ve(p){Array.prototype.forEach.call($('tabs').children,function(b){b.setAttribute('aria-selected',b.getAttribute('data-p')===p?'true':'false');});document.querySelectorAll('.pane').forEach(function(x){x.classList.toggle('on',x.id==='pane-'+p);});
