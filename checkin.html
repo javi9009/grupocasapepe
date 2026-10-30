@@ -781,6 +781,51 @@ function sesionDelEnlace(){
     return s;
   }catch(_){ return null; }
 }
+/* UNA SESIÓN CADUCADA NO ES UN CORTE DE RED. Javi, 29-oct-2026: Ana, de Café
+   Cumbre, «entra a Mi cuenta y Mis datos, a firmar, y no le deja firmar: pone
+   Reintentar».
+   Y Reintentar no arreglaba nada, porque no había nada que reintentar. Esta
+   pantalla no monta el SDK de Supabase: lee el token de `localStorage` tal
+   cual y lo usa. Ese token dura una hora. Pasada la hora, la base contesta 401
+   a todo y la pantalla lo cuenta como «no pudimos leer tus datos» —el mismo
+   aviso que sale cuando de verdad no hay sesión—, así que recargar devuelve
+   exactamente lo mismo, una y otra vez.
+   Aquí la sesión SÍ es la credencial —esto escribe en su expediente—, así que
+   no vale saltársela: se renueva. El refresh_token está guardado al lado del
+   que caducó; con él se pide uno nuevo y se deja escrito donde el resto del
+   archivo lo busca. Si tampoco se puede renovar, entonces sí hay que volver a
+   entrar, y eso se dice con esas palabras. */
+function caducada(s){
+  try{
+    var p=JSON.parse(atob(String(s.access_token).split('.')[1]
+      .replace(/-/g,'+').replace(/_/g,'/')));
+    /* Un minuto de margen: si expira mientras se guarda el expediente, el
+       guardado se pierde y el usuario no sabe por qué. */
+    return !p.exp || (p.exp*1000) < (Date.now()+60000);
+  }catch(_){ return false; }
+}
+async function renueva(s){
+  if(!s || !s.refresh_token) return null;
+  try{
+    var r=await fetch(SB+'/auth/v1/token?grant_type=refresh_token',{method:'POST',
+      headers:{'apikey':KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({refresh_token:s.refresh_token})});
+    if(!r.ok) return null;
+    var j=await r.json();
+    if(!j || !j.access_token) return null;
+    var nueva=Object.assign({},s,j);
+    /* Se reescribe en el mismo cajón del que salió, para que la siguiente
+       pantalla no vuelva a encontrarse el token viejo. */
+    try{
+      for(var i=0;i<localStorage.length;i++){
+        var k=localStorage.key(i);
+        if(k&&/sb-.*-auth-token/.test(k)){ localStorage.setItem(k, JSON.stringify(nueva)); break; }
+      }
+    }catch(_){}
+    return nueva;
+  }catch(_){ return null; }
+}
+
 function sesionGuardada(){
   try{
     for(var i=0;i<localStorage.length;i++){
@@ -3190,6 +3235,9 @@ async function arranca(){
   if(EMBED){ var b0=document.querySelector('.barra'); if(b0) b0.style.display='none'; }
 
   SES=sesionGuardada()||sesionDelEnlace();
+  /* Antes de pedir nada: si el token ya venció, se renueva. Sin esto, todo lo
+     que sigue falla con 401 y la pantalla culpa a la conexión. */
+  if(SES && caducada(SES)) SES = (await renueva(SES)) || SES;
   /* Con token no hace falta sesión: la liga ya dice quién es. */
   if(!SES && TOKP){
     var fp=null;
