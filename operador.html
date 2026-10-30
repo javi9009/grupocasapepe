@@ -1710,7 +1710,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
       PG.salidas=[];
       if(ids.length){
-        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,notas,aviso_enviado_at,venta_cerrada_at'+
+        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,notas,aviso_enviado_at,venta_cerrada_at'+
           '&experiencia_id=in.('+ids.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha,hora',{headers:hdr()});
         PG.salidas = rs.ok ? await rs.json() : [];
       }
@@ -1912,13 +1912,25 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         (PG.guias.length
           ? PG.guias.map(function(g){
               var ini=String(g.nombre||'?').split(' ').map(function(w){return w[0]||'';}).slice(0,2).join('').toUpperCase();
-              return '<span class="pgguia'+(s.guia_id===g.id?' on':'')+'" data-guia="'+g.id+'" data-s="'+s.id+'">'+
-                     '<span class="ini">'+esc(ini)+'</span>'+esc(g.nombre||'')+'</span>';
+              /* VARIOS GUÍAS EN UNA SALIDA. Javi, 30-oct-2026: «en una
+                 actividad puedo escoger varios guías». Y hace falta: la Noche
+                 Mexicana de hoy lleva 96 de 120 lugares, que no los atiende
+                 una persona sola. El primero que se toca es el principal
+                 -es a quien apuntan las pantallas que preguntan «¿quién lleva
+                 esta salida?»- y los demás van con él. */
+              var eq=guiasDe(s), i=eq.indexOf(g.id);
+              return '<span class="pgguia'+(i>=0?' on':'')+'" data-guia="'+g.id+'" data-s="'+s.id+'"'+
+                     (i===0?' title="Principal"':'')+'>'+
+                     '<span class="ini">'+esc(ini)+'</span>'+esc(g.nombre||'')+
+                     (i===0&&eq.length>1?'<span class="mini" style="margin-left:5px;opacity:.75">principal</span>':'')+
+                     '</span>';
             }).join('')
           : '')+
         '<span class="pgguia nuevo" data-nuevoguia="'+s.id+'">＋ Nuevo guía</span>'+
         '<div class="mini">'+(PG.guias.length
-          ? 'Al guía le llega la lista y las recogidas cuando notifiques a los clientes.'
+          ? ((guiasDe(s).length>1)
+              ? 'Van '+guiasDe(s).length+'. El primero es el principal; tócalos para sumar o quitar.'
+              : 'Al guía le llega la lista y las recogidas cuando notifiques a los clientes. Puedes tocar varios si hace falta más de uno.')
           : 'Todavía no tienes a nadie que atienda clientes. Date de alta uno aquí mismo; lo demás —su foto, su Instagram, su texto— se completa en <b>Mi cuenta → tu equipo</b>.')+'</div>'+
       '</div>'+
 
@@ -2218,19 +2230,32 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         if(await marcaLlego(i.getAttribute('data-llegn'), n)) pintaProg(); };});
   }
 
+  /* EL EQUIPO DE UNA SALIDA. `guia_ids` es la lista y `guia_id` el primero de
+     ella: las pantallas viejas -la portada de Sincrético, los patrones- leen
+     el segundo para decir quién falta, y si los dos se separan una acabaría
+     diciendo «sin guía» de una salida que lleva tres. */
+  function guiasDe(s){
+    if(s && s.guia_ids && s.guia_ids.length) return s.guia_ids.slice();
+    return (s && s.guia_id) ? [s.guia_id] : [];
+  }
   /* Volver a tocar el mismo guía lo quita: es lo que espera quien se equivocó
      de persona, y no hace falta una X más en la pantalla. */
   async function ponGuia(sid, gid){
     var s=PG.salidas.filter(function(x){return x.id===sid;})[0]; if(!s)return;
-    var nuevo = (s.guia_id===gid) ? null : gid;
+    var eq=guiasDe(s), i=eq.indexOf(gid);
+    if(i>=0) eq.splice(i,1); else eq.push(gid);
     var r=await fetch(SB+'/rest/v1/sinc_salidas?id=eq.'+sid,{method:'PATCH',
       headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify({guia_id:nuevo})});
+      /* Se mandan los dos a propósito: el principal no se deduce en el
+         navegador para que lo haga la base, se manda ya puesto, y así esto
+         funciona igual aunque el disparador no esté. */
+      body:JSON.stringify({guia_ids:eq, guia_id:(eq.length?eq[0]:null)})});
     /* La fila de vuelta: un PATCH que no toca ninguna fila contesta 200 igual,
        y entonces la pantalla se pinta con un guía que la base no guardó. */
     var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
     if(!fila||!fila.length){ toast('No se pudo asignar el guía: la base no dejó tocar esta salida.',true); return; }
-    s.guia_id=nuevo; pintaProg();
+    s.guia_ids=fila[0].guia_ids||eq; s.guia_id=fila[0].guia_id||(eq.length?eq[0]:null);
+    pintaProg();
   }
 
   /* El mismo boton abre y cierra: quien se equivoco espera volver a tocarlo,
