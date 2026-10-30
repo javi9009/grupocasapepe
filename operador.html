@@ -2091,7 +2091,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
               (c.llegaron!=null
                 ? '<input class="pgnum" type="number" min="0" max="'+(Number(c.pax)||1)+'" value="'+Number(c.llegaron)+'" data-llegn="'+c.id+'">'
                 : '')+
-              '<span class="pgpago '+(pagado?'si':'no')+'">'+(pagado?'Pagado':'Sin pagar')+'</span>'+
+              /* Y se puede desmarcar: tocarla la cambia. */
+              '<span class="pgpago '+(pagado?'si':'no')+'" data-pago="'+c.id+'" '+
+                'title="'+(pagado?'Tócala si no está pagada':'Tócala si ya pagó')+'" '+
+                'style="cursor:pointer">'+(pagado?'Pagado':'Sin pagar')+'</span>'+
             '</div>';
           }).join('')
         : '<div class="pgcli"><div class="qn mini">Nadie apuntado todavía.</div></div>')+
@@ -2252,7 +2255,16 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         idioma:(String(campo(f,['idioma','lengua','language','lang'])||'').trim().toLowerCase()||null),
         email:(String(campo(f,['mail','correo','email','emailaddress'])||'').trim()||null),
         restricciones:(String(campo(f,['restricciones','restriccionesalimenticias','alimenticias','alergias','dieta'])||'').trim()||null),
-        pago_estado:(/^(si|s|yes|y|pagad|1|true|x)/.test(pg)?'pagado':(pg?'pendiente':'sin_cobro')),
+        /* LO QUE SUBE, SUBE PAGADO. Javi, 30-oct-2026: «anota todas las
+           reservas que suban como pagadas y en caso de que no lo estén que
+           ellos las desanoten en el botón». Las 39 de Capital Bus entraron
+           como «sin cobro» porque su Excel no traía columna de pago, y la
+           pantalla las pintó todas en rojo: treinta y nueve avisos que no
+           avisan de nada. Lo normal es que una reserva que llega de otra
+           plataforma venga cobrada; la excepción se marca a mano, y para eso
+           está el botón de cada fila. Si el Excel SÍ trae la columna, manda
+           ella: lo que diga el archivo no se pisa. */
+        pago_estado:(pg ? (/^(si|s|yes|y|pagad|1|true|x)/.test(pg)?'pagado':'pendiente') : 'pagado'),
         notas:((String(campo(f,['notas','nota','observaciones','comentarios','remarks'])||'').trim()
                  || 'Reserva de otra plataforma')+' · cargada desde '+file.name)});
     });
@@ -2409,6 +2421,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         if(!c) return;
         if(c.llegaron!=null) return;           /* ya marcada: se corrige en el número */
         if(await marcaLlego(rid, Number(c.pax)||1)) pintaProg(); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-pago]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); cambiaPago(b.getAttribute('data-pago')); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-llegn]'),function(i){
       i.onchange=async function(){
         var n=parseInt(i.value,10);
@@ -2424,6 +2438,23 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(s && s.guia_ids && s.guia_ids.length) return s.guia_ids.slice();
     return (s && s.guia_id) ? [s.guia_id] : [];
   }
+  /* PAGADA O NO, A UN TOQUE. Lo que sube se da por pagado; quien vea que una
+     no lo está la desmarca aquí mismo, sin abrir nada. */
+  async function cambiaPago(rid){
+    var c=null; Object.keys(PG.clientes).forEach(function(k){
+      PG.clientes[k].forEach(function(x){ if(x.id===rid) c=x; }); });
+    if(!c) return;
+    var pagado = String(c.pago_estado||'')==='pagado';
+    var nuevo  = pagado ? 'pendiente' : 'pagado';
+    var r=await fetch(SB+'/rest/v1/sinc_reservas?id=eq.'+rid,{method:'PATCH',
+      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+      body:JSON.stringify({pago_estado:nuevo, pagado_at:(nuevo==='pagado'?new Date().toISOString():null)})});
+    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
+    if(!fila||!fila.length){ toast('No se pudo cambiar: la base no dejó tocar esta reserva.',true); return; }
+    c.pago_estado=fila[0].pago_estado||nuevo;
+    pintaProg();
+  }
+
   /* Volver a tocar el mismo guía lo quita: es lo que espera quien se equivocó
      de persona, y no hace falta una X más en la pantalla. */
   async function ponGuia(sid, gid){
@@ -2815,9 +2846,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       (s.incluye?'<div class="mini">'+esc(s.incluye)+'</div>':'')+
       '<div class="ccprecio">'+ccPesos(s.precio_neto)+' <span>sin IVA</span>'+
         '<div class="mini">'+ccPesos(bruto)+' con IVA · por '+esc(s.unidad||'persona')+'</div></div>'+
-      '<div class="mini">'+(s.experiencias&&s.experiencias.nombre
-          ? 'Se cobra cuando sale <b>'+esc(s.experiencias.nombre)+'</b>'
-          : 'Sin tour ligado: nadie lo contará solo.')+'</div>'+
+      '<div class="mini">Se asocia a su evento al conciliarlo.</div>'+
       (ADMIN?'<div class="ccacc"><button class="btn sm" data-edserv="'+esc(s.id)+'">Editar</button>'+
              '<button class="btn sm" data-darserv="'+esc(s.id)+'">Apuntar uno dado</button></div>':'')+
     '</div>';
@@ -2842,11 +2871,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           '<option value="salida"'+(s.unidad==='salida'?' selected':'')+'>cada salida</option>'+
         '</select></label>'+
       '</div>'+
-      '<div class="ccfila"><label>A qué tour se liga<select id="fExp">'+
-        '<option value="">— ninguno, se apunta a mano —</option>'+
-        CC.exps.map(function(e){ return '<option value="'+esc(e.experiencia_id)+'"'+
-          (s.experiencia_id===e.experiencia_id?' selected':'')+'>'+esc(e.nombre)+'</option>'; }).join('')+
-      '</select></label></div>'+
+      /* EL SERVICIO NO SE LIGA A UN TOUR. Javi, 30-oct-2026: «a la hora de
+         crear un servicio no lo ligues a un tour. Deja solo el servicio subido
+         para que cuando llegue la conciliación se asocie de forma manual».
+         Y es lo correcto: un servicio es una tarifa —lo que cuesta dar de
+         comer a una persona—, no un tour. El mismo servicio se da en salidas
+         distintas, y atarlo de antemano obliga a crear un servicio gemelo por
+         cada tour que lo use. Lo que se ata es la LÍNEA, cuando se concilia,
+         que es el momento en el que ya se sabe de qué evento se habla. */
       '<div class="ccfila"><label class="ccchk"><input type="checkbox" id="fAct"'+((s.activo===false)?'':' checked')+'> '+
         'Se puede cobrar hoy</label></div>'+
       '<div class="ccacc"><button class="btn sm verde" id="fGuarda">Guardar</button>'+
@@ -3001,7 +3033,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!(pre>0)){ toast('El precio sin IVA tiene que ser un número mayor que cero.',true); return; }
     var campos={nombre:nom, incluye:($('fInc').value||'').trim()||null,
       precio_neto:pre, iva_pct:Number($('fIva').value)||0,
-      unidad:$('fUni').value, experiencia_id:$('fExp').value||null,
+      unidad:$('fUni').value,
       activo:$('fAct').checked};
     var ok;
     if(CC.edita && CC.edita.id) ok=await ccGuarda('op_servicios','id=eq.'+CC.edita.id, campos);
