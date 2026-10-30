@@ -1521,16 +1521,33 @@ var EQ_CARGADO=false, PERS=[], LIDER=null, CONTA=null, nPers=0;
 
 function tablaEq(){ return TIPO==='operador'?'tour_operador_usuarios':'productora_usuarios'; }
 function llaveEq(){ return TIPO==='operador'?'operador_id':'productora_id'; }
-function rolLider(){ return TIPO==='operador'?'coordinador':'titular'; }
+/* QUIEN FIRMA EL ALTA ES EL ADMINISTRADOR. Javi, 30-oct-2026: al partir los
+   papeles, 'coordinador' dejó de querer decir «el que manda» —ahora es quien
+   lleva la operación y no entra ni a conciliaciones ni a Mi cuenta—. Quien se
+   da de alta a sí mismo sí manda: es 'admin'. */
+function rolLider(){ return TIPO==='operador'?'admin':'titular'; }
+
+/* EL PAPEL Y EL OFICIO SON DOS PREGUNTAS. Javi, 30-oct-2026, dictando la lista.
+   Antes «Guía» era a la vez lo que hacía alguien y lo que podía ver, y por eso
+   no había forma de tener un jefe de sonido que no viera las conciliaciones.
+   El papel dice el permiso; el oficio, el trabajo. En la base viven en
+   `op_roles` y `op_oficios`: esta lista es la misma, escrita aquí porque esta
+   pantalla se abre también con liga y sin sesión, y entonces no puede leerlas. */
 function rolesEq(){
-  /* Javi: en touroperadora «guías, principalmente. También catadores. No hay
-     más perfiles». En productora, cinco, y el último lo escriben ellos. */
   return TIPO==='operador'
-    ? [['guia','Guía'],['coordinador','Coordinador'],['catador','Catador'],
-       ['mixologo','Mixólogo'],['cocina','Cocina'],['otro','Otro']]
+    ? [['tecnico','Técnico · guía, sonido, chef…'],
+       ['coordinador','Coordinador · lleva la operación'],
+       ['auxiliar','Auxiliar · solo ve lo operativo'],
+       ['contador','Contador · el dinero y lo fiscal'],
+       ['admin','Administrador · todo']]
     : [['tecnico','Técnico de sonido'],['productor_asociado','Productor asociado'],
        ['artesano','Artesano'],['artista','Artista'],['chef','Chef'],
        ['mixologo','Mixólogo'],['otro','Otro']];
+}
+function oficiosEq(){
+  return [['guia','Guía'],['sonido','Sonido'],['chef','Chef / cocina'],
+          ['catador','Catador'],['mixologo','Mixólogo'],['transporte','Transporte'],
+          ['fotografo','Fotógrafo'],['otro','Otro']];
 }
 
 async function cargaEquipo(){
@@ -1547,7 +1564,7 @@ async function cargaEquipo(){
        un segundo líder a quien ya lo tenía. */
     if(!LIDER && (u.rol===rolLider()||(TIPO==='productora'&&u.rol==='coordinador'))){ LIDER=u; return; }
     if(!CONTA && u.rol==='contador'){ CONTA=u; return; }
-    PERS.push({id:u.id, rol:u.rol||'', rol_otro:u.rol_otro||'', nombre:u.nombre||'',
+    PERS.push({id:u.id, rol:u.rol||'', oficio:u.oficio||'', rol_otro:u.rol_otro||'', nombre:u.nombre||'',
                email:u.email||'', whatsapp:partePre(u.whatsapp)[1], pre:partePre(u.whatsapp)[0],
                instagram:u.instagram||'',
                atiende:!!u.atiende_cliente, descripcion:u.descripcion||'',
@@ -1842,6 +1859,12 @@ function pintaPers(){
       var ops=rolesEq().map(function(r){
         return '<option value="'+r[0]+'"'+(x.rol===r[0]?' selected':'')+'>'+esc(r[1])+'</option>';
       }).join('');
+      /* El oficio solo se pregunta a quien lo tiene: un contador no es «guía
+         de nada». En productora el papel YA es el oficio y no se parte. */
+      var pideOficio = (TIPO==='operador' && x.rol==='tecnico');
+      var ofs=oficiosEq().map(function(r){
+        return '<option value="'+r[0]+'"'+(x.oficio===r[0]?' selected':'')+'>'+esc(r[1])+'</option>';
+      }).join('');
       return '<div class="pers">'+
         '<div class="pers-cab"><span class="pers-n">Persona '+(i+1)+'</span>'+
           '<button type="button" class="quita" data-quita="'+i+'">Quitar</button></div>'+
@@ -1851,7 +1874,10 @@ function pintaPers(){
           '<div><label class="cam">Nombre</label>'+
             '<input type="text" data-c="nombre" data-i="'+i+'" value="'+esc(x.nombre)+'"></div>'+
         '</div>'+
-        (x.rol==='otro'?'<div class="fila"><div><label class="cam">¿Qué hace?</label>'+
+        (pideOficio?'<div class="fila"><div><label class="cam">Oficio</label>'+
+          '<select data-c="oficio" data-i="'+i+'"><option value="">—</option>'+ofs+'</select></div>'+
+          '<div></div></div>':'')+
+        ((x.oficio==='otro'||(TIPO!=='operador'&&x.rol==='otro'))?'<div class="fila"><div><label class="cam">¿Qué hace?</label>'+
           '<input type="text" data-c="rol_otro" data-i="'+i+'" value="'+esc(x.rol_otro)+'" '+
           'placeholder="Sastre, fotógrafo, iluminador…"></div></div>':'')+
         '<div class="fila">'+
@@ -1892,7 +1918,7 @@ function enlazaPers(){
       if(!PERS[i])return;
       if(c==='atiende'){ PERS[i].atiende=el.checked; pintaPers(); return; }
       PERS[i][c]=el.value;
-      if(c==='rol') pintaPers();   /* «Otro» abre su campo */
+      if(c==='rol'||c==='oficio') pintaPers();   /* «Técnico» abre el oficio; «Otro», su campo */
     };
     if((el.tagName==='INPUT'&&el.type!=='checkbox')||el.tagName==='TEXTAREA'){
       el.oninput=function(){
@@ -2014,9 +2040,13 @@ async function guardaEq(){
       }
     }
 
+    var NUEVOS=[];   /* a quién hay que mandarle su acceso al terminar */
+    if(CONTA && CONTA.id && CONTA.email && !CONTA.invitado_at) NUEVOS.push(CONTA.id);
     for(var i=0;i<PERS.length;i++){
       var x=PERS[i];
-      var fp={rol:x.rol, rol_otro:(x.rol==='otro'?String(x.rol_otro).trim():null),
+      var eraNuevo=!x.id;
+      var fp={rol:x.rol, oficio:(TIPO==='operador'&&x.rol==='tecnico'?(x.oficio||null):null),
+              rol_otro:((x.oficio==='otro'||x.rol==='otro')?String(x.rol_otro).trim():null),
               nombre:String(x.nombre).trim(), email:String(x.email).trim(),
               whatsapp:juntaPre(x.pre,x.whatsapp),
               instagram:String(x.instagram).trim()||null,
@@ -2026,6 +2056,7 @@ async function guardaEq(){
       for(var k3 in base) fp[k3]=base[k3];
       var g=await escribeEq(fp, x.id);
       x.id=g.id;
+      if(eraNuevo && g.email && !g.invitado_at) NUEVOS.push(g.id);
     }
 
     /* Las bajas al final: si algo falla antes, nadie se queda sin su gente. */
@@ -2034,6 +2065,32 @@ async function guardaEq(){
       catch(_){}
     }
     BAJAS=[];
+
+    /* EL CORREO DE «CREA TU CONTRASEÑA». Javi, 30-oct-2026: «me gustaría que
+       cuando lo añado le envíes un correo para crear su contraseña y entrar».
+       Antes dar de alta a alguien escribía una fila y nada más: la persona
+       quedaba dentro de la base y fuera de la plataforma, esperando a que
+       alguien se acordara de un botón escondido en el panel de la casa.
+
+       Va al final y en voz baja: si un correo no sale, el equipo ya se guardó
+       y eso es lo que no se puede perder. Se le dice a quién no le llegó y
+       desde «Mi equipo» se reintenta cuando quiera. */
+    if(SES && NUEVOS.length){
+      var fallaron=[];
+      for(var q=0;q<NUEVOS.length;q++){
+        try{
+          var ra=await fetch(SB+'/functions/v1/equipo-acceso',{method:'POST',headers:hdr(),
+            body:JSON.stringify({tipo:TIPO, fila_id:NUEVOS[q]})});
+          var ja=null; try{ ja=await ra.json(); }catch(_){}
+          if(!ra.ok || !ja || ja.ok!==true) fallaron.push(NUEVOS[q]);
+        }catch(_){ fallaron.push(NUEVOS[q]); }
+      }
+      if(fallaron.length) toast('El equipo quedó guardado, pero '+fallaron.length+
+        (fallaron.length===1?' acceso no salió':' accesos no salieron')+'. Se reintenta desde Mi equipo.',1);
+      else if(NUEVOS.length) toast(NUEVOS.length===1
+        ? 'Le mandamos su correo para crear su contraseña.'
+        : 'Les mandamos su correo para crear su contraseña.');
+    }
 
     await esperaMin(1200);
     capaOff();

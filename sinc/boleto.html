@@ -93,6 +93,10 @@ body{margin:0;background:var(--ground);color:var(--ink);
   var q=new URLSearchParams(location.search);
   var COD=(q.get('c')||'').trim().toUpperCase();
   var FOL=(q.get('f')||'').trim().toUpperCase();
+  /* EL BOLETO DE GRUPO. Javi, 30-oct-2026: «mete un QR por reserva con el
+     detalle de cuántas pax». Siete personas que viajan juntas no reparten
+     siete códigos: llevan uno y entran juntas. */
+  var GRP=(q.get('g')||'').trim();
 
   async function rpc(f,b){
     var r=await fetch(SB+'/rest/v1/rpc/'+f,{method:'POST',
@@ -121,6 +125,52 @@ body{margin:0;background:var(--ground);color:var(--ink);
   function money(n){
     return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:0,maximumFractionDigits:2});
   }
+  function pintaGrupo(b){
+    if(!b || !b.codigo){ $('app').className=''; $('app').innerHTML=
+      '<div class="aviso bad"><b>'+esc(T('No encontramos ese boleto'))+'</b>'+
+      esc(T('Revisa el enlace del correo, o escríbenos y lo buscamos por tu nombre.'))+'</div>'; return; }
+    var cancel = b.motivo==='cancelada';
+    var html='';
+    if(cancel){
+      html+='<div class="aviso bad" style="margin-bottom:14px"><b>'+esc(T('Esta reserva está cancelada'))+'</b>'+
+            esc(T('Si crees que es un error, escríbenos antes de venir.'))+'</div>';
+    } else if(Number(b.llegaron||0) >= Number(b.pax||0)){
+      html+='<div class="aviso warn" style="margin-bottom:14px"><b>'+esc(T('Este boleto ya se usó'))+'</b>'+
+            esc(T('Si todavía no has entrado, enséñaselo a quien te recibe.'))+'</div>';
+    }
+    var pax=Number(b.pax||1);
+    html+='<div class="boleto">'+
+      '<div class="cab">'+
+        '<h1 class="exp">'+esc(b.experiencia)+'</h1>'+
+        '<div class="quien">'+esc(b.titular||'')+'</div>'+
+        '<div class="datos">'+
+          '<div class="dato ancho"><label>'+esc(T('Cuándo'))+'</label><b>'+esc(fecha(b.fecha))+'</b>'+
+            '<div class="quien">'+esc(T('a las'))+' '+esc(hhmm(b.hora))+'</div></div>'+
+          (b.punto?'<div class="dato ancho"><label>'+esc(T('Dónde'))+'</label><b>'+esc(b.punto)+'</b></div>':'')+
+          '<div class="dato"><label>'+esc(T('Folio'))+'</label><b>'+esc(b.folio||'—')+'</b></div>'+
+          /* La cifra que de verdad se mira en la puerta. */
+          '<div class="dato"><label>'+esc(T('Personas'))+'</label><b>'+pax+'</b></div>'+
+          (b.opera?'<div class="dato ancho"><label>'+esc(T('La opera'))+'</label><b>'+esc(b.opera)+'</b></div>':'')+
+        '</div>'+
+      '</div>'+
+      (Number(b.por_cobrar||0)>0
+        ? '<div class="aviso warn" style="margin:0 16px 4px"><b>'+
+          esc(T('Llevas pendiente de pago '))+money(b.por_cobrar)+'</b>'+
+          esc(T('Se paga en el punto de encuentro, al empezar, directo con '))+
+          esc(b.cobra||T('tu guía'))+'. '+esc(T('Lleva efectivo si puedes.'))+'</div>'
+        : '')+
+      '<div class="qr"><div id="qr"></div><div class="cod">'+esc(b.codigo)+'</div></div>'+
+      '<div class="pie"><b>'+esc(T('Este código vale por ')+pax+' '+T(pax===1?'persona':'personas'))+'.</b> '+
+        esc(T('Se escanea una sola vez, al llegar, y entran todas juntas.'))+'</div>'+
+    '</div>';
+    $('app').className=''; $('app').innerHTML=html;
+    try{
+      new QRCode(document.getElementById('qr'),
+        {text:b.codigo, width:200, height:200, correctLevel:QRCode.CorrectLevel.M,
+         colorDark:'#1F1B16', colorLight:'#FFFFFF'});
+    }catch(_){}
+  }
+
   function pinta(B){
     if(!B.length){ $('app').className=''; $('app').innerHTML=
       '<div class="aviso bad"><b>'+esc(T('No encontramos ese boleto'))+'</b>'+
@@ -292,7 +342,8 @@ body{margin:0;background:var(--ground);color:var(--ink);
 
   (async function(){
     try{
-      if(FOL){ pinta((await rpc('sinc_boletos_de_folio',{p_folio:FOL})||[]).filter(Boolean)); }
+      if(GRP){ pintaGrupo(await rpc('sinc_boleto_grupo',{p_codigo:GRP})); }
+      else if(FOL){ pinta((await rpc('sinc_boletos_de_folio',{p_folio:FOL})||[]).filter(Boolean)); }
       else if(COD){ var b=await rpc('sinc_boleto_publico',{p_codigo:COD}); pinta(b&&b.codigo?[b]:[]); }
       else {
         /* SIN BOLETOS NO ES UN ERROR. Javi, 19-oct-2026: «si no hay boletos hay

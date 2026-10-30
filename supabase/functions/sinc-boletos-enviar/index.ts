@@ -20,6 +20,29 @@
    a la bandeja— seguía yéndose en español. El idioma no se adivina: lo guarda
    la propia reserva en sinc_reservas.idioma desde que se reserva. */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+/* EL QR TIENE QUE VIAJAR DENTRO DEL CORREO. Javi, 30-oct-2026: «asegúrate que
+   el correo vaya con un QR para poder escanearlo».
+   No iba, y no era un descuido: el QR del boleto lo dibuja JavaScript en el
+   navegador, y ningún correo ejecuta JavaScript. Así que aquí se genera como
+   imagen y se adjunta en línea (cid:), que es la única forma de que llegue
+   dibujado a la bandeja.
+   Si por lo que sea no se pudiera generar, el correo sale igual que siempre
+   -con la liga y el código escrito-: un QR que falta no puede dejar a nadie
+   sin boleto. */
+import QRCode from "npm:qrcode@1.5.4";
+
+async function qrPngBase64(texto: string): Promise<string | null> {
+  try {
+    const buf = await QRCode.toBuffer(texto, {
+      type: "png", width: 420, margin: 1, errorCorrectionLevel: "M",
+      color: { dark: "#1F1B16", light: "#FFFFFF" },
+    });
+    let bin = "";
+    const u8 = new Uint8Array(buf);
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
+  } catch (_) { return null; }
+}
 
 const URL_SB = Deno.env.get("SUPABASE_URL") ?? "";
 const SRK    = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -87,6 +110,14 @@ const TX = {
     faltaTxt: (op: string) => `Con la tarjeta pagaste sólo una parte de la reserva. ` +
             `El resto se lo pagas directamente a ${op} el día del tour, en el punto de encuentro.`,
     operadora: "la operadora del tour",
+    /* Javi, 30-oct-2026. Dos reglas de la puerta que hasta hoy se decian de
+       palabra y acababan en discusion en el punto de encuentro. Van en el
+       correo, que es el papel que el huesped se lleva. */
+    valePor: (n: number) =>
+      `Este código vale por ${n} ${n === 1 ? "persona" : "personas"}. Se escanea una sola vez, al llegar.`,
+    reglaTit: "Antes de venir, dos cosas",
+    reglaTarde: "Una vez iniciado el viaje a la Arena no se permite incorporar a más personas.",
+    reglaNoShow: "Los boletos de quien no se presente sólo se entregan si se piden en el check-in.",
     asunto: (uno: boolean, exp: string, f: string) =>
       `${uno ? "Tu boleto" : "Tus boletos"} · ${exp} · ${f}`,
   },
@@ -107,6 +138,11 @@ const TX = {
     faltaTxt: (op: string) => `Your card covered only part of the booking. ` +
             `You pay the rest directly to ${op} on the day of the tour, at the meeting point.`,
     operadora: "the tour operator",
+    valePor: (n: number) =>
+      `This code is valid for ${n} ${n === 1 ? "person" : "people"}. It is scanned once, on arrival.`,
+    reglaTit: "Two things before you come",
+    reglaTarde: "Once the trip to the Arena has started, no one else can join.",
+    reglaNoShow: "Tickets for anyone who does not show up are only handed over if asked for at check-in.",
     asunto: (uno: boolean, exp: string, f: string) =>
       `Your ${uno ? "ticket" : "tickets"} · ${exp} · ${f}`,
   },
@@ -144,7 +180,7 @@ Deno.serve(async (req) => {
     if (solo_emitir) return json({ ok: true, boletos: boletos.length, correo: false });
 
     // 2 · con qué mandarlo
-    const r = await sb(`sinc_reservas?select=id,folio,nombre,email,idioma,adultos,menores,salida_id,op_experiencia_id,cobro_dividido,pago_resto&id=eq.${reserva_id}&limit=1`);
+    const r = await sb(`sinc_reservas?select=id,folio,nombre,email,idioma,adultos,menores,pax,ref_externa,salida_id,op_experiencia_id,cobro_dividido,pago_resto&id=eq.${reserva_id}&limit=1`);
     const res = r.body?.[0];
     if (!res?.email) return json({ ok: true, boletos: boletos.length, correo: false, aviso: "la reserva no trae correo" });
 
@@ -206,6 +242,28 @@ Deno.serve(async (req) => {
     const cuantos = boletos.length;
     const uno = cuantos === 1;
     const fechaTx = fechaLarga(d.fecha, en);
+
+    /* EL CÓDIGO DEL GRUPO, NO EL DE CADA PERSONA. Javi, 30-oct-2026: «un QR por
+       reserva con el detalle de cuántas pax». Si la reserva vino del sistema de
+       otro operador, su código es el que el huésped ya tiene; si nació aquí, el
+       folio. Los dos los reconoce el escáner. */
+    const paxGrupo = Number(res.pax ?? cuantos) || cuantos;
+    const codGrupo = String(res.ref_externa ?? "").trim() || String(res.folio ?? "");
+    const qr64 = await qrPngBase64(codGrupo);
+    const bloqueQR = qr64
+      ? `<div style="text-align:center;margin:22px 0;padding:18px 0;border-top:1px solid #E2DCCF;border-bottom:1px solid #E2DCCF">
+           <img src="cid:boleto-qr" alt="${esc(codGrupo)}" width="200" height="200"
+                style="width:200px;height:200px;display:block;margin:0 auto 10px;image-rendering:pixelated">
+           <div style="font-family:ui-monospace,Menlo,monospace;font-size:17px;letter-spacing:.14em">${esc(codGrupo)}</div>
+           <div style="color:#6B6459;font-size:13px;margin-top:8px">${esc(t.valePor(paxGrupo))}</div>
+         </div>`
+      : "";
+
+    const bloqueReglas = `
+      <div style="background:#F6EBD5;border-left:3px solid #8C6212;padding:12px 14px;margin:18px 0;border-radius:0 8px 8px 0">
+        <b style="display:block;margin-bottom:6px">${esc(t.reglaTit)}</b>
+        <div style="font-size:14px;line-height:1.55">• ${esc(t.reglaTarde)}<br>• ${esc(t.reglaNoShow)}</div>
+      </div>`;
     const html = `
       <div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:15px;line-height:1.6;color:#1F1B16;max-width:520px">
         <p style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#6B6459;margin:0 0 6px">${esc(t.marca)}</p>
@@ -213,6 +271,7 @@ Deno.serve(async (req) => {
         <p style="margin:0 0 18px;color:#6B6459">${esc(fechaTx)}${d.hora ? esc(t.aLas(String(d.hora).slice(0,5))) : ""}</p>
         <p>${esc(t.hola(String(res.nombre || ""), uno, cuantos))}</p>
         ${aviso}
+        ${bloqueQR}
         <p style="margin:22px 0">
           <a href="${esc(liga)}" style="background:#C9501A;color:#fff;text-decoration:none;padding:13px 22px;border-radius:10px;font-weight:600;display:inline-block">
             ${esc(t.abrir(uno))}</a>
@@ -221,6 +280,7 @@ Deno.serve(async (req) => {
         <p><b>${esc(t.folio)}</b> ${esc(res.folio)}</p>
         <p style="margin-top:10px"><b>${esc(t.codigo(uno))}:</b><br>
           ${boletos.map((b: any) => `<span style="font-family:ui-monospace,Menlo,monospace;font-size:18px;letter-spacing:.2em">${esc(b.codigo)}</span>`).join("<br>")}</p>
+        ${bloqueReglas}
         <p style="color:#6B6459;font-size:13px;margin-top:20px">${esc(t.ensena)}</p>
         <p style="color:#A49B8C;font-size:12px;margin-top:18px">${esc(t.pie)}</p>
       </div>`;
@@ -235,10 +295,16 @@ Deno.serve(async (req) => {
         to: [res.email],
         subject: t.asunto(uno, expNombre || "Sincrético", fechaTx),
         html,
+        /* En línea, con su content_id: así se ve dibujado dentro del correo y
+           no como un archivo suelto que nadie abre. */
+        ...(qr64
+          ? { attachments: [{ filename: "boleto.png", content: qr64, content_id: "boleto-qr" }] }
+          : {}),
       }),
     });
 
-    return json({ ok: true, boletos: cuantos, correo: env.ok, idioma: en ? "en" : "es", detalle: env.ok ? null : await env.text() });
+    return json({ ok: true, boletos: cuantos, correo: env.ok, qr: !!qr64, codigo_grupo: codGrupo,
+                  idioma: en ? "en" : "es", detalle: env.ok ? null : await env.text() });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

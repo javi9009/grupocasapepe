@@ -23,6 +23,11 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
 .res .big{font-size:23px;font-weight:800;line-height:1.15}
 .res .det{font-size:14px;margin-top:8px;line-height:1.5}
 .res .pie{font-size:12.5px;margin-top:8px;opacity:.85}
+.ajusta{display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,.12);font-size:13px}
+.ajusta button{font:inherit;font-weight:700;min-width:40px;padding:8px 11px;border-radius:9px;border:1px solid rgba(0,0,0,.2);background:#fff;cursor:pointer}
+.ajusta b{font-size:20px;min-width:30px;text-align:center}
+.ajusta .gok{background:#1D6B4A;border-color:#1D6B4A;color:#fff;min-width:100px}
+.ajusta button[disabled]{opacity:.65;cursor:default}
 .res.ok{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
 .res.warn{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
 .res.bad{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
@@ -106,6 +111,31 @@ input{flex:1;min-width:150px;padding:11px 12px;border:1px solid var(--rule);bord
              '<span class="pill '+h.cls+'">'+esc(h.txt)+'</span></div>';}).join('');
   }
 
+  /* El ajuste del grupo: sube y baja entre 0 y lo reservado, y confirma. No
+     vuelve a escanear; corrige cuántos entraron de esa reserva. */
+  function enchufaAjuste(){
+    var caja=document.querySelector('.ajusta'); if(!caja) return;
+    var cod=caja.getAttribute('data-cod'), max=+caja.getAttribute('data-pax');
+    var val=+(($('gVal')||{}).textContent||0);
+    function pon(n){ val=Math.max(0, Math.min(max, n));
+      if($('gVal')) $('gVal').textContent=val;
+      if($('gN'))   $('gN').textContent=val; }
+    if($('gMenos')) $('gMenos').onclick=function(){ pon(val-1); };
+    if($('gMas'))   $('gMas').onclick  =function(){ pon(val+1); };
+    if($('gOk'))    $('gOk').onclick   =async function(){
+      var bt=$('gOk'); bt.disabled=true; bt.textContent='…';
+      try{
+        var rr=await sb.rpc('sinc_confirmar_grupo',{p_codigo:cod, p_pax:val});
+        var d=(rr&&rr.data)||rr;
+        if(d&&d.ok){
+          bt.textContent='✓ '+d.llegaron+' de '+d.pax;
+          HIST.unshift({codigo:d.codigo,quien:d.titular,cls:'ok',txt:'ajustado a '+d.llegaron});
+          pintaHist();
+        } else { bt.textContent='no se pudo'; bt.disabled=false; }
+      }catch(e){ bt.textContent='no se pudo'; bt.disabled=false; }
+    };
+  }
+
   function pinta(r){
     var el=$('res');
     if(r&&r.ok){
@@ -113,15 +143,39 @@ input{flex:1;min-width:150px;padding:11px 12px;border:1px solid var(--rule);bord
       el.innerHTML='<div class="big">✅ Adelante</div>'+
         '<div class="det"><b>'+esc(r.titular||'—')+'</b><br>'+esc(r.experiencia||'')+
         (r.fecha?'<br>'+esc(r.fecha)+' · '+esc(hhmm(r.hora)):'')+'</div>'+
-        '<div class="pie">Persona '+esc(r.numero)+' de '+esc(r.de)+' · '+esc(r.tipo)+
-        ' · folio '+esc(r.folio||'')+'</div>';
-      HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'ok',txt:'entró'});
+        /* UN CODIGO DE GRUPO NO ES «persona 1 de 7». Javi, 30-oct-2026: los
+           clientes de Capital Bus llegan con el QR de SU sistema, que es por
+           RESERVA y no por persona, asi que un solo escaneo mete a los siete.
+           Decir «persona 1 de 7» ahi seria mentir al que esta en la puerta
+           contando cabezas. */
+        (r.grupo
+          ? '<div class="pie"><b>Entran <span id="gN">'+esc(r.llegaron)+'</span> de '+esc(r.pax)+
+            '</b> · código de grupo · folio '+esc(r.folio||'')+'</div>'+
+            /* LO QUE PASA EN LA PUERTA CASI NUNCA ES LO QUE DICE EL PAPEL.
+               Javi, 30-oct-2026: «permite que quien escanee ajuste y confirme
+               el número de personas; si son menos, se puede ajustar». El
+               escaneo mete al grupo entero -el caso normal, cero toques- y
+               esto corrige a la baja sin volver a escanear. */
+            '<div class="ajusta" data-cod="'+esc(r.codigo)+'" data-pax="'+esc(r.pax)+'">'+
+              '<span>¿Vinieron menos?</span>'+
+              '<button type="button" id="gMenos" aria-label="Uno menos">−</button>'+
+              '<b id="gVal">'+esc(r.llegaron)+'</b>'+
+              '<button type="button" id="gMas" aria-label="Uno más">+</button>'+
+              '<button type="button" id="gOk" class="gok">Confirmar</button>'+
+            '</div>'
+          : '<div class="pie">Persona '+esc(r.numero)+' de '+esc(r.de)+' · '+esc(r.tipo)+
+            ' · folio '+esc(r.folio||'')+'</div>');
+      HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'ok',
+                    txt: r.grupo ? ('entraron '+r.llegaron) : 'entró'});
+      if(r.grupo) enchufaAjuste();
     } else if(r&&r.motivo==='ya_usado'){
       el.className='res warn';
       el.innerHTML='<div class="big">⚠️ Ya se usó</div>'+
         '<div class="det"><b>'+esc(r.titular||'—')+'</b><br>'+esc(r.experiencia||'')+'</div>'+
-        '<div class="pie">Se escaneó el '+esc((r.usado_at||'').replace('T',' ').slice(0,16))+
-        (r.usado_por?' · '+esc(r.usado_por):'')+'</div>';
+        (r.grupo
+          ? '<div class="pie">Ese grupo de '+esc(r.pax)+' ya entró completo.</div>'
+          : '<div class="pie">Se escaneó el '+esc((r.usado_at||'').replace('T',' ').slice(0,16))+
+            (r.usado_por?' · '+esc(r.usado_por):'')+'</div>');
       HIST.unshift({codigo:r.codigo,quien:r.titular,cls:'rep',txt:'repetido'});
     } else if(r&&r.motivo==='reserva_cancelada'){
       el.className='res bad';
