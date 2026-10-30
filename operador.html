@@ -2688,7 +2688,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      el 23 de octubre: cuarenta y tres días. Nadie contaba los servicios
      mientras ocurrían, así que la cuenta se armaba de memoria cuando alguien
      se acordaba. Contarlos aquí, el día que pasan, es todo el módulo. */
-  var CC={serv:[], dados:[], tickets:[], exps:[], edita:null, dando:null, abierto:null};
+  var CC={serv:[], dados:[], tickets:[], exps:[], edita:null, dando:null, abierto:null,
+          etapas:[], correos:{}, envios:false};
 
   function ccPesos(n){ return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function ccDia(f){
@@ -2722,12 +2723,17 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         fetch(SB+'/rest/v1/op_servicios?select=*,experiencias(nombre)&operador_id=eq.'+cur.id+'&order=activo.desc,nombre',{headers:hdr()}),
         fetch(SB+'/rest/v1/v_op_servicios_dados?select=*&operador_id=eq.'+cur.id+'&order=fecha.desc&limit=500',{headers:hdr()}),
         fetch(SB+'/rest/v1/op_conciliacion_tickets?select=*&operador_id=eq.'+cur.id+'&order=semana_desde.desc&limit=60',{headers:hdr()}),
-        fetch(SB+'/rest/v1/op_experiencias?select=experiencia_id,nombre&operador_id=eq.'+cur.id+'&experiencia_id=not.is.null&order=nombre',{headers:hdr()})
+        fetch(SB+'/rest/v1/op_experiencias?select=experiencia_id,nombre&operador_id=eq.'+cur.id+'&experiencia_id=not.is.null&order=nombre',{headers:hdr()}),
+        fetch(SB+'/rest/v1/op_conc_etapas?select=*&order=orden',{headers:hdr()}),
+        fetch(SB+'/rest/v1/op_conc_correos?select=tipo,correos,updated_at,updated_by&operador_id=eq.'+cur.id,{headers:hdr()})
       ]);
       CC.serv   = r[0].ok ? await r[0].json() : [];
       CC.dados  = r[1].ok ? await r[1].json() : [];
       CC.tickets= r[2].ok ? await r[2].json() : [];
       CC.exps   = r[3].ok ? await r[3].json() : [];
+      CC.etapas = r[4].ok ? await r[4].json() : [];
+      CC.correos={};
+      (r[5].ok ? await r[5].json() : []).forEach(function(c){ CC.correos[c.tipo]=c; });
     }catch(e){
       $('ccCuerpo').innerHTML='<div class="mini" style="padding:18px 0;color:var(--error,#9E3B2E)">No pudimos traer la conciliación: '+esc(e.message||e)+'</div>';
       return;
@@ -2785,8 +2791,69 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       : '<div class="mini">Todavía no se ha armado ningún ticket. Sale el viernes, después del último servicio de la semana.</div>';
     h+='</div>';
 
+    h+=ccEnvios();
+
     $('ccCuerpo').innerHTML=h;
     enganchaConc();
+  }
+
+  /* ---- 4 · CONFIGURACIÓN DE ENVÍOS ----
+     Javi, 30-oct-2026: «pon un lugar que diga configuración de envíos en la
+     página de conciliaciones y que puedan editar cada correo que recibe la
+     info».
+
+     Una lista por etapa y no una sola para todo: quien valida asistentes no es
+     quien recibe la factura, y una lista única obliga a elegir entre mandarle
+     a alguien TODO o nada. De ahí que Leo esté solo en el primer correo y
+     Guest Experience se baje en cuanto la cosa deja de ser operativa.
+
+     Se guarda al momento, sin botón de «guardar»: un correo añadido y no
+     guardado es exactamente el que luego nadie entiende por qué no llegó. */
+  function ccEnvios(){
+    var h='<div class="ccbloque"><div class="cctit"><h2>Configuración de envíos</h2>'+
+      '<button class="btn sm" id="ccEnvToggle">'+(CC.envios?'Ocultar':'Ver y editar')+'</button></div>';
+    if(!CC.envios){
+      var tot=0; Object.keys(CC.correos).forEach(function(k){ tot+=(CC.correos[k].correos||[]).length; });
+      h+='<div class="mini">Quién recibe el aviso de cada paso. Ahora mismo hay '+tot+
+         ' destinatario'+(tot===1?'':'s')+' repartidos en '+CC.etapas.length+' etapas.</div></div>';
+      return h;
+    }
+    h+='<div class="mini" style="margin-bottom:10px">Cada etapa manda su propio correo. '+
+       'Quita a quien no quieras que lo reciba y añade a quien sí — se guarda solo.</div>';
+    h+=CC.etapas.map(function(e){
+      var c=(CC.correos[e.etapa]||{}).correos||[];
+      var pie=(CC.correos[e.etapa]||{}).updated_at;
+      return '<div class="card" style="margin-bottom:10px">'+
+        '<h3 style="margin:0">'+esc(e.etiqueta)+'</h3>'+
+        '<div class="hint">'+esc(e.explica||'')+'</div>'+
+        (c.length
+          ? '<div>'+c.map(function(x,i){
+              return '<div class="chk" style="justify-content:space-between;border-bottom:1px solid var(--linea)">'+
+                '<span>'+esc(x)+'</span>'+
+                '<button class="btn fantasma sm" data-quitamail="'+esc(e.etapa)+'" data-i="'+i+'">Quitar</button></div>';
+            }).join('')+'</div>'
+          : '<div class="mini">Nadie. Este aviso no se manda a nadie.</div>')+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+          '<input id="ccMail-'+esc(e.etapa)+'" placeholder="Nombre &lt;correo@empresa.com&gt;  o  solo el correo" '+
+            'style="flex:1 1 280px;padding:9px 11px;border:1.5px solid var(--linea);border-radius:9px;font:inherit;font-size:13.5px">'+
+          '<button class="btn sm" data-ponmail="'+esc(e.etapa)+'">Añadir</button>'+
+        '</div>'+
+        (pie?'<div class="mini" style="margin-top:8px">Último cambio: '+esc(String(pie).slice(0,10))+
+             ((CC.correos[e.etapa]||{}).updated_by?' por '+esc(CC.correos[e.etapa].updated_by):'')+'</div>':'')+
+      '</div>';
+    }).join('');
+    return h+'</div>';
+  }
+
+  async function ccGuardaCorreos(etapa, lista){
+    var r=await fetch(SB+'/rest/v1/rpc/op_conc_correos_pon',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_operador:cur.id, p_etapa:etapa, p_correos:lista})});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok || !j || j.ok!==true){
+      toast((j&&(j.message||j.error))||'No se pudo guardar la lista.', true);
+      return false;
+    }
+    return true;
   }
 
   /* LOS TOTALES POR ETAPA. Javi, 27-oct-2026: «monta en el resumen los
@@ -2992,6 +3059,42 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var fc=$('fCancela'); if(fc) fc.onclick=function(){ CC.edita=null; pintaConc(); };
     var fg=$('fGuarda');  if(fg) fg.onclick=guardaServicio;
     var ba=$('ccArma');   if(ba) ba.onclick=armaTicket;
+
+    /* ---- configuración de envíos ---- */
+    var et=$('ccEnvToggle');
+    if(et) et.onclick=function(){ CC.envios=!CC.envios; pintaConc();
+      var b=$('ccEnvToggle'); if(b) b.scrollIntoView({block:'center',behavior:'smooth'}); };
+    Array.prototype.forEach.call(c.querySelectorAll('[data-quitamail]'),function(b){
+      b.onclick=async function(){
+        var e=b.getAttribute('data-quitamail'), i=Number(b.getAttribute('data-i'));
+        var lista=((CC.correos[e]||{}).correos||[]).slice();
+        var fuera=lista.splice(i,1)[0];
+        b.disabled=true;
+        if(await ccGuardaCorreos(e, lista)){ toast('Fuera '+String(fuera).replace(/<.*/,'').trim()+'.'); await cargaConc(); }
+        else b.disabled=false;
+      };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-ponmail]'),function(b){
+      var e=b.getAttribute('data-ponmail');
+      var inp=$('ccMail-'+e);
+      var mete=async function(){
+        var v=(inp&&inp.value||'').trim();
+        if(!v){ toast('Escribe el correo.',true); if(inp)inp.focus(); return; }
+        var lista=((CC.correos[e]||{}).correos||[]).slice();
+        /* El mismo buzón dos veces en la misma etapa es un correo duplicado
+           en la bandeja de alguien, y eso es lo que hace que dejen de leerlos. */
+        var ya=lista.some(function(x){
+          var a=(String(x).match(/[^\s<>@]+@[^\s<>@]+/)||[''])[0].toLowerCase();
+          var bq=(v.match(/[^\s<>@]+@[^\s<>@]+/)||[''])[0].toLowerCase();
+          return a && a===bq; });
+        if(ya){ toast('Ese correo ya está en esta etapa.',true); return; }
+        lista.push(v);
+        b.disabled=true;
+        if(await ccGuardaCorreos(e, lista)){ toast('Añadido.'); await cargaConc(); }
+        else b.disabled=false;
+      };
+      b.onclick=mete;
+      if(inp) inp.onkeydown=function(ev){ if(ev.key==='Enter'){ ev.preventDefault(); mete(); } };
+    });
 
     Array.prototype.forEach.call(c.querySelectorAll('[data-edserv]'),function(b){
       b.onclick=function(){ CC.edita=CC.serv.filter(function(s){return s.id===b.getAttribute('data-edserv');})[0]||null;
