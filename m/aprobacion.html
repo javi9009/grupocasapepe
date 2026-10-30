@@ -84,6 +84,7 @@ h2 em{font:600 11px Inter;font-style:normal;color:var(--gris);background:var(--h
 .acc{flex:0 0 auto;display:flex;flex-direction:column;gap:7px;align-items:stretch}
 .espera{font:400 11.5px Inter;color:var(--tenue);margin-top:5px}
 .espera.rojo{color:var(--error);font-weight:600}
+.espera.verde{color:var(--ok,#1D6B4A);font-weight:600}
 .motivo{margin-top:10px;display:none}
 .motivo.on{display:block}
 .motivo textarea{width:100%;border:1.5px solid var(--linea);border-radius:9px;padding:9px 11px;min-height:62px;resize:vertical;background:#fff}
@@ -114,6 +115,20 @@ var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ses=null, YO='', FALLO='', CARGANDO=true;
 var EXPS=[], EVTS=[], ATES=[], TERM=[], CAND={}, OPS={};
+/* LAS OTRAS DOS COSAS QUE LA CASA AUTORIZA. Javi, 30-oct-2026: «en el
+   dashboard no tenemos ningún lugar donde autorizar salas, ¿dónde está?».
+   Sí estaba —🗝️ Peticiones de sala— pero esa pantalla solo enseñaba las
+   peticiones de salas cuyo nombre lleva «cumbre», así que el Teatro, la
+   Galería y las Áreas comunes no salían por ningún lado; y encima solo
+   dejaba decidir a ateneo@casapepe.mx, una cuenta que ya no lleva nadie,
+   cuando la base solo pide ser equipo de casa. Dos candados escritos a mano
+   que no estaban en la base: por eso parecía que el sitio no existía.
+   Ahora las cuatro cosas que autoriza la casa viven aquí. */
+var SALAS=[], HOT=[];
+/* Las dos salas que además pasan por su sede: lo que la casa valida aquí,
+   Ana lo acepta después en su portal de Cumbre. */
+var SEDE_ANA=['Café Cumbre','Galería'];
+function esDeAna(n){ return SEDE_ANA.indexOf(String(n||''))>=0; }
 
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -232,6 +247,58 @@ function buscar(tipo,id){
   return null;
 }
 
+/* ---------- salas ---------- */
+function salaDia(x){ if(!x) return '—';
+  return new Date(x).toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'}); }
+function salaHora(x){ if(!x) return '—';
+  var d=new Date(x); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+
+async function decideSala(i, ok){
+  var r=SALAS[i]; if(!r) return;
+  var motivo=null;
+  if(!ok){
+    var ta=$('salaMot-'+i);
+    motivo=(ta&&ta.value||'').trim();
+    if(motivo.length<4){ avisa('Escribe el motivo: sin él, quien la pidió tiene que adivinar.'); return; }
+  }
+  var disp=$('salaDisp-'+i);
+  try{
+    var j=await traeRpc('ev_solicitud_decide',{p_id:r.id,p_aprobar:!!ok,
+            p_motivo:motivo,p_dispensa_poliza:!!(disp&&disp.checked)});
+    if(!j || j.error){ avisa(j&&j.error ? j.error : 'no se pudo'); return; }
+    /* La decisión ya está guardada. El correo se intenta aparte: si falla, se
+       dice, pero no se deshace nada. */
+    var cola='';
+    try{
+      var ra=await fetch(SB+'/functions/v1/prod-aviso-sala',{method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},hdr()),
+        body:JSON.stringify({solicitud_id:r.id})});
+      var av=await ra.json().catch(function(){return null;});
+      cola = (av&&av.ok&&av.para) ? ' · avisada en '+av.para : ' · no pudimos avisarle por correo';
+    }catch(_){ cola=' · no pudimos avisarle por correo'; }
+    avisa((ok?'Sala confirmada para «'+(j.evento||'')+'»':'Sala rechazada')+cola);
+    carga();
+  }catch(e){ avisa('No se pudo: '+((e&&e.message)||e)); }
+}
+function abreSalaMot(i){
+  var c=$('salaCaja-'+i); if(!c) return;
+  c.style.display = c.style.display==='block' ? 'none' : 'block';
+}
+
+/* ---------- hoteles ---------- */
+async function activaHotel(id){
+  var h=null; for(var i=0;i<HOT.length;i++) if(String(HOT[i].id)===String(id)) h=HOT[i];
+  if(!h) return;
+  if(!h.contrato_firmado_at &&
+     !confirm(h.nombre_comercial+' todavía no tiene convenio firmado.\n\nActivarlo es dejarle vender sin papel. ¿Lo activo igual?')) return;
+  try{
+    await patch('hoteles',id,{estado:'activo'});
+    await historia('hotel',id,'activado',{desde:h.estado});
+    avisa('Hotel activo · lo activó '+(YO||'el equipo'));
+    carga();
+  }catch(e){ avisa('No se pudo activar: '+((e&&e.message)||e)); }
+}
+
 /* ---------- pintar ---------- */
 function tarjeta(tipo,it,icono,titulo,sub,cuando,enlace){
   var e=espera(cuando);
@@ -266,7 +333,7 @@ function pinta(){
   }
   if(CARGANDO){ caja.innerHTML='<div class="vacio">Cargando…</div>'; return; }
 
-  var total=EXPS.length+EVTS.length+ATES.length;
+  var total=EXPS.length+EVTS.length+ATES.length+SALAS.length+HOT.length;
   var viejos=0;
   EXPS.concat(EVTS).forEach(function(x){ var h=horas(x.updated_at||x.created_at); if(h!=null&&h>=48) viejos++; });
   $('cuenta').innerHTML= total
@@ -295,11 +362,85 @@ function pinta(){
     }).join('');
   }
   if(EVTS.length){
-    h+='<h2>Eventos <em>'+EVTS.length+'</em></h2>'+EVTS.map(function(x){
+    h+='<h2>Eventos <em>'+EVTS.length+'</em></h2>'+
+      (EVTS.some(function(x){return esDeAna(x.espacio);})
+        ? '<div style="font-size:12.5px;color:var(--gris);margin:-4px 0 10px">Los de <b>Café Cumbre</b> y '+
+          '<b>Galería</b> llevan dos vistos buenos: el tuyo, aquí, y el de la sede. Cuando lo apruebes, '+
+          'le aparece a Ana en su portal para que acepte tenerlo en su sitio.</div>'
+        : '')+
+      EVTS.map(function(x){
       return tarjeta('evt',x,'🎫',x.nombre||'(sin nombre)',
-        (x.espacio||'sin espacio')+(x.fecha_inicio?' · '+String(x.fecha_inicio).slice(0,10):''),
+        (x.espacio||'sin espacio')+(x.fecha_inicio?' · '+String(x.fecha_inicio).slice(0,10):'')+
+        (esDeAna(x.espacio)?' · después lo acepta la sede':''),
         x.updated_at||x.created_at,'/m/eventos.html?embed=evt');
     }).join('');
+  }
+
+  if(SALAS.length){
+    h+='<h2>Salas para eventos <em>'+SALAS.length+'</em></h2>'+
+      '<div style="font-size:12.5px;color:var(--gris);margin:-4px 0 10px">Una productora pide una sala y '+
+      'queda pendiente hasta que alguien de la casa la confirme. Dos pueden pedir la misma noche: las dos '+
+      'salen aquí y solo una se puede confirmar. Ojo con las dos franjas: <b>la sala se bloquea desde el '+
+      'montaje</b>, pero <b>el boleto se vende a la hora de inicio</b>.</div>'+
+      SALAS.map(function(r,i){
+        var pol=r.poliza||{}, exi=r.poliza_exige||{};
+        var falta = exi.exigible && !pol.ok;
+        var pax = r.cupo||r.aforo;
+        var sobra = (pax && r.capacidad && pax>r.capacidad)
+          ? ' <b style="color:#9E3B2E">pasa del aforo ('+r.capacidad+')</b>' : '';
+        /* UN EVENTO QUE YA SE VENDE CON LA SALA SIN CONFIRMAR. No es teoría:
+           hoy hay tres así. Se canta, porque es lo contrario del orden. */
+        var vendiendo = (r.evento_estado==='publicado')
+          ? '<div class="candado on">Este evento <b>ya está a la venta</b> y su sala sigue sin confirmar.</div>' : '';
+        return '<div class="fila">'+
+          '<div class="ico">🗝️</div>'+
+          '<div class="mid">'+
+            '<div class="nom"><b>'+esc(r.evento||'(sin nombre)')+'</b></div>'+
+            '<div class="donde">'+esc(r.productora||'(sin productora)')+' · <b>'+esc(r.sala||'—')+'</b>'+
+              (esDeAna(r.sala)?' · la sede también lo acepta después':'')+'</div>'+
+            '<div class="donde">'+salaDia(r.venta_desde)+' · sala '+salaHora(r.sala_desde)+'–'+salaHora(r.sala_hasta)+
+              ' · boleto para las '+salaHora(r.venta_desde)+' · '+(pax||'—')+' personas'+sobra+'</div>'+
+            vendiendo+
+            (r.choca_con?'<div class="candado on">Choca con <b>'+esc(r.choca_con)+'</b>, que ya tiene esa franja. Hay que mover uno de los dos.</div>':'')+
+            (falta?'<div class="candado on">'+esc(pol.motivo||'sin póliza')+' · la necesita porque '+
+                   esc(exi.por||'lo pide el contrato')+' (cláusula DÉCIMA QUINTA).'+
+                   '<label style="display:flex;gap:7px;align-items:center;margin-top:6px;font-weight:400">'+
+                   '<input type="checkbox" id="salaDisp-'+i+'"> Dispensar la póliza para este evento — queda a tu nombre</label></div>':'')+
+            '<div id="salaCaja-'+i+'" style="display:none;margin-top:8px">'+
+              '<textarea id="salaMot-'+i+'" placeholder="¿Por qué la rechazas? Se lo decimos tal cual." '+
+                'style="width:100%;min-height:62px;padding:8px 10px;border:1px solid var(--linea,#E3E0D6);border-radius:8px;font:inherit"></textarea>'+
+              '<div style="margin-top:6px"><button class="btn sm gris" onclick="decideSala('+i+',false)">Rechazar con este motivo</button></div>'+
+            '</div>'+
+          '</div>'+
+          '<div class="acc">'+
+            '<button class="btn sm verde" onclick="decideSala('+i+',true)">Confirmar la sala</button>'+
+            '<button class="btn sm gris" onclick="abreSalaMot('+i+')">Rechazar</button>'+
+          '</div>'+
+        '</div>';
+      }).join('');
+  }
+
+  if(HOT.length){
+    h+='<h2>Hoteles nuevos <em>'+HOT.length+'</em></h2>'+
+      '<div style="font-size:12.5px;color:var(--gris);margin:-4px 0 10px">Hoteles que terminaron su alta y '+
+      'todavía no están activos. Activar uno es dejarle vender.</div>'+
+      HOT.map(function(x){
+        return '<div class="fila">'+
+          '<div class="ico">🛏️</div>'+
+          '<div class="mid">'+
+            '<div class="nom"><b>'+esc(x.nombre_comercial||'(sin nombre)')+'</b></div>'+
+            '<div class="donde">'+esc(x.ciudad||'sin ciudad')+
+              (x.cuartos?' · '+x.cuartos+' cuartos':'')+(x.email?' · '+esc(x.email):'')+'</div>'+
+            (x.contrato_firmado_at
+              ? '<div class="espera verde">convenio firmado</div>'
+              : '<div class="candado on">Sin convenio firmado.</div>')+
+          '</div>'+
+          '<div class="acc">'+
+            '<button class="btn sm verde" onclick="activaHotel(\''+esc(x.id)+'\')">Activar</button>'+
+            '<a class="btn sm gris" target="_top" href="/m/hoteles.html">Ver ↗</a>'+
+          '</div>'+
+        '</div>';
+      }).join('');
   }
   if(ATES.length){
     h+='<h2>Altas de antes del cambio <em>'+ATES.length+'</em></h2>'+
@@ -326,6 +467,13 @@ function pinta(){
   caja.innerHTML=h;
 }
 
+async function traeRpc(fn,body){
+  var r=await fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',
+    headers:Object.assign({'Content-Type':'application/json'},hdr()),
+    body:JSON.stringify(body||{})});
+  if(!r.ok) throw new Error(fn+' respondió '+r.status);
+  return r.json();
+}
 async function trae(q){
   var r=await fetch(SB+'/rest/v1/'+q,{headers:hdr()});
   if(!r.ok) throw new Error(q.split('?')[0]+' respondió '+r.status);
@@ -347,11 +495,20 @@ async function carga(){
          seccion desaparece sola. */
       trae('tour_operadores?select=id,nombre_comercial,email,ciudad,estado,created_at,updated_at&estado=eq.en_revision&order=created_at'),
       trae('op_experiencias?select=id,nombre,operador_id&terminos_estado=eq.pendiente&order=nombre&limit=200'),
-      trae('v_ateneistas?select=id,nombre_comercial,candado&limit=1000')
+      trae('v_ateneistas?select=id,nombre_comercial,candado&limit=1000'),
+      /* Las peticiones de sala, TODAS: el filtro por nombre de sala era el
+         agujero. La base ya decide quién puede verlas (es_equipo_casa). */
+      traeRpc('ev_solicitudes_lista',{p_estado:'pendiente'}),
+      /* Un hotel que terminó su alta y todavía no está activo. Los candidatos
+         -los que aún no se han dado de alta- no se aprueban: se contactan, y
+         eso vive en su propia pantalla. */
+      trae('hoteles?select=id,nombre_comercial,ciudad,cuartos,email,etapa,estado,contrato_firmado_at,created_at,updated_at'+
+           '&etapa=eq.alta&estado=neq.activo&order=created_at')
     ]);
     EXPS=res[0]; EVTS=res[1]; ATES=res[2]; TERM=res[3];
     CAND={}; OPS={};
     res[4].forEach(function(a){ CAND[a.id]=a.candado; OPS[a.id]=a.nombre_comercial; });
+    SALAS=res[5]||[]; HOT=res[6]||[];
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   CARGANDO=false; pinta();
 }
