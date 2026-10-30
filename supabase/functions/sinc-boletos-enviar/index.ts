@@ -278,8 +278,17 @@ Deno.serve(async (req) => {
         </p>
         ${punto ? `<p><b>${esc(t.donde)}</b> ${esc(punto)}</p>` : ""}
         <p><b>${esc(t.folio)}</b> ${esc(res.folio)}</p>
-        <p style="margin-top:10px"><b>${esc(t.codigo(uno))}:</b><br>
-          ${boletos.map((b: any) => `<span style="font-family:ui-monospace,Menlo,monospace;font-size:18px;letter-spacing:.2em">${esc(b.codigo)}</span>`).join("<br>")}</p>
+        ${/* UN CODIGO PARA EL GRUPO, NO UNO POR CABEZA. Javi, 30-oct-2026, con
+             el correo delante: «no me des 4 códigos, dame 1 código para 4 pero
+             la opción de editar si son 4 o 3 o 2 o 1».
+             Y tiene razón: la reserva es una, llega junta y se escanea una vez;
+             cuatro códigos invitan a escanear cuatro veces y a que el guía
+             busque cuál es cuál. El código del grupo ya está debajo del QR,
+             diciendo por cuántos vale, y el ajuste se hace en el escáner.
+             La lista por persona solo aparece si el QR no se pudo dibujar: ahí
+             hace falta algo que teclear. */ ""}
+        ${bloqueQR ? "" : `<p style="margin-top:10px"><b>${esc(t.codigo(uno))}:</b><br>
+          ${boletos.map((b: any) => `<span style="font-family:ui-monospace,Menlo,monospace;font-size:18px;letter-spacing:.2em">${esc(b.codigo)}</span>`).join("<br>")}</p>`}
         ${bloqueReglas}
         <p style="color:#6B6459;font-size:13px;margin-top:20px">${esc(t.ensena)}</p>
         <p style="color:#A49B8C;font-size:12px;margin-top:18px">${esc(t.pie)}</p>
