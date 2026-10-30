@@ -63,6 +63,7 @@ input{width:100%;padding:13px 12px;border:1.5px solid var(--linea);border-radius
 .res .big{font-family:Oswald;font-size:21px;font-weight:700;line-height:1.2}
 .pasos{display:flex;gap:7px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .pasos b{font-family:Oswald;font-size:24px;min-width:38px;text-align:center}
+.idbox{margin-top:12px;padding-top:12px;border-top:1px dashed var(--linea)}
 .fila{display:flex;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--linea)}
 .fila:first-of-type{border-top:0}
 .fila .n{flex:1;min-width:0}
@@ -266,9 +267,69 @@ function pintaGrupo(b){
         '<button class="btn" id="confirma">Confirmar</button>'+
       '</div>'+
       '<div class="mini" style="margin-top:8px">Si llegaron menos, baja el número antes de confirmar.</div>'+
+      /* LA FOTO DEL ID. Javi, 30-oct-2026: «en el momento de capturar el QR el
+         sistema solicite capturar foto de ID de la persona para poder
+         continuar con la validación del checkin», y «la foto es por reserva».
+         Una por reserva: el grupo llega junto y se escanea una vez.
+         Si la experiencia la exige, Confirmar no se enciende hasta que esté.
+         Si no la exige, el botón está igual y no estorba: quien quiera la
+         toma. Lo decide la ficha de la experiencia, no esta pantalla. */
+      '<div class="idbox">'+
+        '<div class="mini"><b>Identificación'+(b.pide_id?' · hace falta':' · opcional')+'</b></div>'+
+        (b.id_foto
+          ? '<div class="mini" id="idYa">Ya tiene foto. <button class="btn g" id="idVer" style="padding:7px 12px;font-size:12px">Verla</button> '+
+            '<button class="btn g" id="idOtra" style="padding:7px 12px;font-size:12px">Cambiarla</button></div>'
+          : '<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto'+
+            '<input type="file" id="idArch" accept="image/*" capture="environment" style="display:none"></label>')+
+        '<div class="mini" id="idNota" style="margin-top:6px"></div>'+
+      '</div>'+
     '</div>';
   let n = ya ? Number(b.llegaron) : Number(b.pax);
+  let foto = b.id_foto || null;
   const pinta = () => { $('cuantos').textContent = n; };
+
+  /* El candado: si la experiencia pide identificación y todavía no hay foto,
+     Confirmar no se puede pulsar y se dice por qué. Un botón apagado sin
+     explicación es el que hace que alguien piense que la app se rompió. */
+  const candado = () => {
+    const falta = b.pide_id && !foto;
+    const c=$('confirma'); if(!c) return;
+    c.disabled = falta;
+    if(falta) $('idNota').textContent='Sin la foto no se puede confirmar la llegada.';
+  };
+  candado();
+
+  const sube = async (f) => {
+    if(!f) return;
+    if(f.size > 12*1024*1024){ $('idNota').textContent='La foto pesa más de 12 MB.'; return; }
+    $('idNota').textContent='Subiendo la foto…';
+    const ext=(String(f.name).split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
+    /* La regla del almacén mira la TERCERA carpeta y ahí tiene que ir el
+       operador; cambiar el orden rompe el permiso sin avisar. */
+    const ruta='identificaciones/'+b.salida_id+'/'+(b.operador_id||'casa')+'/'+b.reserva_id+'-'+Date.now()+'.'+ext;
+    try{
+      const up=await fetch(SB+'/storage/v1/object/tercero-docs/'+ruta,{method:'POST',
+        headers:{apikey:KEY, Authorization:'Bearer '+SES.access_token,
+                 'Content-Type':f.type||'image/jpeg'}, body:f});
+      if(!up.ok){ $('idNota').textContent='El almacén la rechazó ('+up.status+').'; return; }
+      const r=await fetch(SB+'/rest/v1/rpc/sinc_reserva_id_foto',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p_reserva:b.reserva_id, p_ruta:ruta})}).then(x=>x.json());
+      if(r && r.ok){ foto=ruta; $('idNota').textContent='Foto guardada.'; candado(); vibra([30]); }
+      else $('idNota').textContent=(r&&(r.message||r.motivo))||'No se pudo guardar.';
+    }catch(e){ $('idNota').textContent='No se pudo subir: '+(e.message||e); }
+  };
+  const arch=$('idArch'); if(arch) arch.onchange = () => sube(arch.files && arch.files[0]);
+  const otra=$('idOtra'); if(otra) otra.onclick = () => {
+    $('idYa').outerHTML='<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto'+
+      '<input type="file" id="idArch2" accept="image/*" capture="environment" style="display:none"></label>';
+    const a2=$('idArch2'); if(a2) a2.onchange = () => sube(a2.files && a2.files[0]);
+  };
+  const ver=$('idVer'); if(ver) ver.onclick = async () => {
+    const sg=await fetch(SB+'/storage/v1/object/sign/tercero-docs/'+foto,{method:'POST',
+      headers:hdr(), body:JSON.stringify({expiresIn:600})}).then(x=>x.json()).catch(()=>null);
+    if(sg && sg.signedURL) window.open(SB+'/storage/v1'+sg.signedURL,'_blank','noopener');
+    else $('idNota').textContent='No se pudo abrir la foto.';
+  };
   $('menos').onclick = () => { if(n>0){ n--; pinta(); } };
   $('mas').onclick   = () => { if(n<Number(b.pax)){ n++; pinta(); } };
   $('confirma').onclick = async () => {
