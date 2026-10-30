@@ -307,6 +307,21 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     </div>
   </section>
 
+  <style>
+  .salChips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 10px}
+  .salChips .c{display:inline-flex;align-items:center;gap:6px;border:1.5px solid var(--rule,#E2DCCF);
+    border-radius:999px;padding:4px 11px;font-size:12.5px;cursor:pointer;background:#fff;user-select:none}
+  .salChips .c .sw{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .salChips .c.off{opacity:.38;text-decoration:line-through}
+  .salChips .todas{font-size:12px;color:var(--muted,#6B6459);cursor:pointer;text-decoration:underline;margin-left:4px}
+  .salCh{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;white-space:nowrap}
+  /* Lo que todavía no tiene la sala confirmada se ve, pero se ve distinto:
+     rayado y con el borde punteado. Pintarlo igual que lo confirmado es la
+     forma más rápida de apartar dos veces la misma noche. */
+  .ocPend,.blq.pend,.mchip.pend{background-image:repeating-linear-gradient(135deg,
+     rgba(255,255,255,.55) 0 5px, rgba(255,255,255,0) 5px 10px)!important;
+     outline:1.5px dashed rgba(0,0,0,.35);outline-offset:-2px}
+  </style>
   <!-- CALENDARIO -->
   <section id="sec-cal" style="display:none">
     <div class="card">
@@ -316,10 +331,15 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
         <button class="btn ghost sm" id="bPrev">‹</button><b id="rango"></b>
         <button class="btn ghost sm" id="bNext">›</button><button class="btn ghost sm" id="bHoy">Hoy</button>
         <span style="flex:1"></span>
-        <select id="fCalSala" style="width:auto;min-width:130px" title="Filtrar por sala"><option value="">Todas las salas</option></select>
-        <select id="fCalEstado" style="width:auto;min-width:130px" title="Filtrar por estado"><option value="">Todos los estados</option><option value="propuesto">Por aprobar</option><option value="confirmado">Confirmados</option><option value="publicado">Publicados</option><option value="borrador">Borradores</option><option value="realizado">Ya pasaron</option></select>
+        <label class="salCh" title="Lo que ya tiene la sala confirmada"><input type="checkbox" id="fCalAcep" checked> Confirmadas</label>
+        <label class="salCh" title="Lo que pidió la sala y espera respuesta, o ni la ha pedido"><input type="checkbox" id="fCalPend" checked> Por aprobar</label>
         <div class="vista" id="modoCal"><button data-m="dia" aria-pressed="false">Día</button><button data-m="semana" aria-pressed="false">Semana</button><button data-m="mes" aria-pressed="true">Mes</button></div>
       </div>
+      <!-- LAS SALAS SE ENCIENDEN Y SE APAGAN. Javi, 30-oct-2026: «con los
+           filtros de activar salas y apagar salas». Un desplegable obliga a
+           mirar las salas de una en una; lo que hace falta aquí es comparar
+           dos o tres noches en las mismas salas. -->
+      <div class="salChips" id="calSalas"></div>
       <div id="calOcup"></div>
       <div id="cal"></div>
       <div class="leg" id="calLeg"></div>
@@ -476,6 +496,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   var SECS=[['evt','Eventos'],['cal','Qué hay en las salas'],['dis','Horarios disputados'],['esp','Los espacios']];
   var sec='evt', ESP=[], PROD=[], EVT=[], ASOC={}, dia=new Date(), lunes=null, mes=new Date(), modoCal='mes';
   var fCalSala='', fCalEstado='';
+  /* Qué salas están encendidas (vacío = todas) y qué estados de sala se ven. */
+  var SAL_OFF={}, verAcep=true, verPend=true, SALEST={};
   /* Deep-link por pestaña: el panel abre esta página en #evt (Ficha de eventos),
      #cal (Qué hay en las salas) o #esp (Los espacios · Configuración). */
   function secFromHash(){var h=(location.hash||'').replace('#','');return ['evt','cal','esp'].indexOf(h)>=0?h:null;}
@@ -1204,11 +1226,26 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   }
 
   /* ocupaciones desde eventos */
-  function ocupaciones(){return EVT.filter(function(e){return e.espacio_id&&e.fecha_inicio&&e.estado!=='cancelado'
-      &&(!fCalSala||e.espacio_id===fCalSala)
-      &&(!fCalEstado||e.estado===fCalEstado);}).map(function(e){
+  /* CÓMO ESTÁ LA SALA DE ESTE EVENTO. Son dos cosas distintas y el calendario
+     las trataba igual: una es el estado del EVENTO (borrador, publicado) y
+     otra si alguien de la casa le CONFIRMÓ la sala. Lo segundo es lo que
+     decide si esa noche está realmente apartada. */
+  function salaDe(e){ return SALEST[e.id] || ''; }
+  function esAceptada(e){ return salaDe(e)==='aprobada'; }
+  function ocupaciones(){return EVT.filter(function(e){
+      if(!(e.espacio_id&&e.fecha_inicio&&e.estado!=='cancelado')) return false;
+      if(SAL_OFF[e.espacio_id]) return false;
+      if(fCalSala && e.espacio_id!==fCalSala) return false;
+      if(fCalEstado && e.estado!==fCalEstado) return false;
+      var ac=esAceptada(e);
+      if(ac && !verAcep) return false;
+      if(!ac && !verPend) return false;
+      return true;
+    }).map(function(e){
     var ei=new Date(e.fecha_inicio), ef=new Date(e.fecha_fin||e.fecha_inicio);
-    return {id:e.id,espacio_id:e.espacio_id,nombre:e.nombre,estado:e.estado,evento_inicia:ei,evento_termina:ef,
+    return {id:e.id,espacio_id:e.espacio_id,nombre:e.nombre,estado:e.estado,
+      sala_estado:salaDe(e), pend:!esAceptada(e),
+      evento_inicia:ei,evento_termina:ef,
       inicia:new Date(ei.getTime()-(e.montaje_min||0)*60000),termina:new Date(ef.getTime()+(e.desmontaje_min||0)*60000)};});}
   function verEvento(id){var e=EVT.filter(function(x){return x.id===id;})[0];if(!e)return;sec='evt';pinta();abreEvt(e);}
   var H0=8,H1=24;
@@ -1227,7 +1264,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
         if(!oc){h+='<td></td>';return;}
         var empieza=oc.inicia>=cel, esMont=oc.evento_inicia>celFin||oc.evento_termina<=cel;
         var col=colOf(e.id),st=esMont?'':'style="background:'+tint(col)+';border-left-color:'+col+';color:'+col+';cursor:pointer"';
-        h+='<td><div class="oc'+(esMont?' mont':'')+'" '+st+(esMont?'':' data-ev="'+oc.id+'"')+'>'+(empieza?('<b>'+esc(oc.nombre||'Reservado')+'</b>'+(esMont?'<br>montaje':'')):'')+'</div></td>';});
+        h+='<td><div class="oc'+(esMont?' mont':'')+(oc.pend?' ocPend':'')+'" '+st+(esMont?'':' data-ev="'+oc.id+'"')+
+          (oc.pend?' title="La sala todavía no está confirmada"':'')+'>'+
+          (empieza?('<b>'+esc(oc.nombre||'Reservado')+'</b>'+(esMont?'<br>montaje':'')):'')+'</div></td>';});
       h+='</tr>';}
     $('cal').innerHTML=h+'</tbody></table></div><div class="mini" style="margin-top:8px">Lo gris es montaje o desmontaje.</div>';
   }
@@ -1242,7 +1281,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       h+='<div class="band">'+b[0]+'<div class="mini" style="font-weight:400;color:var(--faint)">'+b[1]+'–'+b[2]+' h</div></div>';
       for(var i=0;i<7;i++){var d0=new Date(lunes);d0.setDate(d0.getDate()+i);var d1=new Date(d0);d1.setDate(d1.getDate()+1);
         var en=OC.filter(function(o){return o.espacio_id&&o.inicia<d1&&o.termina>d0&&bandaDe(o.evento_inicia)===BANDAS.indexOf(b);});
-        h+='<div>'+en.map(function(o){var col=colOf(o.espacio_id);return '<div class="blq" data-ev="'+o.id+'" style="background:'+col+';cursor:pointer"><b>'+hhmm(o.evento_inicia)+'</b> '+esc(o.nombre||'')+'</div>';}).join('')+'</div>';}
+        h+='<div>'+en.map(function(o){var col=colOf(o.espacio_id);
+          return '<div class="blq'+(o.pend?' pend':'')+'" data-ev="'+o.id+'" style="background:'+col+';cursor:pointer"'+
+            (o.pend?' title="La sala todavía no está confirmada"':'')+'><b>'+hhmm(o.evento_inicia)+'</b> '+esc(o.nombre||'')+'</div>';}).join('')+'</div>';}
     });
     $('cal').innerHTML=h+'</div>';
   }
@@ -1254,7 +1295,9 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     for(var k=0;k<42;k++){var d0=new Date(ini);d0.setDate(d0.getDate()+k);var d1=new Date(d0);d1.setDate(d1.getDate()+1);
       var off=d0.getMonth()!==mo, es=d0.getTime()===hoy.getTime();
       var en=OC.filter(function(o){return o.espacio_id&&o.inicia<d1&&o.termina>d0;});
-      var chips=en.slice(0,3).map(function(o){var col=colOf(o.espacio_id);return '<div class="mchip" data-ev="'+o.id+'" style="background:'+col+'" title="'+esc(o.nombre||'')+'">'+esc(o.nombre||'Reservado')+'</div>';}).join('');
+      var chips=en.slice(0,3).map(function(o){var col=colOf(o.espacio_id);
+        return '<div class="mchip'+(o.pend?' pend':'')+'" data-ev="'+o.id+'" style="background:'+col+'" title="'+
+          esc(o.nombre||'')+(o.pend?' · la sala todavía no está confirmada':'')+'">'+esc(o.nombre||'Reservado')+'</div>';}).join('');
       if(en.length>3)chips+='<div class="mini">+'+(en.length-3)+' más</div>';
       h+='<div class="d'+(off?' off':'')+(es?' hoy':'')+'" data-d="'+d0.getTime()+'" style="cursor:pointer"><span class="dn">'+d0.getDate()+'</span>'+chips+'</div>';
       if(k>=34&&d0.getMonth()!==mo&&d0.getDay()===0)break; // corta la 6a semana si ya no hace falta
@@ -1269,7 +1312,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     var usados={};ocupaciones().forEach(function(o){usados[o.espacio_id]=1;});
     var act=ESP.filter(function(e){return e.activo&&usados[e.id];});
     if(!act.length)act=ESP.filter(function(e){return e.activo;}).slice(0,8);
-    $('calLeg').innerHTML='<span style="font-weight:600">Salas:</span> '+act.map(function(e){return '<span class="it"><span class="sw" style="background:'+colOf(e.id)+'"></span>'+esc(e.nombre)+'</span>';}).join('');
+    $('calLeg').innerHTML='<span style="font-weight:600">Salas:</span> '+act.map(function(e){return '<span class="it"><span class="sw" style="background:'+colOf(e.id)+'"></span>'+esc(e.nombre)+'</span>';}).join('')+
+      '<span class="it" style="margin-left:10px"><span class="sw ocPend" style="background:#9b968c"></span>rayado = sala sin confirmar</span>';
   }
   /* ----- OCUPACIÓN (coworking + residencias) en pax, para el resumen ----- */
   function _od(s){return s?new Date(String(s).slice(0,10)+'T00:00:00'):null;}
@@ -1299,10 +1343,29 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     box.innerHTML='<div class="ocWrap">'+tarjeta('coworking',cw,yc)+tarjeta('residencias',rs,yr)+'</div>';
     Array.prototype.forEach.call(box.querySelectorAll('.ocMas'),function(b){b.onclick=function(){var k=b.parentNode.parentNode;var ab=k.classList.toggle('abierto');b.textContent=ab?'–':'+';};});
   }
-  function fillCalSalas(){var sel=$('fCalSala');if(!sel)return;var cur=sel.value;
+  function fillCalSalas(){
+    var caja=$('calSalas'); if(!caja) return;
     var act=ESP.filter(function(e){return e.activo;});
-    sel.innerHTML='<option value="">Todas las salas</option>'+act.map(function(e){return '<option value="'+e.id+'">'+esc(e.nombre)+'</option>';}).join('');
-    sel.value=cur;}
+    var apagadas=act.filter(function(e){return SAL_OFF[e.id];}).length;
+    caja.innerHTML=act.map(function(e){
+      return '<span class="c'+(SAL_OFF[e.id]?' off':'')+'" data-sal="'+e.id+'">'+
+        '<span class="sw" style="background:'+colOf(e.id)+'"></span>'+esc(e.nombre)+'</span>';
+    }).join('')+
+    '<span class="todas" id="salTodas">'+(apagadas?'Encender todas':'Dejar solo una')+'</span>';
+    Array.prototype.forEach.call(caja.querySelectorAll('[data-sal]'),function(c){
+      c.onclick=function(){ var id=c.getAttribute('data-sal');
+        if(SAL_OFF[id]) delete SAL_OFF[id]; else SAL_OFF[id]=1;
+        pintaCal(); };
+    });
+    var t=$('salTodas');
+    if(t) t.onclick=function(){
+      if(apagadas){ SAL_OFF={}; }
+      /* «Dejar solo una» apaga todas menos la primera: es el gesto que se pide
+         cuando hay cinco salas y solo importa una. */
+      else { SAL_OFF={}; act.slice(1).forEach(function(e){ SAL_OFF[e.id]=1; }); }
+      pintaCal();
+    };
+  }
   function pintaCal(){fillCalSalas();modoCal==='dia'?pintaDia():modoCal==='semana'?pintaSem():pintaMes();pintaLeg();pintaOcup();}
 
   /* espacios */
@@ -1525,7 +1588,11 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
       sb.from('productora_usuarios').select('productora_id,nombre,rol').eq('rol','productor_asociado'),
       sb.from('ateneo_lugares').select('numero,categoria,tipo,capacidad,activo'),
       sb.from('inscripciones_coworking').select('plan_id,plan_nombre,fecha_inicio,pax,estado'),
-      sb.from('ateneo_residencias_reservas').select('unidad,habitacion,fecha_inicio,fecha_fin,estado')
+      sb.from('ateneo_residencias_reservas').select('unidad,habitacion,fecha_inicio,fecha_fin,estado'),
+      /* CÓMO ESTÁ LA SALA DE CADA EVENTO. La petición cuelga del evento por un
+         texto, 'EV:<id>', no por clave: así es como se quedaron huérfanas dos
+         cuando se borraron sus eventos. */
+      sb.from('ev_solicitudes').select('titulo,estado')
     ]);
     if(r[0].error){$('tEsp').innerHTML='<div class="vacio">No se pudo leer: '+esc(r[0].error.message)+'</div>';}
     ESP=r[0].data||[];PROD=(r[1].data||[]).filter(function(p){return p.estado!=='baja';});EVT=r[2].data||[];
@@ -1537,6 +1604,11 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     BOL={};(r[3]&&r[3].data||[]).forEach(function(b){ (BOL[b.evento_id]=BOL[b.evento_id]||[]).push(b); });
     ASOC={};(r[4]&&r[4].data||[]).forEach(function(u){if(!ASOC[u.productora_id])ASOC[u.productora_id]=u.nombre;});
     LUGA=(r[5]&&r[5].data)||[]; INSCA=(r[6]&&r[6].data)||[]; RESA=(r[7]&&r[7].data)||[];
+    SALEST={};
+    ((r[8]&&r[8].data)||[]).forEach(function(x){
+      var t=String(x.titulo||''); if(t.indexOf('EV:')!==0) return;
+      SALEST[t.slice(3)]=x.estado;
+    });
     colorEsp();montaGen();pinta();
     abreDeLaLiga();
   }
@@ -1622,8 +1694,10 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
   $('bPrev').onclick=function(){mueve(-1);};$('bNext').onclick=function(){mueve(1);};
   $('bHoy').onclick=function(){dia=new Date();lunes=aLunes(new Date());mes=new Date();pintaCal();};
   Array.prototype.forEach.call($('modoCal').querySelectorAll('button'),function(b){b.onclick=function(){modoCal=b.getAttribute('data-m');Array.prototype.forEach.call($('modoCal').querySelectorAll('button'),function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});pintaCal();};});
-  $('fCalSala').onchange=function(){fCalSala=this.value;pintaCal();};
-  $('fCalEstado').onchange=function(){fCalEstado=this.value;pintaCal();};
+  /* Los dos desplegables de antes ya no existen: las salas se encienden y se
+     apagan con sus pastillas, y el estado son dos interruptores. */
+  if($('fCalAcep')) $('fCalAcep').onchange=function(){verAcep=this.checked;pintaCal();};
+  if($('fCalPend')) $('fCalPend').onchange=function(){verPend=this.checked;pintaCal();};
   // tocar un evento del calendario -> abre su ficha (gana al clic del día en la vista de mes)
   $('cal').addEventListener('click',function(ev){var t=ev.target.closest&&ev.target.closest('[data-ev]');if(t){ev.stopPropagation();abrePop(t.getAttribute('data-ev'));}},true);
   // pop-up de info rápida del evento
