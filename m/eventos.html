@@ -450,6 +450,11 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     <div class="popbody">
       <div class="poprow"><span>Cuándo</span><b id="popCuando"></b></div>
       <div class="poprow"><span>Sala</span><b id="popSala"></b></div>
+      <!-- CÓMO ESTÁ LA SALA, Y EL BOTÓN AL LADO. Javi, 30-oct-2026: «¿me
+           puedes permitir aprobar la sala desde este pop up?». Hasta hoy
+           había que salir a otra pantalla, y para los eventos que monta la
+           casa no había botón en ninguna. -->
+      <div class="poprow"><span>Estado de la sala</span><b id="popSalaEst">—</b></div>
       <div class="poprow"><span>Precio</span><b id="popPrecio"></b></div>
       <div class="poprow"><span>Ventas al momento</span><b id="popVentas"></b></div>
       <div class="poprow"><span>Productor</span><b id="popProd"></b></div>
@@ -463,6 +468,8 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
            salir en Sincretico, con lo que hay ahora mismo; «Validar y publicar»
            solo lo ve quien puede editar esta pantalla. -->
       <button class="btn ghost" id="popPrev">Previsualizar</button>
+      <button class="btn" id="popSalaOk" style="display:none">Confirmar la sala</button>
+      <button class="btn ghost" id="popSalaNo" style="display:none">Rechazar la sala</button>
       <button class="btn" id="popPublicar" style="display:none">Validar y publicar</button>
       <button class="btn" id="popEditar">Editar evento</button>
       <button class="btn ghost" id="popCerrar2">Cerrar</button>
@@ -1744,8 +1751,73 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
        todavia no esta publicado ni se dio por realizado. */
     var yaSalio = (e.estado==='publicado'||e.estado==='realizado'||e.estado==='cancelado');
     $('popPublicar').style.display=(PUEDO_PUBLICAR && !yaSalio)?'':'none';
+    pintaSalaPop(e);
     $('evPop').hidden=false;
   }
+
+  /* El estado de la sala de este evento, y lo que se puede hacer con él.
+     Tres situaciones y tres frases distintas: confirmada, pedida y esperando,
+     y nadie la pidió —que es lo que pasa con los eventos que monta la casa—. */
+  function pintaSalaPop(e){
+    var cel=$('popSalaEst'), bo=$('popSalaOk'), bn=$('popSalaNo');
+    if(!cel) return;
+    bo.style.display='none'; bn.style.display='none';
+    cel.innerHTML='<span class="mini">leyendo…</span>';
+    if(!e.espacio_id || !e.fecha_inicio){
+      cel.innerHTML='<span class="mini">sin sala o sin fecha</span>'; return;
+    }
+    sb.rpc('ev_sala_estado_evento',{p_evento:e.id}).then(function(q){
+      var d=(q&&q.data)||{};
+      var st=d.estado||'sin_pedir';
+      if(st==='aprobada'){
+        cel.innerHTML='<span class="tag ok">confirmada</span>'+
+          (d.decidido_por?'<div class="mini" style="font-weight:400">por '+esc(d.decidido_por)+'</div>':'');
+      } else if(st==='rechazada'){
+        cel.innerHTML='<span class="tag bad">rechazada</span>'+
+          (d.motivo?'<div class="mini" style="font-weight:400">'+esc(d.motivo)+'</div>':'');
+        if(PUEDO_PUBLICAR) bo.style.display='';
+      } else if(st==='pendiente'){
+        cel.innerHTML='<span class="tag warn">pedida · esperando respuesta</span>';
+        if(PUEDO_PUBLICAR){ bo.style.display=''; bn.style.display=''; }
+      } else {
+        cel.innerHTML='<span class="tag bad">nadie la pidió</span>';
+        if(PUEDO_PUBLICAR) bo.style.display='';
+      }
+    }).catch(function(){ cel.innerHTML='<span class="mini">no pudimos leerlo</span>'; });
+  }
+
+  async function decideSalaPop(ok){
+    var id=popId; if(!id) return;
+    var motivo=null;
+    if(!ok){
+      motivo=prompt('¿Por qué rechazas la sala? Se lo decimos tal cual.');
+      if(motivo===null) return;
+      if(String(motivo).trim().length<4){ toast('Escribe el motivo: sin él, quien la pidió tiene que adivinar.',true); return; }
+    }
+    var bo=$('popSalaOk'), bn=$('popSalaNo');
+    bo.disabled=true; bn.disabled=true;
+    try{
+      var q=await sb.rpc('ev_sala_decide_evento',{p_evento:id,p_aprobar:!!ok,p_motivo:motivo,p_dispensa_poliza:false});
+      var d=(q&&q.data)||{};
+      if(q.error||d.error){
+        var m=(q.error&&q.error.message)||d.error||'no se pudo';
+        /* La póliza no se dispensa a ciegas: se pregunta, y queda a su nombre. */
+        if(d.falta_poliza && confirm(m+'\n\n¿La dispensas para este evento? Queda a tu nombre.')){
+          var q2=await sb.rpc('ev_sala_decide_evento',{p_evento:id,p_aprobar:true,p_motivo:null,p_dispensa_poliza:true});
+          var d2=(q2&&q2.data)||{};
+          if(q2.error||d2.error){ toast((q2.error&&q2.error.message)||d2.error,true); }
+          else { toast('Sala confirmada · póliza dispensada'); await carga(); }
+        } else { toast(m,true); }
+      } else {
+        toast(ok?'Sala confirmada':'Sala rechazada');
+        await carga();
+      }
+    }catch(err){ toast('No se pudo: '+((err&&err.message)||err),true); }
+    bo.disabled=false; bn.disabled=false;
+    var e=EVT.filter(function(x){return x.id===id;})[0]; if(e) pintaSalaPop(e);
+  }
+  if($('popSalaOk')) $('popSalaOk').onclick=function(){ decideSalaPop(true); };
+  if($('popSalaNo')) $('popSalaNo').onclick=function(){ decideSalaPop(false); };
   function cierraPop(){$('evPop').hidden=true;popId=null;}
   $('popCerrar').onclick=cierraPop;$('popCerrar2').onclick=cierraPop;
   $('evPop').onclick=function(ev){if(ev.target===this)cierraPop();};
@@ -1844,7 +1916,11 @@ tr.fila:hover td{background:var(--surface-2);cursor:pointer}
     try{
       var r=await sb.rpc('mis_paginas');
       var l=(r&&r.data)||[];
-      PUEDO_PUBLICAR=l.some(function(x){return (x.codigo==='PAG-EXP-EVENTOS'||x.codigo==='PAG-ATE-FUNNEL')&&x.nivel==='editar';});
+      /* Esta pantalla vive embebida en varios sitios: el calendario tiene su
+         propia página y además se enseña dentro de Aprobación. Quien pueda
+         editar cualquiera de ellas puede decidir desde el pop. */
+      var PUERTAS=['PAG-EXP-EVENTOS','PAG-ATE-FUNNEL','PAG-ATE-CALENDARIO','PAG-SINC-COLA'];
+      PUEDO_PUBLICAR=l.some(function(x){return PUERTAS.indexOf(x.codigo)>=0 && x.nivel==='editar';});
     }catch(_){ PUEDO_PUBLICAR=false; }
   })();
   $('popPublicar').onclick=async function(){
