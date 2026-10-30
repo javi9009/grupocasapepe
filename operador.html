@@ -489,6 +489,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 .ccdetlin b{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--gris);margin-bottom:6px}
 .ccdetfila{display:flex;gap:12px;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--linea);font-size:13px}
 .ccdetfila span:nth-child(2){flex:1 1 160px;min-width:0;color:var(--gris)}
+.ccalerta{border:1px solid #9E3B2E;background:#F6DED9;border-radius:14px;padding:14px 16px;margin-bottom:14px}
+.ccalerta-t{font-family:'Oswald';font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  font-size:15px;color:#7A2C21;margin-bottom:4px}
+.ccalerta table{width:100%;font-size:13px}
+.ccalerta th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#7A2C21}
 /* EL FUNNEL DE LA ORDEN. Cada paso se ve siempre; lo que cambia es si está
    encendido. Apagar en vez de esconder: quien mira sabe qué viene después. */
 .ccpf{border:1px solid var(--linea);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:#fff}
@@ -2732,7 +2737,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      mientras ocurrían, así que la cuenta se armaba de memoria cuando alguien
      se acordaba. Contarlos aquí, el día que pasan, es todo el módulo. */
   var CC={serv:[], dados:[], tickets:[], exps:[], edita:null, dando:null, abierto:null,
-          etapas:[], correos:{}, envios:false, lineas:[], resumen:null};
+          etapas:[], correos:{}, envios:false, lineas:[], resumen:null, desc:[]};
 
   function ccPesos(n){ return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function ccDia(f){
@@ -2770,7 +2775,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         fetch(SB+'/rest/v1/op_conc_etapas?select=*&order=orden',{headers:hdr()}),
         fetch(SB+'/rest/v1/op_conc_correos?select=tipo,correos,updated_at,updated_by&operador_id=eq.'+cur.id,{headers:hdr()}),
         fetch(SB+'/rest/v1/v_op_conc_lineas?select=*&operador_id=eq.'+cur.id+'&order=fecha.desc',{headers:hdr()}),
-        fetch(SB+'/rest/v1/rpc/op_conc_resumen',{method:'POST',headers:hdr(),body:JSON.stringify({p_operador:cur.id})})
+        fetch(SB+'/rest/v1/rpc/op_conc_resumen',{method:'POST',headers:hdr(),body:JSON.stringify({p_operador:cur.id})}),
+        fetch(SB+'/rest/v1/rpc/conc_descuadres',{method:'POST',headers:hdr(),body:JSON.stringify({p_operador:cur.id})})
       ]);
       CC.serv   = r[0].ok ? await r[0].json() : [];
       CC.dados  = r[1].ok ? await r[1].json() : [];
@@ -2781,6 +2787,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       (r[5].ok ? await r[5].json() : []).forEach(function(c){ CC.correos[c.tipo]=c; });
       CC.lineas  = r[6].ok ? await r[6].json() : [];
       CC.resumen = r[7].ok ? await r[7].json() : null;
+      CC.desc    = r[8].ok ? await r[8].json() : [];
     }catch(e){
       $('ccCuerpo').innerHTML='<div class="mini" style="padding:18px 0;color:var(--error,#9E3B2E)">No pudimos traer la conciliación: '+esc(e.message||e)+'</div>';
       return;
@@ -2799,7 +2806,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       'Serie <b>'+esc(serie)+'</b>'+(ultimo?' · el ultimo es <b>'+esc(ultimo)+'</b>':'')+
       (cur.concilia_razon_social?' · factura <b>'+esc(cur.concilia_razon_social)+'</b>':'')+'.';
 
-    var h=ccMontos();
+    var h=ccDescuadre()+ccMontos();
 
     /* ---- 1 · El catálogo ---- */
     h+='<div class="ccbloque"><div class="cctit"><h2>Los servicios</h2>'+
@@ -2939,6 +2946,46 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       h+='<div class="mini" style="margin-top:6px">Hay una orden de compra abierta: los servicios '+
          'nuevos se le van sumando hasta que entre su número de orden o se emita la factura.</div>';
     return h+'</div>';
+  }
+
+  /* LA ALERTA DEL DESCUADRE. Javi, 30-oct-2026: «ponnos una alerta cuando el
+     monto de tours validados por Capital Bus y el ticket de venta de noche
+     mexicana de Poster no cuadra. Es decir, no en monto de $ sino de número
+     de personas».
+
+     Comparar esas dos cifras tenía dos trampas, y las dos estaban puestas:
+
+      · LA NOCHE NO ACABA A MEDIANOCHE. El ticket se cierra pasadas las dos de
+        la madrugada, así que por fecha de cierre cae siempre en el día
+        siguiente. Comparado así no cuadraba NI UNA de las siete noches de
+        octubre. Se compara por noche —de las 12:00 a las 12:00— y entonces
+        cinco de las siete cuadran al número exacto.
+      · LAS CORTESÍAS NO SE COBRAN NI SE CONCILIAN. La noche del 23 hubo 39
+        personas a 250 y 45 cortesías a cero. Contarlas habría dado un
+        descuadre de 45 personas todas las noches.
+
+     Va arriba del todo y en rojo: es lo único de esta pantalla que pide algo
+     de alguien hoy. */
+  function ccDescuadre(){
+    var D=CC.desc||[]; if(!D.length) return '';
+    var gente=D.reduce(function(a,x){ return a+Math.abs(Number(x.diferencia||0)); },0);
+    return '<div class="ccalerta">'+
+      '<div class="ccalerta-t">No cuadran las personas</div>'+
+      '<div class="mini">'+D.length+' noche'+(D.length===1?'':'s')+' en que lo que validó el operador '+
+      'no coincide con el ticket de Poster. Son <b>'+gente+' persona'+(gente===1?'':'s')+'</b> de diferencia. '+
+      'No es el dinero: es la gente.</div>'+
+      '<table style="margin-top:10px"><thead><tr><th>Noche</th><th>Validadas</th><th>Poster</th>'+
+      '<th>Diferencia</th><th>Cortesías</th></tr></thead><tbody>'+
+      D.map(function(x){
+        var dif=Number(x.diferencia||0);
+        return '<tr><td><b>'+esc(ccDia(x.fecha))+'</b></td>'+
+          '<td>'+Number(x.validadas)+'</td>'+
+          '<td>'+(x.sin_ticket?'<i>sin ticket</i>':Number(x.poster))+'</td>'+
+          '<td><b>'+(dif>0?'+':'')+dif+'</b></td>'+
+          '<td class="mini">'+Number(x.cortesias)+' · no cuentan</td></tr>';
+      }).join('')+'</tbody></table>'+
+      (ADMIN?'<div class="ccacc"><button class="btn sm" id="ccAvisaDesc">Avisar por correo</button></div>':'')+
+    '</div>';
   }
 
   function ccResumen(){
@@ -3439,6 +3486,22 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); ccAbre(b.getAttribute('data-ver'), b); };});
 
     /* ---- configuración de envíos ---- */
+    var bd=$('ccAvisaDesc');
+    if(bd) bd.onclick=async function(){
+      if(!await cpPregunta('¿Mandamos el aviso del descuadre?\n'+
+          'Va a la lista de «No cuadran las personas» de Configuración de envíos.',{si:'Sí, avisar'})) return;
+      bd.disabled=true; bd.textContent='Mandando…';
+      var ok=0, mal=0;
+      for(var i=0;i<CC.desc.length;i++){
+        try{
+          var r=await fetch(SB+'/functions/v1/conc-aviso',{method:'POST',headers:hdr(),
+            body:JSON.stringify({linea_id:CC.desc[i].linea_id, etapa:'descuadre', reenviar:true})});
+          if(r.ok) ok++; else mal++;
+        }catch(_){ mal++; }
+      }
+      bd.disabled=false; bd.textContent='Avisar por correo';
+      toast(mal?('Salieron '+ok+' y fallaron '+mal+'.'):('Aviso mandado.'), !!mal);
+    };
     var et=$('ccEnvToggle');
     if(et) et.onclick=function(){ CC.envios=!CC.envios; pintaConc();
       var b=$('ccEnvToggle'); if(b) b.scrollIntoView({block:'center',behavior:'smooth'}); };
