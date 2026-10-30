@@ -70,6 +70,19 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 .fila .nom b{font:600 15px Inter;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fila .pills{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .fila .donde{font:400 12px Inter;color:var(--tenue);margin-top:4px}
+/* LA TARJETA GRANDE. Javi, 30-oct-2026: «me puedes poner el detalle más grande
+   con precio, foto, etc para poder analizarlos mejor». Decidir sin ver la foto
+   ni el precio es abrir otra pantalla por cada cosa de la cola; y la cola es
+   justo donde se decide rápido. */
+.fila .shot{flex:0 0 132px;width:132px;height:99px;border-radius:10px;background:var(--hueso) center/cover;
+  display:grid;place-items:center;font-size:27px;color:var(--tenue);overflow:hidden}
+@media(max-width:760px){.fila{flex-wrap:wrap}.fila .shot{flex:0 0 100%;width:100%;height:150px}}
+.fila .datos{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+.fila .dato{font:600 11.5px Inter;background:var(--hueso);border-radius:7px;padding:3px 9px;color:var(--tinta)}
+.fila .dato.gratis{background:var(--ok-bg,#E1F0E7);color:var(--ok,#1D6B4A)}
+.fila .dato.mal{background:var(--error-bg);color:var(--error)}
+.fila .texto{font:400 12.5px Inter;color:var(--gris);margin-top:7px;line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .vacio{background:#fff;border:1px dashed var(--linea);border-radius:12px;padding:34px 20px;text-align:center;color:var(--gris)}
 .vacio b{display:block;font:600 16px Oswald;letter-spacing:.04em;text-transform:uppercase;color:var(--tinta);margin-bottom:6px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;background:var(--tinta);color:#fff;
@@ -126,6 +139,7 @@ var EXPS=[], EVTS=[], ATES=[], TERM=[], CAND={}, OPS={};
    Ahora las cuatro cosas que autoriza la casa viven aquí. */
 var SALAS=[], HOT=[];
 var FSALA='', FQ='';   /* filtros de la cola de salas */
+var FOTO={}, PRODN={};   /* portada por ficha y nombre de cada productora */
 /* Las dos salas que además pasan por su sede: lo que la casa valida aquí,
    Ana lo acepta después en su portal de Cumbre. */
 var SEDE_ANA=['Café Cumbre','Galería'];
@@ -364,14 +378,69 @@ async function activaHotel(id){
 }
 
 /* ---------- pintar ---------- */
+function dineroMx(n){ return '$'+Number(n||0).toLocaleString('es-MX',{maximumFractionDigits:0}); }
+function horasDe(min){ if(!min) return ''; var h=Math.round(min/60*10)/10; return (h>=1? h+' h' : min+' min'); }
+function cuandoMx(iso,conHora){
+  if(!iso) return '';
+  var d=new Date(iso); if(isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('es-MX',Object.assign({timeZone:'America/Mexico_City',
+    weekday:'short',day:'numeric',month:'short'},
+    conHora?{hour:'2-digit',minute:'2-digit',hour12:false}:{})).format(d);
+}
+function portadaDe(it){
+  if(FOTO[it.id]) return FOTO[it.id];
+  var f=it.fotos;
+  if(f && f.length) return (f[0] && (f[0].url||f[0])) || '';
+  return '';
+}
+/* Los datos que hacen falta para decidir sin abrir otra pantalla. */
+function datosDe(tipo,it){
+  var d=[];
+  if(tipo==='exp'){
+    var pre = Number(it.precio_adulto)>0 ? dineroMx(it.precio_adulto)
+            : Number(it.neto_adulto)>0 ? dineroMx(it.neto_adulto)+' neto' : '';
+    d.push(pre ? {t:pre} : {t:'sin precio', c:'mal'});
+    if(it.duracion_min) d.push({t:horasDe(it.duracion_min)});
+    if(it.cupo_max) d.push({t:'hasta '+it.cupo_max+' pax'});
+    if(it.ciudad) d.push({t:it.ciudad});
+    if(it.categoria) d.push({t:it.categoria});
+    var donde = it.cer_inicio_lugar||it.punto_encuentro;
+    if(donde) d.push({t:'sale de '+donde});
+    else d.push({t:'sin punto de encuentro', c:'mal'});
+  } else if(tipo==='evt'){
+    if(it.fecha_inicio) d.push({t:cuandoMx(it.fecha_inicio,true)});
+    if(it.es_gratis) d.push({t:'entrada libre', c:'gratis'});
+    else if(Number(it.precio)>0) d.push({t:dineroMx(it.precio)});
+    else if(Number(it.precio_por_hora)>0) d.push({t:dineroMx(it.precio_por_hora)+' la hora'});
+    else d.push({t:'sin precio', c:'mal'});
+    var pax=it.cupo||it.aforo; if(pax) d.push({t:pax+' pax'});
+    if(it.duracion_min) d.push({t:horasDe(it.duracion_min)});
+    if(!portadaDe(it)) d.push({t:'sin foto', c:'mal'});
+  }
+  return d;
+}
 function tarjeta(tipo,it,icono,titulo,sub,cuando,enlace){
   var e=espera(cuando);
   var b = tipo==='exp' ? bloqueos(it.operador_id) : [];
+  var foto=portadaDe(it);
+  var datos=datosDe(tipo,it);
+  var texto=String(it.resumen||it.descripcion||'').replace(/\s+/g,' ').trim();
+  /* APROBAR ALGO QUE YA OCURRIO ES PONERLO A LA VENTA DESPUES DE LA FIESTA.
+     Los dos eventos que esperan hoy son del 17 y del 22 de octubre. */
+  var pasado = tipo==='evt' && it.fecha_inicio &&
+               new Date(it.fecha_fin||it.fecha_inicio) < new Date(new Date().toDateString());
   return '<div class="fila '+(e[0]==='rojo'?'viejo':'')+'">'+
-    '<div class="ico">'+icono+'</div>'+
+    (tipo==='ate'
+      ? '<div class="ico">'+icono+'</div>'
+      : '<div class="shot"'+(foto?' style="background-image:url('+JSON.stringify(foto)+')"':'')+'>'+
+        (foto?'':icono)+'</div>')+
     '<div class="mid">'+
       '<div class="nom"><b>'+esc(titulo)+'</b></div>'+
       '<div class="donde">'+esc(sub)+'</div>'+
+      (datos.length?'<div class="datos">'+datos.map(function(x){
+         return '<span class="dato'+(x.c?' '+x.c:'')+'">'+esc(x.t)+'</span>'; }).join('')+'</div>':'')+
+      (texto?'<div class="texto">'+esc(texto)+'</div>':'')+
+      (pasado?'<div class="candado on">Esta fecha <b>ya pasó</b>. Aprobarlo es ponerlo a la venta después de la fiesta.</div>':'')+
       '<div class="espera '+e[0]+'">'+e[1]+'</div>'+
       (b.length?'<div class="candado on">No puede cobrar todavía: '+esc(b.join(' · '))+'</div>':'')+
       '<div class="motivo" id="mot-'+tipo+'-'+esc(it.id)+'">'+
@@ -537,10 +606,12 @@ async function trae(q){
 async function carga(){
   FALLO=''; CARGANDO=true; pinta();
   try{
-    var campos='id,nombre,estado,tipo,formato,operador_id,precio_adulto,neto_adulto,updated_at,created_at';
+    var campos='id,nombre,estado,tipo,formato,operador_id,precio_adulto,neto_adulto,updated_at,created_at,'+
+      'fotos,duracion_min,ciudad,categoria,resumen,descripcion,cupo_max,cupo_min,cer_inicio_lugar,punto_encuentro';
     var res=await Promise.all([
       trae('op_experiencias?select='+campos+'&estado=eq.en_revision&order=updated_at'),
-      trae('eventos?select=id,nombre,estado,espacio,fecha_inicio,productora_id,created_at,updated_at&estado=eq.propuesto&order=created_at'),
+      trae('eventos?select=id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
+           'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase&estado=eq.propuesto&order=created_at'),
       /* LAS ALTAS YA NO PASAN POR AQUI. Javi, 26-oct-2026: «lo que si me
          interesa es que las altas no requieran vto bueno». El alta deja al
          ateneista activo desde que la manda; lo que sigue necesitando firma
@@ -557,12 +628,24 @@ async function carga(){
          -los que aún no se han dado de alta- no se aprueban: se contactan, y
          eso vive en su propia pantalla. */
       trae('hoteles?select=id,nombre_comercial,ciudad,cuartos,email,etapa,estado,contrato_firmado_at,created_at,updated_at'+
-           '&etapa=eq.alta&estado=neq.activo&order=created_at')
+           '&etapa=eq.alta&estado=neq.activo&order=created_at'),
+      /* Las portadas de lo que está en la cola, para verlo sin abrir la ficha. */
+      trae('sinc_media?select=experiencia_id,url,etiqueta,orden&tipo=eq.foto&order=orden&limit=3000'),
+      /* Y el nombre de quien monta cada evento: hasta hoy la cola solo decía
+         en qué sala era. */
+      trae('productoras?select=id,nombre_comercial&limit=1000')
     ]);
     EXPS=res[0]; EVTS=res[1]; ATES=res[2]; TERM=res[3];
     CAND={}; OPS={};
     res[4].forEach(function(a){ CAND[a.id]=a.candado; OPS[a.id]=a.nombre_comercial; });
     SALAS=res[5]||[]; HOT=res[6]||[];
+    FOTO={};
+    (res[7]||[]).forEach(function(m){
+      if(!m.experiencia_id || FOTO[m.experiencia_id]) return;
+      FOTO[m.experiencia_id]=m.url;
+    });
+    PRODN={};
+    (res[8]||[]).forEach(function(x){ PRODN[x.id]=x.nombre_comercial; });
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   CARGANDO=false; pinta();
 }
