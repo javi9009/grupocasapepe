@@ -2713,7 +2713,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      mientras ocurrían, así que la cuenta se armaba de memoria cuando alguien
      se acordaba. Contarlos aquí, el día que pasan, es todo el módulo. */
   var CC={serv:[], dados:[], tickets:[], exps:[], edita:null, dando:null, abierto:null,
-          etapas:[], correos:{}, envios:false};
+          etapas:[], correos:{}, envios:false, lineas:[], resumen:null};
 
   function ccPesos(n){ return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function ccDia(f){
@@ -2749,7 +2749,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         fetch(SB+'/rest/v1/op_conciliacion_tickets?select=*&operador_id=eq.'+cur.id+'&order=semana_desde.desc&limit=60',{headers:hdr()}),
         fetch(SB+'/rest/v1/op_experiencias?select=experiencia_id,nombre&operador_id=eq.'+cur.id+'&experiencia_id=not.is.null&order=nombre',{headers:hdr()}),
         fetch(SB+'/rest/v1/op_conc_etapas?select=*&order=orden',{headers:hdr()}),
-        fetch(SB+'/rest/v1/op_conc_correos?select=tipo,correos,updated_at,updated_by&operador_id=eq.'+cur.id,{headers:hdr()})
+        fetch(SB+'/rest/v1/op_conc_correos?select=tipo,correos,updated_at,updated_by&operador_id=eq.'+cur.id,{headers:hdr()}),
+        fetch(SB+'/rest/v1/v_op_conc_lineas?select=*&operador_id=eq.'+cur.id+'&order=fecha.desc',{headers:hdr()}),
+        fetch(SB+'/rest/v1/rpc/op_conc_resumen',{method:'POST',headers:hdr(),body:JSON.stringify({p_operador:cur.id})})
       ]);
       CC.serv   = r[0].ok ? await r[0].json() : [];
       CC.dados  = r[1].ok ? await r[1].json() : [];
@@ -2758,6 +2760,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       CC.etapas = r[4].ok ? await r[4].json() : [];
       CC.correos={};
       (r[5].ok ? await r[5].json() : []).forEach(function(c){ CC.correos[c.tipo]=c; });
+      CC.lineas  = r[6].ok ? await r[6].json() : [];
+      CC.resumen = r[7].ok ? await r[7].json() : null;
     }catch(e){
       $('ccCuerpo').innerHTML='<div class="mini" style="padding:18px 0;color:var(--error,#9E3B2E)">No pudimos traer la conciliación: '+esc(e.message||e)+'</div>';
       return;
@@ -2776,7 +2780,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       'Serie <b>'+esc(serie)+'</b>'+(ultimo?' · el ultimo es <b>'+esc(ultimo)+'</b>':'')+
       (cur.concilia_razon_social?' · factura <b>'+esc(cur.concilia_razon_social)+'</b>':'')+'.';
 
-    var h=ccResumen();
+    var h=ccMontos();
 
     /* ---- 1 · El catálogo ---- */
     h+='<div class="ccbloque"><div class="cctit"><h2>Los servicios</h2>'+
@@ -2887,6 +2891,37 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      hemos mandado -culpa nuestra- y lo que lleva treinta días facturado sin
      pagar -suya-. Por eso se cuenta por etapa, y lo vencido se saca aparte
      aunque ya esté contado en la suya: es lo único que hay que mirar hoy. */
+  /* LOS CUATRO MONTOS. Javi, 30-oct-2026: «en cada etapa se ajustan los montos
+     de: monto pendiente de validar / monto pendiente de facturar / monto
+     pendiente de cobro», y aparte lo que se pasa de fecha, que va a «pagos
+     vencidos».
+     Los calcula la base, no esta pantalla: validar es de la LINEA -evento a
+     evento- y facturar y cobrar son de la ODC, que agrupa varios servicios y
+     lleva una sola factura. Sumarlo todo de la misma tabla es lo que hacia que
+     «pendiente de cobro» saliera en cero teniendo 84,700 pesos sin cobrar. */
+  function ccMontos(){
+    var R=CC.resumen; if(!R) return '';
+    function t(et,v,cls,pie){
+      return '<div class="ccet'+(cls?' '+cls:'')+'"><span>'+esc(et)+'</span>'+
+             '<b>'+ccPesos(v)+'</b>'+(pie?'<i>'+esc(pie)+'</i>':'')+'</div>';
+    }
+    var h='<div class="ccbloque"><div class="cctit"><h2>Dónde está el dinero</h2></div><div class="ccetapas">';
+    h+=t('Pendiente de validar', R.pendiente_validar, '',
+         (R.lineas||0)+(Number(R.lineas)===1?' servicio':' servicios'));
+    h+=t('Pendiente de facturar', R.pendiente_facturar, '');
+    h+=t('Pendiente de cobro', R.pendiente_cobro, 'ok');
+    if(Number(R.vencido)>0) h+=t('Pagos vencidos', R.vencido, 'mal');
+    h+='</div>';
+    if(Number(R.sin_validar)>0)
+      h+='<div class="mini" style="margin-top:8px;color:var(--error,#9E3B2E)"><b>'+R.sin_validar+
+         '</b> servicio'+(Number(R.sin_validar)===1?'':'s')+' pasó el plazo sin que lo validaran: '+
+         'se dio por bueno lo que contamos nosotros.</div>';
+    if(Number(R.odc_abiertas)>0)
+      h+='<div class="mini" style="margin-top:6px">Hay una orden de compra abierta: los servicios '+
+         'nuevos se le van sumando hasta que entre su número de orden o se emita la factura.</div>';
+    return h+'</div>';
+  }
+
   function ccResumen(){
     var sueltos=CC.dados.filter(function(d){ return d.estado==='por_conciliar'; });
     var sueltoB=sueltos.reduce(function(a,d){ return a+Number(d.bruto||0); },0);
@@ -3078,16 +3113,74 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
                      'la de <b>Configuración de envíos</b> más abajo.</div>')+
        '</div>';
 
-    h+='<div class="ccdetlin"><b>Los servicios de este ticket</b>'+
-       (lineas.length?lineas.map(function(d){
+    /* UNA FILA POR SERVICIO, DENTRO DE SU ORDEN. Javi, 30-oct-2026:
+       «consideraremos todo octubre como 1 orden de compra/factura pero
+       separaremos en filas como tienes cada servicio (añade ahí el botón de
+       validar con el pop up)».
+       La orden agrupa y lleva una sola factura; la validación es de cada
+       evento, con su gente. Por eso el botón vive en la fila y no arriba. */
+    var vivas=CC.lineas.filter(function(x){ return x.ticket_id===t.id; });
+    var filas = vivas.length ? vivas : lineas;
+    h+='<div class="ccdetlin"><b>Los servicios de esta orden</b>'+
+       (filas.length?filas.map(function(d){
+          var val = d.validado_at
+            ? '<span class="etq ok">validado</span>'
+            : (d.no_valido ? '<span class="etq al">sin validar · venció</span>'
+                           : '<span class="etq">por validar</span>');
+          var quien = d.validado_at
+            ? '<div class="mini">'+esc(d.validado_por||'')+
+              (d.validado_nota?' · '+esc(d.validado_nota):'')+'</div>' : '';
+          var ajuste = (d.validado_at && d.asistentes_escaneo!=null &&
+                        Number(d.validado_pax)!==Number(d.asistentes_escaneo))
+            ? '<div class="mini">contamos '+Number(d.asistentes_escaneo)+', quedó en '+Number(d.validado_pax)+'</div>'
+            : '';
           return '<div class="ccdetfila"><span>'+esc(ccDia(d.fecha))+'</span>'+
-                 '<span>'+esc(d.servicio||'')+(d.nota?' · '+esc(d.nota):'')+'</span>'+
+                 '<span>'+esc(d.servicio||'<i>falta el servicio</i>')+
+                   (d.nota?' · '+esc(d.nota):'')+quien+ajuste+'</span>'+
                  '<span>'+Number(d.personas)+' pers.</span>'+
-                 '<span>'+ccPesos(d.bruto)+'</span></div>'; }).join('')
+                 '<span>'+(d.bruto==null?'—':ccPesos(d.bruto))+'</span>'+
+                 '<span>'+val+'</span>'+
+                 (d.id && !d.validado_at
+                   ? '<span><button class="btn fantasma sm" data-val="'+esc(d.id)+'">Validar</button></span>'
+                   : '<span></span>')+
+                 '</div>'; }).join('')
          :'<div class="mini">Sin líneas: se quedó vacío.</div>')+
        '</div>';
 
     return h+'</div>';
+  }
+
+  /* EL POP UP DE VALIDAR. Javi, 30-oct-2026: «aparece un pop up con la opción
+     de validar o ajustar el número y poner justificación. Tras validado debe
+     aparecer el nombre del usuario que validó».
+     El número viene puesto con lo que contamos nosotros: así validar sin
+     cambios es un clic, y cambiarlo es una decisión deliberada. La base exige
+     el motivo si el número cambia —comprobado— y guarda quién lo hizo. */
+  async function validaLinea(id){
+    var d=CC.lineas.filter(function(x){ return x.id===id; })[0];
+    if(!d){ toast('No encuentro esa línea.',true); return; }
+    var contamos = (d.asistentes_escaneo==null?d.personas:d.asistentes_escaneo);
+    var r=await cpPideVarios(
+      'Validar '+(d.servicio||'el servicio')+' del '+ccDia(d.fecha)+'.\n'+
+      'Contamos '+contamos+' persona'+(Number(contamos)===1?'':'s')+' en la puerta. '+
+      'Si el número no cuadra, cámbialo y dinos por qué.',
+      [{k:'pax', et:'Personas que asistieron', valor:contamos, tipo:'number', req:true},
+       {k:'nota', et:'Por qué cambia (solo si cambias el número)', valor:''}],
+      {si:'Validar'});
+    if(!r) return;
+    var pax=parseInt(r.pax,10);
+    if(!(pax>=0)){ toast('El número de personas no es válido.',true); return; }
+    if(pax!==Number(contamos) && !String(r.nota||'').trim()){
+      toast('Si cambias el número, dinos por qué.',true); return;
+    }
+    var q=await fetch(SB+'/rest/v1/rpc/conc_valida',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_linea:id, p_pax:pax, p_nota:String(r.nota||'').trim()||null})});
+    var j=null; try{ j=await q.json(); }catch(_){}
+    if(!q.ok || !j || j.ok!==true){
+      toast((j&&(j.message||j.error))||'No se pudo validar.',true); return;
+    }
+    toast('Validado: '+pax+' persona'+(pax===1?'':'s')+'.');
+    await cargaConc();
   }
 
   function enganchaConc(){
@@ -3096,6 +3189,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var fc=$('fCancela'); if(fc) fc.onclick=function(){ CC.edita=null; pintaConc(); };
     var fg=$('fGuarda');  if(fg) fg.onclick=guardaServicio;
     var ba=$('ccArma');   if(ba) ba.onclick=armaTicket;
+    Array.prototype.forEach.call(c.querySelectorAll('[data-val]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); validaLinea(b.getAttribute('data-val')); };});
 
     /* ---- configuración de envíos ---- */
     var et=$('ccEnvToggle');
