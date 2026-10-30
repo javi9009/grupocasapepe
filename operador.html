@@ -3182,7 +3182,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var c3;
     if(hayFactura){
       c3='<b>'+esc(t.factura_folio)+'</b>'+
-         (t.factura_url?' · <a href="'+esc(t.factura_url)+'" target="_blank" rel="noopener">ver el archivo</a>':'')+
+         (t.factura_url?' · <button class="btn fantasma sm" data-ver="'+esc(t.factura_url)+'">Ver el archivo</button>':'')+
          '<div class="mini">Enviada el '+esc(ccDia(t.factura_enviada_at))+
          (t.factura_por?' por '+esc(t.factura_por):'')+'</div>';
     }else if(!hayODC){
@@ -3204,7 +3204,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(hayPago){
       c4='Pagada'+(t.comprobante_at?' el '+esc(ccDia(t.comprobante_at)):'')+
          (t.comprobante_por?' · lo subió '+esc(t.comprobante_por):'')+
-         (t.comprobante_url?' · <a href="'+esc(t.comprobante_url)+'" target="_blank" rel="noopener">ver el comprobante</a>':'');
+         (t.comprobante_url?' · <button class="btn fantasma sm" data-ver="'+esc(t.comprobante_url)+'">Ver el comprobante</button>':'');
     }else if(!hayFactura){
       c4='<div class="mini">Se abre cuando se envíe la factura.</div>';
     }else{
@@ -3312,7 +3312,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!await cpPregunta('¿Subimos y enviamos la factura'+(fol?' '+fol:'')+'?\n'+
         'Sale en el mismo momento a la lista de «Se mandó la factura», y queda fijado el vencimiento.',
         {si:'Sí, enviar'})) return;
-    var url=await ccSube(f, 'conciliaciones/'+id+'/factura', b);
+    var url=await ccSube(f, 'factura', b);
     if(!url) return;
     var j=await ccRpc('conc_odc_factura',{p_ticket:id,p_folio:fol||null,p_url:url}, b, 'Factura enviada.');
     if(j) await ccAviso(id,'factura');
@@ -3323,25 +3323,56 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var arch=$('parch-'+id);
     var f=arch&&arch.files&&arch.files[0];
     if(!f){ toast('Adjunta el comprobante del pago.',true); return; }
-    var url=await ccSube(f, 'conciliaciones/'+id+'/comprobante', b);
+    var url=await ccSube(f, 'comprobante', b);
     if(!url) return;
     var j=await ccRpc('conc_odc_comprobante',{p_ticket:id,p_url:url,p_referencia:ref||null}, b, 'Comprobante guardado.');
     if(j) await ccAviso(id,'pago');
   }
 
-  /* El archivo va al almacén de siempre. Si el almacén lo rechaza se dice por
-     qué y no se escribe nada en la base: media factura es peor que ninguna. */
-  async function ccSube(f, base, b){
-    if(f.size > 25*1024*1024){ toast('El archivo pesa más de 25 MB.',true); return null; }
+  /* UNA FACTURA NO VA EN UN ALMACÉN PÚBLICO. Al probar la subida apareció lo
+     que de verdad importaba: el almacén de siempre (`sincretico`) es PÚBLICO
+     —cualquiera con la liga ve el archivo, sin sesión— y su regla de escritura
+     solo deja al operador subir dentro de una carpeta `op-<su id>`. O sea que
+     el comprobante de Capital Bus habría sido rechazado, y la factura, de
+     haberse subido, habría quedado a la vista de cualquiera con el enlace.
+
+     Las dos cosas son documentos fiscales, así que van a `tercero-docs`, que
+     es privado y ya tiene la regla correcta: la casa lo lee todo y cada
+     tercero solo lo suyo. Su política mira la TERCERA carpeta de la ruta, de
+     ahí la forma `conciliaciones/<tipo>/<operador>/…`; cambiarla rompe el
+     permiso sin avisar.
+
+     Se guarda la RUTA, no una liga: en un almacén privado las ligas no son
+     eternas, se firman al abrirlas. */
+  var CCBUCKET='tercero-docs';
+  async function ccSube(f, tipo, b){
+    if(f.size > 15*1024*1024){ toast('El archivo pesa más de 15 MB.',true); return null; }
     if(b){ b.disabled=true; b.textContent='Subiendo…'; }
     var ext=(String(f.name).split('.').pop()||'pdf').toLowerCase().replace(/[^a-z0-9]/g,'');
-    var ruta=base+'-'+Date.now()+'.'+ext;
-    var r=await fetch(SB+'/storage/v1/object/sincretico/'+ruta,{method:'POST',
+    var ruta='conciliaciones/'+tipo+'/'+cur.id+'/'+Date.now()+'.'+ext;
+    var r=await fetch(SB+'/storage/v1/object/'+CCBUCKET+'/'+ruta,{method:'POST',
       headers:{'apikey':KEY,'Authorization':'Bearer '+((ses&&ses.access_token)||KEY),
                'Content-Type':f.type||'application/octet-stream'},body:f});
     if(b){ b.disabled=false; }
-    if(!r.ok){ toast('El almacén rechazó el archivo ('+r.status+').',true); return null; }
-    return SB+'/storage/v1/object/public/sincretico/'+ruta;
+    if(!r.ok){
+      var por=r.status===403?'el almacén no te deja subir ahí':('el almacén lo rechazó ('+r.status+')');
+      toast('No se subió: '+por+'.',true); return null;
+    }
+    return ruta;
+  }
+
+  /* Abrir un archivo privado es pedir una liga firmada en ese momento. Dura
+     una hora: lo justo para mirarlo, no para que acabe reenviada por ahí. */
+  async function ccAbre(ruta, b){
+    if(!ruta) return;
+    if(/^https?:/i.test(ruta)){ window.open(ruta,'_blank','noopener'); return; }
+    if(b){ b.disabled=true; }
+    var r=await fetch(SB+'/storage/v1/object/sign/'+CCBUCKET+'/'+ruta,{method:'POST',
+      headers:hdr(), body:JSON.stringify({expiresIn:3600})});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(b){ b.disabled=false; }
+    if(!r.ok || !j || !j.signedURL){ toast('No se pudo abrir el archivo.',true); return; }
+    window.open(SB+'/storage/v1'+j.signedURL,'_blank','noopener');
   }
 
   /* Los correos del funnel. No se mandan solos desde la base: se piden aquí,
@@ -3404,6 +3435,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); subeFactura(b.getAttribute('data-fact'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-comp]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); subeComprobante(b.getAttribute('data-comp'), b); };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-ver]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); ccAbre(b.getAttribute('data-ver'), b); };});
 
     /* ---- configuración de envíos ---- */
     var et=$('ccEnvToggle');
