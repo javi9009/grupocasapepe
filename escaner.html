@@ -64,6 +64,18 @@ input{width:100%;padding:13px 12px;border:1.5px solid var(--linea);border-radius
 .pasos{display:flex;gap:7px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .pasos b{font-family:Oswald;font-size:24px;min-width:38px;text-align:center}
 .idbox{margin-top:12px;padding-top:12px;border-top:1px dashed var(--linea)}
+/* LA HOJA. No es un dialogo del navegador -esos los bloquea el telefono-,
+   es la propia pagina: sube desde abajo y tapa todo, para que a un metro,
+   en la puerta, se vea si el QR se leyo o no. */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(30,26,22,.58);display:none;
+  align-items:flex-end;justify-content:center}
+.modal.on{display:flex}
+.hoja{background:var(--papel);width:100%;max-width:520px;border-radius:18px 18px 0 0;
+  max-height:92vh;overflow:auto;border-top:4px solid var(--naranja);
+  padding:14px max(14px,env(safe-area-inset-left)) calc(16px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right))}
+.hoja .cerrar{float:right;background:none;border:0;font-size:28px;line-height:1;
+  color:var(--gris);cursor:pointer;padding:0 6px}
+@media(min-width:560px){.modal{align-items:center}.hoja{border-radius:18px;max-height:88vh}}
 .fila{display:flex;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--linea)}
 .fila:first-of-type{border-top:0}
 .fila .n{flex:1;min-width:0}
@@ -138,6 +150,8 @@ input{width:100%;padding:13px 12px;border:1.5px solid var(--linea);border-radius
   </div>
 </main>
 
+<div class="modal" id="modal"><div class="hoja" id="hoja"></div></div>
+
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 const SB  = 'https://rehophywchakfapivsbh.supabase.co';
@@ -146,6 +160,7 @@ const sb  = createClient(SB, KEY);
 const $   = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pesos = n => '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
+const cuando = t => { try{ return new Date(t).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }catch(_){ return ''; } };
 
 let SES=null, LECTOR=null, ULT='', ULTAT=0;
 
@@ -231,6 +246,9 @@ async function verifica(cod, deCamara){
      no: si alguien teclea dos veces es porque son dos personas. */
   const ahora=Date.now();
   if(deCamara && cod===ULT && ahora-ULTAT<4000) return;
+  /* Con la hoja abierta la camara sigue viendo el mismo QR: que no la cambie
+     debajo de las manos de quien esta contando personas. */
+  if(deCamara && $('modal').classList.contains('on')) return;
   ULT=cod; ULTAT=ahora;
   $('res').innerHTML='<div class="res"><div class="mini">Comprobando…</div></div>';
   try{
@@ -248,79 +266,109 @@ async function verifica(cod, deCamara){
   }
 }
 
+/* LA HOJA DEL ESCANEO. Javi, 30-oct-2026: «Cuando el sistema detecta el qr no
+   se ve si lo leyo bien. Puedes hacer que cuando lo lea se abra un pop up que
+   abra el editor de personas y capturar ID. Y si ya paso poner cuantos pasaron
+   y si ya pasaron todos reportar que ya llego».
+   Y: «en la lista permite que quien este en la puerta en vez de escanear le de
+   a un boton que diga "ya llego" y el num de personas». Es la misma hoja: se
+   llegue por la camara, por el codigo escrito o por el boton de la lista, lo
+   que se abre es esto, para que nadie aprenda dos pantallas. */
+function abreHoja(html){
+  $('hoja').innerHTML='<button class="cerrar" id="hojaX" aria-label="Cerrar">&times;</button>'+html;
+  $('modal').classList.add('on');
+  $('hojaX').onclick = cierraHoja;
+}
+function cierraHoja(){ $('modal').classList.remove('on'); $('hoja').innerHTML=''; }
+$('modal').onclick = e => { if(e.target===$('modal')) cierraHoja(); };
+
 function pintaGrupo(b){
-  const quedan = Number(b.pax) - Number(b.llegaron||0);
-  const ya = Number(b.llegaron||0) > 0;
-  $('res').innerHTML =
-    '<div class="res '+(b.ok===false?'mal':(ya?'ojo':'ok'))+'">'+
-      '<div class="big">'+esc(b.titular||'Reserva')+'</div>'+
-      '<div class="mini">'+esc(b.experiencia||'')+' · '+esc(String(b.fecha||'').slice(0,10))+
+  const pax = Number(b.pax);
+  const llegaron = Number(b.llegaron||0);
+  const todos = pax>0 && llegaron>=pax;
+  const ya = llegaron>0;
+  const cab = b.ok===false ? 'Reserva cancelada'
+            : todos ? 'Ya llego'
+            : ya    ? 'Ya pasaron '+llegaron+' de '+pax
+            :         (b.titular||'Reserva');
+  $('res').innerHTML='';
+  abreHoja(
+    '<div class="res '+(b.ok===false?'mal':(todos?'ok':(ya?'ojo':'ok')))+'" style="margin-top:6px">'+
+      '<div class="big">'+esc(cab)+'</div>'+
+      ((todos||ya) && b.titular ? '<div class="mini" style="margin-top:2px"><b>'+esc(b.titular)+'</b></div>' : '')+
+      '<div class="mini">'+esc(b.experiencia||'')+' &middot; '+esc(String(b.fecha||'').slice(0,10))+
         (b.hora?' a las '+esc(String(b.hora).slice(0,5)):'')+'</div>'+
-      (ya ? '<div class="mini" style="margin-top:6px"><b>Ya se escaneó:</b> entraron '+b.llegaron+' de '+b.pax+'.</div>' : '')+
+      '<div class="mini" style="margin-top:3px">'+esc(b.codigo||'')+'</div>'+
+      /* Quien autorizo el paso. Javi, 30-oct-2026: «En el detalle se ha de
+         poner que usuario escaneo o autorizo pasar». */
+      (b.llego_por ? '<div class="mini" style="margin-top:6px">Lo paso <b>'+esc(b.llego_por)+'</b>'+
+          (b.llego_at?' &middot; '+esc(cuando(b.llego_at)):'')+'</div>' : '')+
       (Number(b.por_cobrar)>0 ? '<div class="mini" style="margin-top:6px"><b>Por cobrar en la puerta:</b> '+
         pesos(b.por_cobrar)+' ('+pesos(b.por_persona)+' por persona)</div>' : '')+
       '<div class="pasos">'+
-        '<button class="btn g" id="menos">−</button>'+
-        '<b id="cuantos">'+(ya?b.llegaron:b.pax)+'</b>'+
+        '<button class="btn g" id="menos">&minus;</button>'+
+        '<b id="cuantos">'+(ya?llegaron:pax)+'</b>'+
         '<button class="btn g" id="mas">+</button>'+
-        '<span class="mini">de '+b.pax+' persona'+(Number(b.pax)===1?'':'s')+'</span>'+
-        '<button class="btn" id="confirma">Confirmar</button>'+
+        '<span class="mini">de '+pax+' persona'+(pax===1?'':'s')+'</span>'+
       '</div>'+
-      '<div class="mini" style="margin-top:8px">Si llegaron menos, baja el número antes de confirmar.</div>'+
-      /* LA FOTO DEL ID. Javi, 30-oct-2026: «en el momento de capturar el QR el
-         sistema solicite capturar foto de ID de la persona para poder
-         continuar con la validación del checkin», y «la foto es por reserva».
-         Una por reserva: el grupo llega junto y se escanea una vez.
-         Si la experiencia la exige, Confirmar no se enciende hasta que esté.
-         Si no la exige, el botón está igual y no estorba: quien quiera la
-         toma. Lo decide la ficha de la experiencia, no esta pantalla. */
+      '<div class="mini" style="margin-top:8px">Si llegaron menos, baja el numero antes de confirmar.</div>'+
+      /* LA FOTO DEL ID, una por reserva: el grupo llega junto. */
       '<div class="idbox">'+
-        '<div class="mini"><b>Identificación'+(b.pide_id?' · hace falta':' · opcional')+'</b></div>'+
+        '<div class="mini"><b>Identificacion'+(b.pide_id?' &middot; hace falta':' &middot; opcional')+'</b></div>'+
         (b.id_foto
-          ? '<div class="mini" id="idYa">Ya tiene foto. <button class="btn g" id="idVer" style="padding:7px 12px;font-size:12px">Verla</button> '+
+          ? '<div class="mini" id="idYa">Ya tiene foto'+(b.id_foto_por?', la tomo <b>'+esc(b.id_foto_por)+'</b>':'')+'. '+
+            '<button class="btn g" id="idVer" style="padding:7px 12px;font-size:12px">Verla</button> '+
             '<button class="btn g" id="idOtra" style="padding:7px 12px;font-size:12px">Cambiarla</button></div>'
-          : '<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto'+
+          : '<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto del ID'+
             '<input type="file" id="idArch" accept="image/*" capture="environment" style="display:none"></label>')+
         '<div class="mini" id="idNota" style="margin-top:6px"></div>'+
       '</div>'+
-    '</div>';
-  let n = ya ? Number(b.llegaron) : Number(b.pax);
+      '<div style="margin-top:12px"><button class="btn ancho" id="confirma">Confirmar la llegada</button></div>'+
+      '<div style="margin-top:8px"><button class="btn g ancho" id="cierra2">Cerrar</button></div>'+
+    '</div>');
+  $('cierra2').onclick = cierraHoja;
+
+  let n = ya ? llegaron : pax;
   let foto = b.id_foto || null;
   const pinta = () => { $('cuantos').textContent = n; };
 
-  /* El candado: si la experiencia pide identificación y todavía no hay foto,
-     Confirmar no se puede pulsar y se dice por qué. Un botón apagado sin
-     explicación es el que hace que alguien piense que la app se rompió. */
+  /* EL ID AVISA, NO TRANCA. Javi, 30-oct-2026: «Una vez suban el ID ya se
+     cierra la entrada. Si no suben ID se reporta que llego sin ID». Antes el
+     boton se quedaba apagado sin foto, y eso para la fila en la puerta. Ahora
+     se puede pasar sin foto, y queda escrito que se paso sin foto. */
   const candado = () => {
-    const falta = b.pide_id && !foto;
     const c=$('confirma'); if(!c) return;
-    c.disabled = falta;
-    if(falta) $('idNota').textContent='Sin la foto no se puede confirmar la llegada.';
+    const falta = b.pide_id && !foto;
+    c.textContent = falta ? 'Confirmar sin ID' : 'Confirmar la llegada';
+    c.className   = falta ? 'btn g ancho' : 'btn ancho';
+    const nota=$('idNota'); if(!nota) return;
+    nota.textContent = falta ? 'Si confirmas sin la foto, queda reportado que llego sin ID.'
+                     : (foto ? 'Identificacion guardada.' : '');
   };
   candado();
 
   const sube = async (f) => {
     if(!f) return;
-    if(f.size > 12*1024*1024){ $('idNota').textContent='La foto pesa más de 12 MB.'; return; }
-    $('idNota').textContent='Subiendo la foto…';
+    if(f.size > 12*1024*1024){ $('idNota').textContent='La foto pesa mas de 12 MB.'; return; }
+    $('idNota').textContent='Subiendo la foto...';
     const ext=(String(f.name).split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
-    /* La regla del almacén mira la TERCERA carpeta y ahí tiene que ir el
+    /* La regla del almacen mira la TERCERA carpeta y ahi tiene que ir el
        operador; cambiar el orden rompe el permiso sin avisar. */
     const ruta='identificaciones/'+b.salida_id+'/'+(b.operador_id||'casa')+'/'+b.reserva_id+'-'+Date.now()+'.'+ext;
     try{
       const up=await fetch(SB+'/storage/v1/object/tercero-docs/'+ruta,{method:'POST',
         headers:{apikey:KEY, Authorization:'Bearer '+SES.access_token,
                  'Content-Type':f.type||'image/jpeg'}, body:f});
-      if(!up.ok){ $('idNota').textContent='El almacén la rechazó ('+up.status+').'; return; }
+      if(!up.ok){ $('idNota').textContent='El almacen la rechazo ('+up.status+').'; return; }
       const r=await fetch(SB+'/rest/v1/rpc/sinc_reserva_id_foto',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_reserva:b.reserva_id, p_ruta:ruta})}).then(x=>x.json());
-      if(r && r.ok){ foto=ruta; $('idNota').textContent='Foto guardada.'; candado(); vibra([30]); }
+      if(r && r.ok){ foto=ruta; candado(); vibra([30]); }
       else $('idNota').textContent=(r&&(r.message||r.motivo))||'No se pudo guardar.';
     }catch(e){ $('idNota').textContent='No se pudo subir: '+(e.message||e); }
   };
   const arch=$('idArch'); if(arch) arch.onchange = () => sube(arch.files && arch.files[0]);
   const otra=$('idOtra'); if(otra) otra.onclick = () => {
-    $('idYa').outerHTML='<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto'+
+    $('idYa').outerHTML='<label class="btn g ancho" style="display:block;text-align:center">Tomar la foto del ID'+
       '<input type="file" id="idArch2" accept="image/*" capture="environment" style="display:none"></label>';
     const a2=$('idArch2'); if(a2) a2.onchange = () => sube(a2.files && a2.files[0]);
   };
@@ -331,21 +379,32 @@ function pintaGrupo(b){
     else $('idNota').textContent='No se pudo abrir la foto.';
   };
   $('menos').onclick = () => { if(n>0){ n--; pinta(); } };
-  $('mas').onclick   = () => { if(n<Number(b.pax)){ n++; pinta(); } };
+  $('mas').onclick   = () => { if(n<pax){ n++; pinta(); } };
   $('confirma').onclick = async () => {
-    const btn=$('confirma'); btn.disabled=true; btn.textContent='…';
+    const btn=$('confirma'); btn.disabled=true; const antes=btn.textContent; btn.textContent='...';
+    const sinId = !!(b.pide_id && !foto);
     try{
       const r = await fetch(SB+'/rest/v1/rpc/sinc_confirmar_grupo',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_codigo:b.codigo, p_pax:n})}).then(x=>x.json());
       if(r && r.ok){
-        $('res').innerHTML='<div class="res ok"><div class="big">'+n+' de '+b.pax+' adentro</div>'+
-          '<div class="mini">'+esc(b.titular||'')+' · '+esc(b.experiencia||'')+'</div></div>';
+        abreHoja('<div class="res '+(sinId?'ojo':'ok')+'" style="margin-top:6px">'+
+          '<div class="big">'+(n>=pax ? 'Ya llego' : n+' de '+pax+' adentro')+'</div>'+
+          '<div class="mini" style="margin-top:2px"><b>'+esc(b.titular||'')+'</b></div>'+
+          '<div class="mini">'+esc(b.experiencia||'')+'</div>'+
+          '<div class="mini" style="margin-top:6px">Lo paso <b>'+esc(SES.user?.email||'')+'</b></div>'+
+          (sinId?'<div class="mini" style="margin-top:6px"><b>Llego sin ID.</b> Queda reportado asi.</div>':'')+
+          '<div style="margin-top:12px"><button class="btn ancho" id="listo">Listo</button></div>'+
+        '</div>');
+        $('listo').onclick = cierraHoja;
         vibra([40]);
+        if($('tabLista').style.display!=='none') cargaLista();
       }else{
-        $('res').innerHTML='<div class="res mal"><div class="mini">'+esc((r&&(r.message||r.motivo))||'No se pudo confirmar')+'</div></div>';
+        btn.disabled=false; btn.textContent=antes;
+        $('idNota') && ($('idNota').textContent=(r&&(r.message||r.motivo))||'No se pudo confirmar');
       }
     }catch(e){
-      $('res').innerHTML='<div class="res mal"><div class="mini">'+esc(e.message||e)+'</div></div>';
+      btn.disabled=false; btn.textContent=antes;
+      $('idNota') && ($('idNota').textContent=String(e.message||e));
     }
   };
 }
@@ -384,6 +443,7 @@ async function cargaLista(){
             s.pendientes+' sin pasar'+
             (s.ajustadas?' · '+s.ajustadas+' ajustada'+(s.ajustadas===1?'':'s'):'')+
             (s.no_shows?' · '+s.no_shows+' no llegó':'')+
+            (s.sin_id?' · '+s.sin_id+' sin ID':'')+
             (Number(s.por_cobrar)>0?' · por cobrar '+pesos(s.por_cobrar):'')+
           '</div></div>'+
         '<div class="sal-b">'+ (r.length ? r.map(x => {
@@ -392,10 +452,22 @@ async function cargaLista(){
             '<div class="c">'+esc(x.codigo)+'</div>'+
             (x.estado==='ajustado' ? '<div class="mini">entraron '+x.llegaron+' de '+x.pax+'</div>' : '')+
             (Number(x.por_cobrar)>0 ? '<div class="mini">por cobrar '+pesos(x.por_cobrar)+'</div>' : '')+
-            (x.restricciones ? '<div class="mini">'+esc(x.restricciones)+'</div>' : '')+
+            (x.restricciones ? '<div class="mini">'+esc(x.restricciones)+'</div> ' : '')+
+            (x.llego_por ? '<div class="mini">lo pasó '+esc(x.llego_por)+
+                (x.llego_at?' · '+esc(cuando(x.llego_at)):'')+'</div>' : '')+
+            ((x.estado==='llego'||x.estado==='ajustado') && !x.id_foto
+              ? '<div class="mini"><b>llegó sin ID</b></div>' : '')+
           '</div>'+
+          /* EL BOTON DE LA PUERTA. Javi, 30-oct-2026: «en vez de escanear le
+             de a un boton que diga "ya llego" y el num de personas. Ahi
+             tambien lanza la camara para que se suba el ID». Abre la misma
+             hoja que el escaneo: contar personas, foto del ID, confirmar. */
           '<div style="text-align:right"><span class="etq '+e[0]+'">'+e[1]+'</span>'+
-            '<div class="mini">'+x.pax+' pers.</div></div></div>';
+            '<div class="mini">'+x.pax+' pers.</div>'+
+            '<button class="btn'+(x.estado==='pendiente'?'':' g')+'" data-cod="'+esc(x.codigo)+'" '+
+              'style="margin-top:7px;padding:8px 12px;font-size:12px;white-space:nowrap">'+
+              (x.estado==='pendiente'?'Ya llegó':'Abrir')+'</button>'+
+          '</div></div>';
         }).join('') : '<div class="mini" style="padding:10px 0">Sin reservas.</div>')+
         '</div></div>';
     }).join('');
@@ -403,6 +475,13 @@ async function cargaLista(){
     $('lista').innerHTML='<div class="vacio">No pudimos traer la lista: '+esc(e.message||e)+'</div>';
   }
 }
+/* La lista se vuelve a dibujar entera cada vez, asi que el click se escucha
+   arriba y no en cada boton: uno solo, que no se pierde al repintar. */
+$('lista').onclick = e => {
+  const b = e.target.closest && e.target.closest('button[data-cod]');
+  if(!b) return;
+  verifica(b.getAttribute('data-cod'), false);
+};
 
 arranca();
 </script>

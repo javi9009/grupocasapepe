@@ -56,6 +56,26 @@ tbody tr:hover{background:var(--surface-3)}
 .cuenta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted)}
 .quien{font-weight:600}
 .quien small{display:block;font-weight:400;color:var(--muted);font-size:11.5px}
+/* LA HOJA DEL DETALLE. Javi, 30-oct-2026: «en mis ventas no quiero ver las
+   fotos pero si un boton que abra la reserva y vea su detalle», «con la foto
+   en el detalle». La tabla se queda limpia; el detalle se abre encima. */
+.capa{position:fixed;inset:0;z-index:70;background:rgba(31,27,22,.55);display:none;
+  align-items:center;justify-content:center;padding:16px}
+.capa.on{display:flex}
+.hoja{background:var(--surface);border:1px solid var(--rule);border-radius:12px;
+  width:100%;max-width:620px;max-height:88vh;overflow:auto;box-shadow:var(--shadow)}
+.hoja .cab{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-bottom:1px solid var(--rule);
+  position:sticky;top:0;background:var(--surface-3)}
+.hoja .cab h3{margin:0;font-size:16px}
+.hoja .cab button{margin-left:auto;background:none;border:0;font-size:24px;line-height:1;
+  color:var(--muted);cursor:pointer;padding:0 4px}
+.hoja .cue{padding:14px 16px}
+.par{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;font-size:13px}
+.par dt{color:var(--muted);font-size:12px}
+.par dd{margin:0}
+.idfoto{margin-top:14px;padding-top:12px;border-top:1px solid var(--rule)}
+.idfoto img{max-width:100%;border:1px solid var(--rule);border-radius:8px;display:block;margin-top:8px}
+@media(max-width:520px){.par{grid-template-columns:1fr}.par dt{margin-top:6px}}
 </style><link rel="icon" type="image/png" href="/dash-192.png">
 <link rel="apple-touch-icon" href="/dash-192.png">
 </head><body>
@@ -98,6 +118,7 @@ tbody tr:hover{background:var(--surface-3)}
       <th>Folio</th><th>Reservada</th><th>Sale</th><th>Experiencia</th><th>Quién la opera</th>
       <th>Pago</th><th>A dónde cayó</th>
       <th class="n">Cobrado</th><th class="n">Nuestra comisión</th><th class="n">Para el operador</th>
+      <th></th>
     </tr></thead><tbody id="tb"></tbody></table>
     <div class="empty" id="vacio" style="display:none">Todavía no hay ventas que enseñar.</div>
   </div>
@@ -111,6 +132,11 @@ tbody tr:hover{background:var(--surface-3)}
     Stripe, sí caen en la cuenta de Casa Pepe y salen marcadas como tales.
   </div></div>
 </div>
+
+<div class="capa" id="capa"><div class="hoja">
+  <div class="cab"><h3 id="hTit">Reserva</h3><button id="hX" aria-label="Cerrar">&times;</button></div>
+  <div class="cue" id="hCue"></div>
+</div></div>
 
 <script>
 (function(){
@@ -243,6 +269,7 @@ tbody tr:hover{background:var(--surface-3)}
         '<td class="n">'+money(v.pago_total)+'</td>'+
         '<td class="n">'+(v.pago_estado==='pagado'?money(v.nuestra_comision):'—')+'</td>'+
         '<td class="n">'+(v.pago_estado==='pagado'?money(v.neto_operador):'—')+'</td>'+
+        '<td class="n"><button class="btn ghost sm" data-res="'+esc(v.id)+'">Ver detalle</button></td>'+
       '</tr>';
     }).join('');
   }
@@ -266,6 +293,89 @@ tbody tr:hover{background:var(--surface-3)}
     return '<span class="tag warn">a Casa Pepe</span>'+
            '<div class="mini">'+(v.clase==='propia'?'tour propio':'aún sin vincular su Stripe')+'</div>';
   }
+
+  /* ---------- el detalle de una reserva ----------
+     Javi, 30-oct-2026: «si un boton que abra la reserva y vea su detalle»,
+     «con la foto en el detalle», «en el detalle se ha de poner que usuario
+     escaneo o autorizo pasar».
+     La foto vive en un almacen privado: no se pega la ruta, se pide una liga
+     firmada que caduca en diez minutos. Asi la identificacion de un huesped no
+     queda colgando en una URL que cualquiera pueda reenviar. */
+  var ETQP={pendiente:['none','sin pasar'],llego:['ok','llegaron'],
+            ajustado:['warn','ajustada'],no_show:['bad','no llegó']};
+  function hora(t){ if(!t)return ''; var d=new Date(t);
+    return isNaN(d)?'':d.toLocaleString('es-MX',{day:'numeric',month:'short',
+      hour:'2-digit',minute:'2-digit'}); }
+  function fila(t,v){ return v==null||v===''?'':'<dt>'+esc(t)+'</dt><dd>'+v+'</dd>'; }
+  function cierra(){ $('capa').classList.remove('on'); $('hCue').innerHTML=''; }
+  $('hX').onclick=cierra;
+  $('capa').onclick=function(e){ if(e.target===$('capa')) cierra(); };
+
+  async function abreDetalle(id){
+    $('hTit').textContent='Reserva';
+    $('hCue').innerHTML='<div class="mini">Cargando…</div>';
+    $('capa').classList.add('on');
+    var d;
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/sinc_venta_detalle',{method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},hdr()),
+        body:JSON.stringify({p_reserva:id})});
+      d=await r.json();
+      if(!r.ok||!d) throw new Error((d&&(d.message||d.hint))||('la base respondió '+r.status));
+    }catch(x){ $('hCue').innerHTML='<div class="mini">No pude abrir la reserva: '+esc(x.message)+'</div>'; return; }
+
+    var ep=ETQP[d.estado_puerta]||['none','—'];
+    $('hTit').innerHTML=esc(d.huesped||'Reserva')+' <span class="mini">· '+esc(d.folio||'')+'</span>';
+    $('hCue').innerHTML=
+      '<dl class="par">'+
+        fila('Código', '<span class="cuenta">'+esc(d.codigo||'')+'</span>')+
+        fila('Experiencia', esc(d.experiencia||'—')+
+          (d.operador?'<div class="mini">'+esc(d.operador)+'</div>':''))+
+        fila('Sale', fecha(d.fecha)+(d.hora?' · '+esc(String(d.hora).slice(0,5)):'')+
+          (d.punto?'<div class="mini">'+esc(d.punto)+'</div>':''))+
+        fila('Personas', d.pax+(d.menores?' ('+(d.adultos||0)+' adultos, '+d.menores+' menores)':''))+
+        fila('Contacto', (d.email?esc(d.email):'')+(d.telefono?'<div class="mini">'+esc(d.telefono)+'</div>':''))+
+        fila('Idioma', d.idioma?esc(d.idioma):'')+
+        fila('Restricciones', d.restricciones?esc(d.restricciones):'')+
+        fila('Notas', d.notas?esc(d.notas):'')+
+        fila('Canal', (d.canal?esc(d.canal):'')+(d.vendedor?'<div class="mini">'+esc(d.vendedor)+'</div>':''))+
+        fila('Reservada', fecha(d.reservada_at))+
+        fila('Pago', etqPago(d.pago_estado)+
+          (d.pago_total!=null?' <b>'+money(d.pago_total)+'</b>':'')+
+          (Number(d.pago_resto)>0?'<div class="mini">por cobrar en la puerta '+money(d.pago_resto)+'</div>':''))+
+        /* LA PUERTA: quien escaneo o autorizo pasar, y cuando. */
+        fila('En la puerta', '<span class="tag '+ep[0]+'">'+esc(ep[1])+'</span>'+
+          (d.llegaron!=null?' <b>'+d.llegaron+' de '+d.pax+'</b>':'')+
+          (d.llego_por?'<div class="mini">lo pasó <b>'+esc(d.llego_por)+'</b>'+
+              (d.llego_at?' · '+esc(hora(d.llego_at)):'')+'</div>':''))+
+      '</dl>'+
+      '<div class="idfoto" id="idCaja">'+
+        '<b style="font-size:13px">Identificación</b> '+
+        (d.id_foto
+          ? '<div class="mini">'+(d.id_foto_por?'la tomó <b>'+esc(d.id_foto_por)+'</b>':'')+
+            (d.id_foto_at?' · '+esc(hora(d.id_foto_at)):'')+'</div>'+
+            '<div class="mini" id="idCarga">Abriendo la foto…</div>'
+          : '<div class="mini">'+((d.estado_puerta==='llego'||d.estado_puerta==='ajustado')
+              ? 'Pasó sin ID.' : 'Todavía no hay foto.')+'</div>')+
+      '</div>';
+
+    if(d.id_foto){
+      try{
+        var sg=await fetch(SB+'/storage/v1/object/sign/tercero-docs/'+d.id_foto,{method:'POST',
+          headers:Object.assign({'Content-Type':'application/json'},hdr()),
+          body:JSON.stringify({expiresIn:600})}).then(function(x){return x.json();});
+        if(sg&&sg.signedURL){
+          $('idCarga').outerHTML='<img src="'+SB+'/storage/v1'+esc(sg.signedURL)+'" alt="Identificación">';
+        } else { $('idCarga').textContent='No pude abrir la foto.'; }
+      }catch(x){ var c=$('idCarga'); if(c) c.textContent='No pude abrir la foto: '+x.message; }
+    }
+  }
+  /* La tabla se repinta entera con cada filtro, asi que el click se escucha
+     arriba: un solo oyente que no se pierde al redibujar. */
+  $('tb').addEventListener('click',function(e){
+    var b=e.target.closest&&e.target.closest('button[data-res]');
+    if(b) abreDetalle(b.getAttribute('data-res'));
+  });
 
   /* El CSV lleva las mismas columnas que se ven, para que cuadre con la pantalla
      y no haya dos versiones de la verdad. */
