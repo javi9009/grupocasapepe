@@ -1308,6 +1308,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   var NUM={poliza_suma:1};
   var BOOL={tiene_poliza:1,tiene_rnt:1};
   var ses=null,cur=null,step=0,U=[],D=[],X=[],edit=null,PRODUCTORA=null;
+  var EVX=[];   /* sus eventos de verdad, los de la tabla eventos */
   /* Lo que trae este ateneista. Se lee de la base, no se deduce de si tiene
      tours: alguien puede marcar «eventos» hoy y no tener ninguno todavia. */
   var MISCAPS=[], FORMATO_NUEVA='tour', FFORMATO='', FCAP='';
@@ -4126,6 +4127,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var r2=await fetch(SB+'/rest/v1/tour_operador_docs?select=*&operador_id=eq.'+cur.id+'&order=created_at.desc',{headers:hdr()});
     var r3=await fetch(SB+'/rest/v1/op_experiencias?select=*&operador_id=eq.'+cur.id+'&order=created_at.desc',{headers:hdr()});
     U=r1.ok?await r1.json():[];D=r2.ok?await r2.json():[];X=r3.ok?await r3.json():[];
+    /* EL RESUMEN LEE LAS DOS TABLAS. Javi, 30-oct-2026: «siguen apareciendo 4
+       en resumen pero 11 en eventos. Deben aparecer en resumen los actuales».
+       Tenía razón y era de bulto: el Resumen solo miraba op_experiencias, y de
+       Café Cumbre ahí solo quedan 4 copias muertas de eventos que ya pasaron.
+       Sus eventos de verdad viven en `eventos` y cuelgan de su ficha de
+       productora, que es el otro sombrero de la misma persona. Se leen por su
+       liga de portal, igual que hace la pestaña Eventos, y se traducen al
+       idioma de la rejilla. No se migra nada. */
+    await cargaEventosResumen();
     await cargaCaps();
     await cargaPortadas();
     await cargaVirreyes();
@@ -4717,6 +4727,31 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(isNaN(x))x=0.5; if(isNaN(y))y=0.35;
     return (x*100)+'% '+(y*100)+'%';
   }
+  var EV_ESTADO_RES={borrador:'borrador',propuesto:'en_revision',confirmado:'en_revision',
+                     publicado:'publicada',realizado:'pasado',cancelado:'anulada'};
+  async function cargaEventosResumen(){
+    EVX=[];
+    if(!PRODUCTORA || !PRODUCTORA.portal_token) return;
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/prod_portal_eventos',{method:'POST',headers:hdr(),
+            body:JSON.stringify({p_token:PRODUCTORA.portal_token})});
+      if(!r.ok) return;
+      var L=(await r.json())||[];
+      EVX=L.map(function(e){
+        var f=(e.fotos&&e.fotos.length)?(e.fotos[0].url||e.fotos[0]):'';
+        return { id:e.id, _evt:true, nombre:e.nombre, formato:'evento',
+          estado: EV_ESTADO_RES[e.estado]||'borrador',
+          categoria: e.espacio||null,
+          duracion_min: e.duracion_min||null,
+          dias: [],
+          precio_adulto: (Number(e.precio)>0?Number(e.precio):(Number(e.precio_por_hora)>0?Number(e.precio_por_hora):null)),
+          _gratis: !!e.es_gratis,
+          fotos: f?[f]:[],
+          fecha_inicio: e.fecha_inicio||null,
+          termina_en: (e.fecha_fin||e.fecha_inicio||null) };
+      });
+    }catch(_){ EVX=[]; }
+  }
   async function cargaPortadas(){
     if(!X.length)return;
     var ids=X.map(function(e){return e.id;}).join(',');
@@ -5009,6 +5044,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      no se edita, no se vende y no deberia seguir ocupando la rejilla. */
   function evPasado(e){
     if(String(e.formato||'')!=='evento') return false;
+    if(e.estado==='anulada') return true;
     var hoy=new Date(); hoy.setHours(0,0,0,0);
     var fin=e.termina_en||null;
     if(!fin && e.fechas && e.fechas.length) fin=e.fechas.slice().sort().pop();
@@ -5019,9 +5055,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   }
   function pintaCajones(){
     $('hNom').textContent=cur.nombre_comercial||comoSeLlama();
-    var pub=X.filter(function(e){return e.estado==='publicada';}).length;
-    var evs=X.filter(function(e){return e.formato==='evento';}).length;
-    var tours=X.length-evs;
+    /* LA CUENTA DE ARRIBA CONTABA UNA SOLA TABLA. A Café Cumbre le decía
+       «4 eventos · nada a la venta todavía» mientras tenía siete en pie y
+       cuatro a la venta: los cuatro que contaba eran copias muertas. Se
+       cuenta lo que hay vivo en las dos tablas. */
+    var VIVOS=X.concat(EVX).filter(function(e){ return !evPasado(e) && e.estado!=='anulada'; });
+    var pub=VIVOS.filter(function(e){return e.estado==='publicada';}).length;
+    var evs=VIVOS.filter(function(e){return e.formato==='evento';}).length;
+    var tours=VIVOS.length-evs;
     var partes=[];
     if(tours) partes.push(tours+' experiencia'+(tours===1?'':'s'));
     if(evs)   partes.push(evs+' evento'+(evs===1?'':'s'));
@@ -5029,7 +5070,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var npz=(AR.piezas||[]).length;
     var pzv=(AR.piezas||[]).filter(function(p){return p.activo;}).length;
     if(npz) partes.push(npz+' pieza'+(npz===1?'':'s'));
-    $('hSub').textContent = (X.length||npz)
+    $('hSub').textContent = (VIVOS.length||npz)
       ? partes.join(' · ')+' · '+((pub+pzv)?(pub+pzv)+' a la venta':'nada a la venta todavía')
       : 'Todavía no has subido nada';
     /* LA PESTAÑA SE LLAMA COMO LO QUE HAY DETRÁS. A Café Cumbre, que sólo
@@ -5052,10 +5093,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     FFORMATO='';
 
     /* Filtrado por capacidad: lo que subió de ese tipo y nada más. */
+    /* Las dos tablas, en la misma rejilla. */
+    var TODO = X.concat(EVX);
     var LX = (FCAP==='artesania') ? []
-           : (FCAP==='eventos')   ? X.filter(function(e){ return e.formato==='evento'; })
-           : (FCAP==='experiencias') ? X.filter(function(e){ return e.formato!=='evento'; })
-           : X;
+           : (FCAP==='eventos')   ? TODO.filter(function(e){ return e.formato==='evento'; })
+           : (FCAP==='experiencias') ? TODO.filter(function(e){ return e.formato!=='evento'; })
+           : TODO;
     /* Fuera lo que ya ocurrio, salvo que lo pida el check. Se cuenta antes de
        filtrar para poder decir cuantos hay: un check que no dice cuanto
        esconde es un check que nadie toca. */
@@ -5064,7 +5107,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(caja){
       caja.style.display = PAS.length ? 'flex' : 'none';
       var dice=$('pasadosDice');
-      if(dice) dice.textContent='Mostrar los '+PAS.length+' evento'+(PAS.length===1?'':'s')+' que ya '+(PAS.length===1?'pasó':'pasaron');
+      /* «Pasados» incluye los anulados: ninguno de los dos está en pie, y
+         decir «que ya pasaron» de uno anulado sería inventarle una fecha. */
+      if(dice) dice.textContent='Mostrar los '+PAS.length+' evento'+(PAS.length===1?'':'s')+' que ya no '+(PAS.length===1?'está':'están')+' en pie';
       if(chk && !chk._ata){ chk._ata=true; chk.onchange=function(){ pintaCajones(); }; }
     }
     if(!(chk && chk.checked)) LX = LX.filter(function(e){ return !evPasado(e); });
@@ -5072,9 +5117,16 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     $('cajones').innerHTML=LX.map(function(e){
       var foto=portada(e);
       var est=e.estado;
-      var boton=est==='publicada'?'<button class="interruptor act" data-tog="'+e.id+'">Activa</button>'
+      /* Un evento no se enciende con el interruptor de un tour: su estado lo
+         mueve su propia pantalla, y una ficha anulada no es un borrador. */
+      var boton = e._evt
+        ? '<span class="interruptor '+(est==='publicada'?'act':est==='en_revision'?'rev':'ina')+'">'+
+          (est==='publicada'?'A la venta':est==='en_revision'?'En revisión':est==='pasado'?'Ya pasó':est==='anulada'?'Anulado':'Borrador')+'</span>'
+        : est==='publicada'?'<button class="interruptor act" data-tog="'+e.id+'">Activa</button>'
         :(est==='pausada'?'<button class="interruptor ina" data-tog="'+e.id+'">Inactiva</button>'
-        :(est==='en_revision'?'<span class="interruptor rev">En revisión</span>':'<span class="interruptor ina">Borrador</span>'));
+        :(est==='en_revision'?'<span class="interruptor rev">En revisión</span>'
+        :(est==='anulada'?'<span class="interruptor ina">Anulada</span>'
+        :'<span class="interruptor ina">Borrador</span>')));
       return '<div class="cajon">'+
         '<div class="foto"'+(foto?' style="background-image:url(\''+esc(foto)+'\');background-position:'+focoPortada(e)+';background-size:cover"':'')+'>'+(foto?'':'<span>'+esc((e.nombre||'?').charAt(0).toUpperCase())+'</span>')+'</div>'+
         '<div class="cuerpo"><div class="nom">'+esc(e.nombre)+
@@ -5082,7 +5134,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           '<div class="mini" style="margin-top:4px">'+esc(e.categoria||'Sin tipo')+' · '+(e.duracion_min?Math.round(e.duracion_min/60*10)/10+' h':'—')+'</div>'+
           '<div class="mini">'+((e.dias||[]).join(' ')||'Sin días')+'</div>'+
           '<div style="font-family:\'Oswald\';font-size:17px;margin-top:7px">'+money(e.precio_adulto)+'</div></div>'+
-        '<div class="pie">'+boton+'<button class="btn fantasma sm" data-edit="'+e.id+'">Abrir</button></div>'+
+        '<div class="pie">'+boton+(e._evt
+            ? '<button class="btn fantasma sm" data-abreevt="'+e.id+'">Abrir</button>'
+            : '<button class="btn fantasma sm" data-edit="'+e.id+'">Abrir</button>')+'</div>'+
       '</div>';
     }).join('')+
     /* AQUÍ HABÍA DOS CAJONES GRANDES de «＋ Nueva experiencia» y «＋ Nuevo
@@ -5111,6 +5165,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           '<button class="btn fantasma sm" data-pieza-ab="'+esc(p.id)+'">Abrir</button></div>'+
       '</div>';
     }).join('');
+    Array.prototype.forEach.call($('cajones').querySelectorAll('[data-abreevt]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); vista('eventos'); try{ cargaEventos(); }catch(_){} };
+    });
     Array.prototype.forEach.call($('cajones').querySelectorAll('[data-pieza-ab]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation();
         vista('arte'); try{ arSub('stock'); }catch(_){}
