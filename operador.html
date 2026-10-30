@@ -2135,6 +2135,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     return '<div class="pgform">'+
       '<div class="ccfila"><label>Nombre de la reserva'+
         '<input id="xNom" placeholder="A nombre de quién viene"></label></div>'+
+      /* EL CÓDIGO QUE YA LLEVA EL CLIENTE. Con él, el QR que le mandamos es el
+         mismo que él ya tiene de su plataforma, y la reserva no se puede
+         cargar dos veces. Si no lo trae, se deja vacío y le ponemos uno. */
+      '<div class="ccfila"><label>Su código · el de su plataforma'+
+        '<input id="xCod" placeholder="Si no trae, déjalo vacío y le ponemos uno"></label></div>'+
       '<div class="ccfila cc3">'+
         '<label>Adultos<input type="number" min="0" id="xAd" value="1"></label>'+
         '<label>Niños<input type="number" min="0" id="xNi" value="0"></label>'+
@@ -2165,6 +2170,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       headers:hdr(), body:JSON.stringify({p_salida:s.id, p_filas:[{
         nombre:nom, adultos:ad, menores:ni, pax:ad+ni,
         email:($('xMail').value||'').trim(),
+        ref:($('xCod')&&$('xCod').value||'').trim(),
         restricciones:($('xRes').value||'').trim(),
         pago_estado:$('xPag').value,
         notas:'Reserva de otra plataforma · welcoming en Casa Pepe'}]})});
@@ -2174,7 +2180,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        cuáles venían repetidas. Javi, 30-oct-2026. */
     if(!n || typeof n!=='object'){ toast('La base no dejó apuntarla.',true); return; }
     if(!n.cargadas){ toast(repeDicho(n)||'No se apuntó: esa reserva ya estaba.',true); return; }
-    PG.nueva=null; toast('Apuntada.'); await cargaProg();
+    PG.nueva=null;
+    var bol1=await mandaBoletos(n.nuevas||[]);
+    toast('Apuntada. '+(boletosDicho(bol1)||''), !!bol1.fallaron);
+    await cargaProg();
   }
 
   /* EL EXCEL DEL DÍA. Javi, 27-oct-2026: «poder subir un excel con el detalle
@@ -2268,7 +2277,46 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        justo lo que venía a evitar. Esto se queda en pantalla hasta que lo
        cierre. */
     if(n.repetidas && n.repetidas.length) pintaRepetidas(n.repetidas);
+
+    if(cargadas){
+      toast('Mandando los boletos…');
+      var bol=await mandaBoletos(n.nuevas||[]);
+      var d=boletosDicho(bol); if(d) toast(d, !!bol.fallaron);
+    }
     await cargaProg();
+  }
+
+  /* EL CORREO CON EL QR, AL CARGARLAS. Javi, 30-oct-2026: «inicia ya con lo del
+     mail y el QR».
+     Cargar una reserva y mandarle su boleto eran dos cosas distintas, y la
+     segunda vivía en el panel de la casa: quien subía su Excel dejaba las
+     reservas dentro y a los clientes sin nada. La pantalla del alta a mano
+     llegaba a prometerlo —«si le pones correo, le llegará su QR»— y no salía.
+     Ahora sale aquí mismo, en cuanto la reserva existe.
+
+     Van de una en una a propósito: si uno falla, los demás salen igual, y al
+     final se dice cuántos no salieron para poder reintentarlos. */
+  async function mandaBoletos(nuevas){
+    var con=(nuevas||[]).filter(function(x){ return x && x.id && x.email; });
+    if(!con.length) return {mandados:0, fallaron:0, sinmail:(nuevas||[]).length};
+    var ok=0, mal=0;
+    for(var i=0;i<con.length;i++){
+      try{
+        var r=await fetch(SB+'/functions/v1/sinc-boletos-enviar',{method:'POST',headers:hdr(),
+          body:JSON.stringify({reserva_id:con[i].id})});
+        if(r.ok) ok++; else mal++;
+      }catch(_){ mal++; }
+    }
+    return {mandados:ok, fallaron:mal, sinmail:(nuevas||[]).length-con.length};
+  }
+  function boletosDicho(b){
+    if(!b) return '';
+    var p=[];
+    if(b.mandados) p.push(b.mandados===1 ? 'Su boleto con el QR ya salió por correo.'
+                                         : ('Salieron '+b.mandados+' boletos con su QR por correo.'));
+    if(b.fallaron) p.push(b.fallaron+(b.fallaron===1?' correo no salió':' correos no salieron')+'; la reserva sí quedó.');
+    if(b.sinmail)  p.push(b.sinmail+(b.sinmail===1?' no trae correo':' no traen correo')+': se validan en la puerta con su código.');
+    return p.join(' ');
   }
 
   /* La frase corta para el aviso de arriba. */
