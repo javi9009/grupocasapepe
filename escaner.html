@@ -167,6 +167,26 @@ let SES=null, LECTOR=null, ULT='', ULTAT=0;
 function hdr(){
   return { apikey:KEY, Authorization:'Bearer '+(SES?.access_token||KEY), 'Content-Type':'application/json' };
 }
+/* EL TOKEN SE VENCE. Javi, 30-oct-2026, con la fila en la puerta: «ya no
+   permite validar ni subir fotos», y abajo del boton decia «JWT expired».
+   Esta pantalla se abre a las seis y se usa hasta la una: el token que guardo
+   al entrar dura una hora. La libreria lo renueva sola, pero nosotros nos
+   habiamos quedado con la copia vieja en SES y la mandabamos en cada llamada.
+   Asi que antes de cada peticion se pide el vivo -getSession lo renueva si
+   hace falta- y se guarda. Si ya no hay forma de renovarlo, se vuelve a la
+   puerta en vez de dar un error que nadie sabe leer. */
+async function fresco(){
+  try{
+    const { data } = await sb.auth.getSession();
+    if(data?.session){ SES = data.session; return true; }
+  }catch(_){}
+  SES=null; $('puerta').style.display=''; $('app').style.display='none';
+  $('quien').textContent='Sin entrar';
+  $('avisoPuerta').textContent='Tu sesión caducó. Entra otra vez para seguir validando.';
+  cierraHoja();
+  return false;
+}
+sb.auth.onAuthStateChange((_e, s) => { if(s) SES = s; });
 
 /* ---------- la puerta ---------- */
 async function arranca(){
@@ -251,6 +271,7 @@ async function verifica(cod, deCamara){
   if(deCamara && $('modal').classList.contains('on')) return;
   ULT=cod; ULTAT=ahora;
   $('res').innerHTML='<div class="res"><div class="mini">Comprobando…</div></div>';
+  if(!await fresco()) return;
   try{
     const g = await fetch(SB+'/rest/v1/rpc/sinc_boleto_grupo',{method:'POST',headers:hdr(),
       body:JSON.stringify({p_codigo:cod})}).then(r=>r.json());
@@ -351,6 +372,7 @@ function pintaGrupo(b){
     if(!f) return;
     if(f.size > 12*1024*1024){ $('idNota').textContent='La foto pesa mas de 12 MB.'; return; }
     $('idNota').textContent='Subiendo la foto...';
+    if(!await fresco()) return;
     const ext=(String(f.name).split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
     /* La regla del almacen mira la TERCERA carpeta y ahi tiene que ir el
        operador; cambiar el orden rompe el permiso sin avisar. */
@@ -359,7 +381,12 @@ function pintaGrupo(b){
       const up=await fetch(SB+'/storage/v1/object/tercero-docs/'+ruta,{method:'POST',
         headers:{apikey:KEY, Authorization:'Bearer '+SES.access_token,
                  'Content-Type':f.type||'image/jpeg'}, body:f});
-      if(!up.ok){ $('idNota').textContent='El almacen la rechazo ('+up.status+').'; return; }
+      if(!up.ok){
+        $('idNota').textContent = up.status===401
+          ? 'Tu sesión caducó. Sal y entra otra vez.'
+          : 'El almacen la rechazo ('+up.status+').';
+        return;
+      }
       const r=await fetch(SB+'/rest/v1/rpc/sinc_reserva_id_foto',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_reserva:b.reserva_id, p_ruta:ruta})}).then(x=>x.json());
       if(r && r.ok){ foto=ruta; candado(); vibra([30]); }
@@ -373,6 +400,7 @@ function pintaGrupo(b){
     const a2=$('idArch2'); if(a2) a2.onchange = () => sube(a2.files && a2.files[0]);
   };
   const ver=$('idVer'); if(ver) ver.onclick = async () => {
+    if(!await fresco()) return;
     const sg=await fetch(SB+'/storage/v1/object/sign/tercero-docs/'+foto,{method:'POST',
       headers:hdr(), body:JSON.stringify({expiresIn:600})}).then(x=>x.json()).catch(()=>null);
     if(sg && sg.signedURL) window.open(SB+'/storage/v1'+sg.signedURL,'_blank','noopener');
@@ -383,6 +411,7 @@ function pintaGrupo(b){
   $('confirma').onclick = async () => {
     const btn=$('confirma'); btn.disabled=true; const antes=btn.textContent; btn.textContent='...';
     const sinId = !!(b.pide_id && !foto);
+    if(!await fresco()){ btn.disabled=false; btn.textContent=antes; return; }
     try{
       const r = await fetch(SB+'/rest/v1/rpc/sinc_confirmar_grupo',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_codigo:b.codigo, p_pax:n})}).then(x=>x.json());
@@ -429,6 +458,7 @@ const ETQ = {
 async function cargaLista(){
   if(!SES) return;
   $('lista').innerHTML='<div class="vacio">Cargando…</div>';
+  if(!await fresco()) return;
   try{
     const salidas = await fetch(SB+'/rest/v1/rpc/sinc_dia_boletos',{method:'POST',headers:hdr(),
       body:JSON.stringify({p_fecha:$('dia').value||null})}).then(r=>r.json());
