@@ -1945,8 +1945,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       var re=await fetch(SB+'/rest/v1/op_experiencias?select=id,experiencia_id,nombre,pickup_hotel,cer_inicio_lugar,punto_encuentro,requiere_welcoming,impacto_transporte'+
         '&operador_id=eq.'+cur.id+'&experiencia_id=not.is.null',{headers:hdr()});
       PG.exps={};
-      var ids=[];
+      var ids=[], opIds=[];
       if(re.ok)(await re.json()).forEach(function(e){
+        if(opIds.indexOf(e.id)<0) opIds.push(e.id);
         if(!PG.exps[e.experiencia_id]){ PG.exps[e.experiencia_id]=e; ids.push(e.experiencia_id); } });
 
       PG.salidas=[];
@@ -1954,6 +1955,21 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,chofer_ids,notas,aviso_enviado_at,venta_cerrada_at'+
           '&experiencia_id=in.('+ids.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha,hora',{headers:hdr()});
         PG.salidas = rs.ok ? await rs.json() : [];
+      }
+
+      /* LAS QUE PREGUNTARON FUERA DE HORA. Javi, 1-nov-2026: «cuando el
+         cliente solicite reserva extemporánea generale en programación una
+         ficha con el dato de pendiente de confirmación y pago». No son
+         reservas: no ocupan lugar y no cuentan en el cupo. Son una pregunta
+         esperando un sí o un no. */
+      PG.sol={};
+      if(opIds.length){
+        var rq=await fetch(SB+'/rest/v1/sinc_solicitudes?select=id,folio,op_experiencia_id,fecha,hora,pax,nombre,notas,estado,respondida_por,respondida_at,motivo,reserva_id,pago_enviado_at'+
+          '&op_experiencia_id=in.('+opIds.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+
+          '&estado=in.(pedida,confirmada)&reserva_id=is.null&order=created_at',{headers:hdr()});
+        if(rq.ok)(await rq.json()).forEach(function(q){
+          var k=q.op_experiencia_id+'|'+q.fecha+'|'+String(q.hora).slice(0,8);
+          (PG.sol[k]=PG.sol[k]||[]).push(q); });
       }
 
       PG.clientes={};
@@ -2346,6 +2362,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           }).join('')
         : '<div class="pgcli"><div class="qn mini">Nadie apuntado todavía.</div></div>')+
 
+      /* LO QUE PREGUNTÓ FUERA DE HORA, antes de la puerta de apuntar: es lo
+         que está esperando una respuesta tuya, y lo que espera va primero. */
+      pregFuera(e, s)+
+
       /* LAS RESERVAS QUE NO SON NUESTRAS. Javi, 26-oct-2026: hay tours que
          vende otra plataforma y cuya gente pasa por Casa Pepe igual, porque
          les hacemos el welcoming. De esas no sabemos nada hasta que alguien
@@ -2367,6 +2387,71 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           ? 'Las que vende otra plataforma y reciben aquí.'
           : 'Las que vendiste tú por otro lado: una a una, o el Excel del día.')+'</span></div>')+
     '</div>';
+  }
+
+  /* PENDIENTE DE CONFIRMACIÓN Y PAGO. Javi, 1-nov-2026.
+     Una solicitud no es una reserva: no ocupa lugar, no cuenta en el cupo y no
+     se cobra. Por eso se pinta aparte y no entre los clientes, donde parecería
+     gente que ya viene. Aquí sólo caben dos gestos: decir que sí -y entonces
+     le sale el link de pago- o decir que no.
+     Mientras no pague, sigue sin ocupar lugar: «la solicitud no aparta lugar,
+     sólo el pago aparta». Y por eso se puede retirar el link. */
+  function pregFuera(e, s){
+    var k=e.id+'|'+s.fecha+'|'+String(s.hora).slice(0,8);
+    var q=(PG.sol&&PG.sol[k])||[];
+    if(!q.length) return '';
+    return '<div class="pgcli" style="display:block;background:#E4F1FA;border-left:3px solid #8DC8EA">'+
+      '<div class="mini" style="color:#2A6588;font-weight:700;margin-bottom:6px">'+
+        'Preguntan si todavía cabe alguien</div>'+
+      q.map(function(x){
+        var pedida=(x.estado==='pedida');
+        return '<div style="padding:7px 0;border-top:1px dashed #BFDCEE">'+
+          '<b>'+esc(x.nombre)+'</b> <span class="mini">'+Number(x.pax||1)+' pers. · '+esc(x.folio||'')+'</span>'+
+          (x.notas?'<div class="mini">'+esc(x.notas)+'</div>':'')+
+          (pedida
+            ? '<div style="margin-top:6px">'+
+              '<button class="btn sm verde" data-solsi="'+x.id+'">Sí, que venga</button> '+
+              '<button class="btn sm" data-solno="'+x.id+'">No cabe</button>'+
+              '</div>'
+            : '<div class="mini" style="margin-top:4px">Aceptada'+
+              (x.respondida_por?' por '+esc(x.respondida_por):'')+
+              ' · pendiente de pago. No ocupa lugar hasta que pague.'+
+              ' <button class="btn sm" data-solcancela="'+x.id+'">Retirar el link</button></div>')+
+        '</div>';
+      }).join('')+
+    '</div>';
+  }
+
+  /* Contestar desde aquí es lo mismo que contestar desde el correo: la base
+     apunta quién fue. El aviso al cliente sale aparte, para que un correo
+     caído no deshaga una respuesta ya guardada. */
+  async function contestaSol(id, si, motivo){
+    var q=null;
+    Object.keys(PG.sol||{}).forEach(function(k){
+      PG.sol[k].forEach(function(x){ if(x.id===id) q=x; }); });
+    if(!q) return;
+    var yo=(ses&&ses.user&&ses.user.email)||null;
+    var r=await fetch(SB+'/rest/v1/sinc_solicitudes?select=token&id=eq.'+id,{headers:hdr()});
+    var tok=r.ok?((await r.json())[0]||{}).token:null;
+    if(!tok){ toast('No se pudo abrir esa solicitud.',true); return; }
+    var rr=await fetch(SB+'/rest/v1/rpc/sinc_solicitud_responde',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_token:tok,p_si:si,p_quien:yo,p_motivo:motivo||null})});
+    var d=rr.ok?await rr.json():null;
+    if(!d||!d.ok){ toast('No se pudo contestar'+(d&&d.motivo?': '+d.motivo:'')+'.',true); return; }
+    try{
+      await fetch(SB+'/functions/v1/sinc-solicitud-resuelta',{method:'POST',
+        headers:hdr(), body:JSON.stringify({token:tok})});
+    }catch(_){ }
+    toast(si?'Dicho que sí. Le mandamos el link de pago.':'Dicho que no. Le mandamos otras fechas.');
+    await cargaProg();
+  }
+
+  async function cancelaSol(id){
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_solicitud_cancela',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_id:id,p_motivo:null})});
+    if(!r.ok){ toast('No se pudo retirar el link.',true); return; }
+    toast('Link retirado: ya no puede pagar por ahí.');
+    await cargaProg();
   }
 
   /* EL DETALLE DEL CLIENTE. Javi, 27-oct-2026. Lo que de verdad hace falta
@@ -2674,6 +2759,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         PG.abierto = (PG.abierto===id) ? null : id; pintaProg(); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-nueva]'),function(b){
       b.onclick=function(){ PG.nueva=b.getAttribute('data-nueva'); pintaProg(); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solsi]'),function(b){
+      b.onclick=function(){ b.disabled=true; contestaSol(b.getAttribute('data-solsi'), true, null); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solno]'),function(b){
+      b.onclick=function(){ b.disabled=true; contestaSol(b.getAttribute('data-solno'), false, null); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solcancela]'),function(b){
+      b.onclick=function(){ b.disabled=true; cancelaSol(b.getAttribute('data-solcancela')); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-excel]'),function(b){
       b.onclick=function(){ var i=$('xArch'+b.getAttribute('data-excel')); if(i) i.click(); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[id^="xArch"]'),function(i){
