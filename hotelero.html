@@ -657,6 +657,39 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     (await get('experiencias?select=id,foto_url,galeria&estatus=eq.activo&limit=300')||[])
       .forEach(function(x){ var f=x.foto_url||foto1(x.galeria); if(f) fotoVieja[x.id]=f; });
 
+    /* LA FOTO Y EL CUERPO SALEN DE DONDE VIVEN HOY. Javi, 1-nov-2026: «no has
+       metido toda la info de cada tour con su foto correcta en el buffet de
+       experiencias». Era literal. La tarjeta le pedia la foto a la columna
+       `op_experiencias.fotos`, que quedo vacia el dia que la galeria se mudo
+       a `sinc_media`: de 26 fichas publicadas salian 26 tarjetas grises -la
+       unica con foto la sacaba de rebote de la ficha vieja-. Y el popup solo
+       conocia nueve campos, asi que la letra chica, el alma del tour y lo que
+       deja donde pasa no se veian aunque estuvieran escritos.
+       La portada se pide a `v_ficha_portada`, la misma vista que usa el
+       editor de tours; la galeria entera a `sinc_media`, en su orden -primero
+       la de cabecera-; y de la ficha se trae ya todo lo que hay. */
+    var PORT={}, NFOT={};
+    (await get('v_ficha_portada?select=id,portada,n_fotos&limit=2000')||[])
+      .forEach(function(x){ if(x.portada) PORT[x.id]=x.portada; NFOT[x.id]=Number(x.n_fotos)||0; });
+    /* Lo mismo que hace sinc_foto_url en la base: Tripadvisor sirve la grande
+       y pesa de mas para una tarjeta. */
+    function fotoSinc(u){ return u && u.indexOf('media.tacdn.com')>=0 ? u.replace('-1200x900','-674x446') : u; }
+    /* `v_exp_media_publica` y no `sinc_media` a secas: la tabla solo deja ver
+       sus propias fotos a quien entra como operador externo -y un hotelero lo
+       es-, asi que leyendola directa el buffet se quedaba sin galeria justo
+       para quien lo usa. La vista solo saca lo de fichas publicadas. */
+    var RANGO={header:0,general:1,gastro:2}, GALE={};
+    (await get('v_exp_media_publica?select=experiencia_id,url,etiqueta,orden&tipo=eq.foto'
+      +'&order=orden&limit=3000')||[])
+      .forEach(function(m){ if(!m.url||!m.experiencia_id) return;
+        (GALE[m.experiencia_id]=GALE[m.experiencia_id]||[]).push(m); });
+    Object.keys(GALE).forEach(function(k){
+      GALE[k]=GALE[k].sort(function(a,b){
+        var ra=RANGO[a.etiqueta]==null?3:RANGO[a.etiqueta], rb=RANGO[b.etiqueta]==null?3:RANGO[b.etiqueta];
+        return ra-rb || (Number(a.orden)||0)-(Number(b.orden)||0);
+      }).map(function(m){ return fotoSinc(m.url); });
+    });
+
     function durTxt(min){
       min=Number(min)||0; if(!min) return '';
       if(min<60) return min+' min';
@@ -664,11 +697,24 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       return h+'h'+(m?' '+m+'m':'');
     }
     function lista(v){ return Array.isArray(v)? v.filter(Boolean) : (v?[v]:[]); }
+    /* incluye, que_llevar y no_incluye_lista son arrays en la base; sueltos
+       en la pantalla salian pegados con comas -«AguaSnackGuía»-. */
+    function frase(v){ return lista(v).join(' · '); }
+    /* Los ODS vienen como {«6»:«Agua limpia…», «8»:«Trabajo decente…»}. */
+    function odsTxt(o){
+      if(!o || typeof o!=='object') return '';
+      return Object.keys(o).sort(function(a,b){return Number(a)-Number(b);})
+        .map(function(k){ return 'ODS '+k+' — '+o[k]; }).join('\n');
+    }
 
     var pr=await get('op_experiencias?select=id,nombre,categoria,ciudad,resumen,descripcion,'
-      +'duracion_min,dias,horas,punto_encuentro,precio_adulto,concierge_pct,hotel_pct,plataforma_pct,'
-      +'fotos,experiencia_id,operador_id,incluye,no_incluye,que_llevar,cupo_min,idiomas,'
-      +'cer_inicio_lugar,cer_final_lugar,pickup_hotel,sale_de_casa_pepe'
+      +'duracion_min,dias,horas,punto_encuentro,precio_adulto,precio_menor,moneda,'
+      +'concierge_pct,hotel_pct,plataforma_pct,experiencia_id,operador_id,'
+      +'incluye,incluye_desc,no_incluye,no_incluye_lista,que_llevar,accesibilidad,'
+      +'cancelacion,antelacion,edad_minima,cupo_min,cupo_max,idiomas,'
+      +'cer_inicio_lugar,cer_inicio_hora,cer_final_lugar,cer_final_hora,'
+      +'pickup_hotel,sale_de_casa_pepe,solo_huespedes,storytelling,protagonista,'
+      +'gastro_desc,dinamica,tangible_souvenir,fin_teleologico,info_importante,ods'
       +'&estado=eq.publicada&limit=300&order=nombre')||[];
 
     OTRACIU = pr.filter(function(x){ return x.ciudad && !mismaCiudad(x.ciudad, ciu); }).length;
@@ -677,11 +723,14 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       return !x.ciudad || mismaCiudad(x.ciudad, ciu);
     }).map(function(x){
       var o=ops[x.operador_id]||{};
-      var gal=[]; try{ gal=Array.isArray(x.fotos)?x.fotos:[]; }catch(_){ }
-      var f=(gal.length? (typeof gal[0]==='string'?gal[0]:(gal[0]&&gal[0].url)||'') : '')
-            || fotoVieja[x.experiencia_id] || '';
+      var gal=GALE[x.id]||[];
+      var f=PORT[x.id] || gal[0] || fotoVieja[x.experiencia_id] || '';
       return {id:x.id, n:x.nombre, d:durTxt(x.duracion_min), f:f,
+        resumen:x.resumen||'',
         pvp:Number(x.precio_adulto)||0,
+        /* Un free tour vale 0 a proposito. Eso no es lo mismo que una ficha
+           sin precio puesto, y la tarjeta no puede confundirlos. */
+        sinPrecio: x.precio_adulto==null,
         /* El porcentaje es el del producto. Solo si no lo trae se cae al del
            operador, y solo si tampoco, al de la casa. */
         vend: x.concierge_pct!=null?Number(x.concierge_pct):(o.com_vendedor_pct==null?10:Number(o.com_vendedor_pct)),
@@ -692,14 +741,26 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
         ciudad:x.ciudad||'', sinCiudad:!x.ciudad,
         dias: lista(x.dias).join(', '),
         hora: lista(x.horas).join(' · '),
-        nfotos: gal.length,
+        nfotos: NFOT[x.id]!=null?NFOT[x.id]:gal.length,
         ficha:{resumen:x.resumen, descripcion:x.descripcion,
                salida:x.punto_encuentro||x.cer_inicio_lugar||'',
                termina:x.cer_final_lugar||'',
+               horaSale:x.cer_inicio_hora||'', horaVuelve:x.cer_final_hora||'',
                dias:lista(x.dias).join(', '), hora:lista(x.horas).join(' · '),
-               min:x.cupo_min, idiomas:lista(x.idiomas).join(', '),
-               incluye:x.incluye, no_incluye:x.no_incluye, llevar:x.que_llevar,
+               min:x.cupo_min, max:x.cupo_max, edad:x.edad_minima,
+               idiomas:lista(x.idiomas).join(', '),
+               menor:Number(x.precio_menor)||0, moneda:x.moneda||'MXN',
+               incluye:x.incluye_desc||frase(x.incluye),
+               no_incluye:x.no_incluye||frase(x.no_incluye_lista),
+               llevar:frase(x.que_llevar),
+               accesibilidad:x.accesibilidad, cancelacion:x.cancelacion,
+               antelacion:x.antelacion,
+               alma:x.storytelling, protagonista:x.protagonista,
+               gastro:x.gastro_desc, dinamica:x.dinamica,
+               souvenir:x.tangible_souvenir, paraque:x.fin_teleologico,
+               importante:x.info_importante, ods:odsTxt(x.ods),
                pickup:x.pickup_hotel, deCasaPepe:x.sale_de_casa_pepe,
+               soloHuespedes:x.solo_huespedes,
                galeria:gal}};});
 
     var hoy=new Date().toISOString().slice(0,10);
@@ -709,7 +770,8 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       return est.indexOf('borrador')<0 && est.indexOf('cancel')<0
           && (!x.fecha_fin || String(x.fecha_fin).slice(0,10) >= hoy);
     }).map(function(x){return {id:x.id,n:x.nombre,d:x.fecha_inicio?String(x.fecha_inicio).slice(0,10):'',
-      f:'',pvp:Number(x.precio)||0,vend:10,hot:5,quien:'',tipo:'Evento',colonia:'',dias:'',hora:'',nfotos:0,ficha:{}};});
+      f:'',pvp:Number(x.precio)||0,sinPrecio:x.precio==null,
+      vend:10,hot:5,quien:'',tipo:'Evento',colonia:'',dias:'',hora:'',nfotos:0,ficha:{}};});
 
     var m=await get('mapa_puntos?select=*&activo=is.true&limit=500&order=nombre')||[];
     /* El mapa tambien es de la ciudad de la casa. Antes lo decidia `deAqui`,
@@ -732,7 +794,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     var tn=await get('v_tienda_publico?select=*&order=orden,nombre')||[];
     CAT.tienda=tn.map(function(x){
       return {id:x.id,n:x.nombre,d:x.medidas||'',
-        f:x.foto_url||'',pvp:Number(x.precio_mxn)||0,vend:10,hot:5,
+        f:x.foto_url||'',pvp:Number(x.precio_mxn)||0,sinPrecio:x.precio_mxn==null,vend:10,hot:5,
         quien:x.comunidad||'', tipo:x.categoria||'', colonia:x.artesana||'', dias:'', hora:'',
         nfotos:0,
         ficha:{itinerario:x.descripcion, info:x.significado, gastro:'',
@@ -1682,11 +1744,15 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'<span class="cu">'
       +'<span class="nm">'+esc(x.n)+'</span>'
       +'<span class="sub">'+[x.tipo||'sin tipo', x.d, x.colonia||x.ciudad].filter(Boolean).map(esc).join(' · ')
-      + (x.sinCiudad?' · <b style="color:var(--warn)">sin ciudad</b>':'')+'</span>'
+      + (x.sinCiudad?' · <b style="color:var(--warn)">sin ciudad</b>':'')
+      /* Un PVP vacio no es «gratis»: es una ficha a la que le falta el precio.
+         Se dice, porque esa es la que no se puede vender. */
+      + (x.sinPrecio?' · <b style="color:var(--warn)">sin precio</b>':'')+'</span>'
+      + (x.resumen?'<span class="de2">'+esc(x.resumen)+'</span>':'')
       +'<span class="eco3">'
-      +'<span><i>PVP</i><b>'+(x.pvp?dinero(x.pvp):'—')+'</b></span>'
-      +'<span><i>Concierge</i><b>'+(x.pvp?dinero(x.pvp*x.vend/100):'—')+'</b></span>'
-      +'<span class="mio"><i>Tu casa</i><b>'+(x.pvp?dinero(x.pvp*x.hot/100):'—')+'</b></span>'
+      +'<span><i>PVP</i><b>'+(x.sinPrecio?'—':(x.pvp?dinero(x.pvp):'Gratis'))+'</b></span>'
+      +'<span><i>Concierge</i><b>'+(x.sinPrecio?'—':dinero(x.pvp*x.vend/100))+'</b></span>'
+      +'<span class="mio"><i>Tu casa</i><b>'+(x.sinPrecio?'—':dinero(x.pvp*x.hot/100))+'</b></span>'
       +'</span>'
       +'<span class="meta">'
       + (x.dias?'<span>'+esc(x.dias)+'</span>':'')
@@ -1727,7 +1793,13 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
 
   /* La ficha: la foto grande, lo que cuesta y lo que deja. El mismo botón que
      en la tarjeta, para que no haya que cerrar y buscarla otra vez. */
-  function bloque(tit,txt){ return txt? '<div class="fb"><h5>'+esc(tit)+'</h5><p>'+esc(txt)+'</p></div>' : ''; }
+  /* Sin titulo no se pinta el <h5> vacio, y los saltos de linea del texto
+     -los ODS vienen uno por renglon- se respetan. */
+  function bloque(tit,txt){
+    if(!txt) return '';
+    return '<div class="fb">'+(tit?'<h5>'+esc(tit)+'</h5>':'')
+      +'<p>'+esc(String(txt)).replace(/\n+/g,'<br>')+'</p></div>';
+  }
 
   /* La ficha que ve el hotelero es la MISMA que ve el cliente: si va a
      vender la experiencia tiene que conocerla igual de bien. Lo unico que
@@ -1747,24 +1819,50 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
           +'<div><span>Lo que paga el huésped</span><b>'+dinero(x.pvp)+'</b></div>'
           +'<div><span>A quien la vende</span><b>'+dinero(x.pvp*x.vend/100)+'</b><i>'+x.vend+'%</i></div>'
           +'<div><span>A tu casa</span><b>'+dinero(x.pvp*x.hot/100)+'</b><i>'+x.hot+'%</i></div>'
-          +'</div><div class="mini" style="margin-top:6px">Son los porcentajes de su contrato, no un ejemplo.</div>':'')
+          +'</div><div class="mini" style="margin-top:6px">Son los porcentajes de su contrato, no un ejemplo.</div>'
+         : (x.sinPrecio
+            ? '<div class="mini" style="margin-top:8px;color:var(--warn)">Esta ficha todavía no tiene precio puesto: hasta que lo tenga no se puede vender.</div>'
+            : '<div class="mini" style="margin-top:8px">Es gratis: no hay nada que repartir.</div>'))
 
-      + ((F.resumen||F.descripcion)
+      + ((F.resumen||F.descripcion||F.paraque||F.alma)
           ? '<div class="fichasec"><div class="fst">De qué va</div>'
             + bloque('', F.resumen)
             + (F.descripcion && F.descripcion!==F.resumen ? bloque('', F.descripcion) : '')
+            + bloque('Para qué se hace', F.paraque)
+            + bloque('Cómo se cuenta', F.alma)
             + '</div>' : '')
-      + ((F.incluye||F.no_incluye||F.llevar)
+
+      /* Lo que distingue un tour de otro cuando el concierge tiene que
+         escoger: quien lo da, que se come, que se hace y que te llevas. */
+      + ((F.protagonista||F.gastro||F.dinamica||F.souvenir)
+          ? '<div class="fichasec"><div class="fst">Lo que lo hace distinto</div>'
+            + bloque('Quién lo lleva', F.protagonista)
+            + bloque('Qué se come', F.gastro)
+            + bloque('Qué se hace', F.dinamica)
+            + bloque('Qué se llevan', F.souvenir)
+            + '</div>' : '')
+
+      + ((F.incluye||F.no_incluye||F.llevar||F.accesibilidad||F.cancelacion||F.antelacion)
           ? '<div class="fichasec"><div class="fst">La letra chica</div>'
             + bloque('Incluye', F.incluye)
             + bloque('No incluye', F.no_incluye)
             + bloque('Qué llevar', F.llevar)
+            + bloque('Accesibilidad', F.accesibilidad)
+            + bloque('Cancelación', F.cancelacion)
+            + bloque('Con cuánta antelación se reserva', F.antelacion)
             + '</div>' : '')
+
+      /* Lo que hay que decirle al huesped ANTES de cobrarle: altitudes,
+         condiciones fisicas, lo que no se puede. */
+      + (F.importante
+          ? '<div class="fichasec"><div class="fst">Dilo antes de venderlo</div>'
+            + bloque('', F.importante) + '</div>' : '')
 
       + ((F.dias||F.hora||F.min||F.salida||F.termina||F.idiomas)
           ? '<div class="fichasec"><div class="fst">Cómo funciona</div><div class="pares">'
             + (F.dias?'<div><span>Días</span><b>'+esc(F.dias)+'</b></div>':'')
             + (F.hora?'<div><span>Sale a las</span><b>'+esc(F.hora)+'</b></div>':'')
+            + (F.horaVuelve?'<div><span>Vuelve a las</span><b>'+esc(F.horaVuelve)+'</b></div>':'')
             /* data-marca="fija": el punto de salida no se traduce nunca.
                Javi: «si algún tour inicia o termina en casa pepe, eso no lo
                cambies». Aquí lo lee el hotelero, pero esta misma ficha se
@@ -1773,12 +1871,17 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
             + (F.termina?'<div><span>Termina en</span><b data-marca="fija">'+esc(F.termina)+'</b></div>':'')
             + (F.idiomas?'<div><span>Idiomas</span><b>'+esc(F.idiomas)+'</b></div>':'')
             + (F.min?'<div><span>Mínimo</span><b>'+esc(F.min)+' personas</b></div>':'')
+            + (F.max?'<div><span>Máximo</span><b>'+esc(F.max)+' personas</b></div>':'')
+            + (F.edad?'<div><span>Edad mínima</span><b>'+esc(F.edad)+' años</b></div>':'')
+            + (F.menor?'<div><span>Precio menores</span><b>'+dinero(F.menor)+'</b></div>':'')
             + (F.pickup?'<div><span>Pasan por el hotel</span><b>Sí</b></div>':'')
+            + (F.deCasaPepe?'<div><span>Sale de Casa Pepe</span><b>Sí</b></div>':'')
+            + (F.soloHuespedes?'<div><span>Solo para huéspedes</span><b>Sí</b></div>':'')
             +'</div></div>' : '')
 
       + ((F.ods||F.impacto)
           ? '<div class="fichasec"><div class="fst">Qué deja donde pasa</div>'
-            + bloque('ODS', F.ods) + bloque('Impacto', F.impacto) + '</div>' : '')
+            + bloque('', F.ods) + bloque('Impacto', F.impacto) + '</div>' : '')
 
       + (gal.length? '<div class="gal">'+gal.slice(0,6).map(function(u){
             return '<img src="'+esc(typeof u==='string'?u:(u&&u.url)||'')+'" alt="">'; }).join('')+'</div>' : '')
