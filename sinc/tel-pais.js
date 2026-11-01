@@ -71,6 +71,26 @@
       .map(function (c) { return 127397 + c.charCodeAt(0); }));
   }
 
+  /* EL PREFIJO LO PONE LA PÁGINA, NO EL HUÉSPED. Javi, 1-nov-2026: «recuerda
+     poner el prefijo de forma automática y luego el cel que pongan» · «que no
+     pongan ellos el prefijo». Se arranca con el país que mejor se pueda
+     adivinar: el que ya tengamos de esa persona (op.iso), si no el de su
+     navegador, y si no México, que es la mayoría. El huésped teclea sólo su
+     número; si de todos modos pega uno con lada, el blur de abajo lo reconoce
+     y coloca el país solo. */
+  function isoDelNavegador() {
+    try {
+      var ls = (navigator.languages && navigator.languages.length)
+        ? navigator.languages : [navigator.language || ''];
+      for (var i = 0; i < ls.length; i++) {
+        var m = String(ls[i]).toUpperCase().match(/[-_]([A-Z]{2})\b/);
+        if (!m) continue;
+        for (var j = 0; j < PAISES.length; j++) if (PAISES[j][0] === m[1]) return m[1];
+      }
+    } catch (_) {}
+    return null;
+  }
+
   function monta(caja, op) {
     op = op || {};
     var id = op.id || ('tp' + Math.random().toString(36).slice(2, 7));
@@ -115,6 +135,25 @@
 
     var sel = document.getElementById(id + '-p');
     var num = document.getElementById(id + '-n');
+
+    var iso = String(op.iso || '').toUpperCase() || isoDelNavegador();
+    if (iso) {
+      for (var k = 0; k < sel.options.length; k++) {
+        if (sel.options[k].getAttribute('data-iso') === iso) { sel.selectedIndex = k; break; }
+      }
+    }
+    /* Si ya teníamos su número guardado, se parte en lada y número para que no
+       lo vuelva a teclear ni se le quede un +52 delante de un número inglés. */
+    if (op.valor) {
+      var d0 = String(op.valor).replace(/[^0-9]/g, '');
+      if (String(op.valor).indexOf('+') === 0 && d0) {
+        var ord = PAISES.slice().sort(function (a, b) { return b[2].length - a[2].length; });
+        for (var q = 0; q < ord.length; q++) {
+          if (d0.indexOf(ord[q][2]) === 0) { sel.value = ord[q][2]; d0 = d0.slice(ord[q][2].length); break; }
+        }
+      }
+      num.value = d0;
+    }
 
     /* Si el huésped pega su número con lada («+34 600…»), se reconoce y se
        coloca el país solo, en vez de dejarle un +34 duplicado. */
