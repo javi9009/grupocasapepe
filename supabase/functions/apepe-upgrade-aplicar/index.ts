@@ -164,7 +164,13 @@ Deno.serve(async (req)=>{
 
     const desc = `Upgrade a ${plan.to_room_nombre||target_id} (APePe)`;
     // postAdjustment sí es POST.
-    const adj = await cbForm(ctx.key, "postAdjustment", { propertyID:String(ctx.pid), reservationID:rid, amount:String(monto), description:desc });
+    /* `type` es obligatorio en postAdjustment y faltaba aquí también: Cloudbeds
+       contesta «Parameter type is required» y el cargo no entra. Lo destaparon
+       las extensiones el 1-nov-2026; aquí estaba armado sin estallar porque
+       ningún upgrade había llegado todavía a este paso. Admite fee, tax, rate y
+       product; va `rate` porque es ingreso de habitación —la diferencia de
+       cuarto—, no un cargo suelto: como `fee` se saldría del ADR. */
+    const adj = await cbForm(ctx.key, "postAdjustment", { propertyID:String(ctx.pid), reservationID:rid, type:"rate", amount:String(monto), description:desc });
     const estadoFinal = adj.ok? "aplicado" : "aplicado_sin_cargo";
     const fallo = await rastro({ op_key, reservation_id:rid, property:prop, clase, from_room:ctx.cur, to_room:target_id, to_room_unit:null, monto, rate_id:ctx.rateID, estado:estadoFinal, detalle:{plan, mover:mv.j, cargo:adj.j}, aplicado_por:em });
     return J({ ok:true, ejecutado:true, modo:"real", estado:estadoFinal, plan, cargo_ok:adj.ok, cargo_detalle:adj.ok?"":adj.j, rastro_fallo:fallo });

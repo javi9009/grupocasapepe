@@ -21,8 +21,6 @@
 // juntas, porque quien lo muda es Housekeeping y no puede andar recogiendo.
 //
 // Precio: tarifa viva de Cloudbeds de esa noche, con el 15% de SuperPepe.
-// Ventana: desde 2 días antes de su salida hasta las 12:00 del día de salida. Pasada
-// esa hora ya no es extensión, es late checkout, y eso lo decide recepción.
 // Javi, 28-sep.
 const CB = "https://hotels.cloudbeds.com/api/v1.2";
 const SB = Deno.env.get("SUPABASE_URL")!;
@@ -196,7 +194,7 @@ Deno.serve(async (req)=>{
        ENTERO: pidiendo siete noches de golpe contestaba 3150 para una cama de
        dormitorio —los siete días a 450— y le habríamos cobrado siete por una. La
        disponibilidad igual: el número del rango son las camas libres LAS SIETE
-       noches, así que una noche llena tapaba las otras seis. */
+       noches, así que una sola noche llena tapaba las otras seis. */
     const hasta = masDias(salida, MAX_NOCHES);
     const cand:string[]=[]; for(let k=0;k<MAX_NOCHES;k++) cand.push(masDias(salida,k));
 
@@ -326,15 +324,61 @@ Deno.serve(async (req)=>{
       const nuevaSalida=masDias(salida,nQ);
       const op_key=`${rid}:${nuevaSalida}`;
 
-      try{ const ya=await rest(`apepe_extension?op_key=eq.${encodeURIComponent(op_key)}&select=id,estado,monto&limit=1`);
+      /* LA PUERTA SÓLO LA CIERRA LO QUE DE VERDAD PASÓ. Javi, 1-nov-2026.
+         Antes filtraba por op_key a secas, así que un intento fallido quemaba la
+         combinación reserva+fecha: si el huésped volvía a pedirlo, la app le
+         contestaba «esa extensión ya estaba pedida» con ok:true sin haber
+         apartado nada. Les pasó a los cuatro de octubre. Un error no es una
+         extensión; es un intento, y se puede repetir. Mismo criterio que
+         apepe-upgrade-aplicar, que ya filtraba por estado. */
+      try{ const ya=await rest(`apepe_extension?op_key=eq.${encodeURIComponent(op_key)}&estado=in.(por_cobrar,sin_cargo,cobrado)&select=id,estado,monto&limit=1`);
         if(Array.isArray(ya)&&ya[0]) return J({ok:true, ya:true, estado:ya[0].estado, monto:Number(ya[0].monto||0), nueva_salida:nuevaSalida, mensaje:"Esa extensión ya estaba pedida."}); }catch{}
 
       const antes=Number(d.total||0);
-      /* Sólo checkoutDate: mandando `rooms` Cloudbeds rehace la asignación y le
-         quitaríamos la cama que justo venimos a conservarle. */
-      const mv=await cbForm(key,"putReservation",{ propertyID:String(pid), reservationID:rid, checkoutDate:nuevaSalida },"PUT");
+
+      /* EL TRAMO ENTERO, NO SÓLO LA FECHA. Javi, 1-nov-2026.
+         Mandar `checkoutDate` suelto corre la salida y deja el desglose de
+         tarifas con las noches viejas: la reserva queda con cuatro noches y tres
+         tarifas, y Cloudbeds contesta «Number of days not equals to number of
+         day rates». Así murieron las cuatro extensiones del 22 al 28 de octubre
+         —y las dos de antes salieron sin cobrar por lo mismo, sólo que entonces
+         Cloudbeds todavía retarificaba solo y lo tapaba.
+         Ahora va el tramo completo —las dos fechas y los cuartos— que es la
+         forma documentada de cambiar fechas, y con ella Cloudbeds retarifica.
+         La cama se fija con roomID en cada fila: eso es lo que evita que nos la
+         cambie, que era el motivo de mandar la fecha sola. Si esa cama no está
+         libre la noche nueva, Cloudbeds rechaza la llamada, que es exactamente
+         lo que queremos: antes se movía al huésped en silencio. */
+      const destinoTipo = String(alt.room_type||miTipo);
+      const camasDestino: string[] = (Array.isArray(alt.camas)&&alt.camas.length) ? alt.camas : misCuartos;
+      const mover: Record<string,string> = {
+        propertyID:String(pid), reservationID:rid,
+        /* LAS DOS FECHAS, O NINGUNA: tocando `rooms` con sólo checkoutDate,
+           Cloudbeds responde «Parameter checkinDate is required». Lo aprendió
+           apepe-upgrade-aplicar el 29-sep. La entrada no se mueve: es la suya. */
+        checkinDate: llegada, checkoutDate: nuevaSalida,
+      };
+      /* Una fila por cama, que es como viene la reserva: un dormitorio de tres
+         camas son tres entradas, no una con quantity 3. Los adultos y los
+         menores se copian de la fila que ya tenía, para no reescribir el pax. */
+      camasDestino.forEach((roomID:string, i:number)=>{
+        const orig = rooms[i] || rooms[0] || {};
+        mover[`rooms[${i}][roomTypeID]`] = destinoTipo;
+        mover[`rooms[${i}][quantity]`]   = "1";
+        mover[`rooms[${i}][roomID]`]     = String(roomID);
+        mover[`rooms[${i}][adults]`]     = String(Number(orig.adults||1));
+        mover[`rooms[${i}][children]`]   = String(Number(orig.children||0));
+      });
+
+      /* Modo ensayo: enseña lo que mandaría sin tocar Cloudbeds. Es la puerta
+         por la que se prueba un cambio en el PMS sin usar a un huésped de
+         conejillo. Igual que `apepe_upgrade_activo` en el upgrade. */
+      if(b.simular===true) return J({ok:true, simulado:true, nueva_salida:nuevaSalida, noches:nQ,
+        monto:alt.precio, alternativa:alt.etiqueta, enviaria:mover});
+
+      const mv=await cbForm(key,"putReservation",mover,"PUT");
       if(!mv.ok){
-        try{ await rest(`apepe_extension`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({ op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ, monto:alt.precio, tarifa_sin_dto:alt.sin, cama_antes:miCuartoNombre, estado:"error", pedido_por:"huesped", detalle:{paso:"putReservation",resp:mv.j}, updated_at:new Date().toISOString() })}); }catch{}
+        try{ await rest(`apepe_extension?on_conflict=op_key`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({ op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ, monto:alt.precio, tarifa_sin_dto:alt.sin, cama_antes:miCuartoNombre, estado:"error", pedido_por:"huesped", detalle:{paso:"putReservation",resp:mv.j,enviado:mover}, updated_at:new Date().toISOString() })}); }catch{}
         return J({ok:false, error:"no pudimos apartar esa noche", detalle:mv.j},502);
       }
 
@@ -342,35 +386,67 @@ Deno.serve(async (req)=>{
          tarifa menos el 15%. Releemos el folio y cuadramos la diferencia, igual que
          en el upgrade y en el winback: el folio tiene que decir lo que le dijimos. */
       const nd=await cbGet(key,`getReservation?reservationID=${encodeURIComponent(rid)}&propertyID=${pid}`);
-      const cobroCB=Math.round((Number((nd?.data??nd)?.total||0)-antes)*100)/100;
+      const dnd=(nd?.data??nd)||{};
+
+      /* NO BASTA CON QUE LA LLAMADA NO FALLE. `cbForm` da por buena cualquier
+         respuesta que no diga success:false, y el 20-oct eso dejó pasar un
+         movimiento que no movió un peso. Así que se relee la reserva y se mira
+         la fecha: si la salida no es la nueva, no hubo extensión, por mucho que
+         la llamada contestara que sí. */
+      const salidaReal = String(dnd.endDate||"");
+      if(salidaReal !== nuevaSalida){
+        try{ await rest(`apepe_extension?on_conflict=op_key`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({ op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ, monto:alt.precio, tarifa_sin_dto:alt.sin, cama_antes:miCuartoNombre, estado:"error", pedido_por:"huesped", detalle:{paso:"verificacion", esperada:nuevaSalida, quedo:salidaReal, resp:mv.j, enviado:mover}, updated_at:new Date().toISOString() })}); }catch{}
+        return J({ok:false, error:"Cloudbeds aceptó la llamada pero la salida no se movió", esperada:nuevaSalida, quedo:salidaReal},502);
+      }
+
+      const cobroCB=Math.round((Number(dnd.total||0)-antes)*100)/100;
       const dif=Math.round((alt.precio-cobroCB)*100)/100;
       let ajuste:any={aplicado:true, cobro_cb:cobroCB, pactado:alt.precio, dif:0};
       if(Math.abs(dif)>=1){
-        const a=await cbForm(key,"postAdjustment",{ propertyID:String(pid), reservationID:rid, amount:String(dif), description:`Extensión ${nQ} noche(s) · SuperPepe −15%` });
+        /* `type` es obligatorio y no estaba: por eso las dos primeras
+           extensiones se quedaron sin el descuento, con «Parameter type is
+           required». Cloudbeds admite fee, tax, rate y product; va `rate`
+           porque esto es ingreso de habitación —la noche a la tarifa que le
+           prometimos—, no un cargo suelto. Ponerlo como `fee` lo sacaría del
+           ADR y ensuciaría el revenue. */
+        const a=await cbForm(key,"postAdjustment",{ propertyID:String(pid), reservationID:rid, type:"rate", amount:String(dif), description:`Extensión ${nQ} noche(s) · SuperPepe −15%` });
         ajuste={aplicado:a.ok, cobro_cb:cobroCB, pactado:alt.precio, dif, resp:a.ok?undefined:a.j};
       }
 
-      /* Cambiarle la cama a ÉL no afecta a nadie: esas camas están libres. Mover a un
-         tercero sí, y eso lo decide una persona: se lo dejamos escrito a recepción. */
-      let asignada:any=null;
-      if(alt.tipo!=="misma_cama" && alt.tipo!=="misma_cama_moviendo" && alt.camas?.length){
-        const form:Record<string,string>={ propertyID:String(pid), reservationID:rid };
-        alt.camas.forEach((id:string,i:number)=>{ form[`rooms[${i}][roomID]`]=String(id); });
-        const as=await cbForm(key,"putReservation",form,"PUT");
-        asignada={ ok:as.ok, camas:alt.camas_nombre, resp:as.ok?undefined:as.j };
-      }
+      /* La asignación ya va dentro del movimiento de arriba: las camas de
+         destino viajan como `rooms[i][roomID]` en la misma llamada. Antes era
+         una segunda llamada con `rooms[0][roomID]` a secas, sin roomTypeID ni
+         fechas, y Cloudbeds la rechazaba con «Parameter roomTypeID is
+         required» — el 20-oct el huésped que había elegido la privada nunca se
+         movió, y el estado guardado ni se enteró. Una sola llamada: o se mueve
+         todo o no se mueve nada. */
+      const cambiaDeCama = alt.tipo!=="misma_cama" && alt.tipo!=="misma_cama_moviendo" && !!alt.camas?.length;
+      const asignada:any = cambiaDeCama ? { ok:true, camas:alt.camas_nombre, en:"el mismo putReservation" } : null;
 
-      try{ await rest(`apepe_extension`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({
+      /* La ocupación acaba de cambiar por nuestra culpa: el caché que quede ya miente. */
+      try{ await rest(`apepe_cache?clave=like.ocupacion:${prop}*`,{method:"DELETE",headers:{Prefer:"return=minimal"}}); }catch{}
+
+      /* on_conflict=op_key explícito. Aquí op_key ES la clave primaria, así que
+         merge-duplicates ya resolvía bien sin decirlo; se nombra para que no
+         dependa de eso quien lea esto dentro de un año. */
+      try{ await rest(`apepe_extension?on_conflict=op_key`,{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({
         op_key, reservation_id:rid, property:prop, salida_antes:salida, salida_despues:nuevaSalida, noches:nQ,
         monto:alt.precio, tarifa_sin_dto:alt.sin,
         cama_antes:miCuartoNombre, cama_despues:(alt.camas_nombre||[]).join(", ")||miCuartoNombre,
         cambio_de_cama: !!alt.mueve_cosas, movimos_a: alt.mover_a_otro||null,
-        estado:"por_cobrar", pedido_por:"huesped",
+        /* EL ESTADO DICE LO QUE PASÓ. Antes se escribía `por_cobrar` siempre que
+           el PUT no fallara, mirase o no si el cargo había entrado, y el fallo
+           quedaba enterrado en detalle.ajuste.aplicado mientras al huésped se le
+           decía «¡Hecho! Pasa a recepción a pagar». `sin_cargo` es la noche
+           apartada con el folio sin cuadrar: recepción tiene que cobrarla a mano. */
+        estado: ajuste.aplicado ? "por_cobrar" : "sin_cargo", pedido_por:"huesped",
         detalle:{ modo:alt.tipo, etiqueta:alt.etiqueta, ajuste, asignada, pax:paxTotal, camas:camasReserva },
         updated_at:new Date().toISOString() })}); }catch{}
 
       const doler = alt.mueve_cosas ? ` ${AVISO_MUDANZA}` : "";
-      return J({ ok:true, estado:"por_cobrar", nueva_salida:nuevaSalida, noches:nQ,
+      return J({ ok:true, estado: ajuste.aplicado ? "por_cobrar" : "sin_cargo",
+        cargo_ok: ajuste.aplicado, cargo_detalle: ajuste.aplicado? undefined : ajuste.resp,
+        nueva_salida:nuevaSalida, noches:nQ,
         monto:alt.precio, ahorro:Math.round(alt.sin-alt.precio), donde:alt.etiqueta, detalle:alt.detalle,
         mueve_cosas:!!alt.mueve_cosas, recepcion_mueve:alt.mover_a_otro||null,
         mensaje:`¡Hecho! Te quedas ${nQ} noche${nQ>1?"s":""} más · ${alt.etiqueta}. Pasa a recepción a pagar los $${alt.precio}.${doler}` });

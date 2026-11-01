@@ -98,7 +98,11 @@ Deno.serve(async(req)=>{
       const totalNuevo=Number((nd?.data??nd)?.total||0);
       const dif=Math.round((precio_directo-totalNuevo)*100)/100;
       if(Math.abs(dif)>=1){
-        const a=await cbForm(key,"postAdjustment",{propertyID:String(pid),reservationID:newId,amount:String(dif),description:`Tarifa directa winback −15% (antes ${precio_ota})`});
+        /* `type` es obligatorio y faltaba: sin él Cloudbeds contesta «Parameter
+           type is required» y el descuento no entra. Va `rate` —es tarifa de
+           habitación—, no `fee`, que lo sacaría del ADR. Mismo arreglo que en
+           apepe-extender y apepe-upgrade-aplicar, 1-nov-2026. */
+        const a=await cbForm(key,"postAdjustment",{propertyID:String(pid),reservationID:newId,type:"rate",amount:String(dif),description:`Tarifa directa winback −15% (antes ${precio_ota})`});
         ajuste={aplicado:a.ok, de:totalNuevo, a:precio_directo, dif, resp:a.ok?undefined:a.j};
       } else { ajuste={aplicado:true, de:totalNuevo, a:precio_directo, dif:0, nota:"ya coincidía"}; }
     }
