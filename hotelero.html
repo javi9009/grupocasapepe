@@ -1374,6 +1374,18 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'<div class="fld"><label>Papel en el sistema</label><select id="ePap">'
         + PAPELES.map(function(p){ return '<option value="'+p[0]+'"'+((e.rol||'colaborador')===p[0]?' selected':'')+'>'+p[1]+'</option>'; }).join('')
       +'</select><div class="ay">Decide el marco; el detalle se afina en Accesos</div></div>'
+      /* ¿ADEMÁS GUÍA? Javi, 1-nov-2026: «haz el punteo del equipo de cada
+         hotel con la opción de si son guías. Dale esa opción cuando los des
+         de alta y entran al padrón de guías del ateneísta».
+         Marcarlo no es un adorno: mete a la persona en el padrón, en las
+         fichas y en la lista de quien puede salir a guiar. Son tres sitios,
+         y por eso lo hace una sola función en la base. */
+      +'<div class="fld"><label>¿Además guía?</label>'
+        +'<select id="eGuia">'
+        +'<option value="no"'+(e.es_guia?'':' selected')+'>No</option>'
+        +'<option value="si"'+(e.es_guia?' selected':'')+'>Sí, puede guiar</option>'
+        +'</select>'
+        +'<div class="ay">Entra al padrón de guías: se le puede poner en una ficha y asignar a una salida</div></div>'
       +'</div>'
       /* LO QUE LE FALTA A UN CONCIERGE PARA PODER VENDER. Bloque 4, 26-oct-2026.
          `codigo_venta`, `com_pct` y `descuento_max_pct` existen en
@@ -1416,7 +1428,8 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
           var na=Object.keys(EQ.acc).filter(function(k){return k.indexOf(u.id+':')===0;}).length;
           return '<tr><td><b>'+esc([u.nombre,u.apellido].filter(Boolean).join(' ')||'—')+'</b>'
             +'<span class="mini" style="display:block">'+esc(u.email||u.whatsapp||'—')+'</span></td>'
-            +'<td>'+esc(u.puesto||'—')+'<span class="mini" style="display:block">'+esc(u.area||'')+'</span></td>'
+            +'<td>'+esc(u.puesto||'—')+'<span class="mini" style="display:block">'+esc(u.area||'')+'</span>'
+              +(u.es_guia?'<span class="chip" style="margin:4px 0 0">También guía</span>':'')+'</td>'
             +'<td class="mini">'+esc(donde)+'</td>'
             +'<td class="mini">'+esc(pap[u.rol]||u.rol||'—')
               /* El codigo, a la vista: es lo que se dicta y lo que hay que
@@ -1478,6 +1491,10 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       o.hotel_id=o.hoteles[0]||(G&&G.id)||null;
     } else { o.alcance='uno'; o.hotel_id=alc.replace(/^h:/,''); o.hoteles=[o.hotel_id]; }
     if(EQ.edit&&EQ.edit.id) o.id=EQ.edit.id;
+    /* Va aparte del resto: `es_guia` no se guarda con el PATCH de la fila,
+       lo pone la función que además la mete en el padrón. Se lleva colgado
+       para que eqGuarda sepa qué pedirle. */
+    o._esGuia = (function(){ var e=$('eGuia'); return !!e && e.value==='si'; })();
     return o;
   }
   async function eqGuarda(){
@@ -1492,6 +1509,7 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
         body:JSON.stringify([{area:o.area,nombre:o.puesto,orden:500,hotel_id:(G&&G.id)||null}])}).catch(function(){});
     }
     var id=o.id; delete o.id;
+    var quiereGuia=o._esGuia; delete o._esGuia;
     if(!id) o.activo=true;
     var h=hdr(); h['Prefer']='return=representation';
     var r=await fetch(SB+'/rest/v1/hotel_usuarios'+(id?'?id=eq.'+id:''),
@@ -1499,7 +1517,23 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     if(!r.ok) return toast('No se pudo guardar: '+(await r.text()).slice(0,110),true);
     var j=await r.json();
     if(!j||!j.length) return toast('No se guardó: tu usuario no puede editar este equipo.',true);
-    EQ.edit=null; toast(id?'Guardado':'Dado de alta');
+    /* El alta en el padrón de guías va después y por su propia puerta: toca
+       tres tablas y tiene que ser la misma operación o se queda a medias.
+       Si falla, se dice —la persona quedó guardada igual, y eso hay que
+       saberlo para no creer que puede guiar cuando no. */
+    var fila=j[0]||{};
+    var eraGuia=!!(EQ.edit&&EQ.edit.es_guia);
+    if(fila.id && (quiereGuia!==eraGuia || quiereGuia)){
+      var rg=await fetch(SB+'/rest/v1/rpc/hotel_marca_guia',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p_usuario:fila.id, p_es_guia:quiereGuia})});
+      var jg=null; try{ jg=await rg.json(); }catch(_){}
+      if(!rg.ok || !jg || jg.ok!==true){
+        toast('Se guardó, pero no entró al padrón de guías: '+((jg&&jg.error)||'la base no dejó'),true);
+        EQ.edit=null; await eqCarga(); return;
+      }
+    }
+    EQ.edit=null;
+    toast(id?'Guardado':'Dado de alta');
     await eqCarga();
   }
   async function eqBaja(id){

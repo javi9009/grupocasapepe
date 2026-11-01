@@ -2879,12 +2879,22 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!c) return;
     var pagado = String(c.pago_estado||'')==='pagado';
     var nuevo  = pagado ? 'pendiente' : 'pagado';
-    var r=await fetch(SB+'/rest/v1/sinc_reservas?id=eq.'+rid,{method:'PATCH',
-      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-      body:JSON.stringify({pago_estado:nuevo, pagado_at:(nuevo==='pagado'?new Date().toISOString():null)})});
-    var fila=null; if(r.ok){ try{ fila=await r.json(); }catch(_){} }
-    if(!fila||!fila.length){ toast('No se pudo cambiar: la base no dejó tocar esta reserva.',true); return; }
-    c.pago_estado=fila[0].pago_estado||nuevo;
+    /* POR LA PUERTA, NO POR LA VENTANA. Esto era un PATCH directo a
+       `sinc_reservas`, y esa tabla tiene RLS encendido y ninguna política de
+       escritura: contestaba 200 sin tocar una fila. Llevaba muerto desde que
+       se escribió. No se arregla abriendo la tabla -ahí viven los totales,
+       las comisiones y los ids de Stripe-, sino con `sinc_marca_pago`, que
+       sólo toca el estado del cobro, comprueba a quién le toca, se niega si
+       la reserva se cobró por Stripe -ese estado lo manda el banco- y deja
+       apuntado en las notas quién lo cambió y cuándo. */
+    var r=await fetch(SB+'/rest/v1/rpc/sinc_marca_pago',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_reserva:rid, p_pagado:(nuevo==='pagado')})});
+    var j=null; if(r.ok){ try{ j=await r.json(); }catch(_){} }
+    if(!j || j.ok!==true){
+      toast((j&&j.error)||'No se pudo cambiar el cobro.',true); return;
+    }
+    c.pago_estado=j.pago_estado||nuevo;
+    toast(nuevo==='pagado'?'Marcada como pagada':'Marcada como pendiente');
     pintaProg();
   }
 
