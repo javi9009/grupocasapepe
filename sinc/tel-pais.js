@@ -73,23 +73,13 @@
 
   /* EL PREFIJO LO PONE LA PÁGINA, NO EL HUÉSPED. Javi, 1-nov-2026: «recuerda
      poner el prefijo de forma automática y luego el cel que pongan» · «que no
-     pongan ellos el prefijo». Se arranca con el país que mejor se pueda
-     adivinar: el que ya tengamos de esa persona (op.iso), si no el de su
-     navegador, y si no México, que es la mayoría. El huésped teclea sólo su
-     número; si de todos modos pega uno con lada, el blur de abajo lo reconoce
-     y coloca el país solo. */
-  function isoDelNavegador() {
-    try {
-      var ls = (navigator.languages && navigator.languages.length)
-        ? navigator.languages : [navigator.language || ''];
-      for (var i = 0; i < ls.length; i++) {
-        var m = String(ls[i]).toUpperCase().match(/[-_]([A-Z]{2})\b/);
-        if (!m) continue;
-        for (var j = 0; j < PAISES.length; j++) if (PAISES[j][0] === m[1]) return m[1];
-      }
-    } catch (_) {}
-    return null;
-  }
+     pongan ellos el prefijo». Arranca en México siempre -se lo pregunté y lo
+     eligió él: llegué a adivinar el país por el idioma del navegador y lo
+     quitó-. El huésped teclea sólo su número; si de todos modos pega uno con
+     lada, se reconoce y el país se coloca solo. Y si ya teníamos su número
+     guardado con lada, se parte en los dos campos sin tocar nada.
+     op.iso sigue existiendo para quien quiera arrancar en otro país a
+     propósito; nadie lo usa hoy. */
 
   function monta(caja, op) {
     op = op || {};
@@ -136,7 +126,7 @@
     var sel = document.getElementById(id + '-p');
     var num = document.getElementById(id + '-n');
 
-    var iso = String(op.iso || '').toUpperCase() || isoDelNavegador();
+    var iso = String(op.iso || '').toUpperCase();   /* sin op.iso: México, que es el primero de la lista */
     if (iso) {
       for (var k = 0; k < sel.options.length; k++) {
         if (sel.options[k].getAttribute('data-iso') === iso) { sel.selectedIndex = k; break; }
