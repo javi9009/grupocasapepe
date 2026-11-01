@@ -987,13 +987,13 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     Array.prototype.forEach.call($('nav').children,function(li){
       li.className = li.getAttribute('data-k')===k ? 'on' : ''; });
     var x=SECS[nivel].filter(function(y){return y.k===k;})[0]||{t:'',d:''};
-    var dsec = x.d;
-    if(x.k==='cuenta'){ var dd=destino();
-      if(dd && dd.es_del_grupo) dsec='Los datos de esta casa. Es del grupo: no hay acuerdo que firmar con nadie.'; }
+    var dsec = x.d, dd = destino();
+    if(x.k==='cuenta' && dd && dd.es_del_grupo)
+      dsec='Los datos de esta casa. Es del grupo: no hay acuerdo que firmar con nadie.';
     $('sechead').innerHTML='<h1>'+esc(x.t)+'</h1>'+(dsec?'<p>'+esc(dsec)+'</p>':'')
       + (x.k==='espacios'&&nivel==='grupo'
           ? '<div class="nota">Un evento necesita dónde pasar: los espacios los da de alta el hotel, y luego los puede usar una productora si lo abres a terceros.</div>'
-          : (x.k==='eventos'
+          : (x.k==='eventos' && !(dd&&dd.es_del_grupo)
              ? '<div class="nota">Antes de montar eventos, el contrato: se firma una vez para todas tus casas.</div>' : ''));
     pinta();
     window.scrollTo(0,0);
@@ -3037,23 +3037,42 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
        el sombrero hereda la firma del hotel. Si el hotel todavía no ha
        firmado, se lo decimos con sus palabras, aquí, en vez de soltarlo en un
        check-in de productora que no entiende. */
-    if(!d.contrato_firmado_at){
+    /* UNA CASA DEL GRUPO NO SE FIRMA NADA A SI MISMA. Javi, 1-nov-2026:
+       «puedes configurar lo del contrato marco para Casa Pepe. Es la misma
+       razón social, no necesita contrato».
+       «Mi cuenta · El acuerdo» ya lo sabía desde el 31-oct -ahí el paso sale
+       como «no aplica» y dice que el convenio se firmaría entre dos empresas
+       del mismo dueño-, pero esta puerta no se había enterado, así que la
+       misma casa era apta por un lado y estaba bloqueada por el otro. */
+    if(!d.contrato_firmado_at && !d.es_del_grupo){
       toast('Primero firma tu contrato marco',true);
       var w2=$('vfi')||$('wrap');
-      if(w2) w2.insertAdjacentHTML('afterbegin',
-        '<div class="card" style="border-color:#E6D2A8"><h3>Antes de montar eventos, el contrato</h3>'
+      /* Una por pantalla, no una por clic: esto se insertaba al principio del
+         contenedor cada vez, y tres intentos dejaban tres tarjetas iguales. */
+      if(w2 && !$('muroContrato')) w2.insertAdjacentHTML('afterbegin',
+        '<div class="card" id="muroContrato" style="border-color:#E6D2A8"><h3>Antes de montar eventos, el contrato</h3>'
         +'<div class="hint">Los eventos se venden por la plataforma, y eso se ampara en tu contrato marco. '
         +'Está en <b>Mi cuenta · El acuerdo</b>: se genera con tus datos y lo firmas en línea. '
         +'En cuanto esté firmado, el asistente de eventos se abre solo.</div></div>');
       return;
     }
     var pr=await sombreroPROD(d); if(!pr) return;
-    /* La firma del marco viaja al sombrero, con los datos fiscales que ya dio. */
+    /* La firma del marco viaja al sombrero, con los datos fiscales que ya dio.
+       Para una casa del grupo no hay firma que heredar, y copiar un nulo
+       encima dejaría la productora peor de lo que estaba: se mandan solo los
+       campos que de verdad hay. */
+    /* De qué casa es este sombrero. Sin esto, su propio portal no puede saber
+       que no necesita convenio -lo lee de `hoteles.es_del_grupo` a través de
+       aquí- y le pediría firmar algo que no existe. */
+    var hereda={razon_social:d.razon_social,rfc:d.rfc,tipo_persona:d.tipo_persona,
+      hotel_id:d.id, estado:'activo', email_notificaciones:d.email_notificaciones||d.email};
+    if(d.contrato_firmado_at){
+      hereda.contrato_version=d.contrato_version;
+      hereda.contrato_firmado_at=d.contrato_firmado_at;
+      hereda.contrato_firmante=d.contrato_firmante;
+    }
     await fetch(SB+'/rest/v1/productoras?id=eq.'+pr.id,{method:'PATCH',headers:hdr(),
-      body:JSON.stringify({razon_social:d.razon_social,rfc:d.rfc,tipo_persona:d.tipo_persona,
-        contrato_version:d.contrato_version,contrato_firmado_at:d.contrato_firmado_at,
-        contrato_firmante:d.contrato_firmante,estado:'activo',
-        email_notificaciones:d.email_notificaciones||d.email})}).catch(function(){});
+      body:JSON.stringify(hereda)}).catch(function(){});
     if(!pr.portal_token){
       var r=await fetch(SB+'/rest/v1/productoras?id=eq.'+pr.id,
         {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
