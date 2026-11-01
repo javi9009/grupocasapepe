@@ -110,6 +110,9 @@ tbody tr:hover{background:var(--surface-3)}
       <option value="en_disputa">En disputa</option>
     </select>
     <select id="fOper"><option value="">Todos los operadores</option></select>
+    <select id="fConc"><option value="">La venda quien la venda</option></select>
+    <select id="fHotel"><option value="">Desde cualquier casa</option></select>
+    <select id="fTour"><option value="">Cualquier tour</option></select>
     <select id="fDonde">
       <option value="">Caiga donde caiga</option>
       <option value="a la cuenta del operador">A la cuenta del operador</option>
@@ -126,12 +129,13 @@ tbody tr:hover{background:var(--surface-3)}
   </div>
 
   <div class="mini" id="notaFiltro" style="margin:-4px 0 10px;display:none"></div>
+  <div class="card" id="cajaConc" style="margin-bottom:12px;display:none"></div>
   <div class="kpis" id="kpis"></div>
 
   <div class="card tablewrap">
     <table><thead><tr>
       <th>Folio</th><th>Reservada</th><th>Sale</th><th>Experiencia</th><th>Quién la opera</th>
-      <th>Pago</th><th>A dónde cayó</th>
+      <th>Quién la vendió</th><th>Pago</th><th>A dónde cayó</th>
       <th class="n">Cobrado</th><th class="n">Nuestra comisión</th><th class="n">Para el operador</th>
       <th></th>
     </tr></thead><tbody id="tb"></tbody></table>
@@ -195,7 +199,7 @@ tbody tr:hover{background:var(--surface-3)}
       : d.toLocaleDateString('en-CA',{timeZone:'America/Mexico_City'}); }
   function soloDia(x){ return x?String(x).slice(0,10):''; }
 
-  var V=[];
+  var V=[], CONCNOM={};
 
   async function carga(){
     $('sub').textContent='Cargando…';
@@ -210,6 +214,28 @@ tbody tr:hover{background:var(--surface-3)}
     $('fOper').innerHTML='<option value="">Todos los operadores</option>'+
       Object.keys(ops).sort().map(function(o){return '<option>'+esc(o)+'</option>';}).join('');
 
+    /* Javi, 1-nov-2026: «un filtro de ventas por concierge, y ver el detalle
+       por temporalidad o tour u hotel». Las tres listas se arman de lo que hay
+       en la base, no de un catálogo aparte: así no sobra un nombre que ya no
+       vende ni falta uno que empezó ayer. «Sin concierge» es su propia opción
+       porque es la respuesta más útil de todas: cuánto entra sin que nadie lo
+       venda, que es lo que el QR viene a cambiar. */
+    var cs={}, hs={}, ts={}, sinC=0;
+    V.forEach(function(v){
+      if(v.concierge_id) cs[v.concierge_id]=v.concierge||v.codigo_venta||'Sin nombre'; else sinC++;
+      if(v.hotel) hs[v.hotel]=1;
+      if(v.experiencia) ts[v.experiencia]=1;
+    });
+    $('fConc').innerHTML='<option value="">La venda quien la venda</option>'
+      + Object.keys(cs).sort(function(a,b){ return cs[a]<cs[b]?-1:1; })
+          .map(function(id){return '<option value="'+esc(id)+'">'+esc(cs[id])+'</option>';}).join('')
+      + (sinC?'<option value="__sin">Sin concierge ('+sinC+')</option>':'');
+    $('fHotel').innerHTML='<option value="">Desde cualquier casa</option>'+
+      Object.keys(hs).sort().map(function(o){return '<option>'+esc(o)+'</option>';}).join('');
+    $('fTour').innerHTML='<option value="">Cualquier tour</option>'+
+      Object.keys(ts).sort().map(function(o){return '<option>'+esc(o)+'</option>';}).join('');
+    CONCNOM=cs;
+
     $('sub').innerHTML=V.length
       ? V.length+' reserva'+(V.length===1?'':'s')+' en la base. Aquí se ve, de cada una, '+
         '<b>en qué cuenta de Stripe aterrizó el dinero</b>.'
@@ -219,6 +245,7 @@ tbody tr:hover{background:var(--surface-3)}
 
   function visibles(){
     var e=$('fEstado').value, o=$('fOper').value, d=$('fDonde').value,
+        c=$('fConc').value, ho=$('fHotel').value, tu=$('fTour').value,
         q=$('fBusca').value.trim().toLowerCase(),
         rd=$('fRdesde').value, rh=$('fRhasta').value,
         sd=$('fSdesde').value, sh=$('fShasta').value;
@@ -226,6 +253,9 @@ tbody tr:hover{background:var(--surface-3)}
       if(e && v.pago_estado!==e)return false;
       if(o && v.operador!==o)return false;
       if(d && v.donde_cayo!==d)return false;
+      if(c==='__sin' ? !!v.concierge_id : (c && v.concierge_id!==c))return false;
+      if(ho && v.hotel!==ho)return false;
+      if(tu && v.experiencia!==tu)return false;
       /* LOS DOS CALENDARIOS SON INDEPENDIENTES, y en eso esta la gracia: una
          cosa es cuando entro la venta y otra cuando sale el tour. «Lo que se
          reservo esta semana» y «lo que sale en noviembre» son dos preguntas
@@ -284,6 +314,8 @@ tbody tr:hover{background:var(--surface-3)}
       tarjeta('', money(suma(alOper,'cobrado_neto')), 'Cayó en cuentas de operador', alOper.length+' de '+vivas.length)+
       tarjeta('warn', money(suma(aCasa,'cobrado_neto')), 'Cayó en Casa Pepe', aCasa.length+' de '+vivas.length);
 
+    pintaConc(l);
+
     $('vacio').style.display=l.length?'none':'';
     $('tb').innerHTML=l.map(function(v){
       return '<tr>'+
@@ -297,6 +329,9 @@ tbody tr:hover{background:var(--surface-3)}
         '<td>'+esc(v.experiencia||'—')+'</td>'+
         '<td><span class="quien">'+esc(v.operador||'—')+
           '<small>'+esc(v.clase||'')+'</small></span></td>'+
+        '<td><span class="quien">'+(v.concierge
+            ? esc(v.concierge)+'<small>'+esc([v.codigo_venta,v.hotel].filter(Boolean).join(' · '))+'</small>'
+            : '<span class="mini">nadie · '+esc(v.canal||'web')+'</span>')+'</span></td>'+
         '<td>'+etqPago(v.pago_estado)+'</td>'+
         '<td>'+etqDonde(v)+'</td>'+
         '<td class="n">'+money(v.cobrado_neto)+
@@ -308,6 +343,59 @@ tbody tr:hover{background:var(--surface-3)}
         '<td class="n"><button class="btn ghost sm" data-res="'+esc(v.id)+'">Ver detalle</button></td>'+
       '</tr>';
     }).join('');
+  }
+
+  /* EL DESGLOSE POR CONCIERGE. Javi, 1-nov-2026: «veríamos el detalle de
+     ventas por concierge por temporalidad o tour u hotel».
+     La temporalidad y el tour ya los ponen los filtros de arriba; esto
+     contesta la otra mitad: de lo que estás viendo, quién lo vendió. Se cuenta
+     sobre lo filtrado, no sobre todo, para que no diga una cosa mientras la
+     tabla dice otra. Tocar un nombre lo mete en el filtro: el desglose es la
+     puerta al detalle, no un cuadro aparte. */
+  function pintaConc(l){
+    var caja=$('cajaConc'); if(!caja) return;
+    var g={}, sin={n:0,v:0};
+    l.forEach(function(v){
+      var neto=Number(v.cobrado_neto||0);
+      if(!v.concierge_id){ sin.n++; sin.v+=neto; return; }
+      var k=v.concierge_id, x=g[k]=g[k]||{nom:v.concierge||v.codigo_venta||'Sin nombre',
+        cod:v.codigo_venta||'', n:0, v:0, bono:0, pax:0, casas:{}, tours:{}};
+      x.n++; x.v+=neto; x.bono+=Number(v.bono_concierge||0)*Number(v.factor_neto==null?1:v.factor_neto);
+      x.pax+=Number(v.pax||0);
+      if(v.hotel) x.casas[v.hotel]=1;
+      if(v.experiencia) x.tours[v.experiencia]=(x.tours[v.experiencia]||0)+1;
+    });
+    var ks=Object.keys(g).sort(function(a,b){ return g[b].v-g[a].v; });
+    if(!ks.length && !sin.n){ caja.style.display='none'; return; }
+    caja.style.display='';
+
+    function masVendido(t){
+      var k=Object.keys(t).sort(function(a,b){return t[b]-t[a];})[0];
+      return k? k+' ('+t[k]+')' : '';
+    }
+    caja.innerHTML='<h3 style="margin:0 0 4px">Quién vendió</h3>'
+      +'<div class="mini" style="margin-bottom:10px">De las '+l.length+' reservas que estás viendo. '
+      +'Toca un nombre para quedarte solo con las suyas.</div>'
+      +'<table><thead><tr><th>Concierge</th><th>Código</th><th>Casa</th><th>Lo que más vende</th>'
+      +'<th class="n">Ventas</th><th class="n">Ingreso</th><th class="n">Su comisión</th></tr></thead><tbody>'
+      + ks.map(function(k){ var x=g[k];
+          return '<tr class="clicconc" data-conc="'+esc(k)+'" style="cursor:pointer">'
+            +'<td><b>'+esc(x.nom)+'</b></td>'
+            +'<td class="mini">'+esc(x.cod||'—')+'</td>'
+            +'<td class="mini">'+esc(Object.keys(x.casas).join(', ')||'—')+'</td>'
+            +'<td class="mini">'+esc(masVendido(x.tours)||'—')+'</td>'
+            +'<td class="n">'+x.n+(x.pax?'<div class="mini">'+x.pax+' pax</div>':'')+'</td>'
+            +'<td class="n">'+money(x.v)+'</td>'
+            +'<td class="n">'+money(x.bono)+'</td></tr>';
+        }).join('')
+      + (sin.n? '<tr class="clicconc" data-conc="__sin" style="cursor:pointer">'
+          +'<td><b>Sin concierge</b><div class="mini">entraron solas por la web</div></td>'
+          +'<td class="mini">—</td><td class="mini">—</td><td class="mini">—</td>'
+          +'<td class="n">'+sin.n+'</td><td class="n">'+money(sin.v)+'</td><td class="n">—</td></tr>' : '')
+      +'</tbody></table>';
+
+    caja.querySelectorAll('[data-conc]').forEach(function(t){
+      t.onclick=function(){ $('fConc').value=t.getAttribute('data-conc'); pinta(); };});
   }
 
   function tarjeta(clase,valor,titulo,pie){
@@ -574,11 +662,13 @@ tbody tr:hover{background:var(--surface-3)}
     var l=visibles();
     if(!l.length)return;
     var cab=['Folio','Huesped','Pax','Reservada','Pagada','Salida','Experiencia','Operador',
-             'Clase','Pago','A donde cayo','Cuenta Stripe','Cobrado','Nuestra comision',
-             'Para el operador','Payment intent'];
+             'Clase','Concierge','Codigo','Casa','Su comision','Pago','A donde cayo',
+             'Cuenta Stripe','Cobrado','Nuestra comision','Para el operador','Payment intent'];
     var filas=l.map(function(v){return [
       v.folio, v.huesped, v.pax, v.reservada_at, v.pagado_at, v.fecha_salida,
-      v.experiencia, v.operador, v.clase, v.pago_estado, v.donde_cayo,
+      v.experiencia, v.operador, v.clase,
+      v.concierge||'', v.codigo_venta||'', v.hotel||'', v.bono_concierge||'',
+      v.pago_estado, v.donde_cayo,
       v.stripe_destino||'', v.pago_total,
       v.pago_estado==='pagado'?v.nuestra_comision:'',
       v.pago_estado==='pagado'?v.neto_operador:'',
@@ -596,11 +686,11 @@ tbody tr:hover{background:var(--surface-3)}
     a.click(); URL.revokeObjectURL(a.href);
   };
 
-  ['fEstado','fOper','fDonde','fRdesde','fRhasta','fSdesde','fShasta']
+  ['fEstado','fOper','fConc','fHotel','fTour','fDonde','fRdesde','fRhasta','fSdesde','fShasta']
     .forEach(function(i){$(i).onchange=pinta;});
   $('fBusca').oninput=pinta;
   $('btnLimpia').onclick=function(){
-    ['fEstado','fOper','fDonde','fRdesde','fRhasta','fSdesde','fShasta','fBusca']
+    ['fEstado','fOper','fConc','fHotel','fTour','fDonde','fRdesde','fRhasta','fSdesde','fShasta','fBusca']
       .forEach(function(i){$(i).value='';});
     pinta();
   };

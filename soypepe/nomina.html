@@ -163,9 +163,53 @@ El monto anticipado se descontará íntegramente del pago de esta misma quincena
   }catch(e){$('#amsg').className='msg err';$('#amsg').textContent='Error de conexión';$('#firmar').disabled=false;}
  };
 }
+/* ===== lo que llevo vendido =====
+   Javi, 1-nov-2026: «el portal de SoyPepe, en Mi nómina, donde el colaborador
+   puede ver sus ventas que lleva acumuladas».
+   No lee sinc_reservas: un concierge no tiene permiso para leer la tabla de
+   reservas entera ni le hace falta. Lo suyo se lo da mis_ventas_concierge. */
+let V=null;
+function vFecha(f){ try{ return new Date(f+'T12:00:00').toLocaleDateString('es-MX',{day:'numeric',month:'short'}); }catch(e){ return f; } }
+
+function verVentas(){
+ if(!V||!V.ok||V.sin_codigo)return;
+ const u=V.ultimas||[];
+ openSheet(`<h2>Mis ventas</h2><div class="sub">del ${vFecha(V.desde)} al ${vFecha(V.hasta)} · código ${esc(V.codigo)}</div>
+  <table class="tc">
+   <tr><th>Cuándo</th><th>Qué</th><th>Para mí</th></tr>
+   ${u.length?u.map(x=>`<tr><td>${vFecha(x.fecha)}</td><td>${esc(x.tour)}<div style="color:var(--faint);font-size:10.5px">${esc(x.cliente||'')} · ${x.pax||1} pax · ${money(x.total)}${x.pagado?'':' · <b>sin pagar</b>'}</div></td><td class="up">${money(x.mio)}</td></tr>`).join('')
+    :'<tr><td colspan="3">Todavía nada en este periodo.</td></tr>'}
+  </table>
+  ${(V.por_tour||[]).length?`<h2 style="margin-top:18px">Lo que más vendo</h2><table class="tc">
+   ${V.por_tour.map(t=>`<tr><td>${esc(t.tour)}</td><td>${t.n}</td><td class="up">${money(t.mio)}</td></tr>`).join('')}
+  </table>`:''}
+  <div class="nota">Se te liquida en el corte, junto con tu quincena. Lo que está sin pagar todavía no cuenta: se cuenta cuando el huésped paga.</div>`);
+}
+
+function cardVentas(){
+ if(!V||!V.ok)return '';
+ if(V.sin_codigo) return `<div class="card"><h3>Lo que llevo vendido</h3>
+   <div class="nota">${esc(V.aviso||'')}</div></div>`;
+ const p=V.periodo||{}, a=V.acumulado||{};
+ if(!Number(a.ventas)) return `<div class="card"><h3>Lo que llevo vendido</h3>
+   <div class="nota">Todavía no has vendido nada. Tu código es <b>${esc(V.codigo)}</b>: enseña tu QR al huésped desde Concierge y lo que compre se te apunta a ti, aunque lo pague esa noche desde su cuarto.</div></div>`;
+ return `<div class="card"><h3>Lo que llevo vendido <span class="tag final">${esc(V.codigo)}</span></h3>
+  <table class="tc">
+   <tr><th>Concepto</th><th>Este mes</th><th>Desde siempre</th></tr>
+   <tr><td>Ventas</td><td>${p.ventas||0}${p.pax?` <span style="color:var(--faint)">· ${p.pax} pax</span>`:''}</td><td>${a.ventas||0}</td></tr>
+   <tr><td>Vendido</td><td>${money(p.vendido)}</td><td>${money(a.vendido)}</td></tr>
+   <tr class="tot"><td>Para mí${V.com_pct!=null?` (${V.com_pct}%)`:''}</td><td>${money(p.mio)}<div style="font-size:9.5px;font-weight:400;color:var(--faint)">${money(p.por_cobrar)} sin cobrar aún</div></td><td>${money(a.mio)}</td></tr>
+  </table>
+  <button class="btn g full" id="bVentas">🧾 Ver mis ventas una por una</button>
+  <div class="nota">Se liquida en el corte con tu quincena. Una venta cuenta cuando el huésped paga; si se cancela o se devuelve, se cae.</div>
+ </div>`;
+}
+
 /* ===== vista principal ===== */
 async function pinta(){
  try{D=await rpc('mi_nomina',{p_email:VER||EMAIL});}catch(e){$('#app').innerHTML='<div class="cargando">No se pudo cargar. Revisa tu sesión.</div>';return;}
+ /* Las ventas no bloquean la nómina: si fallan, la quincena se enseña igual. */
+ try{V=await rpc('mis_ventas_concierge',{p_email:VER||EMAIL});}catch(e){V=null;}
  if(!D.ok){$('#app').innerHTML='<div class="cargando">'+esc(D.error||'Sin datos')+'</div>';return;}
  if(ROSTER===null){try{ROSTER=await rpc('roster_nomina',{});}catch(e){ROSTER=[];}}
  const esFinal=D.estimada_estatus==='validada';
@@ -202,12 +246,14 @@ async function pinta(){
    <button class="btn full" id="bAdelantar" ${(!D.preview&&!D.adelanto&&D.retirable_neto>=100)?'':'disabled'}>💸 Adelantar ${money(D.retirable_neto)} de mis días trabajados</button>
    <div class="nota">${D.adelanto?('Adelanto en trámite: '+money(D.adelanto.monto)+' ('+esc(D.adelanto.estado)+').'):(esFinal?'Cifra validada por administración: esto es lo que te cae.':'La cifra final se valida dos días antes del depósito; bonos y extras pueden moverla.')}</div>
   </div>
+  ${cardVentas()}
   <div class="card"><h3>Mis recibos anteriores</h3>
    ${(D.recibos||[]).length?(D.recibos||[]).map((r,i)=>`<div class="rec" data-i="${i}"><span class="q">${QN(r.quincena)}</span><span class="mid">${bonoTxt(r.ajuste)}</span><span class="n">${money(r.neto)}</span><span class="ch">›</span></div>`).join(''):'<div class="nota">Aún no hay recibos registrados.</div>'}
   </div>
   <div class="aviso">Tu quincena base viene de tu contrato. Los bonos se ganan con asistencia y chamba — cuídalos. Cualquier duda con tus números, toca el recibo y revisa el desglose.</div>`;
  $('#bDesglose').onclick=verDesglose;
  $('#bContrato').onclick=verContrato;
+ const bv=$('#bVentas'); if(bv) bv.onclick=verVentas;
  const ba=$('#bAdelantar');if(ba&&!ba.disabled)ba.onclick=verAdelanto;
  const vc=$('#verComo');if(vc)vc.onchange=()=>{VER=vc.value;pinta();};
  document.querySelectorAll('.rec[data-i]').forEach(el=>el.onclick=()=>verRecibo(D.recibos[+el.dataset.i]));
