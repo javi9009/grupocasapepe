@@ -306,6 +306,9 @@ th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 .pgc1.fuera{opacity:.52}
 .pgc1.fuera .pgnm{text-decoration:line-through;text-decoration-thickness:1px}
 .pgmas{font-size:11px;color:var(--muted);white-space:nowrap}
+/* Una fila que se abre se nota antes de tocarla. */
+.eqt tr.clic{cursor:pointer}
+.eqt tr.clic:hover td{background:var(--surface-2)}
 /* Las filas de la ficha del huésped: etiqueta a la izquierda, dato a la derecha. */
 .hfila{display:flex;gap:10px;justify-content:space-between;align-items:baseline;
   padding:5px 0;border-bottom:1px solid var(--rule);font-size:12.5px}
@@ -1533,6 +1536,12 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       var v=$('eVenta'); if(!v) return;
       var tiene=(EQ.edit&&EQ.edit.codigo_venta);
       v.style.display = (this.value==='concierge'||tiene) ? 'block' : 'none';
+      /* Y se le propone un código en el momento. Hasta hoy el campo existía,
+         estaba vacío y nadie lo llenaba: de cinco personas del Grupo, cero
+         tenían código, así que ninguna venta se le podía apuntar a nadie. Un
+         campo opcional que hace falta siempre es un campo que hay que
+         rellenar solo. Se puede cambiar antes de guardar. */
+      if(this.value==='concierge') concSugiereCodigo();
     };
     w.querySelectorAll('[data-casa]').forEach(function(b){ b.onclick=function(){ b.classList.toggle('on'); }; });
     w.querySelectorAll('[data-ed]').forEach(function(b){ b.onclick=function(){
@@ -1543,6 +1552,28 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     if($('eCancel')) $('eCancel').onclick=function(){ EQ.edit=null; eqPinta(); };
     if($('eGuarda')) $('eGuarda').onclick=eqGuarda;
   }
+  /* NOMBRE-CASA, corto y dictable, y que no choque con otro. La base lo
+     compara en mayúsculas y rechaza el repetido, así que aquí se evita antes
+     de que se guarde y salte un error que nadie sabe leer. */
+  function concSugiereCodigo(){
+    var c=$('eCod'); if(!c || (c.value||'').trim()) return;
+    var nom=(($('eNom')&&$('eNom').value)||'').trim();
+    if(!nom) return;
+    var casas={}; eqCasas().forEach(function(x){ casas[x.id]=x.nombre_comercial; });
+    var alc=(($('eAlc')&&$('eAlc').value)||'');
+    var dondeId = /^h:/.test(alc) ? alc.replace(/^h:/,'') : ((Hsel&&Hsel.id) || (G&&G.id));
+    var donde=sinAcento(casas[dondeId]||'').replace(/^casa pepe ?/,'').replace(/[^a-z]/g,'');
+    var tag = donde.indexOf('cdmx')>=0||donde.indexOf('mexico')>=0 ? 'CDMX'
+            : donde ? donde.slice(0,4).toUpperCase() : '';
+    var base = sinAcento(nom).replace(/[^a-z]/g,'').slice(0,8).toUpperCase();
+    if(!base) return;
+    var usados={}; (EQ.gente||[]).forEach(function(u){
+      if(u.codigo_venta && (!EQ.edit || u.id!==EQ.edit.id)) usados[String(u.codigo_venta).toUpperCase()]=1; });
+    var cod = tag? base+'-'+tag : base, n=1;
+    while(usados[cod]){ n++; cod = (tag? base+'-'+tag : base)+n; }
+    c.value=cod;
+  }
+
   function eqLee(){
     var v=function(i){ var e=$(i); return e?(e.value||'').trim():''; };
     var alc=v('eAlc'), o={email:v('eMail'),nombre:v('eNom'),apellido:v('eApe'),
@@ -3998,6 +4029,200 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
      lista: es la misma, con el mismo formulario del paso 3 de Mi cuenta. El
      paso sirve para darlos de alta mientras te das de alta; la seccion, para
      volver a ellos cuando ya estas dentro. */
+  /* LO QUE VENDE CADA QUIEN. Javi, 1-nov-2026: «el portal de ateneísta de
+     hotel, donde en "mis concierges" pueden ver las ventas de cada uno».
+     La venta ya sabía a quién atribuirse: el QR lleva el código, `pago.html`
+     lo manda, `sinc_reservar` lo escribe y un trigger lo resuelve a la
+     persona. Lo que faltaba era el principio de la cadena —nadie tenía
+     código— y el final: un sitio donde verlo. Esto es el final. */
+  var CONC={periodo:'mes', ventas:[], exp:{}, cargado:false};
+
+  var CPER=[['mes','Este mes'],['mespasado','El mes pasado'],['90','Últimos 90 días'],['todo','Todo']];
+
+  function concRango(p){
+    var hoy=new Date(hoyMX()+'T12:00:00');
+    if(p==='mes')       return [pgYmd(new Date(hoy.getFullYear(),hoy.getMonth(),1)), '2999-12-31'];
+    if(p==='mespasado') return [pgYmd(new Date(hoy.getFullYear(),hoy.getMonth()-1,1)),
+                                pgYmd(new Date(hoy.getFullYear(),hoy.getMonth(),0))];
+    if(p==='90')        return [masDias(hoyMX(),-90), '2999-12-31'];
+    return ['2000-01-01','2999-12-31'];
+  }
+
+  async function concCarga(){
+    var d=destino();
+    var ids = (nivel==='hotel' && Hsel) ? [Hsel.id]
+            : [G].concat(HOT||[]).filter(Boolean).map(function(x){return x.id;});
+    CONC.ventas = await get('sinc_reservas?select=id,folio,created_at,estado,cancelada_at,pax,total,'
+      +'al_hotel,bono_concierge,vendedor_nombre,codigo_venta,hotel_usuario_id,canal,hotel_id,'
+      +'op_experiencia_id,pago_estado&hotel_id=in.('+ids.join(',')+')'
+      +'&order=created_at.desc&limit=1000') || [];
+    var ex={}; CONC.ventas.forEach(function(x){ if(x.op_experiencia_id) ex[x.op_experiencia_id]=1; });
+    var k=Object.keys(ex);
+    if(k.length) (await get('op_experiencias?select=id,nombre&id=in.('+k.join(',')+')')||[])
+      .forEach(function(e){ CONC.exp[e.id]=e.nombre; });
+    CONC.cargado=true;
+  }
+
+  /* A quién se le apunta una venta. Por orden de confianza: la persona que el
+     trigger resolvió, el código que se dictó, y el nombre suelto que alguien
+     escribió a mano. Lo que no trae ninguna de las tres no se reparte entre
+     los demás: se queda aparte, contado y a la vista, porque una venta sin
+     dueño es un problema que hay que poder ver. */
+  function concQuien(x){
+    if(x.hotel_usuario_id) return {k:'u:'+x.hotel_usuario_id, id:x.hotel_usuario_id};
+    var c=String(x.codigo_venta||'').trim().toUpperCase();
+    if(c) return {k:'c:'+c, cod:c};
+    var n=String(x.vendedor_nombre||'').trim();
+    if(n) return {k:'n:'+n, nom:n};
+    return {k:'__', suelta:true};
+  }
+
+  function concPinta(){
+    var caja=$('concVentas'); if(!caja) return;
+    var r=concRango(CONC.periodo), d0=r[0], d1=r[1];
+    var vivas=CONC.ventas.filter(function(x){
+      if(x.cancelada_at || x.estado==='anulada' || x.estado==='cancelada') return false;
+      var f=fechaMX(x.created_at); return f>=d0 && f<=d1;
+    });
+
+    var por={}, suelta={n:0,v:0,pax:0};
+    vivas.forEach(function(x){
+      var q=concQuien(x);
+      if(q.suelta){ suelta.n++; suelta.v+=Number(x.total||0); suelta.pax+=Number(x.pax||0); return; }
+      var g=por[q.k]=por[q.k]||{q:q,n:0,v:0,b:0,casa:0,pax:0,ventas:[]};
+      g.n++; g.v+=Number(x.total||0); g.b+=Number(x.bono_concierge||0);
+      g.casa+=Number(x.al_hotel||0); g.pax+=Number(x.pax||0); g.ventas.push(x);
+    });
+
+    /* La gente que PUEDE vender sale siempre, haya vendido o no: un cero es
+       una respuesta, y además es la que hace falta para saber a quién hay que
+       empujar. Quien no tiene código sale marcado, porque sin código su venta
+       no es de nadie. */
+    var equipo=(EQ.gente||[]).filter(function(u){
+      return u.activo!==false && ((u.rol||'')==='concierge' || u.codigo_venta || por['u:'+u.id]);
+    });
+    equipo.forEach(function(u){
+      var k='u:'+u.id, kc=u.codigo_venta?('c:'+String(u.codigo_venta).toUpperCase()):null;
+      if(!por[k]) por[k]={q:{k:k,id:u.id},n:0,v:0,b:0,casa:0,pax:0,ventas:[]};
+      /* Si alguna venta se quedó colgada del código y no de la persona -una
+         reserva vieja, de antes del trigger- se le suma aquí a su dueño. */
+      if(kc && por[kc]){
+        var o=por[kc]; var g=por[k];
+        g.n+=o.n; g.v+=o.v; g.b+=o.b; g.casa+=o.casa; g.pax+=o.pax;
+        g.ventas=g.ventas.concat(o.ventas); delete por[kc];
+      }
+      por[k].u=u;
+    });
+
+    var filas=Object.keys(por).map(function(k){ return por[k]; })
+      .sort(function(a,b){ return b.v-a.v; });
+    var tot=filas.reduce(function(a,g){return a+g.v;},0);
+    var totB=filas.reduce(function(a,g){return a+g.b;},0);
+
+    var sinCod=(EQ.gente||[]).filter(function(u){
+      return u.activo!==false && (u.rol||'')==='concierge' && !u.codigo_venta; }).length;
+
+    caja.innerHTML=
+      '<div class="bufbar"><span class="vistas" id="concPer">'
+      + CPER.map(function(p){ return '<button data-p="'+p[0]+'" class="'+(CONC.periodo===p[0]?'on':'')+'">'
+          +esc(p[1])+'</button>'; }).join('')
+      +'</span></div>'
+      +'<div class="hgrid" style="margin-top:10px">'
+      + cajaNum('Vendido', tot)
+      + cajaNum('Para quien vendió', totB)
+      +'</div>'
+      + (sinCod
+          ? '<div class="dice mal" style="margin-top:10px">Hay '+sinCod+' con el papel de concierge y <b>sin código</b>. '
+            +'Lo que vendan no se le apunta a nadie. Se lo pones abajo, en su ficha.</div>'
+          : '')
+      + (filas.length
+          ? '<div class="eqt" style="margin-top:12px"><table><thead><tr>'
+            +'<th>Quién</th><th>Código</th><th>Ventas</th><th>Vendido</th><th>Le toca</th><th></th></tr></thead><tbody>'
+            + filas.map(function(g){
+                var u=g.u, nom = u ? [u.nombre,u.apellido].filter(Boolean).join(' ')
+                                   : (g.q.nom || ('código '+(g.q.cod||'—')));
+                var cod = u ? (u.codigo_venta||'') : (g.q.cod||'');
+                return '<tr'+(g.n?' class="clic" data-conc="'+esc(g.q.k)+'"':'')+'>'
+                  +'<td><b>'+esc(nom||'—')+'</b>'
+                    + (u&&u.email?'<span class="mini" style="display:block">'+esc(u.email)+'</span>':'')
+                    + (u?'':'<span class="mini" style="display:block">no está en tu equipo</span>')+'</td>'
+                  +'<td class="mini">'+(cod?'<b>'+esc(cod)+'</b>':'<span class="nomi">sin código</span>')+'</td>'
+                  +'<td class="mini">'+g.n+(g.pax?' · '+g.pax+' pax':'')+'</td>'
+                  +'<td><b>'+pesos(g.v)+'</b></td>'
+                  +'<td><b>'+pesos(g.b)+'</b></td>'
+                  +'<td class="mini">'+(g.n?'ver ›':'')+'</td></tr>';
+              }).join('')
+            +'</tbody></table></div>'
+          : '<div class="vacio" style="margin-top:12px">Nadie ha vendido en ese periodo.</div>')
+      + (suelta.n
+          ? '<div class="dice" style="margin-top:10px"><b>'+suelta.n+' venta'+(suelta.n===1?'':'s')+' sin dueño</b> · '
+            + pesos(suelta.v)+'. Entraron por la web sin código, así que no se le apuntan a nadie. '
+            +'Con el QR de cada quien dejan de pasar.</div>'
+          : '');
+
+    $('concPer').querySelectorAll('[data-p]').forEach(function(b){
+      b.onclick=function(){ CONC.periodo=b.getAttribute('data-p'); concPinta(); };});
+    caja.querySelectorAll('[data-conc]').forEach(function(t){
+      t.onclick=function(){ concFicha(por[t.getAttribute('data-conc')]); };});
+  }
+
+  /* La ficha de un concierge: su código, su QR para el huésped, qué tours
+     vende y sus últimas ventas una por una. */
+  function concFicha(g){
+    if(!g) return;
+    var u=g.u, nom = u ? [u.nombre,u.apellido].filter(Boolean).join(' ')
+                       : (g.q.nom || ('código '+(g.q.cod||'—')));
+    var cod = u ? (u.codigo_venta||'') : (g.q.cod||'');
+    var liga = cod ? ('https://casapepe.mx/sincretico/?c='+encodeURIComponent(cod)) : '';
+
+    var porTour={};
+    g.ventas.forEach(function(x){
+      var k=CONC.exp[x.op_experiencia_id]||'Sin ficha';
+      var t=porTour[k]=porTour[k]||{n:0,v:0};
+      t.n++; t.v+=Number(x.total||0);
+    });
+    var tours=Object.keys(porTour).sort(function(a,b){ return porTour[b].v-porTour[a].v; });
+
+    LATID='c:'+g.q.k;
+    $('capa').classList.add('on'); $('lat').classList.add('on');
+    $('capa').onclick=cierraLat;
+    $('lat').innerHTML='<div class="lh"><b>'+esc(nom||'Concierge')+'</b>'
+      +'<button id="latX" aria-label="Cerrar">&times;</button></div>'
+      +'<div class="lb">'
+      +'<div class="bloque"><div class="hfila"><span>Ventas</span><b>'+g.n+'</b></div>'
+        +'<div class="hfila"><span>Personas</span><b>'+g.pax+'</b></div>'
+        +'<div class="hfila"><span>Vendido</span><b>'+pesos(g.v)+'</b></div>'
+        +'<div class="hfila"><span>A la casa</span><b>'+pesos(g.casa)+'</b></div>'
+        +'<div class="hfila"><span>Le toca a él</span><b>'+pesos(g.b)+'</b></div>'
+        +'<div class="dice">Del periodo que tienes elegido. Se liquida en el corte.</div></div>'
+      + (cod
+          ? '<div class="bloque"><h5>Su código y su QR</h5>'
+            +'<div class="hfila"><span>Código</span><b>'+esc(cod)+'</b></div>'
+            +'<div class="dice">El QR se lo enseña él desde su app, en <b>Concierge · Mi código</b>. '
+            +'El huésped lo escanea, compra desde su teléfono cuando quiera, y la venta se le apunta igual.</div>'
+            +'<div class="mini" style="margin-top:6px;word-break:break-all">'+esc(liga)+'</div></div>'
+          : '<div class="bloque"><h5>Sin código</h5>'
+            +'<div class="dice mal">Lo que venda no se le apunta a nadie. Se lo pones en su ficha, abajo en el equipo.</div></div>')
+      + (tours.length
+          ? '<div class="bloque"><h5>Qué vende</h5>'
+            + tours.map(function(t){ return '<div class="hfila"><span>'+esc(t)+'</span><b>'
+                + porTour[t].n+' · '+pesos(porTour[t].v)+'</b></div>'; }).join('')
+            +'</div>'
+          : '')
+      + (g.ventas.length
+          ? '<div class="bloque"><h5>Una por una</h5>'
+            + g.ventas.slice(0,40).map(function(x){
+                return '<div class="hfila"><span>'+esc(String(x.created_at||'').slice(0,10))+' · '
+                  + esc(CONC.exp[x.op_experiencia_id]||x.folio||'—')
+                  + (x.pago_estado==='pagado'?'':' · <b>sin pagar</b>')
+                  +'</span><b>'+pesos(x.total)+'</b></div>'; }).join('')
+            + (g.ventas.length>40?'<div class="dice">Las 40 más recientes de '+g.ventas.length+'.</div>':'')
+            +'</div>'
+          : '')
+      +'</div>';
+    $('latX').onclick=cierraLat;
+  }
+
   async function vConcierges(w){
     var d=destino();
     w.innerHTML='<div class="card"><h3>'+(nivel==='hotel'?'Sus concierges':'Mis concierges')+'</h3>'
@@ -4005,6 +4230,10 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'El código es lo que se dicta y lo que hay que poder comprobar el día que una venta no cuadre. '
       +'<b>Es la misma gente de «Mi cuenta · Mi equipo»</b>: quien tiene código de venta sale aquí.</div>'
       +'<div id="concCuenta" class="mini" style="margin-top:9px">Cargando a tu gente…</div></div>'
+      +'<div class="card"><h3>Lo que vende cada quien</h3>'
+      +'<div class="hint">Lo vendido con el código de cada uno, en el periodo que elijas. '
+      +'Toca una fila y se abre su detalle: qué tours vende y sus ventas una por una.</div>'
+      +'<div id="concVentas"><div class="mini" style="margin-top:10px">Trayendo lo vendido…</div></div></div>'
       +'<div class="card"><div id="eqBox"></div></div>'
       +'<div class="card"><h3>Cómo se paga lo que venden</h3>'
       +'<div class="hint">La comisión de quien vende ('+esc(d.com_colaborador_pct==null?'—':d.com_colaborador_pct+'%')
@@ -4026,11 +4255,15 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
        Mi cuenta: eqCarga() solo se llamaba desde alli. Es el fallo de siempre
        -una pantalla que lee lo que otra carga- y aqui se evita cargando. */
     if(!(EQ.gente||[]).length) await eqCarga(); else eqPinta();
-    var c=$('concCuenta'); if(!c) return;
-    var vende=(EQ.gente||[]).filter(function(u){return (u.rol||'')==='concierge'||u.codigo_venta;});
-    c.innerHTML = vende.length
-      ? vende.length+' de '+EQ.gente.length+' venden.'
-      : '<span class="nomi" style="display:block">Todavía nadie tiene código de venta. Dale uno a alguien abajo y aparece aquí.</span>';
+    var c=$('concCuenta');
+    if(c){
+      var vende=(EQ.gente||[]).filter(function(u){return (u.rol||'')==='concierge'||u.codigo_venta;});
+      c.innerHTML = vende.length
+        ? vende.length+' de '+EQ.gente.length+' venden.'
+        : '<span class="nomi" style="display:block">Todavía nadie tiene código de venta. Dale uno a alguien abajo y aparece aquí.</span>';
+    }
+    await concCarga();
+    concPinta();
   }
 
   /* ---------- mi app: la portada y sus cajas ----------
