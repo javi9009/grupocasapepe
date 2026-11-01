@@ -31,7 +31,7 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
 .kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
 .kpi span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .kpi .pie{font-size:11.5px;color:var(--muted);margin-top:3px}
-.kpi.ok b{color:var(--ok)}.kpi.warn b{color:var(--warn)}
+.kpi.ok b{color:var(--ok)}.kpi.warn b{color:var(--warn)}.kpi.bad b{color:var(--bad,#9E3B2E)}
 .card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;box-shadow:var(--shadow)}
 .tablewrap{overflow:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -254,17 +254,35 @@ tbody tr:hover{background:var(--surface-3)}
       n.innerHTML='Estás viendo <b>'+l.length+'</b> de '+V.length+' reservas. '+
         'Las cifras de abajo son solo de estas.';
     } else { n.style.display='none'; }
-    var pagadas=l.filter(function(v){return v.pago_estado==='pagado';});
+    /* EL INGRESO ES LO COBRADO MENOS LO DEVUELTO. Javi, 1-nov-2026: «puedes
+       ajustar en cobrado (cobrado - devolución) y que eso quede como ingreso».
+       Antes sólo se sumaba lo que estaba en estado 'pagado'. Una devolución
+       entera salía bien de casualidad -desaparecía- pero una PARCIAL también
+       desaparecía, y esa diferencia sí se cobró. Ahora cuentan las tres y cada
+       una aporta su neto; la comisión y la parte del operador se prorratean
+       con lo que sobrevivió de la venta. */
+    var cobradas=l.filter(function(v){
+      return v.pago_estado==='pagado'||v.pago_estado==='reembolsado'||v.pago_estado==='reembolso_parcial'; });
     var suma=function(a,k){return a.reduce(function(s,v){return s+Number(v[k]||0);},0);};
-    var alOper=pagadas.filter(function(v){return v.stripe_destino;});
-    var aCasa =pagadas.filter(function(v){return !v.stripe_destino;});
+    var sumaNeta=function(a,k){return a.reduce(function(s,v){
+      return s+Number(v[k]||0)*Number(v.factor_neto==null?1:v.factor_neto);},0);};
+    var devuelto=suma(cobradas,'devuelto');
+    var conDev=cobradas.filter(function(v){return Number(v.devuelto||0)>0;});
+    var vivas=cobradas.filter(function(v){return Number(v.cobrado_neto||0)>0;});
+    var alOper=vivas.filter(function(v){return v.stripe_destino;});
+    var aCasa =vivas.filter(function(v){return !v.stripe_destino;});
 
     $('kpis').innerHTML=
-      tarjeta('', money(suma(pagadas,'pago_total')), 'Cobrado', pagadas.length+' venta'+(pagadas.length===1?'':'s'))+
-      tarjeta('ok', money(suma(pagadas,'nuestra_comision')), 'Nuestra comisión', 'lo que nos queda')+
-      tarjeta('', money(suma(pagadas,'neto_operador')), 'Para los operadores', 'ya está en sus cuentas')+
-      tarjeta('', money(suma(alOper,'pago_total')), 'Cayó en cuentas de operador', alOper.length+' de '+pagadas.length)+
-      tarjeta('warn', money(suma(aCasa,'pago_total')), 'Cayó en Casa Pepe', aCasa.length+' de '+pagadas.length);
+      tarjeta('', money(suma(cobradas,'cobrado_neto')), 'Ingreso',
+              'cobrado menos devuelto · '+vivas.length+' venta'+(vivas.length===1?'':'s'))+
+      (devuelto>0
+        ? tarjeta('bad', money(devuelto), 'Devuelto',
+                  conDev.length+' devolución'+(conDev.length===1?'':'es')+' · no es ingreso ni gasto')
+        : '')+
+      tarjeta('ok', money(sumaNeta(cobradas,'nuestra_comision')), 'Nuestra comisión', 'lo que nos queda')+
+      tarjeta('', money(sumaNeta(cobradas,'neto_operador')), 'Para los operadores', 'ya está en sus cuentas')+
+      tarjeta('', money(suma(alOper,'cobrado_neto')), 'Cayó en cuentas de operador', alOper.length+' de '+vivas.length)+
+      tarjeta('warn', money(suma(aCasa,'cobrado_neto')), 'Cayó en Casa Pepe', aCasa.length+' de '+vivas.length);
 
     $('vacio').style.display=l.length?'none':'';
     $('tb').innerHTML=l.map(function(v){
@@ -281,9 +299,12 @@ tbody tr:hover{background:var(--surface-3)}
           '<small>'+esc(v.clase||'')+'</small></span></td>'+
         '<td>'+etqPago(v.pago_estado)+'</td>'+
         '<td>'+etqDonde(v)+'</td>'+
-        '<td class="n">'+money(v.pago_total)+'</td>'+
-        '<td class="n">'+(v.pago_estado==='pagado'?money(v.nuestra_comision):'—')+'</td>'+
-        '<td class="n">'+(v.pago_estado==='pagado'?money(v.neto_operador):'—')+'</td>'+
+        '<td class="n">'+money(v.cobrado_neto)+
+          (Number(v.devuelto||0)>0
+            ? '<div class="mini">cobrado '+money(v.pago_total)+'<br>devuelto '+money(v.devuelto)+'</div>'
+            : '')+'</td>'+
+        '<td class="n">'+(Number(v.cobrado_neto||0)>0?money(Number(v.nuestra_comision||0)*Number(v.factor_neto==null?1:v.factor_neto)):'—')+'</td>'+
+        '<td class="n">'+(Number(v.cobrado_neto||0)>0?money(Number(v.neto_operador||0)*Number(v.factor_neto==null?1:v.factor_neto)):'—')+'</td>'+
         '<td class="n"><button class="btn ghost sm" data-res="'+esc(v.id)+'">Ver detalle</button></td>'+
       '</tr>';
     }).join('');
