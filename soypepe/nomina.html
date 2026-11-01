@@ -171,20 +171,51 @@ El monto anticipado se descontará íntegramente del pago de esta misma quincena
 let V=null;
 function vFecha(f){ try{ return new Date(f+'T12:00:00').toLocaleDateString('es-MX',{day:'numeric',month:'short'}); }catch(e){ return f; } }
 
+/* TAMBIÉN LAS QUE NO LE CONTARON. Javi, 1-nov-2026: «anótale en el reporte de
+   + info al concierge el detalle de pagos reembolsados, pagos exitosos, pagos
+   no terminados, etc., para que vea toda la info de lo que sí le aplicó y lo
+   que no».
+   Esconder lo que no contó no lo hace desaparecer: la persona se acuerda de
+   que vendió ese tour, y si no lo ve, lo que concluye es que el sistema le
+   quitó algo. Salen las tres cosas, separadas y con su motivo escrito. */
+const VCLASE={
+ cuenta:['Ya es tuyo','Cobradas. Esto entra en tu corte.','up'],
+ aire:  ['Todavía en el aire','Aún puede contar: depende de que el huésped pague o de cómo acabe.','' ],
+ cayo:  ['No te contó','Se cayeron. Aquí están para que sepas por qué.','down']
+};
+function filasVentas(L){
+ return L.map(x=>`<tr><td>${vFecha(x.fecha)}</td><td>${esc(x.tour)}
+   <div style="color:var(--faint);font-size:10.5px">${esc(x.cliente||'')} · ${x.pax||1} pax · ${money(x.total)}${x.base?` · sin IVA ${money(x.base)}`:''}</div>
+   <div style="color:var(--faint);font-size:10.5px">${esc(x.estado||'')}</div></td>
+   <td class="${x.clase==='cuenta'?'up':x.clase==='cayo'?'down':''}">${x.clase==='cayo'?'—':money(x.mio)}</td></tr>`).join('');
+}
+
 function verVentas(){
  if(!V||!V.ok||V.sin_codigo)return;
- const u=V.ultimas||[];
+ const u=V.ultimas||[], p=V.periodo||{};
+ const bloque=k=>{
+  const L=u.filter(x=>x.clase===k); if(!L.length) return '';
+  const c=VCLASE[k];
+  return `<h2 style="margin-top:18px">${c[0]} <span style="font-weight:400;color:var(--faint);font-size:12px">· ${L.length}</span></h2>
+   <div class="sub">${c[1]}</div>
+   <table class="tc"><tr><th>Cuándo</th><th>Qué</th><th>Para mí</th></tr>${filasVentas(L)}</table>`;
+ };
  openSheet(`<h2>Mis ventas</h2><div class="sub">del ${vFecha(V.desde)} al ${vFecha(V.hasta)} · código ${esc(V.codigo)}</div>
   <table class="tc">
-   <tr><th>Cuándo</th><th>Qué</th><th>Para mí</th></tr>
-   ${u.length?u.map(x=>`<tr><td>${vFecha(x.fecha)}</td><td>${esc(x.tour)}<div style="color:var(--faint);font-size:10.5px">${esc(x.cliente||'')} · ${x.pax||1} pax · ${money(x.total)}${x.base?` · sin IVA ${money(x.base)}`:''}${x.pagado?'':' · <b>sin pagar</b>'}</div></td><td class="up">${money(x.mio)}</td></tr>`).join('')
-    :'<tr><td colspan="3">Todavía nada en este periodo.</td></tr>'}
+   <tr><td>Cobradas y tuyas</td><td>${p.ventas||0}</td><td class="up">${money(p.mio)}</td></tr>
+   ${p.aire_n?`<tr><td>Todavía en el aire</td><td>${p.aire_n}</td><td>${money(p.aire)}</td></tr>`:''}
+   ${p.cayo_n?`<tr><td>No te contaron</td><td>${p.cayo_n}</td><td class="down">—</td></tr>`:''}
   </table>
+  ${!u.length?'<div class="nota">Todavía nada en este periodo.</div>':''}
+  ${bloque('cuenta')}${bloque('aire')}${bloque('cayo')}
+  ${(V.por_estado||[]).length?`<h2 style="margin-top:18px">Cómo acabó cada cobro</h2><table class="tc">
+   ${V.por_estado.map(e=>`<tr><td>${esc(e.estado)}</td><td>${e.n}</td><td class="${e.clase==='cuenta'?'up':e.clase==='cayo'?'down':''}">${e.clase==='cayo'?'—':money(e.mio)}</td></tr>`).join('')}
+  </table>`:''}
   ${(V.por_tour||[]).length?`<h2 style="margin-top:18px">Lo que más vendo</h2><table class="tc">
    ${V.por_tour.map(t=>`<tr><td>${esc(t.tour)}</td><td>${t.n}</td><td class="up">${money(t.mio)}</td></tr>`).join('')}
   </table>`:''}
   ${ejemploIva()}
-  <div class="nota">Se te liquida en el corte, junto con tu quincena. Lo que está sin pagar todavía no cuenta: se cuenta cuando el huésped paga.</div>`);
+  <div class="nota">Se te liquida en el corte, junto con tu quincena. Si algo de «no te contó» no te cuadra, enséñaselo a tu gerente con el folio: ahí está escrito qué pasó.</div>`);
 }
 
 /* POR QUÉ NO SON 73.30 SINO 63.19. Javi, 1-nov-2026: «debe ser su 10% − el
@@ -194,7 +225,9 @@ function verVentas(){
    Así que se explica con SU venta, con sus propios números, no con una regla
    abstracta. */
 function ejemploIva(){
- const u=(V&&V.ultimas||[]).find(x=>x.base&&x.total);
+ /* El ejemplo se hace con una venta que SÍ le contó: explicar el reparto con
+    una devuelta es enseñar la cuenta de un dinero que no va a cobrar. */
+ const u=(V&&V.ultimas||[]).find(x=>x.clase==='cuenta' && x.base && x.total);
  if(!u) return '';
  const iva=u.iva_pct||16, pct=V.com_pct!=null?V.com_pct:10;
  return `<h2 style="margin-top:18px">De dónde sale tu ${pct}%</h2>
@@ -220,6 +253,8 @@ function cardVentas(){
    <tr><td>Ventas</td><td>${p.ventas||0}${p.pax?` <span style="color:var(--faint)">· ${p.pax} pax</span>`:''}</td><td>${a.ventas||0}</td></tr>
    <tr><td>Vendido</td><td>${money(p.vendido)}</td><td>${money(a.vendido)}</td></tr>
    <tr><td>Menos IVA, que no es de la casa</td><td class="down">−${money(p.iva)}</td><td>—</td></tr>
+   ${p.aire_n?`<tr><td>En el aire<div style="color:var(--faint);font-size:10.5px">${p.aire_n} sin cerrar todavía</div></td><td>${money(p.aire)}</td><td>—</td></tr>`:''}
+   ${p.cayo_n?`<tr><td>No contaron<div style="color:var(--faint);font-size:10.5px">${p.cayo_n} devueltas, falladas o canceladas</div></td><td class="down">—</td><td>—</td></tr>`:''}
    <tr class="tot"><td>Para mí${V.com_pct!=null?` (${V.com_pct}% de lo que queda)`:''}</td><td>${money(p.mio)}<div style="font-size:9.5px;font-weight:400;color:var(--faint)">${money(p.por_cobrar)} sin cobrar aún</div></td><td>${money(a.mio)}</td></tr>
   </table>
   <button class="btn g full" id="bVentas">🧾 Ver mis ventas una por una</button>
