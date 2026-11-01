@@ -4886,6 +4886,82 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
         +' concierges» le das un papel a quien corresponda y aparece aquí.</div>';
   }
 
+  /* ---------- el trato 2: lo que la casa da a quien vende ----------
+     Javi, 1-nov-2026. La comisión general vale para todos; la de una persona
+     manda sobre la general cuando se le pone. Ninguna de las dos puede pasar
+     de los puntos que la casa tiene, y eso lo comprueba la base, no esta
+     pantalla: aquí se avisa antes para no hacer perder el viaje, pero el que
+     dice que no es el candado de abajo. */
+  function comPinta(){
+    var caja=$('comBox'); if(!caja) return;
+    var d=destino();
+    var tope=Number(d.com_hotel_pct||0);
+    var gen=(d.com_colaborador_pct==null?'':String(d.com_colaborador_pct));
+    var gente=eqVisible().filter(function(u){ return u.activo!==false; });
+
+    caja.innerHTML=
+      '<div class="bloque" style="margin-top:10px">'
+      +'<h5>Para todos</h5>'
+      +'<div class="campo"><label style="flex:1">Comisión general'
+        +'<input id="comGen" type="number" min="0" max="'+tope+'" step="0.5" value="'+esc(gen)+'" '
+        +'placeholder="sin pactar" style="width:90px;margin-left:8px"> %</label>'
+        +'<button class="btn sm" id="comGuarda">Guardar</button></div>'
+      +'<div class="dice" id="comDice">De tus '+tope+' puntos. En blanco o en cero, no das comisión y te quedas los '+tope+'.</div>'
+      +'</div>'
+      + (gente.length
+        ? '<div class="bloque"><h5>Uno a uno, si alguno lleva otra</h5>'
+          +'<div class="mini" style="margin-bottom:8px">En blanco usa la general. El tope de descuento no puede pasar de su propia comisión.</div>'
+          + gente.map(function(u){
+              return '<div class="campo" style="border-top:1px solid var(--rule);padding-top:8px">'
+                +'<span style="flex:1;min-width:120px">'+esc(u.nombre||u.email||'—')
+                  +(u.codigo_venta?' <span class="mini">'+esc(u.codigo_venta)+'</span>':' <span class="mini">sin código</span>')+'</span>'
+                +'<label class="mini">Comisión <input data-cu="'+u.id+'" type="number" min="0" max="'+tope+'" step="0.5" '
+                  +'value="'+esc(u.com_pct==null?'':u.com_pct)+'" placeholder="gen." style="width:72px"> %</label>'
+                +'<label class="mini">Tope descuento <input data-du="'+u.id+'" type="number" min="0" step="0.5" '
+                  +'value="'+esc(u.descuento_max_pct==null?'':u.descuento_max_pct)+'" placeholder="0" style="width:72px"> %</label>'
+                +'<button class="btn sm ghost" data-gu="'+u.id+'">Guardar</button>'
+                +'<span class="dice" data-du-dice="'+u.id+'"></span></div>';
+            }).join('')
+          +'</div>'
+        : '<div class="mini">Todavía no hay nadie que venda en esta casa.</div>');
+
+    $('comGuarda').onclick=async function(){
+      var v=$('comGen').value.trim();
+      var n=(v===''?null:Number(v));
+      if(n!=null && (isNaN(n) || n<0 || n>tope)){
+        latDice2('comDice','No cabe: tienes '+tope+' puntos.','mal'); return; }
+      this.disabled=true; latDice2('comDice','Guardando…');
+      var r=await fetch(SB+'/rest/v1/hoteles?id=eq.'+d.id,{method:'PATCH',
+        headers:Object.assign(hdr(),{'Prefer':'return=representation'}),
+        body:JSON.stringify({com_colaborador_pct:(n==null?0:n)})});
+      this.disabled=false;
+      if(!r.ok){ latDice2('comDice','La base no dejó guardarlo.','mal'); return; }
+      var j=null; try{ j=await r.json(); }catch(_){}
+      if(j && j[0]) d.com_colaborador_pct=j[0].com_colaborador_pct;
+      latDice2('comDice','Guardado: das '+(d.com_colaborador_pct||0)+' de tus '+tope+'.','ok');
+    };
+
+    caja.querySelectorAll('[data-gu]').forEach(function(b){ b.onclick=async function(){
+      var id=b.getAttribute('data-gu');
+      var c=caja.querySelector('[data-cu="'+id+'"]').value.trim();
+      var t=caja.querySelector('[data-du="'+id+'"]').value.trim();
+      var dice=caja.querySelector('[data-du-dice="'+id+'"]');
+      var body={ com_pct:(c===''?null:Number(c)), descuento_max_pct:(t===''?null:Number(t)) };
+      b.disabled=true; if(dice){ dice.textContent='Guardando…'; dice.className='dice'; }
+      var r=await fetch(SB+'/rest/v1/hotel_usuarios?id=eq.'+encodeURIComponent(id),
+        {method:'PATCH',headers:hdr(),body:JSON.stringify(body)});
+      b.disabled=false;
+      if(!r.ok){
+        var t2=''; try{ t2=(await r.json()).message||''; }catch(_){}
+        if(dice){ dice.textContent=t2||'No se pudo guardar.'; dice.className='dice mal'; }
+        return;
+      }
+      (EQ.gente||[]).forEach(function(u){ if(u.id===id){ u.com_pct=body.com_pct; u.descuento_max_pct=body.descuento_max_pct; } });
+      if(dice){ dice.textContent='Guardado.'; dice.className='dice ok'; }
+    };});
+  }
+  function latDice2(k,t,cl){ var e=$(k); if(e){ e.textContent=t; e.className='dice'+(cl?' '+cl:''); } }
+
   async function vConcierges(w){
     var d=destino();
     w.innerHTML='<div class="card"><h3>'+(nivel==='hotel'?'Sus concierges':'Mis concierges')+'</h3>'
@@ -4898,10 +4974,19 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'Toca una fila y se abre su detalle: qué tours vende y sus ventas una por una.</div>'
       +'<div id="concVentas"><div class="mini" style="margin-top:10px">Trayendo lo vendido…</div></div></div>'
       +'<div class="card"><div id="eqBox"></div></div>'
+      /* EL TRATO 2, QUE ES EL TUYO. Javi, 1-nov-2026: «¿me puedes hacer en
+         "mis concierges" una opción para que el hotelero configure qué
+         comisión le da?» — y además: «hagamos eso en dos tratos, no
+         prefijemos la comisión del colaborador de inicio».
+         Son dos tratos distintos y por eso se ven separados: lo que Sincrético
+         firmó contigo -tus puntos- no se toca desde aquí, y lo que tú das a
+         quien vende sale DE esos puntos, nunca encima. Lo que no repartes se
+         queda en la casa. */
       +'<div class="card"><h3>Cómo se paga lo que venden</h3>'
-      +'<div class="hint">La comisión de quien vende ('+esc(d.com_colaborador_pct==null?'—':d.com_colaborador_pct+'%')
-      +') se liquida a la casa en el corte; la casa decide cómo se la paga a cada uno. '
-      +'Los porcentajes se cambian en <b>Mi cuenta · Cómo te pagamos</b>, y de ahí salen éstos.</div></div>'
+      +'<div class="hint">Lo que Sincrético pacta contigo son <b>'+esc(d.com_hotel_pct==null?'—':d.com_hotel_pct+'%')+'</b> '
+      +'de cada venta. De ahí sale lo que le das a quien vende: lo que no repartas se queda en la casa. '
+      +'Un descuento que dé un concierge sale de su propia comisión, no de la tuya.</div>'
+      +'<div id="comBox"><div class="mini" style="margin-top:10px">Cargando…</div></div></div>'
       +'<div class="card"><h3>Por dónde entran a vender</h3>'
       +'<div class="hint">Son dos ligas y no se confunden: la primera la abre cada uno <b>una vez</b>, para ponerse '
       +'su contraseña y recibir su código; la segunda es la de todos los días, la del turno.</div>'
@@ -4919,6 +5004,9 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
        -una pantalla que lee lo que otra carga- y aqui se evita cargando. */
     EQ.vista='conc';
     if(!(EQ.gente||[]).length) await eqCarga(); else eqPinta();
+    /* La comisión se pinta DESPUÉS de tener a la gente: antes salía la caja
+       con «todavía no hay nadie que venda» aunque los hubiera. */
+    comPinta();
     var c=$('concCuenta');
     if(c){
       var G2=eqVisible();
