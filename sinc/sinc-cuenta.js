@@ -1,3 +1,46 @@
+/* --- el campo de WhatsApp con su lada, compartido por las dos hojas ---
+   Se apoya en /sinc/tel-pais.js. Si por lo que sea no cargara, cae a un campo
+   llano: vale más una lada tecleada que ningún teléfono. CUTEL guarda el
+   montaje de cada caja para poder leerlo y enfocarlo después. */
+var CUTEL = {};
+function cargaTelPaisCuenta() {
+  if (window.telPais) return Promise.resolve(true);
+  if (cargaTelPaisCuenta._p) return cargaTelPaisCuenta._p;
+  cargaTelPaisCuenta._p = new Promise(function (res) {
+    var s = document.createElement('script');
+    s.src = '/sinc/tel-pais.js';
+    s.onload = function () { res(!!window.telPais); };
+    s.onerror = function () { res(false); };
+    document.head.appendChild(s);
+  });
+  return cargaTelPaisCuenta._p;
+}
+function cuMontaTel(cajaId, valor) {
+  var caja = document.getElementById(cajaId);
+  if (!caja) return;
+  cargaTelPaisCuenta().then(function (hay) {
+    if (!document.getElementById(cajaId)) return;   /* la hoja ya se cerró */
+    if (hay) {
+      CUTEL[cajaId] = window.telPais.monta(cajaId, { valor: valor || '' });
+    } else {
+      caja.innerHTML = '<input id="' + cajaId + '-llano" type="tel" inputmode="tel" ' +
+        'autocomplete="tel" value="' + String(valor || '').replace(/"/g, '&quot;') +
+        '" placeholder="+52 55 1234 5678">';
+      CUTEL[cajaId] = null;
+    }
+  });
+}
+function cuValorTel(cajaId) {
+  if (CUTEL[cajaId]) return CUTEL[cajaId].valor();
+  var ll = document.getElementById(cajaId + '-llano');
+  return ll ? ll.value.trim() : '';
+}
+function cuFocoTel(cajaId) {
+  if (CUTEL[cajaId]) { CUTEL[cajaId].foco(); return; }
+  var ll = document.getElementById(cajaId + '-llano');
+  if (ll) ll.focus();
+}
+
 /* La cuenta del huésped de Sincrético.
  *
  * Antes se compraba escribiendo un correo en un campo. El problema no era el
@@ -530,24 +573,39 @@ window.sincCuenta = (function () {
 
       /* ---- cómo te llamas (solo la primera vez) ---- */
       function paso3() {
+        /* UN SOLO SITIO DONDE SE PIDE EL TELÉFONO. Javi, 1-nov-2026: «el cel es
+           obligatorio para poder avanzar» · «no dupliques en la compra de
+           eventos». La compra de eventos y la de horas de coworking no piden
+           teléfono: mandan el de la cuenta, y si la cuenta no tiene, mandan
+           vacío. Así que no se añade un campo allí —sería el tercero— sino que
+           se arregla aquí, que es la puerta por la que pasan todos. Y con el
+           desplegable de lada, que el huésped no teclea el prefijo. */
         $('cuHoja').innerHTML =
           '<h2>' + esc(T('¿A nombre de quién?')) + '</h2>' +
           '<p>' + esc(T('Es lo que verá quien te reciba el día del tour.')) + '</p>' +
           '<div class="cuErr" id="cuErr"></div>' +
           '<label for="cuNom">' + esc(T('Nombre y apellido')) + '</label>' +
           '<input id="cuNom" autocomplete="name" placeholder="' + esc(T('Nombre y apellido')) + '">' +
-          '<label for="cuTel">WhatsApp <span style="text-transform:none;letter-spacing:0">' + esc(T('(por si hay que avisarte algo)')) + '</span></label>' +
-          '<input id="cuTel" type="tel" autocomplete="tel" placeholder="+52 55 …">' +
+          '<label for="cuTel">WhatsApp</label>' +
+          '<div id="cuTelCaja"></div>' +
+          '<p style="margin:4px 0 0;font-size:12.5px;color:#6E665C">' +
+            esc(T('Es por donde se coordina contigo quien opera tu experiencia.')) + '</p>' +
           '<button class="cuBtn" id="cuGuarda">' + esc(T('Listo')) + '</button>';
+        cuMontaTel('cuTelCaja', '');
         $('cuNom').focus();
         $('cuNom').onkeydown = function (e) { if (e.key === 'Enter') $('cuGuarda').click(); };
         $('cuGuarda').onclick = async function () {
           err('');
           var n = $('cuNom').value.trim();
           if (n.length < 2) { err(T('Dinos cómo te llamas.')); return; }
+          var tel = cuValorTel('cuTelCaja');
+          if (tel.replace(/\D/g, '').length < 8) {
+            err(T('Déjanos un WhatsApp donde localizarte: sin él no podemos avisarte de nada.'));
+            cuFocoTel('cuTelCaja'); return;
+          }
           this.disabled = true; this.textContent = T('Un momento…');
           try {
-            var yo = await fichaje({ p_nombre: n, p_telefono: $('cuTel').value.trim() || null });
+            var yo = await fichaje({ p_nombre: n, p_telefono: tel });
             cierra(); listo(yo);
           } catch (x) {
             this.disabled = false; this.textContent = T('Listo');
@@ -596,13 +654,21 @@ window.sincCuenta = (function () {
           '<label for="cuNom">' + esc(T('Nombre y apellido')) + '</label>' +
           '<input id="cuNom" autocomplete="name" value="' + esc(yo.nombre || '') + '">' +
           '<label for="cuTel">WhatsApp</label>' +
-          '<input id="cuTel" type="tel" autocomplete="tel" value="' + esc(yo.telefono || '') + '">' +
+          '<div id="cuTelCaja2"></div>' +
+          '<div class="cuErr" id="cuErr2"></div>' +
           '<button class="cuBtn" id="cuOk">' + esc(T('Guardar')) + '</button>';
+        cuMontaTel('cuTelCaja2', yo.telefono || '');
         document.getElementById('cuOk').onclick = async function () {
+          var tel2 = cuValorTel('cuTelCaja2');
+          if (tel2.replace(/\D/g, '').length < 8) {
+            var e2 = document.getElementById('cuErr2');
+            if (e2) { e2.textContent = T('Déjanos un WhatsApp donde localizarte.'); e2.style.display = 'block'; }
+            cuFocoTel('cuTelCaja2'); return;
+          }
           this.disabled = true; this.textContent = T('Guardando…');
           try {
             yo = await fichaje({ p_nombre: document.getElementById('cuNom').value.trim() || null,
-                                 p_telefono: document.getElementById('cuTel').value.trim() || null });
+                                 p_telefono: tel2 });
             cierra(); listo(yo);
           } catch (x) {
             this.disabled = false; this.textContent = T('Guardar');
