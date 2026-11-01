@@ -40,6 +40,20 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--mute
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 tbody tr:hover{background:var(--surface-3)}
 .tag{display:inline-block;border-radius:999px;padding:1px 8px;font-size:10.5px;font-weight:700;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.acc{margin-top:16px;border-top:1px solid var(--rule);padding-top:14px}
+.acc h4{margin:0 0 2px;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+.acc .pie{margin:0 0 10px;font-size:12px;color:var(--ink-2)}
+.acc details{border:1px solid var(--rule);border-radius:10px;margin:0 0 8px;background:var(--surface-1)}
+.acc summary{cursor:pointer;padding:9px 12px;font-weight:600;font-size:13.5px;list-style:none}
+.acc summary::-webkit-details-marker{display:none}
+.acc summary:before{content:'+';display:inline-block;width:14px;color:var(--ink-2);font-weight:700}
+.acc details[open] summary:before{content:'–'}
+.acc .cuerpo{padding:2px 12px 12px}
+.acc label{display:block;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);margin:8px 0 3px}
+.acc input,.acc select,.acc textarea{width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--rule);border-radius:8px;font:inherit;font-size:14px;background:var(--surface-0)}
+.acc .ok{margin-top:10px;font-size:13px;color:#1D6B4A}
+.acc .mal{margin-top:10px;font-size:13px;color:#9E3B2E}
+.acc .fila2{display:flex;gap:8px}.acc .fila2>*{flex:1;min-width:0}
 .tag.ok{background:var(--ok-bg);color:var(--ok)}
 .tag.warn{background:var(--warn-bg);color:var(--warn)}
 .tag.bad{background:var(--bad-bg);color:var(--bad)}
@@ -312,6 +326,159 @@ tbody tr:hover{background:var(--surface-3)}
   $('hX').onclick=cierra;
   $('capa').onclick=function(e){ if(e.target===$('capa')) cierra(); };
 
+  /* ---------- LO QUE SE PUEDE HACER DESDE LA FICHA ----------
+     Javi, 1-nov-2026: «cuando abro la ficha del cliente permíteme darme la
+     mayor cantidad de funciones posibles», con dos nombradas: registrar un
+     reembolso con su monto, y cambiar de día.
+     Cada acción llama a la función que YA existe en la base y que sabe hacer
+     el trabajo completo, no a un UPDATE suelto: mover de día comprueba que
+     haya sitio en la salida nueva y avisa al guía; cancelar devuelve el lugar;
+     el reembolso exige un motivo. Por eso no hay aquí ningún "marcar como
+     reembolsado" a mano: eso es lo que deja la base diciendo que hubo una
+     devolución sin saber de cuánto, cuándo ni por qué. */
+  function campo(id,et,tipo,val,extra){
+    return '<label for="'+id+'">'+esc(et)+'</label><input id="'+id+'" type="'+(tipo||'text')+'" '+
+      (extra||'')+' value="'+esc(val==null?'':val)+'">';
+  }
+  function caja(id,tit,cuerpo){
+    return '<details id="d_'+id+'"><summary>'+esc(tit)+'</summary><div class="cuerpo">'+cuerpo+
+      '<div id="m_'+id+'"></div></div></details>';
+  }
+  function dice(id,txt,mal){
+    var e=$('m_'+id); if(e){ e.className=mal?'mal':'ok'; e.textContent=txt; }
+  }
+  async function rpc(nombre,cuerpo){
+    var r=await fetch(SB+'/rest/v1/rpc/'+nombre,{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},hdr()),
+      body:JSON.stringify(cuerpo)});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok) throw new Error((j&&(j.message||j.hint))||('la base respondió '+r.status));
+    return j;
+  }
+
+  function panelAcciones(d){
+    var yaDev = Number(d.reembolso_mxn||0);
+    var pagado = Number(d.pago_total||0);
+    var queda = Math.max(0, pagado - yaDev);
+    var cancelada = d.estado==='cancelada';
+
+    return '<div class="acc">'+
+      '<h4>Qué se puede hacer</h4>'+
+      '<div class="pie">Cada cosa de aquí se guarda al momento y queda con tu nombre.</div>'+
+
+      /* 1. DEVOLUCIÓN */
+      caja('dev','Registrar una devolución',
+        (yaDev>0
+          ? '<div class="pie">Ya hay '+money(yaDev)+' devueltos'+
+            (d.reembolso_at?' el '+esc(String(d.reembolso_at).slice(0,10)):'')+
+            (d.reembolso_por?' por '+esc(d.reembolso_por):'')+
+            (d.reembolso_motivo?' · '+esc(d.reembolso_motivo):'')+'.</div>'
+          : '')+
+        '<div class="pie">Esto <b>no mueve dinero</b>: apunta una devolución que ya hiciste en Stripe. '+
+          'Cobrado '+money(pagado)+(yaDev>0?', pendiente de apuntar '+money(queda):'')+'.</div>'+
+        campo('devMonto','Cuánto devolviste','number',queda||pagado,'step="0.01" min="0"')+
+        campo('devMotivo','Por qué','text','','maxlength="500" placeholder="No pudo venir, se le devolvió todo"')+
+        campo('devStripe','Id del reembolso en Stripe (opcional)','text','','placeholder="re_..."')+
+        '<label for="devBtn">&nbsp;</label><button class="btn" id="devBtn">Apuntar la devolución</button>')+
+
+      /* 2. CAMBIAR DE DÍA */
+      (cancelada ? '' : caja('mov','Cambiar de día',
+        '<div class="pie">Sólo se ofrecen días y horas con sitio de verdad. Al guardarlo se le '+
+          'reenvía el boleto al huésped y se avisa al guía y a la operadora.</div>'+
+        '<div class="pie">Ahora: <b>'+esc(fecha(d.fecha))+(d.hora?' · '+esc(String(d.hora).slice(0,5)):'')+'</b></div>'+
+        campo('movFecha','Día nuevo','date','','min="'+new Date().toISOString().slice(0,10)+'"')+
+        '<label for="movHora">Hora</label><select id="movHora"><option value="">Elige el día primero</option></select>'+
+        campo('movNota','Nota (opcional)','text','','maxlength="200"')+
+        '<label>&nbsp;</label><button class="btn" id="movBtn">Cambiarla de día</button>'))+
+
+      /* 3. RECOGIDA */
+      (cancelada ? '' : caja('pic','Dónde y a qué hora lo recogemos',
+        campo('picLugar','Hotel o dirección','text',d.pickup_lugar||'','maxlength="200"')+
+        campo('picHora','Hora de recogida','time',d.pickup_hora?String(d.pickup_hora).slice(0,5):'')+
+        '<label>&nbsp;</label><button class="btn" id="picBtn">Guardar la recogida</button>'))+
+
+      /* 4. CANCELAR */
+      (cancelada
+        ? '<div class="pie">Esta reserva está cancelada.</div>'
+        : caja('can','Cancelar la reserva',
+            '<div class="pie">Le devuelve el lugar a la salida. El dinero no se mueve: si hay que '+
+              'devolverlo, hazlo en Stripe y apúntalo arriba.</div>'+
+            campo('canMotivo','Por qué se cancela','text','','maxlength="200"')+
+            '<label>&nbsp;</label><button class="btn" id="canBtn">Cancelar la reserva</button>'))+
+    '</div>';
+  }
+
+  function montaAcciones(d){
+    /* --- devolución --- */
+    var bd=$('devBtn');
+    if(bd) bd.onclick=async function(){
+      var m=Number($('devMonto').value||0), mot=($('devMotivo').value||'').trim();
+      if(!(m>0)){ dice('dev','Dinos cuánto devolviste.',true); return; }
+      if(!mot){ dice('dev','Una devolución sin motivo no se puede revisar después.',true); return; }
+      this.disabled=true; dice('dev','Guardando…');
+      try{
+        await rpc('sinc_reembolso_registrar',{p_reserva:d.id,p_mxn:m,p_motivo:mot,
+          p_stripe:($('devStripe').value||'').trim()||null});
+        dice('dev','Apuntado. '+money(m)+' devueltos.');
+        setTimeout(function(){ abreDetalle(d.id); carga(); },900);
+      }catch(x){ this.disabled=false; dice('dev',x.message,true); }
+    };
+
+    /* --- cambiar de día: las horas salen de la disponibilidad real --- */
+    var mf=$('movFecha');
+    if(mf) mf.onchange=async function(){
+      var sel=$('movHora'); sel.innerHTML='<option value="">Buscando…</option>';
+      if(!this.value||!d.op_experiencia_id){ sel.innerHTML='<option value="">—</option>'; return; }
+      try{
+        var h=await rpc('sinc_disponibilidad',{p_op_exp:d.op_experiencia_id,p_desde:this.value,p_hasta:this.value});
+        var libres=(h||[]).filter(function(x){return x.estado==='libre' && Number(x.libres||0)>=Number(d.pax||1);});
+        sel.innerHTML = libres.length
+          ? libres.map(function(x){ return '<option value="'+esc(x.hora)+'">'+esc(String(x.hora).slice(0,5))+
+              ' · quedan '+x.libres+'</option>'; }).join('')
+          : '<option value="">Ese día no hay sitio para '+(d.pax||1)+'</option>';
+      }catch(x){ sel.innerHTML='<option value="">'+esc(x.message)+'</option>'; }
+    };
+    var bm=$('movBtn');
+    if(bm) bm.onclick=async function(){
+      var f=$('movFecha').value, h=$('movHora').value;
+      if(!f||!h){ dice('mov','Elige el día y la hora.',true); return; }
+      this.disabled=true; dice('mov','Moviéndola…');
+      try{
+        await rpc('sinc_reserva_mueve',{p_reserva:d.id,p_fecha:f,p_hora:h,
+          p_nota:($('movNota').value||'').trim()||null});
+        dice('mov','Cambiada. Ya le salió el aviso al guía y a la operadora.');
+        setTimeout(function(){ abreDetalle(d.id); carga(); },900);
+      }catch(x){ this.disabled=false; dice('mov',x.message,true); }
+    };
+
+    /* --- recogida --- */
+    var bp=$('picBtn');
+    if(bp) bp.onclick=async function(){
+      this.disabled=true; dice('pic','Guardando…');
+      try{
+        var l=($('picLugar').value||'').trim();
+        if(l) await rpc('sinc_reserva_pickup',{p_reserva:d.id,p_lugar:l});
+        var ho=$('picHora').value;
+        if(ho) await rpc('sinc_pon_recogida',{p_reserva:d.id,p_hora:ho});
+        dice('pic','Guardado.');
+        setTimeout(function(){ abreDetalle(d.id); },700);
+      }catch(x){ this.disabled=false; dice('pic',x.message,true); }
+    };
+
+    /* --- cancelar --- */
+    var bc=$('canBtn');
+    if(bc) bc.onclick=async function(){
+      var mot=($('canMotivo').value||'').trim();
+      if(!mot){ dice('can','Di por qué se cancela: eso es lo que se lee después.',true); return; }
+      this.disabled=true; dice('can','Cancelando…');
+      try{
+        await rpc('sinc_cancelar_reserva',{p_reserva:d.id,p_motivo:mot});
+        dice('can','Cancelada. El lugar vuelve a la salida.');
+        setTimeout(function(){ abreDetalle(d.id); carga(); },900);
+      }catch(x){ this.disabled=false; dice('can',x.message,true); }
+    };
+  }
+
   async function abreDetalle(id){
     $('hTit').textContent='Reserva';
     $('hCue').innerHTML='<div class="mini">Cargando…</div>';
@@ -358,7 +525,9 @@ tbody tr:hover{background:var(--surface-3)}
             '<div class="mini" id="idCarga">Abriendo la foto…</div>'
           : '<div class="mini">'+((d.estado_puerta==='llego'||d.estado_puerta==='ajustado')
               ? 'Pasó sin ID.' : 'Todavía no hay foto.')+'</div>')+
-      '</div>';
+      '</div>'+
+      panelAcciones(d);
+    montaAcciones(d);
 
     if(d.id_foto){
       try{
