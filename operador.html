@@ -2574,12 +2574,48 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     inp.value='';
     if(!s) return;
     toast('Leyendo el archivo…');
-    var filas;
+    var filas, COLS=[];
     try{
       var X=await cargaXLSX();
       var buf=await file.arrayBuffer();
       var wb=X.read(buf,{type:'array'});
-      filas=X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:null});
+      var hoja=wb.Sheets[wb.SheetNames[0]];
+      /* LA CABECERA NO SIEMPRE ES LA PRIMERA FILA. Javi, 2-nov-2026: Leo subio
+         la plantilla que damos nosotros y no entro ni una linea. La plantilla
+         lleva el titulo y la explicacion ENCIMA de los encabezados, asi que
+         sheet_to_json tomaba por nombres de columna el texto del titulo y
+         celdas vacias: cada fila salia sin nombre y sin personas, y la hoja
+         estaba perfecta. Se busca la fila que de verdad trae los encabezados
+         en las primeras quince; si no aparece se usa la primera, que es como
+         se comportaba antes. */
+      var aoa=X.utils.sheet_to_json(hoja,{header:1, defval:null, blankrows:false});
+      var ALIAS_NOM=['nombre','reserva','nombredelareserva','cliente','titular','name'];
+      var ALIAS_PAX=['personas','pax','total','numerodepersonas','adultos','adulto','adults'];
+      var hix=-1;
+      for(var hi=0; hi<Math.min(aoa.length,15); hi++){
+        var cel=aoa[hi]||[], vnom=false, vpax=false;
+        for(var cj=0; cj<cel.length; cj++){
+          var kk=llave(cel[cj]); if(!kk) continue;
+          if(ALIAS_NOM.indexOf(kk)>=0) vnom=true;
+          if(ALIAS_PAX.indexOf(kk)>=0) vpax=true;
+        }
+        if(vnom && vpax){ hix=hi; break; }
+      }
+      if(hix<0) hix=0;
+      var cab=(aoa[hix]||[]).map(function(c,ix){
+        return (c==null||String(c).trim()==='') ? ('_vacia'+ix) : String(c).trim();
+      });
+      COLS=cab.filter(function(c){ return c.indexOf('_vacia')!==0; });
+      filas=[];
+      for(var ri=hix+1; ri<aoa.length; ri++){
+        var fil=aoa[ri]||[], obj={}, algo=false;
+        for(var ci=0; ci<cab.length; ci++){
+          var vv=(ci<fil.length ? fil[ci] : null);
+          obj[cab[ci]] = (vv===undefined ? null : vv);
+          if(vv!==null && vv!==undefined && String(vv).trim()!=='') algo=true;
+        }
+        if(algo) filas.push(obj);
+      }
     }catch(e){ toast('No pudimos leer ese archivo: '+(e.message||e), true); return; }
     if(!filas.length){ toast('El archivo no trae ninguna fila.', true); return; }
 
@@ -2626,7 +2662,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         notas:((String(campo(f,['notas','nota','observaciones','comentarios','remarks'])||'').trim()
                  || 'Reserva de otra plataforma')+' · cargada desde '+file.name)});
     });
-    if(!buenas.length){ toast('Ninguna fila tenía nombre y personas: no se cargó nada.', true); return; }
+    /* UN AVISO QUE NO DICE LO QUE VIO OBLIGA A ADIVINAR. Decir que columnas
+       se leyeron convierte media hora de prueba y error en diez segundos. */
+    if(!buenas.length){
+      toast('Ninguna fila tenía nombre y personas: no se cargó nada. Las columnas que leí fueron: '
+            +(COLS.join(', ')||'ninguna')+'.', true);
+      return;
+    }
 
     var r=await fetch(SB+'/rest/v1/rpc/sinc_apunta_externas',{method:'POST',
       headers:hdr(), body:JSON.stringify({p_salida:s.id, p_filas:buenas})});

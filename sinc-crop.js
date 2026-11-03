@@ -342,9 +342,37 @@
     if(r.tBlob)pasos.push(function(n){pon(r.tBlob,r.tName||'foto_t.jpg','tUrl','tPath',n);});
     if(r.hBlob)pasos.push(function(n){pon(r.hBlob,r.hName||'foto_h.jpg','hUrl','hPath',n);});
     (function corre(i){
-      if(i>=pasos.length){ cb(fallo, fallo?null:out); return; }
+      if(i>=pasos.length){
+        if(fallo){ cb(fallo, null); return; }
+        /* LA PRUEBA. Javi, 2-nov-2026.
+           Un 200 del almacen NO es prueba de que la foto este. El 29-oct se
+           escribieron 30 fichas con su foto_url -22 piezas de Rotulos y las
+           artesanas- y ni uno solo de esos archivos existe hoy; nadie los
+           borro, nunca llegaron. Las subidas dieron ok y la ficha quedo
+           anunciando una foto fantasma durante cuatro dias.
+           La unica prueba de que una foto esta es pedirsela al almacen y que
+           la devuelva. Si no la devuelve, esto es un fallo, no un exito, y
+           quien llama NO debe escribir la URL en ningun sitio. */
+        verifica(out.vUrl||out.hUrl||out.tUrl, function(viva){
+          if(viva){ cb(null, out); return; }
+          cb(new Error('el almacen acepto la foto pero no la devuelve: no se guardo la liga'), null);
+        });
+        return;
+      }
       pasos[i](function(){ corre(i+1); });
     })(0);
+  }
+
+  /* Se usa <img> y no fetch: no depende de CORS, y es exactamente lo que hara
+     el navegador del huesped cuando abra la tienda. Si falla aqui, falla alli. */
+  function verifica(url, cb){
+    if(!url){ cb(false); return; }
+    var i=new Image(), hecho=false;
+    function fin(v){ if(!hecho){ hecho=true; cb(v); } }
+    i.onload =function(){ fin(i.naturalWidth>0); };
+    i.onerror=function(){ fin(false); };
+    setTimeout(function(){ fin(false); }, 15000);
+    i.src=url+(url.indexOf('?')<0?'?':'&')+'v='+Date.now();
   }
 
   function subir(fuente, cfg, cb){
