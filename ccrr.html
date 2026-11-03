@@ -23,6 +23,8 @@ td.msep,th.msep{border-left:2px solid #c9b88c}
    con un mes cerrado por contabilidad. */
 td.proy{background:#fffaf0;border-left:2px dashed #d9a441;font-style:italic}
 thead th.proy{background:#fdeec9;color:#7a5a12;border-left:2px dashed #d9a441}
+thead th.precierre{background:#e4eef7;color:#1f5f8b;border-left:2px solid #1f5f8b}
+thead th.precierre .tag{background:#1f5f8b}
 .tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#b8860b;color:#fff;font-size:9px;font-style:normal;letter-spacing:.06em;vertical-align:middle}
 th.totcol,td.totcol{border-left:3px solid #b89a52}td.totcol{background:#f7f1e2}thead th.totcol{background:#efe6cf}
 td.lab,th.lab{text-align:left;position:sticky;left:0;background:var(--card);min-width:300px;border-right:2px solid #d8cdb0;z-index:2}
@@ -66,7 +68,7 @@ tr.xexp td.lab{color:#9a5b16}tr.click td.lab{cursor:pointer}.caret{display:inlin
 <div class="bar">
  <span class="lbl">Ubicación</span><div class="grp" id="locs"><span class="chk on" data-loc="cdmx">CDMX</span><span class="chk on" data-loc="pue">Puebla</span><span class="chk on" data-loc="corp">Corp</span><span class="chk on" data-loc="sinc">Sincrético</span><span class="chk on" data-loc="all">TODO</span></div>
  <span class="lbl" style="margin-left:8px">Columnas</span><div class="grp" id="cols"><span class="chk on" data-col="aa">AA + %vs AA</span><span class="chk on" data-col="pl">Plan + Var</span><span class="chk fc" data-col="fc">Forecast a ventas (%AA)</span><span class="hlp" title="Toma el % de coste sobre ingreso del año anterior (2025) y lo aplica al ingreso real 2026 de cada departamento (costo de ventas, personal y operación). Responde: ¿cuánto debió costar dado lo que realmente vendimos? Sube o baja según el ingreso logrado." onclick='alert("Toma el % de coste sobre ingreso del año anterior (2025) y lo aplica al ingreso real 2026 de cada departamento (costo de ventas, personal y operación). Responde: ¿cuánto debió costar dado lo que realmente vendimos? Sube o baja según el ingreso logrado.")'>?</span></div>
- <span class="lbl" style="margin-left:8px">Comparativo</span><div class="grp" id="extra"><span class="chk" data-x="sayu">Efecto Sayulita 2025</span><span class="hlp" title="Sayulita operó en 2025 pero ya no en 2026. Este check la suma a la columna AA (2025) para comparar de forma justa el P&L y la deuda contra el año anterior." onclick='alert("Sayulita operó en 2025 pero ya no en 2026. Este check la suma a la columna AA (2025) para comparar de forma justa el P&L y la deuda contra el año anterior.")'>?</span></div>
+ <span class="lbl" style="margin-left:8px">Comparativo</span><div class="grp" id="extra"><span class="chk on" data-x="proy">Incluir proyección en el total</span><span class="hlp" title="Quítalo para que la columna TOTAL sume sólo los meses cerrados y el precierre, dejando fuera noviembre y diciembre, que son proyección." onclick='alert("Quítalo para que la columna TOTAL sume sólo los meses cerrados y el precierre, dejando fuera noviembre y diciembre, que son proyección.")'>?</span><span class="chk" data-x="sayu">Efecto Sayulita 2025</span><span class="hlp" title="Sayulita operó en 2025 pero ya no en 2026. Este check la suma a la columna AA (2025) para comparar de forma justa el P&L y la deuda contra el año anterior." onclick='alert("Sayulita operó en 2025 pero ya no en 2026. Este check la suma a la columna AA (2025) para comparar de forma justa el P&L y la deuda contra el año anterior.")'>?</span></div>
  
 </div>
 <div class="tablebox"><table id="t"></table></div>
@@ -77,6 +79,14 @@ const P={"DATA":{"ene":{"cdmx":{"400":[0,0],"400-01":[885909.24,1063216.52],"400
 let LOC={cdmx:true,pue:true,corp:true,sinc:true},COL={aa:true,pl:true,fc:false},SAYU=false,EXP=false;const open={};
 /* Meses que NO son cierre sino proyección (fin_pl.forecast). Los llena el overlay. */
 const PROY=new Set();
+/* Octubre está en PRECIERRE: contabilidad ya cargó el mes con cifras reales
+   pero todavía no lo cerró. No es proyección —los números son de verdad— y
+   tampoco es cierre firme. Cuando contabilidad cierre octubre, se quita 'oct'
+   de aquí y la etiqueta desaparece sola. */
+const PRECIERRE=new Set(['oct']);
+/* El TOTAL puede mirarse con o sin los meses proyectados. */
+let INCPROY=true;
+const mesesTotal=()=>INCPROY?MES:MES.filter(m=>!PROY.has(m));
 function baseOf(id){if(id.startsWith('tot_')||id==='gop'||id==='uai'||id==='neta')return 'tot_ing';if(id.startsWith('ing_'))return 'tot_ing';if(id.endsWith('cuartos'))return 'ing_cuartos';if(id.endsWith('ayb'))return 'ing_alim';if(id.endsWith('otros')||id==='ud_exp')return 'ing_tour';return 'tot_ing';}
 function sumPref(prefs,metric,mes){let s=0;
  if(metric==='p'){const idx=MES.indexOf(mes);['cdmx','pue','corp','sinc'].forEach(l=>{if(!LOC[l]||!PLAN[l])return;Object.keys(PLAN[l]).forEach(c=>{if(prefs.some(p=>c===p||c.startsWith(p)))s+=PLAN[l][c][idx]||0;});});return s;}
@@ -99,11 +109,14 @@ const periods=()=>{const ps=MES.map(m=>({m}));ps.push({tot:1});return ps;};
 /* El total abarca los meses que haya, no un rango escrito a mano. Y si alguno
    es proyección, el encabezado lo dice: un total que mezcla cierre y estimado
    sin avisar es la manera más fácil de que alguien lo lea como real. */
-function totLabel(){const a=(MES[0]||'').toUpperCase(),b=(MES[MES.length-1]||'').toUpperCase();
- return 'TOTAL '+a+'–'+b+(MES.some(m=>PROY.has(m))?' <span class="tag">con proyección</span>':'');}
-function nodeVal(id,metric,p){if(p.tot){let s=0;MES.forEach(m=>s+=computeVals(metric,m)[id]||0);return s;}return computeVals(metric,p.m)[id];}
+function totLabel(){const MM=mesesTotal(),a=(MM[0]||'').toUpperCase(),b=(MM[MM.length-1]||'').toUpperCase();
+ const hayProy=MM.some(m=>PROY.has(m)), hayPre=MM.some(m=>PRECIERRE.has(m));
+ return 'TOTAL '+a+'–'+b
+   +(hayProy?' <span class="tag">con proyección</span>':'')
+   +(hayPre?' <span class="tag">con precierre</span>':'');}
+function nodeVal(id,metric,p){if(p.tot){let s=0;mesesTotal().forEach(m=>s+=computeVals(metric,m)[id]||0);return s;}return computeVals(metric,p.m)[id];}
 function sumCode(code,metric,mes){let s=0;if(metric==='p'){const idx=MES.indexOf(mes);['cdmx','pue','corp','sinc'].forEach(l=>{if(LOC[l]&&PLAN[l]&&PLAN[l][code])s+=PLAN[l][code][idx]||0;});return s;}const idx=metric==='a'?1:0;['cdmx','pue','corp','sinc'].forEach(l=>{if(LOC[l]&&DATA[mes][l]&&DATA[mes][l][code])s+=DATA[mes][l][code][idx]||0;});if(metric==='a'&&SAYU&&DATA[mes]['sayu']&&DATA[mes]['sayu'][code])s+=DATA[mes]['sayu'][code][1]||0;return s;}
-function codeVal(code,metric,p){const mm=metric==='f'?'r':metric;if(p.tot){let s=0;MES.forEach(m=>s+=sumCode(code,mm,m));return s;}return sumCode(code,mm,p.m);}
+function codeVal(code,metric,p){const mm=metric==='f'?'r':metric;if(p.tot){let s=0;mesesTotal().forEach(m=>s+=sumCode(code,mm,m));return s;}return sumCode(code,mm,p.m);}
 function fmt(v){if(v==null||isNaN(v))return '<span class=muted>—</span>';const neg=v<0,s=Math.round(Math.abs(v)).toLocaleString('es-MX');return neg?'('+s+')':s;}
 function pc(a,b){if(b==null||b===0||a==null)return null;return (a-b)/Math.abs(b)*100;}
 function col(p,kind){if(p==null)return '';const cost=kind.indexOf('cost')>=0;const good=cost?(p<0):(p>0);if(Math.abs(p)<0.5)return 'background:#fdfcf7';const a=(0.10+Math.min(Math.abs(p)/30,1)*0.45).toFixed(2);return good?`background:rgba(46,160,86,${a})`:`background:rgba(207,80,70,${a})`;}
@@ -114,10 +127,10 @@ function span(){return 2+(COL.aa?2:0)+(COL.pl?2:0)+(COL.fc?2:0);}
 function cells(ratio,r,a,pl,fc,kind,i,tot,pr){const b=(tot?'totcol':(i>0?'msep':''))+(pr?' proy':'');let h=`<td class="${b}">${fmt(r)}</td>`+ratiocell(ratio);if(COL.aa)h+=`<td class="aa">${fmt(a)}</td>`+pcell(pc(r,a),kind,'aa');if(COL.pl)h+=`<td class="pl">${fmt(pl)}</td>`+pcell(pc(r,pl),kind,'pl');if(COL.fc)h+=`<td class="fc">${fmt(fc)}</td>`+pcell(pc(r,fc),kind,'fc');return h;}
 function render(){
  const ps=periods();let h='<thead><tr class="h1"><th class="lab" rowspan="2">Cuenta</th>';
- ps.forEach((p,i)=>{const pr=!p.tot&&PROY.has(p.m);
-  h+=`<th colspan="${span()}" class="${(p.tot?'totcol':(i>0?'msep':''))+(pr?' proy':'')}">${p.tot?totLabel():p.m.toUpperCase()+(pr?' <span class="tag">PROYECCIÓN</span>':'')}</th>`;});
+ ps.forEach((p,i)=>{const pr=!p.tot&&PROY.has(p.m);const pz=!p.tot&&!pr&&PRECIERRE.has(p.m);
+  h+=`<th colspan="${span()}" class="${(p.tot?'totcol':(i>0?'msep':''))+(pr?' proy':'')+(pz?' precierre':'')}">${p.tot?totLabel():p.m.toUpperCase()+(pr?' <span class="tag">PROYECCIÓN</span>':(pz?' <span class="tag">PRECIERRE</span>':''))}</th>`;});
  h+='</tr><tr class="h2">';
- ps.forEach((p,i)=>{const pr=!p.tot&&PROY.has(p.m);const b=(p.tot?'totcol':(i>0?'msep':''))+(pr?' proy':'');h+=`<th class="${b}">${pr?'Proy.':'Real'}</th><th class="pi">%Ing</th>`;if(COL.aa)h+='<th class="aa">AA</th><th class="aa">%AA</th>';if(COL.pl)h+='<th class="pl">Plan</th><th class="pl">Var</th>';if(COL.fc)h+='<th class="fc">Fcst</th><th class="fc">vsF</th>';});
+ ps.forEach((p,i)=>{const pr=!p.tot&&PROY.has(p.m);const pz=!p.tot&&!pr&&PRECIERRE.has(p.m);const b=(p.tot?'totcol':(i>0?'msep':''))+(pr?' proy':'')+(pz?' precierre':'');h+=`<th class="${b}">${pr?'Proy.':(pz?'Precierre':'Real')}</th><th class="pi">%Ing</th>`;if(COL.aa)h+='<th class="aa">AA</th><th class="aa">%AA</th>';if(COL.pl)h+='<th class="pl">Plan</th><th class="pl">Var</th>';if(COL.fc)h+='<th class="fc">Fcst</th><th class="fc">vsF</th>';});
  h+='</tr></thead><tbody>';
  NODES.forEach(n=>{const[id,label,lvl,kind,grp,par,pre,calc]=n;
   if(id==='_'){h+=`<tr class="lvl0 click" onclick="tg('${grp}')"><td class="lab"><span class="caret">${open[grp]===false?'▸':'▾'}</span> ${label}</td>`;ps.forEach((p,i)=>h+=`<td colspan="${span()}" class="${p.tot?'totcol':(i>0?'msep':'')}"></td>`);h+='</tr>';return;}
@@ -151,10 +164,10 @@ function updateChart(){if(typeof Chart==='undefined')return;const R=marginSeries
  else{_chart=new Chart(document.getElementById('chart'),{type:'line',data:{labels:lbl,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{boxWidth:12,font:{size:11}}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y+'%')}}},scales:{y:{ticks:{callback:v=>v+'%'}}}}});}
 }
 function tg(k){if(k[0]==='L')open[k]=!open[k];else open[k]=open[k]===false?true:false;render();}
-function sync(){document.querySelectorAll('#locs .chk').forEach(c=>{const l=c.dataset.loc;const on=l==='all'?(LOC.cdmx&&LOC.pue&&LOC.corp&&LOC.sinc):LOC[l];c.classList.toggle('on',on);});document.querySelectorAll('#cols .chk').forEach(c=>c.classList.toggle('on',COL[c.dataset.col]));document.querySelector('#extra .chk').classList.toggle('on',SAYU);}
+function sync(){document.querySelectorAll('#locs .chk').forEach(c=>{const l=c.dataset.loc;const on=l==='all'?(LOC.cdmx&&LOC.pue&&LOC.corp&&LOC.sinc):LOC[l];c.classList.toggle('on',on);});document.querySelectorAll('#cols .chk').forEach(c=>c.classList.toggle('on',COL[c.dataset.col]));document.querySelectorAll('#extra .chk').forEach(c=>c.classList.toggle('on',c.dataset.x==='sayu'?SAYU:INCPROY));}
 document.getElementById('locs').addEventListener('click',e=>{const c=e.target.closest('.chk');if(!c)return;const l=c.dataset.loc;if(l==='all'){const on=!(LOC.cdmx&&LOC.pue&&LOC.corp&&LOC.sinc);LOC={cdmx:on,pue:on,corp:on,sinc:on};}else LOC[l]=!LOC[l];sync();render();});
 document.getElementById('cols').addEventListener('click',e=>{const c=e.target.closest('.chk');if(!c)return;COL[c.dataset.col]=!COL[c.dataset.col];sync();render();});
-document.getElementById('extra').addEventListener('click',e=>{if(!e.target.closest('.chk'))return;SAYU=!SAYU;sync();render();});
+document.getElementById('extra').addEventListener('click',e=>{const c=e.target.closest('.chk');if(!c)return;if(c.dataset.x==='proy')INCPROY=!INCPROY;else SAYU=!SAYU;sync();render();});
 
 sync();render();
 </script>
