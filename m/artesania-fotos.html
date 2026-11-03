@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="es">
+<head>
+<script src="/m/cp-marco.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fotos de artesanía — reponer</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/cp-acceso.js"></script>
+<style>
+:root{
+  --ground:#F4F1EA; --surface:#FFFFFF; --surface-3:#FBF8F1;
+  --ink:#1F1B16; --ink-2:#3A3630; --muted:#6B6459;
+  --rule:#E2DCCF; --rule-2:#D2C8B6;
+  --accent:#C9501A; --accent-soft:#FDE7DC; --on-accent:#FFFFFF;
+  --ok:#1D6B4A; --ok-bg:#E1F0E7;
+  --warn:#8C6212; --warn-bg:#F3EAD6;
+  --bad:#9E3B2E; --bad-bg:#F4E2DE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:18px 20px 70px}
+h1{font-size:1.35rem;margin:0 0 4px;font-weight:650;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:.9rem;margin:0 0 18px;max-width:78ch}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:18px;margin-bottom:16px}
+.card h2{font-size:1rem;margin:0 0 8px;font-weight:650}
+.card p{margin:0 0 12px;color:var(--ink-2);font-size:.92rem;max-width:76ch}
+.btn{font:inherit;font-weight:600;border-radius:6px;cursor:pointer;padding:9px 16px;
+  border:1px solid var(--accent);background:var(--accent);color:var(--on-accent)}
+.btn:hover{filter:brightness(1.08)}
+.btn[disabled]{opacity:.45;cursor:not-allowed;filter:none}
+.btn.ghost{background:transparent;color:var(--accent);border-color:var(--rule-2)}
+.drop{border:2px dashed var(--rule-2);border-radius:8px;padding:34px 20px;text-align:center;
+  background:var(--surface-3);cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop b{display:block;font-size:1rem;margin-bottom:4px}
+.drop span{color:var(--muted);font-size:.88rem}
+input[type=file]{display:none}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th{text-align:left;font-weight:650;color:var(--muted);font-size:.78rem;letter-spacing:.04em;
+  text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--rule-2)}
+td{padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+td.ruta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;color:var(--muted);
+  word-break:break-all;max-width:320px}
+.pill{display:inline-block;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;
+  font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)}
+.mini{width:46px;height:46px;object-fit:cover;border-radius:4px;border:1px solid var(--rule);display:block}
+.aviso{padding:11px 14px;border-radius:6px;font-size:.9rem;margin-bottom:14px}
+.aviso.ok{background:var(--ok-bg);color:var(--ok)}
+.aviso.bad{background:var(--bad-bg);color:var(--bad)}
+.aviso.warn{background:var(--warn-bg);color:var(--warn)}
+.cuenta{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Fotos de artesanía — reponer</h1>
+  <p class="sub">Esta pantalla no toca la base. Comprueba qué piezas apuntan a una foto que
+  no existe en el almacén y te deja volver a subir los archivos a la ruta que la pieza ya
+  espera. Empareja por el nombre del archivo, así que puedes soltar la carpeta entera.</p>
+
+  <div id="avisos"></div>
+
+  <div class="card">
+    <h2>1. Qué piezas están rotas</h2>
+    <p>Revisa una por una las fotos de todas las piezas y marca las que devuelven error.
+    Tarda unos segundos.</p>
+    <button class="btn" id="bRevisa">Revisar las piezas</button>
+    <span id="progreso" class="cuenta" style="margin-left:10px;color:var(--muted)"></span>
+  </div>
+
+  <div class="card" id="cardSube" style="display:none">
+    <h2>2. Suelta aquí los archivos</h2>
+    <p>Se suben solo los que emparejen con una pieza rota. Lo que no empareje te lo digo,
+    no lo subo a ciegas. Después de subir, vuelvo a pedir la foto al almacén para
+    comprobar que de verdad quedó — que es justo lo que no se hizo la primera vez.</p>
+    <div class="drop" id="drop">
+      <b>Arrastra las fotos aquí</b>
+      <span>o haz clic para elegirlas · JPG o PNG</span>
+    </div>
+    <input type="file" id="arch" multiple accept="image/jpeg,image/png,.jpg,.jpeg,.png">
+  </div>
+
+  <div class="card" id="cardTabla" style="display:none">
+    <h2>Piezas</h2>
+    <div style="overflow-x:auto"><table id="tabla"><tbody></tbody></table></div>
+  </div>
+</div>
+
+<script>
+/* REPONER FOTOS DE PIEZAS. Javi, 2-nov-2026.
+   El alta de la colección Rótulos escribió la URL de la foto en cada pieza y dio el alta
+   por buena SIN comprobar que el archivo hubiera quedado en el almacén. Resultado: 22
+   piezas anunciando una foto que nunca existió, y la tienda pintando «foto próximamente»
+   durante cuatro días sin que nadie se enterara.
+
+   Esta pantalla es la cura, no la vacuna: repone los archivos en la ruta que la pieza ya
+   tiene escrita, así no hay que tocar ni un registro. La vacuna —que el alta compruebe
+   antes de escribir— va aparte.
+
+   Regla de la casa: nada se da por subido hasta que el almacén devuelve la foto. */
+
+var SB  = 'https://rehophywchakfapivsbh.supabase.co';
+var KEY = 'sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+var PUB = SB + '/storage/v1/object/public/sincretico/';
+var sb  = supabase.createClient(SB, KEY);
+
+var PIEZAS = [];   /* {id, nombre, url, ruta, viva} */
+var tok = '';
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+function avisa(txt, clase){
+  var d=document.createElement('div');
+  d.className='aviso '+(clase||'warn'); d.textContent=txt;
+  document.getElementById('avisos').appendChild(d);
+}
+function limpiaAvisos(){ document.getElementById('avisos').innerHTML=''; }
+
+/* La clave con la que se emparejan archivo y pieza. Hay que quitar lo que pone la
+   máquina (el sello de tiempo, el sufijo de tamaño) y lo que pone el diseñador
+   (el prefijo de la colección), y luego olvidarse de acentos, guiones y mayúsculas:
+   «POPular_CHULADA_AYPAPAYA.jpg» y «1793241766452-chulada-ay-papaya_v.jpg» son la misma. */
+function clave(nombre){
+  var s = String(nombre||'').split('/').pop();
+  s = s.replace(/\.(jpe?g|png|webp)$/i,'');
+  s = s.replace(/^\d{10,}-/,'');        /* sello de tiempo */
+  s = s.replace(/_(v|h|t)$/i,'');       /* sufijo de tamaño */
+  s = s.replace(/^POPular[_-]/i,'');    /* prefijo de la colección */
+  s = s.normalize('NFD').replace(/[̀-ͯ]/g,'');
+  return s.toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
+/* Pedirle la foto al almacén es la ÚNICA prueba de que está. Se usa <img> y no fetch
+   porque así no depende de CORS ni de la caché del navegador. */
+function fotoViva(url){
+  return new Promise(function(ok){
+    var i = new Image(); var hecho=false;
+    function fin(v){ if(!hecho){ hecho=true; ok(v); } }
+    i.onload  = function(){ fin(i.naturalWidth>0); };
+    i.onerror = function(){ fin(false); };
+    setTimeout(function(){ fin(false); }, 12000);
+    i.src = url + (url.indexOf('?')>=0?'&':'?') + 'cb=' + Date.now();
+  });
+}
+
+function rutaDe(url){
+  var i = String(url||'').indexOf('/public/sincretico/');
+  return i<0 ? null : url.slice(i + '/public/sincretico/'.length).split('?')[0];
+}
+
+async function sesion(){
+  var r = await sb.auth.getSession();
+  tok = (r && r.data && r.data.session && r.data.session.access_token) || '';
+  return tok;
+}
+
+async function traePiezas(){
+  var r = await fetch(SB+'/rest/v1/arte_productos?select=id,nombre,foto_url&order=nombre',
+    {headers:{'apikey':KEY,'Authorization':'Bearer '+(tok||KEY)}});
+  if(!r.ok) throw new Error('la base no soltó las piezas ('+r.status+')');
+  var j = await r.json();
+  return j.filter(function(p){ return p.foto_url; }).map(function(p){
+    return {id:p.id, nombre:p.nombre, url:p.foto_url, ruta:rutaDe(p.foto_url), viva:null};
+  });
+}
+
+function pinta(){
+  var tb = document.querySelector('#tabla tbody');
+  tb.innerHTML = '';
+  PIEZAS.forEach(function(p){
+    var tr = document.createElement('tr');
+    var estado = p.viva===null ? '<span class="pill warn">sin revisar</span>'
+               : p.viva        ? '<span class="pill ok">foto viva</span>'
+                               : '<span class="pill bad">sin archivo</span>';
+    tr.innerHTML =
+      '<td style="width:58px">'+(p.viva?'<img class="mini" src="'+esc(p.url)+'">':'')+'</td>'+
+      '<td><b>'+esc(p.nombre)+'</b></td>'+
+      '<td>'+estado+'</td>'+
+      '<td class="ruta">'+esc(p.ruta||p.url)+'</td>'+
+      '<td id="r-'+esc(p.id)+'" style="font-size:.85rem;color:var(--muted)"></td>';
+    tb.appendChild(tr);
+  });
+  document.getElementById('cardTabla').style.display='';
+}
+
+async function revisa(){
+  limpiaAvisos();
+  var b = document.getElementById('bRevisa'); b.disabled = true;
+  var prog = document.getElementById('progreso');
+  try{
+    await sesion();
+    if(!tok){ avisa('No hay sesión iniciada. Entra al panel y vuelve.', 'bad'); b.disabled=false; return; }
+    PIEZAS = await traePiezas();
+    pinta();
+    for(var i=0;i<PIEZAS.length;i++){
+      prog.textContent = (i+1)+' de '+PIEZAS.length;
+      PIEZAS[i].viva = await fotoViva(PIEZAS[i].url);
+    }
+    prog.textContent = '';
+    pinta();
+    var rotas = PIEZAS.filter(function(p){ return !p.viva; });
+    var sinRuta = rotas.filter(function(p){ return !p.ruta; });
+    if(!rotas.length){
+      avisa('Las '+PIEZAS.length+' piezas tienen su foto. No hay nada que reponer.', 'ok');
+    }else{
+      avisa(rotas.length+' de '+PIEZAS.length+' piezas apuntan a un archivo que no existe.', 'bad');
+      if(sinRuta.length) avisa(sinRuta.length+' de esas no están en nuestro almacén (apuntan a otro sitio): '+
+        'esas hay que arreglarlas a mano, aquí no se pueden reponer.', 'warn');
+      document.getElementById('cardSube').style.display='';
+    }
+  }catch(e){
+    avisa('No se pudo revisar: '+(e.message||e), 'bad');
+  }
+  b.disabled = false;
+}
+
+async function sube(files){
+  limpiaAvisos();
+  await sesion();
+  if(!tok){ avisa('Se cerró la sesión. Entra al panel y vuelve.', 'bad'); return; }
+
+  var rotas = PIEZAS.filter(function(p){ return !p.viva && p.ruta; });
+  var porClave = {};
+  rotas.forEach(function(p){ porClave[clave(p.ruta)] = p; });
+
+  var hechas=0, fallaron=0, huerfanos=[];
+
+  /* SEGUNDO INTENTO, PERO SIN ADIVINAR. El diseñador numera versiones
+     («…juego-de-pelota2») y entonces la clave exacta no cuadra. Se acepta que una
+     clave contenga a la otra SOLO si queda un único candidato: con dos o más no se
+     elige ninguno, porque colgarle a una pieza la foto de otra es peor que dejarla
+     sin foto. */
+  function pieza(nombreArchivo){
+    var k = clave(nombreArchivo);
+    if(porClave[k]) return porClave[k];
+    var cand = Object.keys(porClave).filter(function(kk){
+      return kk.length>3 && k.length>3 && (kk.indexOf(k)===0 || k.indexOf(kk)===0);
+    });
+    return cand.length===1 ? porClave[cand[0]] : null;
+  }
+
+  for(var i=0;i<files.length;i++){
+    var f = files[i];
+    var p = pieza(f.name);
+    if(!p){ huerfanos.push(f.name); continue; }
+
+    var celda = document.getElementById('r-'+p.id);
+    if(celda) celda.textContent = 'subiendo…';
+
+    var r = await fetch(SB+'/storage/v1/object/sincretico/'+p.ruta, {
+      method:'POST',
+      headers:{'apikey':KEY,'Authorization':'Bearer '+tok,
+               'Content-Type': f.type || 'image/jpeg', 'x-upsert':'true'},
+      body: f });
+
+    if(!r.ok){
+      var detalle=''; try{ detalle=(await r.json()).message||''; }catch(_){}
+      fallaron++;
+      if(celda) celda.innerHTML = '<span style="color:var(--bad)">el almacén lo rechazó ('+r.status+
+        (detalle?' · '+esc(detalle):'')+')</span>';
+      continue;
+    }
+
+    /* La prueba. Sin esto estaríamos repitiendo el error que vinimos a arreglar. */
+    var viva = await fotoViva(p.url);
+    if(viva){
+      p.viva = true; hechas++;
+      if(celda) celda.innerHTML = '<span style="color:var(--ok)">lista</span>';
+    }else{
+      fallaron++;
+      if(celda) celda.innerHTML = '<span style="color:var(--bad)">subió pero el almacén no la devuelve</span>';
+    }
+  }
+
+  pinta();
+  if(hechas)   avisa(hechas+' foto'+(hechas===1?'':'s')+' repuesta'+(hechas===1?'':'s')+' y comprobada'+(hechas===1?'':'s')+' en el almacén.', 'ok');
+  if(fallaron) avisa(fallaron+' no quedaron. El motivo está en su renglón.', 'bad');
+  if(huerfanos.length) avisa(huerfanos.length+' archivo'+(huerfanos.length===1?'':'s')+
+    ' no empareja'+(huerfanos.length===1?'':'n')+' con ninguna pieza rota y no se subieron: '+
+    huerfanos.slice(0,6).join(', ')+(huerfanos.length>6?'…':''), 'warn');
+
+  var quedan = PIEZAS.filter(function(x){ return !x.viva; }).length;
+  if(!quedan) avisa('No queda ninguna pieza sin foto.', 'ok');
+}
+
+/* ---- cableado ---- */
+document.getElementById('bRevisa').onclick = revisa;
+
+var drop = document.getElementById('drop');
+var arch = document.getElementById('arch');
+drop.onclick = function(){ arch.click(); };
+arch.onchange = function(){ if(arch.files && arch.files.length){ sube(arch.files); arch.value=''; } };
+['dragenter','dragover'].forEach(function(ev){
+  drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); }); });
+['dragleave','drop'].forEach(function(ev){
+  drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
+drop.addEventListener('drop', function(e){
+  var fs = e.dataTransfer && e.dataTransfer.files;
+  if(fs && fs.length) sube(fs);
+});
+
+if(window.cpAcceso && cpAcceso.exige) cpAcceso.exige();
+</script>
+</body>
+</html>
