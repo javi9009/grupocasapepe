@@ -1952,7 +1952,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
       PG.salidas=[];
       if(ids.length){
-        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,chofer_ids,notas,aviso_enviado_at,venta_cerrada_at'+
+        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,chofer_ids,notas,aviso_enviado_at,venta_cerrada_at,vuelta_aviso_at,vuelta_aviso_n'+
           '&experiencia_id=in.('+ids.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha,hora',{headers:hdr()});
         PG.salidas = rs.ok ? await rs.json() : [];
       }
@@ -2296,6 +2296,26 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           ? 'Cerrada el '+esc(String(s.venta_cerrada_at).slice(0,10).split('-').reverse().join('/'))+
             ' a las '+esc(String(s.venta_cerrada_at).slice(11,16))+'. No entra nadie nuevo; los que ya están siguen dentro.'
           : 'Deja de admitir gente nueva en esta salida. No la cancela: sale igual con quien ya esté apuntado.')+'</div>'+
+      '</div>'+
+
+      /* EL «YA NOS VAMOS». Javi, 3-nov-2026. Al acabar la función el grupo se
+         dispersa: unos se quedan por la foto, otros salen por otra puerta,
+         otros se pierden. Este correo los vuelve a juntar, y dice lo único
+         que hace falta de pie y en la calle: salimos del mismo sitio donde
+         llegamos, aquí está el mapa, y te esperamos diez minutos. Con el
+         teléfono del guía de ESTA noche, que a las diez nadie llama a una
+         oficina.
+         No se manda solo: lo aprieta el guía cuando la función termina de
+         verdad, que es un momento que ninguna pantalla sabe adivinar. */
+      '<div class="pgfila"><div class="et">Al salir</div>'+
+        '<button class="btn sm'+(s.vuelta_aviso_at?' gris':'')+'" data-vuelta="'+s.id+'">'+
+          (s.vuelta_aviso_at?'Volver a mandar el «ya nos vamos»':'Mandar el «ya nos vamos»')+'</button>'+
+        '<div class="mini">'+(s.vuelta_aviso_at
+          ? 'Salió a las '+esc(String(s.vuelta_aviso_at).slice(11,16))+
+            (s.vuelta_aviso_n!=null?' a '+esc(s.vuelta_aviso_n)+' persona'+(s.vuelta_aviso_n===1?'':'s'):'')+
+            '. Puedes volver a mandarlo: la gente pierde correos.'
+          : 'Cuando la función termine. Les dice que salimos del mismo lugar donde llegamos, con el mapa, '+
+            'que los esperas 10 minutos y el teléfono del guía principal.')+'</div>'+
       '</div>'+
 
       /* EL BOTON DE TODOS SIGUE, PERO SOLO AVISA A LOS QUE FALTAN. Es lo que
@@ -2815,6 +2835,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); avisaUno(b.getAttribute('data-avisac'), b); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-venta]'),function(b){
       b.onclick=function(){ cierraVenta(b.getAttribute('data-venta'), b); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-vuelta]'),function(b){
+      b.onclick=function(){ mandaVuelta(b.getAttribute('data-vuelta'), b); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-avisa]'),function(b){
       b.onclick=function(){
         var sid=b.getAttribute('data-avisa');
@@ -2989,6 +3011,39 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   /* El mismo boton abre y cierra: quien se equivoco espera volver a tocarlo,
      igual que con el guia. Se pregunta antes de cerrar -es lo que apaga la
      venta- pero no antes de abrir, que no rompe nada. */
+  /* MANDAR EL «YA NOS VAMOS». Javi, 3-nov-2026.
+     Se confirma antes de mandarlo porque sale a gente de verdad y no se puede
+     des-mandar; y se dice cuántos lo van a recibir ANTES, no después, que es
+     cuando sirve: si de 34 reservas solo seis traen correo, eso hay que
+     saberlo mientras todavía se puede juntar al grupo a gritos. */
+  async function mandaVuelta(sid, btn){
+    var s=PG.salidas.filter(function(x){return x.id===sid;})[0];
+    var cl=(PG.clientes[sid]||[]).filter(function(c){return !c.cancelada_at;});
+    var con=cl.filter(function(c){return String(c.email||'').indexOf('@')>0;}).length;
+    var sin=cl.length-con;
+    if(!cl.length){ toast('Esta salida no tiene a nadie apuntado.',true); return; }
+    if(!con){ toast('Ninguna de las '+cl.length+' reservas trae correo: no hay a quién escribirle.',true); return; }
+
+    var aviso='Les llega a '+con+' de '+cl.length+' reserva'+(cl.length===1?'':'s')+'.'+
+      (sin?' '+sin+' no trae'+(sin===1?'':'n')+' correo y no se entera'+(sin===1?'':'n')+' por aquí.':'')+
+      (s&&s.vuelta_aviso_at?' Ojo: este aviso ya salió una vez.':'');
+    if(!await cpPregunta('¿Mando el «ya nos vamos»?\n\n'+aviso, {si:'Sí, mandarlo'})) return;
+
+    btn.disabled=true; var antes=btn.textContent; btn.textContent='Mandando…';
+    var r=await fetch(SB+'/functions/v1/sinc-ya-nos-vamos',{method:'POST',
+      headers:hdr(), body:JSON.stringify({salida_id:sid, forzar:true, minutos:10})});
+    var j=null; try{ j=await r.json(); }catch(_){}
+    btn.disabled=false; btn.textContent=antes;
+
+    if(!j||j.error){ toast('No se pudo mandar: '+((j&&j.error)||'la base no contestó'),true); return; }
+    if(!j.enviados){ toast(j.aviso||'No salió ninguno.',true); return; }
+    toast('Mandado a '+j.enviados+' persona'+(j.enviados===1?'':'s')+'.'+
+      (j.fallaron&&j.fallaron.length?' '+j.fallaron.length+' rebotaron.':'')+
+      (j.tel?'':' Ojo: el guía principal no tiene teléfono en el padrón, así que fue sin número de contacto.'),
+      !!(j.fallaron&&j.fallaron.length)||!j.tel);
+    await cargaProg();
+  }
+
   async function cierraVenta(sid, btn){
     var s=PG.salidas.filter(function(x){return x.id===sid;})[0]; if(!s) return;
     var cerrando = !s.venta_cerrada_at;
