@@ -31,6 +31,9 @@ h1{font-size:1.3rem;margin:0 0 2px}
 .res.warn{background:var(--warn-bg);border-color:var(--warn)} .res.warn .big{color:var(--warn)}
 .res.bad{background:var(--bad-bg);border-color:var(--bad)} .res.bad .big{color:var(--bad)}
 .res .tipo.tour{background:#DCEFE6;color:var(--accent)} .res .tipo.cine{background:#EDE4F3;color:#6B3FA0}
+.res .tipo.vnum{background:#FBE4D8;color:#C9501A}
+.res .btn{margin-top:12px}
+.res .btn.p{background:#C9501A;color:#fff}
 .mini{color:var(--muted)}
 .hist{margin-top:18px}
 .hist h3{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);margin:0 0 6px}
@@ -47,7 +50,7 @@ h1{font-size:1.3rem;margin:0 0 2px}
 <body>
 <div class="wrap">
   <h1>🎫 Lector de boletos</h1>
-  <div class="sub">Un solo lector para todo: boletos de eventos (cine/teatro) y de tours. Apunta al QR y te dice solo de qué es.</div>
+  <div class="sub">Un solo lector para todo: boletos de eventos (cine/teatro), de tours y las cartas de premio de los Vnums. Apunta al QR y te dice solo de qué es.</div>
   <div id="gate" style="display:none"></div>
   <div class="card" id="scanCard">
     <div id="lector"></div>
@@ -112,6 +115,23 @@ async function tryRpc(fn, codigo){
   catch(e){ return null; }
 }
 
+/* Las cartas de premio (Vnums) son el TERCER tipo de QR que anda en la casa, y
+   el lector no las conocía: decía «no válido» a una margarita de bienvenida
+   perfectamente buena. Javi, 4-nov-2026 (código VPJXQLHF, de Juan Carlos).
+   vnum_ver sólo MIRA, no quema la carta: cobrarla es un botón aparte, porque
+   quien está en la puerta de un tour no debería gastar una carta sin querer.
+   Si el guión no tiene permiso de Vnums, la función revienta con 42501 y desde
+   aquí no se puede saber si el código era una carta: se dice en el pie. */
+var SIN_PERMISO_VNUM=false;
+async function tryVnum(codigo){
+  try{
+    var r=await sb.rpc('vnum_ver',{p_codigo:codigo});
+    if(r.error){ if(/permiso/i.test(r.error.message||'')) SIN_PERMISO_VNUM=true; return null; }
+    var d=r.data||null;
+    return (d && d.ok===true) ? d : null;
+  }catch(e){ if(/permiso/i.test(e.message||'')) SIN_PERMISO_VNUM=true; return null; }
+}
+
 async function verifica(texto){
   var cands=candidatos(texto);
   if(!cands.length) return;
@@ -128,13 +148,16 @@ async function verifica(texto){
     if(reconocido(t)){ hit=t; tipo='tour'; break; }
     var k=await tryRpc('cine_verificar_boleto', c);      // eventos (cine/teatro)
     if(reconocido(k)){ hit=k; tipo='cine'; break; }
+    var v=await tryVnum(c);                              // cartas de premio (Vnums)
+    if(v){ hit=v; tipo='vnum'; break; }
   }
   pinta(hit, tipo, cands[0]);
 }
 
 function pinta(r, tipo, codigo){
   var el=$('res'); el.style.display='block';
-  var tag = tipo==='tour' ? '<span class="tipo tour">Tour</span>' : (tipo==='cine' ? '<span class="tipo cine">Cine / Evento</span>' : '');
+  var tag = tipo==='tour' ? '<span class="tipo tour">Tour</span>' : (tipo==='cine' ? '<span class="tipo cine">Cine / Evento</span>' : (tipo==='vnum' ? '<span class="tipo vnum">Carta de premio</span>' : ''));
+  if(tipo==='vnum'){ pintaVnum(r); return; }
   if(r && r.ok){
     el.className='res ok';
     var nom = esc(r.titular||r.evento||'');
@@ -163,8 +186,73 @@ function pinta(r, tipo, codigo){
     HIST.unshift({q:(r.titular||codigo), cls:'no', txt:'cancelada'});
   } else {
     el.className='res bad';
-    el.innerHTML='<div class="big">⛔ No válido</div><div class="pie">Ese código no es de boletos ni de tours. Revisa que sea un QR de Casa Pepe.</div>';
+    el.innerHTML='<div class="big">⛔ No válido</div><div class="pie">Ese código no es de boletos, ni de tours, ni una carta de premio'+
+      (SIN_PERMISO_VNUM ? ' que tú puedas ver (las cartas de los Vnums las cobra barra o recepción, en 🪙 Cobrar)' : '')+
+      '. Revisa que sea un QR de Casa Pepe.</div>';
     HIST.unshift({q:esc(codigo||'—'), cls:'no', txt:'no existe'});
+  }
+  pintaHist();
+}
+
+/* La carta se mira primero y se cobra con un botón. En la pantalla de Cobrar
+   (/m/vnum-cobrar.html) se cobra de un tiro al escanear, porque ahí el mesero
+   ya va a eso; aquí no, porque este lector se usa en la puerta. */
+var VNUM_ACTUAL=null;
+function pintaVnum(d){
+  VNUM_ACTUAL=d;
+  var el=$('res'); el.style.display='block';
+  var tag='<span class="tipo vnum">Carta de premio</span>';
+  var quien='<b>'+esc(d.premio||'Carta')+'</b><br>'+esc(d.nombre||'')+
+            (d.donde?'<br>Se entrega en '+esc(d.donde):'');
+  if(d.estado==='activa'){
+    el.className='res ok';
+    el.innerHTML=tag+'<div class="big">🪙 Carta buena</div><div class="det">'+quien+'</div>'+
+      '<button class="btn p" id="bVnum">Cobrar esta carta</button>'+
+      '<div class="pie">Todavía no se ha gastado. Dále a cobrar cuando se la entregues.</div>';
+    $('bVnum').onclick=function(){ cobraVnum(d.codigo); };
+    HIST.unshift({q:(d.nombre||d.codigo), cls:'ok', txt:'carta sin cobrar'});
+  } else if(d.estado==='usada'){
+    el.className='res warn';
+    el.innerHTML=tag+'<div class="big">⚠️ Ya se cobró</div><div class="det">'+quien+'</div>'+
+      '<div class="pie">Se cobró el '+esc(String(d.usada_at||'').replace('T',' ').slice(0,16))+
+      (d.usada_por?' · '+esc(d.usada_por):'')+'</div>';
+    HIST.unshift({q:(d.nombre||d.codigo), cls:'rep', txt:'carta ya cobrada'});
+  } else {
+    el.className='res bad';
+    el.innerHTML=tag+'<div class="big">⛔ '+(d.estado==='caducada'?'Carta caducada':'Carta anulada')+'</div>'+
+      '<div class="det">'+quien+'</div>'+
+      '<div class="pie">'+(d.estado==='caducada'?'Se le pasó el plazo.':'Esta carta se dio de baja.')+'</div>';
+    HIST.unshift({q:(d.nombre||d.codigo), cls:'no', txt:'carta '+esc(d.estado||'')});
+  }
+  pintaHist();
+}
+
+async function cobraVnum(codigo){
+  var el=$('res'); el.className='res'; el.innerHTML='<div class="mini">Cobrando…</div>';
+  try{
+    var r=await sb.rpc('vnum_cobrar',{p_codigo:codigo});
+    if(r.error) throw r.error;
+    var d=r.data||{};
+    if(d.ok){
+      el.className='res ok';
+      el.innerHTML='<span class="tipo vnum">Carta de premio</span>'+
+        '<div class="big">✅ Cobrada</div>'+
+        '<div class="det"><b>'+esc(d.premio||'')+'</b><br>'+esc(d.nombre||'')+'</div>'+
+        '<div class="pie">'+esc(d.mensaje||'¡Salud!')+'</div>';
+      HIST.unshift({q:(d.nombre||codigo), cls:'ok', txt:'carta cobrada'});
+      if(navigator.vibrate) try{ navigator.vibrate(60); }catch(_){}
+    } else if(d.motivo==='otra_casa'){
+      el.className='res bad';
+      el.innerHTML='<div class="big">⛔ Es de otra casa</div><div class="pie">Esta carta se ganó en '+esc(d.casa||'otra casa')+'.</div>';
+      HIST.unshift({q:(d.nombre||codigo), cls:'no', txt:'otra casa'});
+    } else {
+      el.className='res warn';
+      el.innerHTML='<div class="big">⚠️ No se pudo cobrar</div><div class="pie">'+esc(d.motivo||'')+'</div>';
+      HIST.unshift({q:(d.nombre||codigo), cls:'rep', txt:esc(d.motivo||'')});
+    }
+  }catch(e){
+    el.className='res bad';
+    el.innerHTML='<div class="big">No se pudo cobrar</div><div class="pie">'+esc(e.message||e)+'</div>';
   }
   pintaHist();
 }
