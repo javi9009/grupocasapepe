@@ -2943,9 +2943,53 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
 
   /* La ficha del espacio es la del Ateneo entera — mismos campos, misma tabla.
      Lo único propio del hotel es de quién es y si lo abre a terceros. */
+  /* ---------- Google en el campo de dirección ----------
+     Javi, 5-nov-2026: «si es dirección habilita Google Maps». La llave vive
+     en sinc_config, igual que en la ficha de experiencia; aquí solo se pide
+     el autocompletado de direcciones, no el mapa entero. Si no hay llave o
+     el script no carga, el campo sigue siendo un campo de escribir: nunca
+     se queda bloqueado esperando a Google. */
+  var MAPSCARGA=null;
+  function cargaMapsUnaVez(){
+    if(MAPSCARGA) return MAPSCARGA;
+    MAPSCARGA = (async function(){
+      if(window.google && google.maps && google.maps.places) return true;
+      var c=await get('sinc_config?select=valor&clave=eq.google_maps_key&limit=1');
+      var k=c && c[0] && c[0].valor; if(!k) return false;
+      return await new Promise(function(ok){
+        var t=setTimeout(function(){ ok(false); }, 8000);
+        window.__cpMapsListo=function(){ clearTimeout(t); ok(true); };
+        var sc=document.createElement('script');
+        sc.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(k)
+              +'&libraries=places&language=es&region=MX&loading=async&callback=__cpMapsListo';
+        sc.async=true;
+        sc.onerror=function(){ clearTimeout(t); ok(false); };
+        document.head.appendChild(sc);
+      });
+    })().catch(function(){ return false; });
+    return MAPSCARGA;
+  }
+  async function mapsEnDireccion(){
+    var el=$('espDir'); if(!el) return;
+    var hay=await cargaMapsUnaVez();
+    if(!hay || !$('espDir')) return;
+    try{
+      var ac=new google.maps.places.Autocomplete(el,
+        {types:['geocode','establishment'], componentRestrictions:{country:'mx'},
+         fields:['formatted_address','name']});
+      ac.addListener('place_changed', function(){
+        var p=ac.getPlace()||{};
+        if(p.formatted_address) el.value=p.formatted_address;
+      });
+      el.setAttribute('autocomplete','off');
+    }catch(_){}
+  }
+
   function fichaEspacio(id){
     var x=ESP.filter(function(e){return e.id===id;})[0]; if(!x) return;
     var d=destino();
+    var casasE=[G].concat(HOT||[]).filter(Boolean);
+    var suCasa=casasE.filter(function(c){return c.id===x.hotel_id;})[0] || null;
     function f(lab,c,t,ay,ph){ var v=x[c];
       return '<div class="fld"><label>'+lab+'</label><input data-e="'+c+'" type="'+(t||'text')+'"'+(t==='number'?' step="any"':'')
         +' value="'+esc(v==null?'':v)+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'+(ay?'<div class="ay">'+ay+'</div>':'')+'</div>'; }
@@ -2956,11 +3000,26 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       + f('Nombre','nombre') + f('Cómo lo llaman','alias',null,'El nombre de la casa, si es otro')
       + f('Aforo de pie','capacidad','number') + f('Aforo sentado','capacidad_sentado','number')
       + f('Metros cuadrados','metros2','number') + f('Dónde está','lugar_numero',null,'Piso, azotea, patio trasero')
+      /* DE QUE CASA ES ESTE ESPACIO. Javi, 5-nov-2026: «dónde está: si es
+         dirección habilita Google Maps, y si es ubicación selecciona el hotel
+         si no está seleccionado previamente».
+         «Dónde está» era el piso o el patio -dentro de la casa-, y no había
+         manera de decir de QUE casa. Por eso la Pulquería Cósmica de Puebla
+         se abría con la dirección de República de Uruguay. */
+      +'<div class="fld"><label>¿En qué casa está?</label><select data-e="hotel_id" id="espCasa">'
+        + casasE.map(function(c){ return '<option value="'+esc(c.id)+'">'
+            +esc((c.nombre_comercial||'(sin nombre)')+' · '+(c.ciudad||'sin ciudad'))+'</option>'; }).join('')
+      +'</select><div class="ay">La dirección de abajo se hereda de esta casa</div></div>'
       +'</div>'
       +'<div class="fld" style="margin-top:12px"><label>Cómo es</label><textarea data-e="descripcion" rows="3" placeholder="Qué se ve, qué luz tiene, qué se siente estando ahí">'+esc(x.descripcion||'')+'</textarea></div>'
       +'<div class="fgrid" style="margin-top:12px">'
       + f('Horario de servicio','horario_servicio',null,null,'L–D 9:00 a 23:00')
-      +'<div class="fld"><label>Dirección</label><input data-e="direccion" value="'+esc(x.direccion||d.direccion||'')+'"><div class="ay">Heredada de la casa; cámbiala si la entrada es otra</div></div>'
+      /* La dirección se hereda de SU casa, no de `destino()`: desde «todo el
+         grupo» destino() es la casa por la que se entró, y por eso a un
+         espacio de Puebla se le ofrecía la dirección de CDMX. */
+      +'<div class="fld"><label>Dirección</label><input data-e="direccion" id="espDir" value="'
+        +esc(x.direccion||(suCasa&&suCasa.direccion)||'')
+        +'" placeholder="Escribe y elígela de Google"><div class="ay" id="espDirAy">Heredada de la casa; cámbiala si la entrada es otra</div></div>'
       +'</div></div>'
 
       +'<div class="card"><h3>¿Lo abres a gente de fuera?</h3>'
@@ -3007,6 +3066,22 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       var el=document.querySelector('[data-e="'+c+'"]'); if(el) el.value = x[c]===true?'true':'false';
     });
     var ft=document.querySelector('[data-e="fianza_tipo"]'); if(ft) ft.value=x.fianza_tipo||'';
+    /* El desplegable arranca en la casa que ya tiene; si no tiene ninguna
+       -los que nacieron antes de que la columna existiera-, se queda en la
+       primera y quien lo abra la corrige de un clic, que es justo lo que
+       pidió: «selecciona el hotel si no está seleccionado previamente». */
+    var ec=$('espCasa');
+    if(ec){
+      if(x.hotel_id) ec.value=x.hotel_id;
+      ec.onchange=function(){
+        var c=casasE.filter(function(y){return y.id===ec.value;})[0];
+        var di=$('espDir'), ay=$('espDirAy');
+        if(c && di && !di.value.trim()){ di.value=c.direccion||''; }
+        if(c && ay) ay.textContent='En '+(c.nombre_comercial||'')+'. La direcci\u00f3n se hereda de ah\u00ed; c\u00e1mbiala si la entrada es otra.';
+      };
+      ec.onchange();
+    }
+    mapsEnDireccion();
     var sel=$('modoE'); sel.value=x.cobro_tercero_modo||'';
     function cajas(){ $('boxFijo').style.display = sel.value==='fijo'?'grid':'none';
                       $('boxPct').style.display  = sel.value==='porcentaje'?'grid':'none'; }
@@ -3017,7 +3092,12 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       var NUM={capacidad:1,capacidad_sentado:1,metros2:1,tarifa_hora:1,tarifa_dia:1,tarifa_hora_extra:1,
                tarifa_mes:1,cobro_tercero_pct:1,fianza_monto:1,reserva_anticipo_pct:1,cancela_horas:1,cancela_penaliza_pct:1};
       var b={};
-      document.querySelectorAll('[data-e]').forEach(function(el){
+      /* SOLO LOS CAMPOS DE LA FICHA, NO TODO EL DOCUMENTO. Las tarjetas de
+         la rejilla llevan `data-e` con el id del espacio -es como se sabe
+         cuál se abre-, así que este barrido se las llevaba por delante y
+         mandaba a guardar columnas que se llaman como un uuid. Se acota a
+         #efi, que es la ficha. */
+      document.querySelectorAll('#efi [data-e]').forEach(function(el){
         var c=el.getAttribute('data-e'), v=el.value;
         if(BOOL[c]) b[c]= v==='true';
         else if(NUM[c]) b[c]= v===''?null:Number(v);
