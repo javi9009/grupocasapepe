@@ -354,6 +354,12 @@
   window.apepeMarca = {
     /* La marca cruda, o null si esto es Casa Pepe. */
     marca: function () { return M && M.hotel_id ? M : null; },
+    /* De que casa es esta app, pase lo que pase con la marca. `marca()`
+       devuelve null a proposito cuando la casa es Casa Pepe -no hay nada que
+       renombrar-, pero la carta del huesped SI necesita saber de que casa es:
+       desde el 5-nov-2026 cada casa tiene la suya y sin esto se le servirian
+       los platillos de la otra. Javi, 5-nov-2026. */
+    hotelId: function () { return (M && M.hotel_id) || null; },
     hotel: function () { return (M && M.hotel) || 'Casa Pepe'; },
     app:   function () { return (M && M.app)   || 'APePe'; },
     soy:   function () { return (M && M.soy)   || 'SoyPepe'; },

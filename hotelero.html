@@ -1308,7 +1308,9 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     /* El boton de guardar no se ata aqui: `pinta` esta envuelta mas abajo y
        llama a ataGuarda() despues de pintar, pase por donde pase. */
     if(sec==='general')   return w.innerHTML=vGeneral();
-    if(sec==='rest')      return w.innerHTML=vRest();
+    if(sec==='rest'){ w.innerHTML=vRest();
+      var bm=$('cartaMas'); if(bm) bm.onclick=cartaNuevo;
+      cartaCarga(); return; }
     if(sec==='espacios')  return vEspacios(w);
     if(sec==='exps')      return vExps(w);
     if(sec==='eventos')   return vEventos(w);
@@ -2682,9 +2684,156 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       +'<div class="ft"><button class="btn" id="gGen">Guardar</button></div></div>'
 
       +'<div class="card"><h3>La carta</h3>'
-      +'<div class="pronto">La carta no se teclea aquí: vive en A&amp;B, que es de donde salen el recetario y el costeo. '
-        +'Enlazar la de esta casa para que el huésped la vea desde su app es el paso siguiente, y todavía no está hecho. '
-        +'Mientras tanto, lo de arriba ya le dice si hay dónde comer y a qué hora.</div></div>';
+      +'<div class="hint">Lo que ve el huésped desde su app: por secciones, con su foto y su precio. '
+        +'<b>Todos los precios llevan el IVA incluido</b> — se escribe lo que paga, no lo que factura.</div>'
+      +'<div id="cartaCuerpo"><div class="mini">Cargando la carta…</div></div>'
+      +'<div class="ft" style="justify-content:flex-start"><button class="btn" id="cartaMas">+ Añadir platillo</button></div>'
+      +'</div><div id="cartaFicha"></div>';
+  }
+
+  /* ======================= LA CARTA DEL HUÉSPED =======================
+     Javi, 5-nov-2026: «abade en restaurante que suban categoría /
+     subcategoría y platillo con foto para conocer su carta, y precio y
+     descripción. Todos los precios contienen IVA».
+     Esta caja decía «la carta no se teclea aquí: vive en A&B», y era media
+     verdad. Lo que vive en A&B es el CATÁLOGO DEL POS -866 productos que
+     sincroniza Poster, con la comida de personal, las botellas y los extra
+     ingredientes dentro-: eso no es una carta, es el inventario de lo que se
+     cobra. La carta del huésped ya existía en `cosmica_carta` y la lee la
+     app; lo que le faltaba era de qué casa es, una foto, y dónde teclearla.
+     No se monta encima del POS a propósito: una resincronización de Poster
+     se llevaría por delante las fotos y las descripciones. */
+  var CARTA=[];
+  function cartaSecs(){
+    var v=[]; CARTA.forEach(function(x){ if(x.seccion && v.indexOf(x.seccion)<0) v.push(x.seccion); });
+    ['desayuno','comida','bebida'].forEach(function(k){ if(v.indexOf(k)<0) v.push(k); });
+    return v;
+  }
+  function cartaGrupos(){
+    var v=[]; CARTA.forEach(function(x){ if(x.grupo && v.indexOf(x.grupo)<0) v.push(x.grupo); });
+    return v.sort();
+  }
+  async function cartaCarga(){
+    var d=destino(), cu=$('cartaCuerpo'); if(!cu) return;
+    if(!d || !d.id){ cu.innerHTML='<div class="mini">Elige una casa para ver su carta.</div>'; return; }
+    CARTA = await get('cosmica_carta?select=*&hotel_id=eq.'+d.id+'&order=seccion,grupo,orden,nombre') || [];
+    cartaPinta();
+  }
+  function cartaPinta(){
+    var cu=$('cartaCuerpo'); if(!cu) return;
+    if(!CARTA.length){
+      cu.innerHTML='<div class="mini">Todavía no hay nada en la carta de esta casa. '
+        +'Empieza por un platillo: la sección y el grupo se escriben al vuelo.</div>';
+      return;
+    }
+    var porSec={};
+    CARTA.forEach(function(x){
+      var s=x.seccion||'sin sección', g=x.grupo||'sin grupo';
+      (porSec[s]=porSec[s]||{})[g]=(porSec[s][g]||[]).concat([x]);
+    });
+    cu.innerHTML=Object.keys(porSec).map(function(s){
+      return '<div style="margin-top:14px"><div style="font:600 12px Oswald;letter-spacing:.14em;text-transform:uppercase;color:var(--muted,#8A8178)">'
+        +esc(s)+'</div>'
+        + Object.keys(porSec[s]).sort().map(function(g){
+            return '<div style="margin-top:8px"><div class="mini"><b>'+esc(g)+'</b></div><div class="hgrid">'
+              + porSec[s][g].map(function(x){
+                  return '<button class="hc" data-carta="'+x.id+'" style="text-align:left">'
+                    + (x.foto_url? '<div style="height:84px;border-radius:7px;background:#eee center/cover url(&quot;'+esc(x.foto_url)+'&quot;);margin-bottom:6px"></div>'
+                                 : '<div style="height:84px;border-radius:7px;background:var(--surface-3,#F3EFE8);display:flex;align-items:center;justify-content:center;margin-bottom:6px" class="mini">sin foto</div>')
+                    +'<div class="hn">'+esc(x.nombre||'(sin nombre)')+'</div>'
+                    +'<div class="hm">'+(x.precio_mxn!=null?dinero(x.precio_mxn)+' <span style="opacity:.6">IVA incl.</span>':'sin precio')
+                    + (x.gramaje?' · '+esc(x.gramaje):'')
+                    + (x.activo===false?'<br>Apagado':'')+'</div></button>'; }).join('')
+              +'</div></div>'; }).join('')
+        +'</div>';
+    }).join('');
+    cu.querySelectorAll('[data-carta]').forEach(function(b){
+      b.onclick=function(){ cartaFicha(b.getAttribute('data-carta')); };
+    });
+  }
+  function cartaFicha(id){
+    var x=CARTA.filter(function(y){return y.id===id;})[0]; if(!x) return;
+    var fi=$('cartaFicha'); if(!fi) return;
+    fi.innerHTML='<div class="card"><h3>'+esc(x.nombre||'Platillo')+'</h3>'
+      +'<div class="fgrid">'
+      +'<div class="fld"><label>Sección</label><input data-k="seccion" list="dlSec" value="'+esc(x.seccion||'')+'" placeholder="desayuno, comida, bebida"></div>'
+      +'<div class="fld"><label>Grupo</label><input data-k="grupo" list="dlGru" value="'+esc(x.grupo||'')+'" placeholder="Entradas, Cócteles, Tacos"></div>'
+      +'<div class="fld"><label>Nombre</label><input data-k="nombre" value="'+esc(x.nombre||'')+'"></div>'
+      +'<div class="fld"><label>Precio (con IVA)</label><input data-k="precio_mxn" type="number" step="any" value="'+esc(x.precio_mxn==null?'':x.precio_mxn)+'"><div class="ay">Lo que paga el huésped</div></div>'
+      +'<div class="fld"><label>Gramaje o medida</label><input data-k="gramaje" value="'+esc(x.gramaje||'')+'" placeholder="250 g, 350 ml, 3 piezas"></div>'
+      +'<div class="fld"><label>¿En la carta?</label><select data-k="activo"><option value="true">Sí</option><option value="false">Apagado</option></select></div>'
+      +'</div>'
+      +'<datalist id="dlSec">'+cartaSecs().map(function(v){return '<option value="'+esc(v)+'">';}).join('')+'</datalist>'
+      +'<datalist id="dlGru">'+cartaGrupos().map(function(v){return '<option value="'+esc(v)+'">';}).join('')+'</datalist>'
+      +'<div class="fld" style="margin-top:12px"><label>Descripción</label>'
+        +'<textarea data-k="descripcion" rows="3" placeholder="Qué lleva y a qué sabe">'+esc(x.descripcion||'')+'</textarea></div>'
+      +'<div class="fld" style="margin-top:12px"><label>Foto</label>'
+        + (x.foto_url?'<div style="height:140px;border-radius:9px;background:#eee center/cover url(&quot;'+esc(x.foto_url)+'&quot;);margin-bottom:8px"></div>':'')
+        +'<input type="file" id="cartaFoto" accept="image/*"><div class="ay" id="cartaFotoAy">JPG o PNG. Se sube al tocar Guardar.</div></div>'
+      +'<div class="ft" style="justify-content:space-between">'
+        +'<button class="btn fantasma" id="cartaQuita">Quitar de la carta</button>'
+        +'<button class="btn" id="cartaGuarda">Guardar</button></div></div>';
+    var sa=fi.querySelector('[data-k="activo"]'); if(sa) sa.value = x.activo===false?'false':'true';
+    fi.scrollIntoView({behavior:'smooth',block:'nearest'});
+
+    $('cartaGuarda').onclick=async function(){
+      var b={};
+      fi.querySelectorAll('[data-k]').forEach(function(el){
+        var k=el.getAttribute('data-k'), v=el.value;
+        if(k==='activo') b[k]= v==='true';
+        else if(k==='precio_mxn') b[k]= v===''?null:Number(v);
+        else b[k]= v===''?null:v;
+      });
+      b.precio_incluye_iva=true;
+      var f=$('cartaFoto') && $('cartaFoto').files && $('cartaFoto').files[0];
+      if(f){
+        var ext=(String(f.name).split('.').pop()||'jpg').toLowerCase();
+        var ruta='carta/'+(destino().id||'sin-casa')+'/'+id+'-'+Date.now()+'.'+ext;
+        var rs=await fetch(SB+'/storage/v1/object/sincretico/'+ruta,{method:'POST',
+          headers:{'apikey':KEY,'Authorization':'Bearer '+tok(),'Content-Type':f.type||'application/octet-stream'},
+          body:f});
+        if(rs.ok){ b.storage_path=ruta; b.foto_url=SB+'/storage/v1/object/public/sincretico/'+ruta; }
+        else toast('La foto no se pudo subir ('+rs.status+'); lo demás sí se guarda',true);
+      }
+      var h=hdr(); h['Prefer']='return=representation';
+      var r=await fetch(SB+'/rest/v1/cosmica_carta?id=eq.'+id,{method:'PATCH',headers:h,body:JSON.stringify(b)});
+      if(!r.ok){ toast('No se pudo guardar: '+(await r.text()).slice(0,120),true); return; }
+      toast('Guardado'); fi.innerHTML=''; await cartaCarga();
+    };
+    $('cartaQuita').onclick=async function(){
+      var si=await cpPregunta('¿Quitar «'+(x.nombre||'este platillo')+'» de la carta?',
+        {si:'Quitar', no:'Dejarlo'});
+      if(!si) return;
+      /* Se apaga, no se borra: un platillo que vuelve en temporada no tiene
+         por qué teclearse otra vez, y lo que ya se vendió sigue apuntando
+         aquí. */
+      var h=hdr(); h['Prefer']='return=representation';
+      var r=await fetch(SB+'/rest/v1/cosmica_carta?id=eq.'+id,{method:'PATCH',headers:h,
+        body:JSON.stringify({activo:false})});
+      if(!r.ok){ toast('No se pudo quitar',true); return; }
+      toast('Fuera de la carta'); fi.innerHTML=''; await cartaCarga();
+    };
+  }
+  async function cartaNuevo(){
+    var d=destino();
+    if(!d || !d.id){ toast('Elige primero una casa',true); return; }
+    var r0=await cpPideVarios('Un platillo nuevo',[
+      {k:'seccion', et:'Sección', req:true, valor:'comida', marca:'desayuno, comida, bebida'},
+      {k:'grupo',   et:'Grupo o subcategoría', req:true, marca:'Entradas, Cócteles, Tacos'},
+      {k:'nombre',  et:'Cómo se llama', req:true},
+      {k:'precio_mxn', et:'Precio con IVA', tipo:'number'}
+    ],{si:'Crear'});
+    if(!r0) return;
+    var r=await fetch(SB+'/rest/v1/cosmica_carta',{method:'POST',
+      headers:Object.assign(hdr(),{Prefer:'return=representation'}),
+      body:JSON.stringify({hotel_id:d.id, property_id:d.property_id||null,
+        seccion:r0.seccion, grupo:r0.grupo, nombre:r0.nombre,
+        precio_mxn:r0.precio_mxn===''?null:Number(r0.precio_mxn),
+        precio_incluye_iva:true, activo:true})});
+    if(!r.ok){ toast('No se pudo crear: '+(await r.text()).slice(0,120),true); return; }
+    var e=(await r.json())[0];
+    await cartaCarga();
+    cartaFicha(e.id);
   }
 
   /* ---------- mis ventas ----------
