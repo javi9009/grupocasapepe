@@ -109,11 +109,30 @@
           var l = document.createElement('label');
           l.className = 'cpd-et';
           l.textContent = c.et + (c.req ? ' *' : '');
-          var i = document.createElement('input');
-          i.className = 'cpd-in';
-          i.type = c.tipo;
-          i.value = c.valor;
-          if (c.marca) i.placeholder = c.marca;
+          /* Elegir de una lista cerrada no es escribir. Hasta hoy todo campo
+             era un <input>, asi que preguntar «¿de que casa es?» obligaba a
+             teclear el nombre y a que coincidiera. Con `tipo:'select'` y
+             `opciones:[[valor,texto],...]` se elige, que es lo que toca
+             cuando las respuestas posibles se cuentan con los dedos.
+             Javi, 5-nov-2026. */
+          var i;
+          if (c.tipo === 'select') {
+            i = document.createElement('select');
+            i.className = 'cpd-in';
+            (c.opciones || []).forEach(function (o) {
+              var op = document.createElement('option');
+              op.value = String(o[0]);
+              op.textContent = String(o[1] == null ? o[0] : o[1]);
+              i.appendChild(op);
+            });
+            if (c.valor) i.value = c.valor;
+          } else {
+            i = document.createElement('input');
+            i.className = 'cpd-in';
+            i.type = c.tipo;
+            i.value = c.valor;
+            if (c.marca) i.placeholder = c.marca;
+          }
           l.appendChild(i);
           caja.appendChild(l);
           campos.push({ k: c.k, et: c.et, req: c.req, el: i });
@@ -210,7 +229,8 @@
       tipo: 'varios', texto: T(texto), nada: null,
       campos: campos.map(function (c) {
         return { k: c.k, et: T(c.et || c.k), req: !!c.req, valor: c.valor == null ? '' : String(c.valor),
-                 marca: c.marca ? T(c.marca) : '', tipo: c.tipo || 'text' };
+                 marca: c.marca ? T(c.marca) : '', tipo: c.tipo || 'text',
+                 opciones: c.opciones || null };
       }),
       si: T(o.si || 'Guardar'), no: T(o.no || 'Cancelar'),
       falta: T(o.falta || 'Falta por rellenar:')

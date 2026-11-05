@@ -1086,12 +1086,31 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
        gris. Y como las experiencias: solo publicado y solo lo que no ha
        pasado -un evento sin fecha_fin se mide por su fecha_inicio, que antes
        se colaba y dejaba entrar los de octubre-. */
+    /* EL EVENTO TAMBIEN ES DE UNA CIUDAD. Javi, 5-nov-2026: «a Ale ya le
+       aparecen los tours de Puebla pero los eventos y artesanía de CDMX».
+       Las experiencias y el mapa filtraban por ciudad desde hace semanas;
+       estos dos no lo hicieron nunca, asi que a Puebla le salia la cartelera
+       entera del Ateneo -Mundomón, Chicha, UNDERCORP- a 130 km.
+       El evento no guarda ciudad: la tiene su espacio -`ev_espacios.sede`- o
+       su hotel. Se arma el puente aqui y se filtra con el. Virreyes es el
+       Ateneo, que esta en CDMX aunque no sea un hotel. */
+    var CIUSEDE={virreyes:'CDMX', casapepe_cdmx:'CDMX', casapepe_puebla:'Puebla'};
+    var espCiu={};
+    (await get('ev_espacios?select=id,sede,hotel_id')||[]).forEach(function(s){
+      var h=GRUPOS.filter(function(x){return x.id===s.hotel_id;})[0];
+      espCiu[s.id] = (h && h.ciudad) || CIUSEDE[String(s.sede||'').toLowerCase()] || '';
+    });
     var v=await get('eventos?select=id,nombre,descripcion,precio,es_gratis,estado,clase,cupo,'
-      +'fotos,fecha_inicio,fecha_fin&limit=300&order=fecha_inicio')||[];
+      +'fotos,fecha_inicio,fecha_fin,hotel_id,espacio_id&limit=300&order=fecha_inicio')||[];
     CAT.evento=v.filter(function(x){
       if(String(x.estado||'').toLowerCase()!=='publicado') return false;
       var fin=String(x.fecha_fin||x.fecha_inicio||'').slice(0,10);
-      return !fin || fin >= hoyMx;
+      if(fin && fin < hoyMx) return false;
+      var hh=GRUPOS.filter(function(g){return g.id===x.hotel_id;})[0];
+      var cEv=(hh && hh.ciudad) || espCiu[x.espacio_id] || '';
+      /* Sin ciudad averiguable se enseña, como el mapa: mas vale un evento de
+         mas que una cartelera vacia. Son 4 de 32 y no tienen ni espacio. */
+      return !cEv || mismaCiudad(cEv, ciu);
     }).map(function(x){
       var gal=Array.isArray(x.fotos)?x.fotos:[];
       var fam = x.clase==='espacio' ? 'Espacio creativo' : x.clase==='privado' ? 'Uso privado'
@@ -1124,6 +1143,20 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     /* La tienda es la de la Comunidad de Potrero de la Palmita: 26 piezas con
        su artesana, sus materiales y su significado. Las 26 tienen foto. */
     var tn=await get('v_tienda_publico?select=*&order=orden,nombre')||[];
+    /* LA PIEZA ESTA DONDE ESTA. Javi, 5-nov-2026, misma queja que los
+       eventos: a Puebla le salian los rótulos de Óscar Reyes, que están en
+       CDMX. La artesanía no tiene «ciudad» porque viene de Nayarit: lo que
+       tiene es ALMACEN, y la vista ya trae `existencia_cdmx` y
+       `existencia_puebla`. Se ofrece lo que esta casa puede entregar.
+       Una pieza sin existencia en ningun lado se enseña igual -todavia no se
+       ha repartido-, pero si hay stock en la otra ciudad y no aqui, aqui no
+       se vende. */
+    var colExi = ciudadCat(ciu)==='Puebla' ? 'existencia_puebla' : 'existencia_cdmx';
+    var otraExi = colExi==='existencia_puebla' ? 'existencia_cdmx' : 'existencia_puebla';
+    tn = tn.filter(function(x){
+      var aqui=Number(x[colExi]||0), alla=Number(x[otraExi]||0);
+      return aqui>0 || alla<=0;
+    });
     CAT.tienda=tn.map(function(x){
       return {id:x.id,n:x.nombre,d:x.medidas||'',
         f:x.foto_url||'',pvp:Number(x.precio_mxn)||0,sinPrecio:x.precio_mxn==null,iva:16,vend:10,hot:5,
@@ -3067,9 +3100,18 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     /* solo_huespedes no está en la vista (la comparte el editor de tours):
        se trae aparte y se pega, en vez de tocar una vista de la que cuelga
        media pantalla de Sincrético. */
-    var priv={}; (await get('op_experiencias?select=id,solo_huespedes&'+filtroOp(d,MITO))||[])
-      .forEach(function(x){ priv[x.id]=!!x.solo_huespedes; });
-    todas.forEach(function(x){ x.solo_huespedes=!!priv[x.id]; });
+    var priv={}; (await get('op_experiencias?select=id,solo_huespedes,alcance,hotel_id&'+filtroOp(d,MITO))||[])
+      .forEach(function(x){ priv[x.id]=x; });
+    todas.forEach(function(x){ var p=priv[x.id]||{};
+      x.solo_huespedes=!!p.solo_huespedes; x.alcance=p.alcance||null; x.hotel_id=p.hotel_id||null; });
+    /* CADA CASA VE LAS SUYAS Y LAS DEL GRUPO. Javi, 5-nov-2026: «que cada
+       hotel pueda crear sus propias experiencias».
+       Dentro de una casa no se enseñan las fichas que otra casa creó para
+       sí: las de la hermana son suyas. Las que no tienen dueño -las de
+       siempre, nacidas antes de que la columna existiera- siguen siendo del
+       grupo y se ven desde todas, que es como estaban. */
+    if(nivel==='hotel' && d && d.id)
+      todas = todas.filter(function(x){ return !x.hotel_id || x.hotel_id===d.id; });
     /* La portada vive en su propia vista, igual que en el editor de tours. */
     var ports={}; (await get('v_ficha_portada?select=id,portada')||[]).forEach(function(x){ports[x.id]=x.portada;});
     todas.forEach(function(e){ e.portada=ports[e.id]||''; });
@@ -3144,6 +3186,23 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     pintaRejillaExps(w);
   }
 
+  /* A QUIEN SE LE VENDE: TRES RESPUESTAS, NO DOS. Javi, 5-nov-2026:
+     «solo a sus huéspedes (incluye la de todos los hoteles del grupo de ESA
+     ubicación), a todo Sincrético».
+     Era un sí/no -`solo_huespedes`- y le faltaba el de en medio, que es el
+     que pide un grupo con dos casas en la misma plaza: lo que ofrece Casa
+     Pepe CDMX vale para quien duerme en Barrio Bolívar, y no por eso sale al
+     público. La columna vieja se mantiene al día para lo que ya la lee. */
+  var ALC=[
+    ['casa','Solo mis huéspedes','Solo quien duerme en esta casa.'],
+    ['ciudad','Huéspedes de la ciudad','Quien duerme en cualquier casa del grupo en esta ciudad.'],
+    ['sincretico','Todo Sincrético','A la venta para cualquiera.']
+  ];
+  function alcanceDe(e){
+    if(e.alcance) return e.alcance;
+    return e.solo_huespedes ? 'casa' : 'sincretico';
+  }
+
   function pintaRejillaExps(w){
     var L=exFiltradas();
     $('eg').innerHTML = (L.length? L.map(function(e){
@@ -3159,8 +3218,10 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
         +'<span class="sem">'+semaforo(e)+'</span>'
         +'<span class="falta">'+(f.length?'falta '+f.slice(0,4).join(', ')+(f.length>4?' y '+(f.length-4)+' más':''):'Lista para vender')+'</span>'
         +'<span class="resp" data-xp="'+e.id+'" style="margin-top:8px">'
-          +'<button data-v="1" class="'+(e.solo_huespedes?'on':'')+'">Solo mis huéspedes</button>'
-          +'<button data-v="0" class="'+(e.solo_huespedes?'':'on')+'">Abierta</button></span>'
+          + ALC.map(function(a){
+              return '<button data-v="'+a[0]+'" class="'+(alcanceDe(e)===a[0]?'on':'')+'" '
+                +'title="'+esc(a[2])+'">'+esc(a[1])+'</button>'; }).join('')
+          +'</span>'
         +'</span></div>';
     }).join('')
       : (MIS.length? '<div class="vacio">Ninguna ficha con este filtro.</div>' : ''))
@@ -3171,19 +3232,46 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       if(ev.target.closest('[data-xp]')) return;
       abreLateral(b.getAttribute('data-x'), w);
     };});
-    /* Privada = no sale al público de Sincrético; la aprueba el hotel. */
+    /* Se escribe el alcance nuevo y, en el mismo PATCH, `solo_huespedes`
+       coherente con él: «ciudad» sigue siendo privado para quien solo sabe
+       leer el booleano, y así ninguna pantalla vieja se cree que algo salió
+       al público sin que nadie lo dijera. */
     $('eg').querySelectorAll('[data-xp] button').forEach(function(b){b.onclick=async function(ev){
       ev.stopPropagation();
-      var id=b.parentNode.getAttribute('data-xp'), v=b.getAttribute('data-v')==='1';
+      var id=b.parentNode.getAttribute('data-xp'), v=b.getAttribute('data-v');
       var h=hdr(); h['Prefer']='return=representation';
       var r=await fetch(SB+'/rest/v1/op_experiencias?id=eq.'+id,{method:'PATCH',headers:h,
-        body:JSON.stringify({solo_huespedes:v})});
+        body:JSON.stringify({alcance:v, solo_huespedes: v!=='sincretico'})});
       if(!r.ok){ toast('No se pudo cambiar',true); return; }
-      toast(v?'Solo para tus huéspedes':'Abierta al público'); vExps(w);
+      toast((ALC.filter(function(a){return a[0]===v;})[0]||[])[2]||'Cambiado'); vExps(w);
     };});
     $('nuevaX').onclick=async function(){
       var d=destino();
-      var n=await cpPide('¿Cómo se llama la experiencia?'); if(!n) return;
+      /* DESDE «TODO EL GRUPO» HAY QUE PREGUNTAR DE QUE CASA ES. Javi,
+         5-nov-2026: «si se grabaron con ubicación CDMX tienes que solicitar
+         la ubicación cuando se crea un tour desde the whole group».
+         Y es lo que paso: Ale creo dos walking tours de Puebla desde el
+         nivel de grupo, y `destino()` ahi es G -la casa por la que se
+         entro, Casa Pepe CDMX-, asi que se guardaron como CDMX. Los veia en
+         «todo el grupo» y no en Puebla, y no era un filtro roto: era la
+         ciudad mal escrita en el momento de nacer.
+         Con una sola casa no se pregunta nada. */
+      var CASAS=[G].concat(HOT).filter(Boolean);
+      var n, casa=d;
+      if(nivel!=='hotel' && CASAS.length>1){
+        var r0=await cpPideVarios('¿Cómo se llama y de qué casa es?',[
+          {k:'n', et:'Nombre de la experiencia', req:true},
+          {k:'h', et:'¿De qué casa es?', tipo:'select', req:true,
+           opciones:CASAS.map(function(x){
+             return [x.id, (x.nombre_comercial||'(sin nombre)')+' · '+(x.ciudad||'sin ciudad')]; })}
+        ],{si:'Crear'});
+        if(!r0) return;
+        n=r0.n; casa=CASAS.filter(function(x){return x.id===r0.h;})[0]||d;
+      } else {
+        n=await cpPide('¿Cómo se llama la experiencia?');
+      }
+      if(!n) return;
+      d=casa;
       /* UNA FICHA NUEVA NACE DONDE VIVEN LAS DEMAS. Esto creaba siempre
          `tipo:'tercero'` colgada del sombrero de touroperador, que es como se
          llegó a tener nueve fichas de Casa Pepe archivadas como si fueran de
@@ -3193,7 +3281,10 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       var r=await fetch(SB+'/rest/v1/op_experiencias',{method:'POST',
         headers:Object.assign(hdr(),{Prefer:'return=representation'}),
         body:JSON.stringify({operador_id: propia?null:MITO.id, tipo: propia?'propio':'tercero',
-          nombre:n,estado:'borrador',ciudad:ciudadCat(d.ciudad)})});
+          nombre:n,estado:'borrador',ciudad:ciudadCat(d.ciudad),
+          /* De quien es la ficha, dicho en la fila y no deducido por la
+             ciudad: dos casas pueden compartir ciudad. */
+          hotel_id:d.id||null, alcance:'sincretico'})});
       if(!r.ok){toast('No se pudo crear: '+(await r.text()).slice(0,130),true);return;}
       var e=(await r.json())[0];
       /* AQUI NO SE ABRE UNA PESTAÑA, SE VA. Javi, 5-nov-2026: «el modulo de
