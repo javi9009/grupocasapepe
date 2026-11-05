@@ -775,6 +775,17 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
       {k:'rest',     t:'Restaurante y menú',  g:'cutlery',d:'Si la casa da de comer.'},
       {k:'intang',   t:'Sus intangibles',     g:'bag', d:'Hereda los del grupo. Quita lo que no le cuadre a esta casa.'},
       {k:'mapa',     t:'Su mapa',             g:'pin', d:'Hereda el del grupo. Quita o añade lo de su barrio.'},
+      /* LO QUE SE CREA, SE CREA EN UNA CASA. Javi, 5-nov-2026: «te falta en
+         Casa Pepe Puebla Mis experiencias, Mis espacios y Eventos: eso es por
+         cada ubicación y cada hotel, y se suman en el total del grupo con la
+         etiqueta del hotel».
+         Estaban solo en el menú del grupo, así que una casa podía heredar
+         experiencias pero no tener las suyas, y su terraza y su cartelera no
+         existían desde dentro. Ahora las tres viven en los dos niveles: en la
+         casa, lo suyo; en el grupo, la suma con el nombre de cada una. */
+      {k:'espacios', t:'Sus espacios',        g:'plan',d:'Los sitios de esta casa que se pueden ocupar: salas, terraza, patio, azotea.'},
+      {k:'exps',     t:'Sus experiencias',    g:'map', d:'Las que crea esta casa. Las del grupo las ve en Mis intangibles.'},
+      {k:'eventos',  t:'Sus eventos',         g:'ticket',d:'Lo que se monta en los espacios de esta casa.'},
       {k:'conc',     t:'Sus concierges',      g:'users',d:'Quién vende en esta casa.'},
       {k:'equipo',   t:'Su equipo',           g:'users',d:'Quién opera: guías, técnicos, coordinación y eventos.'},
       {k:'prog',     t:'Su programación',     g:'calendar',d:'Qué viene en esta casa en los próximos 30 días.'},
@@ -2877,15 +2888,25 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
   var ESP=[];
   async function vEspacios(w){
     var d=destino();
-    w.innerHTML='<div class="card"><h3>Mis espacios</h3>'
+    /* EN EL GRUPO SE SUMAN; EN LA CASA, SOLO LOS SUYOS. Antes esta pantalla
+       pedía siempre `hotel_id=eq.<destino>`, así que desde el grupo se veían
+       únicamente los de la casa por la que se había entrado y las demás no
+       existían. Javi, 5-nov-2026: «se suman en el total del grupo con la
+       etiqueta del hotel». */
+    var casasE = nivel==='hotel' ? [d] : [G].concat(HOT||[]).filter(Boolean);
+    var nomCasa={}; casasE.forEach(function(h){ nomCasa[h.id]=h.nombre_comercial||''; });
+    w.innerHTML='<div class="card"><h3>'+(nivel==='hotel'?'Sus espacios':'Mis espacios')+'</h3>'
       +'<div class="hint">Los sitios de tu casa que se pueden ocupar: salas, terraza, patio, azotea. De cada uno decides cómo le cobras a alguien de fuera que monte algo ahí: precio fijo con fianza, o un porcentaje de lo que venda el evento.</div>'
       +'<div class="hgrid" id="eg"><div class="mini">Cargando…</div></div></div><div id="efi"></div>';
-    ESP = await get('ev_espacios?select=*&hotel_id=eq.'+d.id+'&order=nombre') || [];
+    ESP = await get('ev_espacios?select=*&hotel_id=in.('
+      +casasE.map(function(x){return x.id;}).join(',')+')&order=nombre') || [];
     var h=ESP.map(function(x){
       var cobro = x.cobro_tercero_modo==='porcentaje' ? (x.cobro_tercero_pct||0)+'% de su venta'
                 : x.cobro_tercero_modo==='fijo' ? ('$'+(x.tarifa_hora||0)+'/h'+(x.tarifa_dia?' · $'+x.tarifa_dia+'/día':'')+(x.fianza_monto?' · fianza $'+x.fianza_monto:''))
                 : 'sin precio todavía';
       return '<button class="hc" data-e="'+x.id+'"><div class="hn">'+esc(x.nombre||'(sin nombre)')+'</div>'
+        + (nivel!=='hotel' && nomCasa[x.hotel_id]
+            ? '<div class="hm" style="opacity:.75">'+esc(nomCasa[x.hotel_id])+'</div>' : '')
         +'<div class="hm">'+(x.capacidad?x.capacidad+' de pie':'sin aforo')+(x.capacidad_sentado?' · '+x.capacidad_sentado+' sentados':'')+'<br>'
         + esc(cobro)+'<br>'+(x.activo?'Publicado':'Apagado')+(x.abierto_terceros?' · abierto a terceros':' · solo para ti')+'</div></button>';
     }).join('');
@@ -2893,10 +2914,28 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
     $('eg').innerHTML=h;
     $('eg').querySelectorAll('.hc[data-e]').forEach(function(b){b.onclick=function(){fichaEspacio(b.getAttribute('data-e'));};});
     $('nuevoE').onclick=async function(){
-      var n=await cpPide('¿Cómo se llama el espacio?'); if(!n) return;
+      /* Lo mismo que con las experiencias: desde «todo el grupo», destino()
+         es la casa por la que se entró, así que la Pulquería Cósmica de
+         Puebla nacía en CDMX sin que nada lo dijera. Javi, 5-nov-2026:
+         «necesito que ubiques bien la ubicación porque se va a mandar a
+         CDMX». Con una sola casa no se pregunta nada. */
+      var n, casa=d;
+      if(nivel!=='hotel' && casasE.length>1){
+        var r0=await cpPideVarios('¿Cómo se llama y en qué casa está?',[
+          {k:'n', et:'Nombre del espacio', req:true},
+          {k:'h', et:'¿En qué casa está?', tipo:'select', req:true,
+           opciones:casasE.map(function(x){
+             return [x.id, (x.nombre_comercial||'(sin nombre)')+' · '+(x.ciudad||'sin ciudad')]; })}
+        ],{si:'Crear'});
+        if(!r0) return;
+        n=r0.n; casa=casasE.filter(function(x){return x.id===r0.h;})[0]||d;
+      } else {
+        n=await cpPide('¿Cómo se llama el espacio?');
+      }
+      if(!n) return;
       var sl=n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,30);
       var r=await fetch(SB+'/rest/v1/ev_espacios',{method:'POST',headers:Object.assign(hdr(),{Prefer:'return=representation'}),
-        body:JSON.stringify({nombre:n,slug:sl+'-'+Math.random().toString(36).slice(2,5),hotel_id:d.id,sede:(d.slug||null),activo:false})});
+        body:JSON.stringify({nombre:n,slug:sl+'-'+Math.random().toString(36).slice(2,5),hotel_id:casa.id,sede:(casa.slug||null),activo:false})});
       if(!r.ok){toast('No se pudo crear: '+(await r.text()).slice(0,110),true);return;}
       var j=await r.json(); toast('Espacio creado'); await vEspacios(w); fichaEspacio(j[0].id);
     };
@@ -3642,9 +3681,12 @@ body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
   var MEV=[], MESP=[];
   async function vEventos(w){
     var d=destino();
-    var casas=[G].concat(HOT||[]).filter(Boolean).map(function(x){return x.id;});
+    /* AL REVES QUE LOS ESPACIOS: esta pedía siempre el grupo entero, así que
+       dentro de Casa Pepe Puebla salía la cartelera del Ateneo. En la casa,
+       lo de la casa. Javi, 5-nov-2026. */
+    var casas=(nivel==='hotel'?[d]:[G].concat(HOT||[])).filter(Boolean).map(function(x){return x.id;});
     MESP = await get('ev_espacios?select=id,nombre,hotel_id&hotel_id=in.('+casas.join(',')+')&order=nombre') || [];
-    w.innerHTML='<div class="card"><h3>Mis eventos</h3>'
+    w.innerHTML='<div class="card"><h3>'+(nivel==='hotel'?'Sus eventos':'Mis eventos')+'</h3>'
       +'<div class="hint">Se montan con el <b>mismo asistente que usan las productoras del Ateneo</b>: las tres clases '
       +'(con público, espacio creativo, uso privado), el calendario de tu sala, los boletos y las fotos. '
       +'Te quedas el <b>65%</b>, y <b>70%</b> si es solo para tus huéspedes. '
