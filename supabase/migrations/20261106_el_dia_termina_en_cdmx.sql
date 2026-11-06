@@ -1,0 +1,53 @@
+-- 6-nov-2026 · El día termina en CDMX, no en Greenwich.
+--
+-- Javi: «recuerda no dejar el evento como que ya pasó hasta que sean las 00:00
+-- del día siguiente».
+--
+-- Lo dijo como una regla de producto y destapó un fallo de reloj. El servidor
+-- de Postgres corre en UTC, así que `current_date` cambia de día a las 18:00 de
+-- la Ciudad de México: seis horas antes de tiempo, todos los días.
+--
+-- Comprobado en el momento: `now()` 22:17 UTC, hora CDMX 16:17, las dos fechas
+-- todavía coincidiendo. A las 18:00 locales dejan de coincidir hasta medianoche.
+--
+-- Y esa franja —de las seis de la tarde a las doce de la noche— es justo la de
+-- las experiencias de noche. La Noche Mexicana sale a las 18:00: en el minuto
+-- en que arranca, para la base ya era el día siguiente.
+--
+-- QUÉ ROMPÍA.
+--
+-- `sinc_catalogo` pide la disponibilidad desde `current_date`, así que a partir
+-- de las 18:00 el escaparate empezaba a contar desde mañana y el día en curso
+-- desaparecía de la vista seis horas antes de acabarse. Quien buscara algo para
+-- hoy a las siete de la tarde no lo veía.
+--
+-- `sinc_dia_boletos` usa `current_date` como día por defecto: llamada sin fecha
+-- después de las 18:00 contestaba por el día siguiente, es decir, «ese día no
+-- tienes ninguna salida» en plena verificación. La pantalla del escáner se
+-- salvaba por casualidad, porque la fecha la pone el navegador con el reloj del
+-- teléfono (escaner.html, línea 199) y ése sí está en hora local.
+--
+-- EL ARREGLO. Una pieza que faltaba:
+--
+--   create or replace function public.hoy_cdmx()
+--    returns date language sql stable
+--   as $$ select (now() at time zone 'America/Mexico_City')::date; $$;
+--
+-- Y sustituir `current_date` por ella donde «el día» es el día de operación:
+-- lo que se vende, lo que se escanea, lo que se corta. Parcheadas:
+-- sinc_catalogo, sinc_catalogo_prueba, sinc_dia_boletos y el default de
+-- sinc_corte(p_hasta).
+--
+-- Comprobado después, con las dos fechas todavía coincidiendo (que es cuando el
+-- cambio no debe notarse): 21 fichas en el catálogo, y la lista del día sin
+-- pasarle fecha devuelve las tres salidas de hoy con sus 86 personas.
+--
+-- LO QUE QUEDA SIN TOCAR, a propósito, porque su «hoy» puede no ser el día de
+-- operación y hay que mirarlas una por una: sinc_arma_reparto, sinc_es_huesped,
+-- sinc_generar_salidas, sinc_impacto_indirecto y sinc_revenue_guarda_ficha.
+--
+-- LA REGLA. Un sistema que opera en un sitio tiene un huso horario, y no es el
+-- del servidor. `current_date` no significa «hoy»: significa «hoy donde está la
+-- máquina». Mientras las dos fechas coinciden —dieciocho horas de cada
+-- veinticuatro— el fallo no se ve, y por eso lleva ahí desde el principio sin
+-- que nadie lo notara: sólo asoma de noche.
