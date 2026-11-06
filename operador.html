@@ -735,6 +735,14 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       </span>
       <button data-v="ventas">Mis ventas</button>
       <button data-v="prog">Programación</button>
+      <!-- LO DEL EDIFICIO. Javi, 6-nov-2026. Dos cosas que solo tienen
+           sentido para quien baja las escaleras: la comida que sube Cumbre y
+           el codigo de concierge. Nacen apagadas y las enciende `ateneoEdificio`
+           despues de preguntarle a la base si esta persona tiene contrato.
+           Ensenarle la comida de Virreyes a un artesano de Nayarit seria
+           ofrecerle algo que no puede usar. -->
+      <button data-v="comida" id="btnComida" style="display:none">🍽️ Comida</button>
+      <button data-v="qr" id="btnQr" style="display:none">🧭 Concierge</button>
       <!-- LO SUYO, RECOGIDO. Los hijos son vistas de verdad (data-v), así que
            los engancha el mismo bucle que el resto de la barra; no hacen falta
            apartados propios como en Artesanía. El padre entra a Mis datos, que
@@ -1303,6 +1311,50 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     </div>
   </div></div>
 
+  <!-- ============ LA COMIDA DE VIRREYES ============
+       Javi, 6-nov-2026: «mete el módulo de reserva de comidas en Virreyes que
+       sube Ana/Cumbre para que puedan solicitar cuándo bajar a comer y lo
+       pagan directamente ahí. Se permite anotar si van a comer hasta 4 horas
+       antes de la comida».
+
+       EL MENÚ SE ESCRIBE DONDE SIEMPRE. Cumbre sube el platillo del día en la
+       misma tabla en la que Ana lo sube para CDMX y Puebla; aquí solo se lee.
+       Lo único que cambia en Virreyes es que lleva precio, porque quien baja
+       no está en nómina.
+
+       LA HORA NO SE ESCRIBE AQUÍ. El corte lo calcula la base desde la hora
+       del servicio y las horas de antelación. Si mañana se come a las 13:30,
+       se cambia un dato y esta pantalla se entera sola. -->
+  <div class="vista" id="vComida"><div class="wrap">
+    <div class="encab">
+      <div><h1>Comida en Virreyes</h1>
+        <div class="mini">Lo que cocina Cumbre cada día. Te apuntas, pagas aquí, y bajas a comer.</div></div>
+    </div>
+    <div id="cmCaja"><div class="mini" style="padding:18px 0">Mirando qué hay…</div></div>
+    <div class="card" id="cmProx" style="display:none">
+      <h3>Los próximos días</h3>
+      <div class="hint">Lo que Cumbre ya dejó puesto. Puedes apuntarte con días de antelación.</div>
+      <div id="cmLista"></div>
+    </div>
+  </div></div>
+
+  <!-- ============ TU CONCIERGE ============
+       Javi, 6-nov-2026: «mételes un módulo de concierge con su QR en ficha
+       ateneista para que vendan tours y eventos si quieren». Solo coworkers
+       con contrato.
+
+       EL QR ES EL MISMO DE SIEMPRE. Apunta a casapepe.mx/sincretico con su
+       código, que es lo que ya resuelve quién atendió y a quién le toca la
+       comisión. No hay un segundo canal de venta: hay una casa más colgada
+       del que ya funciona. -->
+  <div class="vista" id="vQr"><div class="wrap">
+    <div class="encab">
+      <div><h1>Tu concierge</h1>
+        <div class="mini">Vende los tours y los eventos de la casa. Lo que se compre con tu código lleva tu comisión.</div></div>
+    </div>
+    <div id="qrCaja"><div class="mini" style="padding:18px 0">Mirando tu código…</div></div>
+  </div></div>
+
   <div class="vista" id="vCuenta">
     <iframe id="ifCuenta" title="Mi cuenta"
       style="display:block;width:100%;border:0;min-height:calc(100vh - 118px)"></iframe>
@@ -1858,6 +1910,256 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     };
   });
 
+  /* ================= LA COMIDA DE VIRREYES =================
+     El menú lo sube Cumbre; aquí solo se lee y se paga. El corte -cuatro horas
+     antes de la comida- lo calcula la base y viene ya hecho en `cierre`: la
+     pantalla no vuelve a hacer esa cuenta, porque dos sitios calculando la
+     misma hora es un sitio donde se van a separar.
+
+     Y lo que da por pagada una comida NO es esta pantalla ni la vuelta de
+     Stripe: es el webhook. Aquí, después de pagar, se vuelve a preguntar. Si
+     el aviso de Stripe tardó un segundo, el botón lo dice y se refresca; nunca
+     se pinta un «pagado» que la base no haya visto. */
+  var CM=null;
+  async function cmRpc(fn, body){
+    var r=await fetch(SB+'/rest/v1/rpc/'+fn,{method:'POST',headers:hdr(),
+            body:JSON.stringify(body||{})});
+    if(!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+  function cmHora(iso){
+    if(!iso) return '';
+    try{ return new Date(iso).toLocaleTimeString('es-MX',
+           {hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'}); }
+    catch(_){ return ''; }
+  }
+
+  function cmPinta(d){
+    if(!d) return '<div class="card"><div class="hint">No pudimos leer el men\u00fa.</div></div>';
+    var h='<div class="card">';
+    if(!d.hay){
+      h+='<h3>Hoy todav\u00eda no hay men\u00fa</h3>'+
+         '<div class="hint">Cumbre lo sube por la ma\u00f1ana. Vuelve en un rato, o mira los pr\u00f3ximos d\u00edas aqu\u00ed abajo.</div>';
+      return h+'</div>';
+    }
+    h+='<h3>'+esc(d.platillo)+'</h3>';
+    if(d.descripcion) h+='<div class="hint">'+esc(d.descripcion)+'</div>';
+    h+='<div class="mini" style="margin:2px 0 12px">Se come a las '+esc(d.hora||'14:00')+
+       (d.precio?(' \u00b7 '+money(d.precio)+' por persona'):'')+'</div>';
+
+    var a=d.mi_apunte;
+    if(a && a.estado==='pagado'){
+      h+='<div class="hint" style="color:var(--ok)"><b>Est\u00e1s apuntado'+
+         (a.personas>1?(' \u00b7 '+a.personas+' personas'):'')+'.</b> Te esperamos a las '+esc(d.hora||'14:00')+'.</div>';
+      if(a.nota) h+='<div class="mini">Tu nota: '+esc(a.nota)+'</div>';
+      h+='<div class="mini" style="margin-top:8px">Si al final no puedes bajar, d\u00edselo a recepci\u00f3n: ya est\u00e1 cobrada.</div>';
+      return h+'</div>';
+    }
+    if(a && a.estado==='pendiente'){
+      h+='<div class="hint" style="color:var(--alerta)"><b>Te falta pagarla.</b> '+
+         'Tu sitio no est\u00e1 apartado hasta que entre el pago.</div>'+
+         '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+         '<button class="btn" id="cmPagar" data-a="'+esc(a.id)+'">Pagar '+money(a.importe)+'</button>'+
+         '<button class="btn fantasma sm" id="cmQuitar" data-a="'+esc(a.id)+'">Quitarme</button></div>';
+      return h+'</div>';
+    }
+    if(!d.abierto){
+      h+='<div class="hint">'+(d.precio?('Ya pas\u00f3 la hora de apuntarse: cerr\u00f3 a las '+cmHora(d.cierre)+'.'):
+         'Este d\u00eda todav\u00eda no tiene precio puesto.')+'</div>';
+      return h+'</div>';
+    }
+    h+='<div class="hint">Puedes apuntarte hasta las <b>'+cmHora(d.cierre)+'</b> de hoy.</div>'+
+       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'+
+       '<div><label class="mini" for="cmGente">Cu\u00e1ntos</label>'+
+       '<select id="cmGente" style="display:block">'+
+         [1,2,3,4,5,6].map(function(n){return '<option value="'+n+'">'+n+'</option>';}).join('')+
+       '</select></div>'+
+       '<div style="flex:1;min-width:180px"><label class="mini" for="cmNota">Algo que deban saber</label>'+
+       '<input id="cmNota" placeholder="Sin cebolla, vegetariano\u2026" style="display:block;width:100%"></div>'+
+       '<button class="btn" id="cmApunta" data-f="'+esc(d.fecha)+'">Apuntarme</button></div>';
+    return h+'</div>';
+  }
+
+  function cmEngancha(){
+    var b=$('cmApunta');
+    if(b) b.onclick=async function(){
+      b.disabled=true;
+      try{
+        var r=await cmRpc('ate_comida_apuntar',{
+          p_fecha:b.getAttribute('data-f'),
+          p_personas:Number(($('cmGente')||{}).value||1),
+          p_nota:(($('cmNota')||{}).value||'')});
+        if(r && r.error){ toast(r.error,true); b.disabled=false; return; }
+        await cmCobra(r.apunte_id);
+      }catch(e){ toast('No pudimos apuntarte.',true); b.disabled=false; }
+    };
+    var p=$('cmPagar');
+    if(p) p.onclick=function(){ p.disabled=true; cmCobra(p.getAttribute('data-a')); };
+    var q=$('cmQuitar');
+    if(q) q.onclick=async function(){
+      q.disabled=true;
+      try{
+        var r=await cmRpc('ate_comida_cancelar',{p_apunte:q.getAttribute('data-a')});
+        if(r && r.error){ toast(r.error,true); q.disabled=false; return; }
+        toast('Te quitamos de la lista.');
+        cargaComida();
+      }catch(_){ toast('No pudimos quitarte.',true); q.disabled=false; }
+    };
+  }
+
+  /* El cobro lo abre la función del servidor, no el navegador: aquí no hay ni
+     puede haber una llave de Stripe. */
+  async function cmCobra(apunte){
+    try{
+      var r=await fetch(SB+'/functions/v1/ate-comida-pago',{method:'POST',headers:hdr(),
+              body:JSON.stringify({apunte_id:apunte})});
+      var j=await r.json();
+      if(j && j.ya){ toast('Esa comida ya estaba pagada.'); cargaComida(); return; }
+      if(!j || !j.url){ toast((j&&j.error)||'No pudimos abrir el cobro.',true); cargaComida(); return; }
+      location.href=j.url;
+    }catch(_){ toast('No pudimos abrir el cobro.',true); cargaComida(); }
+  }
+
+  async function cargaComida(){
+    var c=$('cmCaja'); if(!c) return;
+    c.innerHTML='<div class="mini" style="padding:18px 0">Mirando qu\u00e9 hay\u2026</div>';
+    try{ CM=await cmRpc('ate_comida_dia',{}); }
+    catch(_){ c.innerHTML='<div class="card"><div class="hint">No pudimos leer el men\u00fa. Vuelve a entrar en un momento.</div></div>'; return; }
+    c.innerHTML=cmPinta(CM); cmEngancha();
+
+    /* Los próximos días. Van aparte de hoy porque son otra decisión: hoy se
+       mira para bajar en un rato, y la semana para organizarse. */
+    try{
+      var l=await cmRpc('ate_comida_proximos',{p_dias:7});
+      l=(l||[]).filter(function(x){ return String(x.fecha)!==String(CM&&CM.fecha); });
+      var caja=$('cmProx'), lst=$('cmLista');
+      if(!caja||!lst) return;
+      if(!l.length){ caja.style.display='none'; return; }
+      caja.style.display='';
+      lst.innerHTML=l.map(function(x){
+        var est = x.mi_estado==='pagado' ? '<span style="color:var(--ok)">apuntado</span>'
+                : x.mi_estado==='pendiente' ? '<span style="color:var(--alerta)">sin pagar</span>'
+                : x.abierto ? '<span class="mini">abierto</span>' : '<span class="mini">cerrado</span>';
+        return '<div style="display:flex;justify-content:space-between;gap:10px;'+
+               'padding:9px 0;border-top:1px solid var(--linea)">'+
+               '<div><b>'+esc(x.platillo||'\u2014')+'</b><div class="mini">'+fd(x.fecha)+
+               (x.precio?(' \u00b7 '+money(x.precio)):'')+'</div></div><div>'+est+'</div></div>';
+      }).join('');
+    }catch(_){ }
+  }
+
+  /* ================= TU CONCIERGE =================
+     El código y el QR son los mismos que usa un concierge de hotel. Lo único
+     que cambia es la casa a la que cuelga: el Ateneo. */
+  var QRLIB=null;
+  function qrLib(){
+    if(window.QRCode) return Promise.resolve(true);
+    if(QRLIB) return QRLIB;
+    QRLIB=new Promise(function(res){
+      var s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      s.onload=function(){res(true);}; s.onerror=function(){res(false);};
+      document.head.appendChild(s);
+    });
+    return QRLIB;
+  }
+
+  async function cargaQr(){
+    var c=$('qrCaja'); if(!c) return;
+    c.innerHTML='<div class="mini" style="padding:18px 0">Mirando tu c\u00f3digo\u2026</div>';
+    var d=null;
+    try{ d=await cmRpc('ate_concierge_yo',{}); }
+    catch(_){ c.innerHTML='<div class="card"><div class="hint">No pudimos leerlo. Vuelve a entrar en un momento.</div></div>'; return; }
+
+    if(!d || !d.puede){
+      c.innerHTML='<div class="card"><h3>Todav\u00eda no</h3><div class="hint">'+
+        esc((d&&d.motivo)||'El m\u00f3dulo de concierge es para coworkers con contrato.')+
+        '</div><div class="mini">Si crees que deber\u00edas tenerlo, d\u00edselo a Mariana.</div></div>';
+      return;
+    }
+
+    if(!d.alta){
+      c.innerHTML='<div class="card"><h3>Vende lo de la casa</h3>'+
+        '<div class="hint">Te damos un c\u00f3digo y un QR. Cuando alguien reserva un tour o un evento '+
+        'ense\u00f1\u00e1ndolo, esa venta queda a tu nombre y te llevas el '+esc(d.comision||10)+'%.</div>'+
+        '<button class="btn" id="qrAlta">Quiero mi c\u00f3digo</button></div>';
+      var ba=$('qrAlta');
+      if(ba) ba.onclick=async function(){
+        ba.disabled=true;
+        try{
+          var r=await cmRpc('ate_concierge_alta',{});
+          if(r && r.error){ toast(r.error,true); ba.disabled=false; return; }
+          toast('Listo. Ese es tu c\u00f3digo.');
+          cargaQr();
+        }catch(_){ toast('No pudimos darte de alta.',true); ba.disabled=false; }
+      };
+      return;
+    }
+
+    c.innerHTML='<div class="card" style="text-align:center">'+
+      '<h3>Tu c\u00f3digo</h3>'+
+      '<div style="font-family:Oswald,sans-serif;font-size:28px;letter-spacing:.06em;'+
+      'color:var(--naranja);margin:10px 0">'+esc(d.codigo)+'</div>'+
+      '<div id="qrBox" style="display:flex;justify-content:center;margin:14px 0"></div>'+
+      '<div class="hint">Ens\u00e9\u00f1aselo a quien quieras. Lo escanea, reserva, y esa venta '+
+      'es tuya: el '+esc(d.comision||10)+'% de lo que pague.</div>'+
+      '<div class="mini" style="word-break:break-all">'+esc(d.liga)+'</div>'+
+      '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px">'+
+      '<button class="btn fantasma sm" id="qrCopia">Copiar la liga</button>'+
+      '<button class="btn fantasma sm" id="qrOff">Apagarlo</button></div>'+
+      '</div>'+
+      '<div class="card"><h3>Lo que llevas vendido</h3>'+
+      '<div class="hint">'+(Number(d.ventas||0)?
+        (d.ventas+' reserva'+(d.ventas==1?'':'s')+' \u00b7 '+money(d.vendido)):
+        'Todav\u00eda nada. En cuanto alguien compre con tu c\u00f3digo, sale aqu\u00ed.')+'</div></div>';
+
+    var cp=$('qrCopia');
+    if(cp) cp.onclick=function(){
+      try{ navigator.clipboard.writeText(d.liga); toast('Copiada.'); }
+      catch(_){ toast('C\u00f3piala a mano, est\u00e1 ah\u00ed arriba.',true); }
+    };
+    var off=$('qrOff');
+    if(off) off.onclick=async function(){
+      off.disabled=true;
+      try{ await cmRpc('ate_concierge_baja',{}); toast('Apagado. Tu c\u00f3digo se guarda.'); cargaQr(); }
+      catch(_){ toast('No pudimos apagarlo.',true); off.disabled=false; }
+    };
+
+    /* El QR, al final y sin bloquear: si cdnjs no responde, la liga de arriba
+       sigue sirviendo y la pantalla no se queda a medias. */
+    if(await qrLib()){
+      try{ new QRCode($('qrBox'),{text:d.liga,width:190,height:190,
+             correctLevel:QRCode.CorrectLevel.M}); }catch(_){ }
+    }
+  }
+
+  /* QUIÉN VE ESTAS DOS PESTAÑAS. Lo decide la base, no la pantalla: un
+     `ate_concierge_yo` que dice que no puede es también la respuesta a si tiene
+     contrato en el edificio, que es la misma condición para la comida. */
+  async function ateneoEdificio(){
+    try{
+      var d=await cmRpc('ate_concierge_yo',{});
+      var dentro = !!(d && d.puede);
+      var bc=$('btnComida'), bq=$('btnQr');
+      if(bc) bc.style.display = dentro ? '' : 'none';
+      if(bq) bq.style.display = dentro ? '' : 'none';
+      if(dentro) vuelveDeLaComida();
+    }catch(_){ }
+  }
+
+  /* La vuelta de Stripe. El navegador aterriza en ?comida=ok, pero quien dio
+     la comida por pagada fue el webhook: por eso lo único que hace esto es
+     abrir la pestaña y volver a preguntar. */
+  function vuelveDeLaComida(){
+    var q='';
+    try{ q=new URLSearchParams(location.search).get('comida')||''; }catch(_){ }
+    if(!q) return;
+    try{ history.replaceState(null,'',location.pathname); }catch(_){ }
+    if(q==='ok'){ toast('Comida pagada. Te esperamos abajo.'); }
+    else { toast('Se qued\u00f3 sin pagar; tu sitio no est\u00e1 apartado.', true); }
+    try{ vista('comida'); cargaComida(); }catch(_){ }
+  }
+
   Array.prototype.forEach.call(document.querySelectorAll('.barra nav button[data-v]'),function(b){
     b.onclick=function(){var v=b.getAttribute('data-v');if(!v)return;vista(v);
       if(v==='galeria')cargaGaleria();
@@ -1867,6 +2169,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(v!=='boletos'){try{apagaBoletos();}catch(_){}}
       if(v==='impacto'){try{odsCarga();}catch(_){} try{cargaImpacto();}catch(_){}}
       if(v==='prog'){try{cargaProg();}catch(_){}}
+      if(v==='comida'){try{cargaComida();}catch(_){}}
+      if(v==='qr'){try{cargaQr();}catch(_){}}
       if(v==='conc'){try{cargaConc();}catch(_){}}
       if(v==='eventos'){try{cargaEventos();}catch(_){}}
       if(v==='hoteles'){try{cargaHoteles();}catch(_){}}
@@ -6756,6 +7060,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        que protege, y una barra a medias por un fallo de red es peor que la
        barra entera. Javi, 30-oct-2026. */
     try{ await cargaPapel(); }catch(_){}
+    /* Y si además tiene contrato en el edificio, se le encienden la comida
+       y su código de concierge. Va detrás del papel a propósito: primero se
+       quita lo que no le toca por su rol, y solo después se añade lo suyo.
+       Javi, 6-nov-2026. */
+    try{ await ateneoEdificio(); }catch(_){}
   }
   function pintaCaps(){
     var caja=$('misCaps'); if(!caja) return;
