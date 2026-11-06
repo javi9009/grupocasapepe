@@ -2018,14 +2018,24 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           (PG.sol[k]=PG.sol[k]||[]).push(q); });
       }
 
-      PG.clientes={};
+      /* LOS INTENTOS, APARTE. Javi, 6-nov-2026: «los que son intentos y NO
+         pasaron no las pongas como ventas; no subas los intentos a la
+         programación». Cuando el cobro devuelve un error y el huésped vuelve a
+         darle al botón, nace una reserva nueva cada vez: el 5-nov salieron
+         cinco de la misma persona en siete minutos. Esas no son gente que
+         venga ni dinero que entre, así que no se cuentan en el cupo ni se
+         pintan entre los clientes -se enseñan debajo, con su propio rótulo-. */
+      PG.clientes={}; PG.intentos={};
       var sids=PG.salidas.map(function(x){return x.id;});
       if(sids.length){
         var rc=await fetch(SB+'/rest/v1/sinc_reservas?select=id,salida_id,nombre,pax,adultos,menores,idioma,email,telefono,'+
           'pickup,pickup_lugar,pickup_hora,pickup_lat,pickup_lng,pago_estado,total,notas,cancelada_at,encuentro_estado,recordatorio_3h_at,'+
-          'canal,restricciones,llegaron,llego_at,folio,hotel_id,adultos,menores,llegue_aviso_at,llegue_aviso_min'+
+          'canal,restricciones,llegaron,llego_at,folio,hotel_id,adultos,menores,llegue_aviso_at,llegue_aviso_min,'+
+          'intento,intento_nota,created_at'+
           '&salida_id=in.('+sids.join(',')+')&cancelada_at=is.null&order=pickup_hora',{headers:hdr()});
-        if(rc.ok)(await rc.json()).forEach(function(c){ (PG.clientes[c.salida_id]=PG.clientes[c.salida_id]||[]).push(c); });
+        if(rc.ok)(await rc.json()).forEach(function(c){
+          var d = c.intento ? PG.intentos : PG.clientes;
+          (d[c.salida_id]=d[c.salida_id]||[]).push(c); });
       }
 
       var rg=await fetch(SB+'/rest/v1/v_mis_guias?select=id,nombre,idiomas,oficio,whatsapp,email&operador_id=eq.'+cur.id+'&order=nombre',{headers:hdr()});
@@ -2564,6 +2574,25 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
                 'style="cursor:pointer">'+(pagado?'Pagado':'Sin pagar')+'</span>'+
             '</div>';
         }
+      })()+
+
+      /* LOS INTENTOS QUE NO PASARON. No suman en el cupo ni en ventas, pero se
+         ven: son la prueba de que a alguien se le cayó el cobro, y sin verlos
+         el único rastro es un hueco en la lista. Javi, 6-nov-2026. */
+      (function(){
+        var it=(PG.intentos&&PG.intentos[s.id])||[];
+        if(!it.length) return '';
+        return '<div class="pgcli" style="opacity:.72">'+
+          '<div class="qn"><b>'+it.length+' '+
+            (it.length===1?'intento de pago que no pasó':'intentos de pago que no pasaron')+'</b>'+
+            '<div class="mini">No cuentan en el cupo ni en ventas.'+
+              (it[0].intento_nota?' '+esc(it[0].intento_nota):'')+'</div>'+
+            it.map(function(c){
+              return '<div class="mini">'+esc(c.nombre||'(sin nombre)')+' · '+
+                (Number(c.pax)||1)+' pers. · '+esc(c.folio||'')+
+                (c.created_at?' · '+esc(String(c.created_at).slice(11,16)):'')+'</div>';
+            }).join('')+
+          '</div></div>';
       })()+
 
       /* LO QUE PREGUNTÓ FUERA DE HORA, antes de la puerta de apuntar: es lo
@@ -8440,7 +8469,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
   function renVentas(){
     var l=document.getElementById('vtLista'); if(!l) return;
-    var vivas=VT.filter(function(r){return r.estado!=='cancelada';});
+    /* UN INTENTO NO ES UNA VENTA. Javi, 6-nov-2026. Cuando el cobro devuelve
+       un error y el huésped vuelve a darle al botón, nace una reserva nueva:
+       el 5-nov salieron cinco de la misma persona en siete minutos. Contarlas
+       como ventas infla las personas, el dinero y el cupo. Se quedan fuera de
+       todo y se miran por su propio filtro. */
+    var INT=VT.filter(function(r){return !!r.intento;});
+    var vivas=VT.filter(function(r){return r.estado!=='cancelada' && !r.intento;});
     var pagadas=vivas.filter(function(r){return r.pago_estado==='pagado';});
     var pax=vivas.reduce(function(s,r){return s+(Number(r.pax)||0);},0);
     var neto=pagadas.reduce(function(s,r){return s+(Number(r.neto)||0);},0);
@@ -8462,7 +8497,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     selT.style.display = hay.length>1 ? '' : 'none';
     selT.onchange=function(){ VTT=this.value; VTEXP=''; VTDIA=''; renVentas(); };
 
-    var DEL_TIPO=VT.filter(function(r){ return !VTT || String(r.tipo||'tour')===VTT; });
+    /* Sin los intentos: si no, el calendario enciende días en los que no vino
+       nadie y el selector lista tours que nunca se vendieron. */
+    var DEL_TIPO=VT.filter(function(r){ return !r.intento && (!VTT || String(r.tipo||'tour')===VTT); });
     document.getElementById('vtExp').style.display = (VTT==='artesania') ? 'none' : '';
 
     var exps=[], vis={};
@@ -8490,11 +8527,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     });
 
     var F=[['todas','Todas'],['pagadas','Pagadas'],['pendientes','Sin pagar'],['canceladas','Canceladas']];
+    /* El filtro de los intentos sólo aparece cuando hay alguno: un botón con
+       cero al lado es una pregunta que nadie hizo. */
+    if(INT.length) F.push(['intentos','Intentos']);
     document.getElementById('vtFiltros').innerHTML=F.map(function(f){
-      var n = f[0]==='todas'?VT.length
+      var n = f[0]==='todas'?VT.filter(function(r){return !r.intento;}).length
             : f[0]==='pagadas'?pagadas.length
             : f[0]==='pendientes'?vivas.filter(function(r){return r.pago_estado!=='pagado';}).length
-            : VT.filter(function(r){return r.estado==='cancelada';}).length;
+            : f[0]==='intentos'?INT.length
+            : VT.filter(function(r){return r.estado==='cancelada' && !r.intento;}).length;
       return '<button class="btn fantasma sm" data-vf="'+f[0]+'"'+(VTF===f[0]?' style="border-color:var(--naranja);font-weight:700"':'')+'>'+
              esc(f[1])+' · '+n+'</button>';
     }).join('');
@@ -8510,6 +8551,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       if(VTT && String(r.tipo||'tour')!==VTT) return false;
       if(VTEXP && String(r.experiencia_id||'')!==VTEXP) return false;
       if(VTDIA && String(r.dia||'')!==VTDIA) return false;
+      /* Los intentos sólo salen en su filtro, nunca mezclados con lo demás. */
+      if(VTF==='intentos')   return !!r.intento;
+      if(r.intento)          return false;
       if(VTF==='pagadas')    return r.estado!=='cancelada' && r.pago_estado==='pagado';
       if(VTF==='pendientes') return r.estado!=='cancelada' && r.pago_estado!=='pagado';
       if(VTF==='canceladas') return r.estado==='cancelada';

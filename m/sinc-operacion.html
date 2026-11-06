@@ -144,6 +144,16 @@ tr.clic:hover td{background:var(--accent-soft)}
     <select id="fCanal"><option value="">Todos los canales</option></select>
     <select id="fEstado"><option value="">Todos los estados del tour</option></select>
     <select id="fPago"><option value="">Todos los estados de pago</option></select>
+    <!-- UN INTENTO NO ES UNA VENTA. Javi, 6-nov-2026: «los que son intentos y
+         NO pasaron no las pongas como ventas, eso si dejalas consideradas como
+         intentos y con un filtro a parte». Cuando el cobro falla y el huesped
+         vuelve a darle al boton nace una reserva nueva cada vez; por defecto
+         no se ven, y este desplegable es donde se van a buscar. -->
+    <select id="fIntento">
+      <option value="no">Sin los intentos</option>
+      <option value="solo">Solo los intentos</option>
+      <option value="todas">Intentos incluidos</option>
+    </select>
     <button class="btn ghost sm" id="btnLimpia">Limpiar filtros</button>
   </div>
 
@@ -242,7 +252,11 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     var q=($('fQ').value||'').trim().toLowerCase(), cu=$('fCuando').value, h=hoy();
     var f={tour:$('fTour').value,touroperadora:$('fOper').value,hotel:$('fHotel').value,
            anfitrion:$('fAnf').value,canal:$('fCanal').value,estado_tour:$('fEstado').value,pago_estado:$('fPago').value};
+    var vi=($('fIntento')&&$('fIntento').value)||'no';
     return R.filter(function(x){
+      /* Los intentos fallidos no cuentan ni en la tabla ni en los KPIs. */
+      if(vi==='no'   &&  x.intento) return false;
+      if(vi==='solo' && !x.intento) return false;
       if(SEDE && x.sede!==SEDE) return false;
       for(var k in f){ if(f[k] && String(x[k]||'')!==f[k]) return false; }
       if(cu==='prox'    && !(x.fecha_salida && x.fecha_salida>=h)) return false;
@@ -276,11 +290,13 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     ].map(function(k){return '<div class="kpi'+(k[2]?' '+k[2]:'')+'"><b>'+k[0]+'</b><span>'+k[1]+'</span></div>';}).join('');
 
     $('tb').innerHTML = l.length ? l.map(function(x){
-      return '<tr class="clic" data-id="'+esc(x.id)+'"'+(x.estado_tour==='cancelada'?' style="opacity:.55"':'')+'>'+
+      return '<tr class="clic" data-id="'+esc(x.id)+'"'+
+        (x.intento?' style="opacity:.6"':(x.estado_tour==='cancelada'?' style="opacity:.55"':''))+'>'+
         '<td><b>'+fd(x.fecha_salida)+'</b>'+(x.hora_salida?' <span class="mini">'+hm(x.hora_salida)+'</span>':'')+
           (x.sede?'<br><span class="mini">'+esc(x.sede)+'</span>':'')+'</td>'+
         '<td>'+esc(x.tour||'—')+'</td>'+
-        '<td><b>'+esc(x.huesped||'—')+'</b><br><span class="mini">'+esc(x.folio||'')+'</span></td>'+
+        '<td><b>'+esc(x.huesped||'—')+'</b><br><span class="mini">'+esc(x.folio||'')+
+          (x.intento?' · <b>intento</b>':'')+'</span></td>'+
         '<td class="n">'+(x.pax||0)+'</td>'+
         '<td class="n">'+money(x.bruto)+'</td>'+
         '<td>'+(x.hotel?esc(x.hotel):'<span class="mini">—</span>')+
@@ -381,7 +397,18 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
         '</select></div>'+
       '</div>'+
       '<div class="fld" style="margin-top:10px"><label>Nota (queda con tu nombre y la hora)</label><textarea id="aNota" rows="2" placeholder="Lo que haya que recordar de esta reserva"></textarea></div>'+
-      '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="aGuarda">Guardar</button></div>'+
+      '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="aGuarda">Guardar</button>'+
+        /* MARCARLA COMO INTENTO. Javi, 6-nov-2026. Un cobro que falla y un
+           huesped que vuelve a darle al boton dejan varias reservas de la
+           misma persona. Marcarla la saca de las ventas, del cupo y de la
+           Programacion sin cancelarla: sigue ahi, en su filtro, como prueba de
+           que algo se rompio. Y se puede deshacer, que es lo que la separa de
+           una cancelacion. */
+        '<button class="btn ghost" id="aIntento">'+
+          (x.intento?'No era un intento: devolverla':'Marcarla como intento que no paso')+
+        '</button></div>'+
+      (x.intento?'<div class="mini" style="margin-top:6px;opacity:.85">Marcada como intento'+
+        (x.intento_nota?': '+esc(x.intento_nota):'')+'. No cuenta en ventas ni en el cupo.</div>':'')+
 
       '<div class="sec">Moverla de día</div>'+
       '<div class="fgrid">'+
@@ -398,6 +425,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
 
     $('cajon').classList.add('on'); $('cajonBg').classList.add('on');
     $('aGuarda').onclick=guarda; $('aCancel').onclick=cancela; $('mvGo').onclick=mueve;
+    $('aIntento').onclick=marcaIntento;
     $('mvFecha').onchange=pintaHoras;
     cargaDisp(x);
   }
@@ -466,6 +494,19 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     }catch(e){ toast(String(e.message||e),true); }
     b.disabled=false;
   }
+  async function marcaIntento(){
+    if(!ABIERTA) return;
+    var si = !ABIERTA.intento;
+    var b=$('aIntento'); b.disabled=true;
+    try{
+      await rpc('sinc_reserva_intento',{p_reserva:ABIERTA.id, p_si:si,
+        p_nota: si ? (($('aNota').value||'').trim() || 'El cobro no paso y el huesped volvio a intentarlo.') : null});
+      toast(si?'Marcada como intento. Fuera de ventas, del cupo y de la Programacion.'
+              :'Devuelta: vuelve a contar como reserva.');
+      cierra(); await load();
+    }catch(e){ toast(String(e.message||e),true); }
+    b.disabled=false;
+  }
   async function cancela(){
     if(!ABIERTA) return;
     var m=prompt('¿Por qué se cancela? Queda escrito en la reserva.');
@@ -505,11 +546,12 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       SEDE=b.getAttribute('data-s'); pinta();
     };
   });
-  ['fQ','fCuando','fTour','fOper','fHotel','fAnf','fCanal','fEstado','fPago'].forEach(function(id){
+  ['fQ','fCuando','fTour','fOper','fHotel','fAnf','fCanal','fEstado','fPago','fIntento'].forEach(function(id){
     var el=$(id); el.addEventListener(el.tagName==='INPUT'?'input':'change',pinta);
   });
   $('btnLimpia').onclick=function(){
     ['fTour','fOper','fHotel','fAnf','fCanal','fEstado','fPago'].forEach(function(id){$(id).value='';});
+    if($('fIntento')) $('fIntento').value='no';
     $('fQ').value=''; $('fCuando').value='prox'; pinta();
   };
   $('btnRecarga').onclick=load;
