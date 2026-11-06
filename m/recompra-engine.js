@@ -38,15 +38,17 @@ var ACC={jj:74346, pitao:43854, ae:22729, lj:22529, pontigu:19411, aldo:14416,
 var PON_TODO=7518290, STR_TODO=4195000;
 
 /* Quién sale. El capital es el EXHIBIDO por cada persona; las acciones solo
-   determinan el % de dividendo mientras cobra. Guiot y Manzanilla están en los
-   dos vehículos: son dos posiciones con dos capitales, pero UNA sola persona, y
-   cobran UNA sola porción del bote repartida entre sus dos saldos. */
+   determinan el % de dividendo mientras cobra. Daniel Guiot está en los dos
+   vehículos: son dos posiciones con dos capitales, pero UNA sola persona, y
+   cobra UNA sola porción del bote repartida entre sus dos saldos.
+   Jorge Manzanilla salía en los dos y ya no sale: su capital se queda dentro
+   de cada vehículo (Javi, 6-nov-2026), y además entra a la refundación con
+   $170,000 nuevos. */
 var SALEN=[
  {k:'Starseeker, S.L.U.', n:'Joaquín Canals', v:'Starseeker', cap:3384307, acc:8907,  tot:3384307},
  {k:'Aldo Gelover Escamilla', n:'Aldo Gelover Escamilla', v:'directo',    cap:5579666, acc:14416, tot:5579666},
  {k:'PON-ANGEL', n:'Ángel Álvarez Cadavieco', v:'El Pontigu', cap:500000,  acc:19411, tot:PON_TODO},
  {k:'PON-CASADO', n:'Pedro Miguel Casado', v:'El Pontigu', cap:500000,  acc:19411, tot:PON_TODO},
- {k:'PON-MANZA', n:'Jorge León Manzanilla Cañizares', v:'El Pontigu',cap:500000,  acc:19411, tot:PON_TODO},
  {k:'PON-NABORI', n:'Nabori Medina Berrios', v:'El Pontigu', cap:500000,  acc:19411, tot:PON_TODO},
  {k:'PON-GUIOT', n:'Daniel Guiot Vial', v:'El Pontigu', cap:500000,  acc:19411, tot:PON_TODO},
  {k:'PON-ROBLEDO', n:'Marcos Robledo Gómez', v:'El Pontigu', cap:320000,  acc:19411, tot:PON_TODO},
@@ -55,7 +57,6 @@ var SALEN=[
  {k:'PON-SANDRA', n:'Sandra Luz Sierra Arellano', v:'El Pontigu', cap:200000,  acc:19411, tot:PON_TODO},
  {k:'PON-MONICA', n:'Mónica Franco Mendoza', v:'El Pontigu', cap:100000,  acc:19411, tot:PON_TODO},
  {k:'STR-PPGA', n:'Pedro Pablo González Aguirregomezcorta', v:'Struchture',cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-MANZA', n:'Jorge León Manzanilla Cañizares', v:'Struchture',cap:450000,  acc:3386,  tot:STR_TODO},
  {k:'STR-CLAUSELL', n:'Alejandra Clausell Narro', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
  {k:'STR-GUIOT', n:'Daniel Guiot Vial', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
  {k:'STR-JFV', n:'Jaime Fernández-Villaverde Narvaiza', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
@@ -72,8 +73,8 @@ var QUEDAN=[
  {n:'AE Future · Estanislao Masiá',acc:22729, frac:1, ref:1, cap:3453746},
  {n:'Luis Javier Cué de la Fuente',acc:22529, frac:1, ref:1, cap:500000},
  /* lo que queda dentro de cada vehículo tras salir los suyos */
- {n:'El Pontigu (Javier, Estanis, Borchi, Óscar)', acc:19411, frac:3988366/PON_TODO, ref:0, cap:3988366},
- {n:'Struchture (Cejudo y Javier)',                acc:3386,  frac:145000/STR_TODO,  ref:0, cap:145000},
+ {n:'El Pontigu (Javier, Estanis, Borchi, Óscar, Manzanilla)', acc:19411, frac:4488366/PON_TODO, ref:0, cap:4488366},
+ {n:'Struchture (Cejudo, Javier y Manzanilla)',     acc:3386,  frac:595000/STR_TODO,  ref:0, cap:595000},
  {n:'Serie D · vesting de Javier Puente',          acc:SERIE_D_VIVA, frac:1, ref:0, cap:1547333}
 ];
 
@@ -311,9 +312,9 @@ function comparativaFn(h, cfg){
    pisar los globales de los módulos que cargan este archivo. */
 window.RECOMPRA={
   SALEN:SALEN, QUEDAN:QUEDAN, U:U, ANIOS:ANIOS, BASE:BASE, TOTDIL:TOTDIL,
-  /* Cuántas PERSONAS distintas salen: Guiot y Manzanilla están en los dos
-     vehículos, así que hay 22 posiciones pero 20 personas, y el bote se
-     divide entre personas. */
+  /* Cuántas PERSONAS distintas salen: Daniel Guiot está en los dos vehículos,
+     así que hay 20 posiciones pero 19 personas, y el bote se divide entre
+     personas. */
   PERSONAS:(function(){ var v={},n=0; SALEN.forEach(function(s){ if(!v[s.n]){v[s.n]=1;n++;} }); return n; })(),
   VALFUT:VALFUT, DESC:DESC, SERIE_D:SERIE_D, SERIE_D_VIVA:SERIE_D_VIVA, VEST:VEST,
   PON_TODO:PON_TODO, STR_TODO:STR_TODO, ACC:ACC,
