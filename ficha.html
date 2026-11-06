@@ -2636,7 +2636,12 @@ gmp-place-autocomplete,.gmpac{
     if(fcm) fcm.onchange=pintaCierre;
     pintaCierre();
     opts('cupo_max_grupo2',CUPO);opts('accesibilidad',ACCES);
-    pintaIdiomas();chips('chDias',DIAS);
+    /* Al cambiar los días de la ficha hay que repintar las salidas: sus chips
+       son un recorte de éstos, y si no, se quedan ofreciendo un día que ya no
+       existe -o escondiendo el que se acaba de añadir-. */
+    pintaIdiomas();chips('chDias',DIAS,function(){
+      try{ guardaSalidas(); pintaSalidas(); }catch(_){}
+    });
     $('bVolver').onclick=function(){location.href=aDondeVuelvo();};
     /* El touroperador externo no tiene centro de mando: su casa es su portal.
        El logo lo lleva ahí, no a una pantalla que no le pertenece. */
@@ -3514,10 +3519,24 @@ gmp-place-autocomplete,.gmpac{
     });
     return hay?out:null;
   }
+  /* Los días que la ficha abre, tal como estén EN PANTALLA: si el operador
+     acaba de marcar el sábado arriba, la salida tiene que poder usarlo sin
+     guardar primero. Si todavía no eligió ninguno, valen todos. */
+  function diasDeLaFicha(){
+    var d=[];
+    try{ d=leeChips('chDias'); }catch(_){ d=[]; }
+    if(!d.length) d=(E&&E.dias||[]).slice();
+    return d.length?d:DIAS.slice();
+  }
+
   function pintaSalidas(){
     var hs=(E.horas||[]).slice(), hf=(E.horas_fin||[]).slice();
     if(!hs.length)hs=[''];
     dsalSiembra(hs);
+    var diasFicha=diasDeLaFicha();
+    function huerfanos(i){
+      return (DSAL[i]||[]).filter(function(d){ return diasFicha.indexOf(d)<0; });
+    }
     $('salidas').innerHTML=hs.map(function(h,i){
       var fin=hf[i]||(i===0?(E.cer_final_hora||''):'');
       return '<div class="salida">'+
@@ -3531,16 +3550,41 @@ gmp-place-autocomplete,.gmpac{
            las multiplicaba por los días, así que el martes heredaba también
            la hora del viernes. En blanco se queda como siempre: esta salida
            vale para todos los días de arriba. */
+        /* SÓLO LOS DÍAS QUE LA FICHA ABRE. Javi, 6-nov-2026, con las Luchas:
+           «estamos modificando el horario y no se modifica a los sábados».
+           Y no se modificaba porque aquí se podía marcar «Sáb» en la salida
+           teniendo arriba sólo martes y viernes. Esa combinación no existe
+           nunca: la disponibilidad cruza los días de la ficha con los de cada
+           salida, y martes∩sábado es vacío. La ficha se quedaba publicada,
+           sin un solo día a la venta y sin decir una palabra. Ahora el chip
+           que no puede funcionar no está. */
         '<div class="fld" style="grid-column:1/-1"><label>Días de esta salida '+
           '<span class="mini" style="font-weight:400">· en blanco, todos los de arriba</span></label>'+
           '<div class="chips" data-dsalf="'+i+'">'+
-            DIAS.map(function(d){
+            diasFicha.map(function(d){
               var puesto=(DSAL[i]||[]).indexOf(d)>=0;
               return '<span class="chip'+(puesto?' on':'')+'" data-dsal="'+i+'" data-dv="'+esc(d)+'">'+esc(d)+'</span>';
             }).join('')+
-          '</div></div>'+
+          '</div>'+
+          /* Y lo que quedó marcado de antes y ya no cabe se dice en voz alta,
+             con el botón para quitarlo. Borrárselo por la espalda sería el
+             mismo silencio de antes, al revés. */
+          (huerfanos(i).length
+            ? '<div class="mini" style="color:var(--error,#9E3B2E);margin-top:6px">'+
+              '⚠ Esta salida tiene marcado <b>'+esc(huerfanos(i).join(', '))+'</b>, '+
+              'que no está en los días de arriba, así que no se vende ningún día. '+
+              '<button type="button" class="btn fantasma sm" data-limpiadsal="'+i+'" '+
+              'style="margin-left:6px">Quitarlo</button> o añade ese día arriba.</div>'
+            : '')+
+          '</div>'+
         '<div class="dura" data-dura="'+i+'"></div></div>';
     }).join('');
+    Array.prototype.forEach.call($('salidas').querySelectorAll('[data-limpiadsal]'),function(b){
+      b.onclick=function(){
+        var i=+b.getAttribute('data-limpiadsal');
+        DSAL[i]=(DSAL[i]||[]).filter(function(d){ return diasFicha.indexOf(d)>=0; });
+        guardaSalidas(); pintaSalidas();
+      };});
     Array.prototype.forEach.call($('salidas').querySelectorAll('[data-delhora]'),function(b){
       b.onclick=function(){var i=+b.getAttribute('data-delhora');guardaSalidas();
         E.horas.splice(i,1);E.horas_fin.splice(i,1);DSAL.splice(i,1);pintaSalidas();};});
@@ -6380,6 +6424,34 @@ gmp-place-autocomplete,.gmpac{
           b.cupo_min=cmax; b.cupo_max=cmin; return true; }
       });
     }
+
+    /* N · Una salida con días que la ficha no abre. Bloquea, y tiene que
+       bloquear: es el único fallo de esta pantalla que deja la ficha
+       PUBLICADA y sin un solo día a la venta, sin error, sin aviso y sin que
+       nada se vea raro. Le pasó a las Luchas el 6-nov-2026: días de la ficha
+       martes y viernes, salida de las 18:00 marcada «Sáb», y la experiencia
+       llevaba horas fuera de la venta sin que nadie pudiera saberlo mirando. */
+    (function(){
+      var df = (b.dias && b.dias.length) ? b.dias : [];
+      var hd = b.horas_dias || {};
+      if(!df.length) return;                       /* sin días no es este fallo */
+      var malas = [];
+      Object.keys(hd).forEach(function(k){
+        var sus = (hd[k]||[]).filter(Boolean);
+        if(!sus.length) return;
+        var caben = sus.filter(function(d){ return df.indexOf(d) >= 0; });
+        if(!caben.length) malas.push({hora:k, dias:sus});
+      });
+      if(!malas.length) return;
+      var m = malas[0];
+      h.push({clave:'dias_salida', bloquea:true,
+        titulo:'La salida de las '+m.hora+' no cae ningún día',
+        dice:'Los días de la ficha son '+df.join(', ')+', y esa salida está marcada sólo para '+
+             m.dias.join(', ')+'. No hay ningún día en común, así que la experiencia '+
+             'quedaría publicada y sin una sola fecha a la venta.',
+        propuesta:'O añades '+m.dias.join(' / ')+' a los días de la ficha, o le quitas ese día a la salida.'
+      });
+    })();
 
     /* El resumen: lo que se va a guardar, en una línea cada cosa. */
     var resumen=[
