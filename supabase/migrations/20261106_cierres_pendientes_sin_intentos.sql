@@ -1,0 +1,31 @@
+-- 6-nov-2026 · La lista del cierre llevaba gente que no existe y decía que el
+-- operador ya tenía su dinero.
+--
+-- Dos cosas en sinc_cierres_pendientes(), que es lo que alimenta el correo de
+-- «Cerró la venta» que recibe la touroperadora (edge sinc-cierre-lista, cron
+-- cada 15 min):
+--
+-- 1. Fuera los intentos de pago que no pasaron. Este correo ES la programación
+--    del día que recibe la operadora: con los reintentos dentro, Noche Mexicana
+--    del 6-nov habría salido con doce reservas y quince personas cuando venían
+--    siete.
+--
+-- 2. Baja el reparto del cobro dividido (cobro_dividido, pago_resto, total). En
+--    un tour de dos cobros el huésped nos paga por tarjeta sólo nuestra
+--    comisión y le liquida el resto al operador al llegar. La lista decía
+--    «pagado» con el importe de nuestra comisión debajo, así que el operador
+--    leía que ya estaba todo cobrado y se plantaba en el punto de encuentro sin
+--    cobrar los $861.20 de cada quien. La plantilla ya usa estos campos para
+--    decir «cóbrale $861.20» y para poner arriba el total a cobrar en la salida.
+--
+-- El SQL completo está aplicado en la base; aquí queda la nota y el cambio.
+
+-- (ver el cuerpo vigente con:
+--    select pg_get_functiondef('public.sinc_cierres_pendientes'::regproc);
+--  los dos filtros añadidos son:
+--    and not coalesce(r.intento, false)        -- en el jsonb_agg de 'clientes'
+--    and not coalesce(r.intento, false)        -- y en el exists final
+--  y las tres claves nuevas del cliente:
+--    'cobro_dividido', coalesce(r.cobro_dividido, false),
+--    'pago_resto',     coalesce(r.pago_resto, 0),
+--    'total',          r.total )
