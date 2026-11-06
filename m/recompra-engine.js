@@ -35,7 +35,11 @@ var ACC={jj:74346, pitao:43854, ae:22729, lj:22529, pontigu:19411, aldo:14416,
 /* Lo aportado dentro de cada vehículo. El Pontigu se reconoce en acta por
    $7,518,290.26 —lo que de verdad pusieron sus socios— y Javier Puente absorbe
    los $140,000 de diferencia contra lo que HBR le reconoce al vehículo. */
-var PON_TODO=7518290, STR_TODO=4195000;
+/* 6-nov-2026 · el capital de Jorge Manzanilla sale de los dos vehículos: se le
+   paga con acciones de HBR en la asamblea, no con flujo. El Pontigu baja de
+   $7,518,290 a $7,018,290 y Struchture de $4,245,000 a $3,745,000 —su posición
+   en Struchture era de $500,000 en efectivo, no los $450,000 que tenía la base. */
+var PON_TODO=7018290, STR_TODO=3745000;
 
 /* Quién sale. El capital es el EXHIBIDO por cada persona; las acciones solo
    determinan el % de dividendo mientras cobra. Daniel Guiot está en los dos
@@ -73,8 +77,12 @@ var QUEDAN=[
  {n:'AE Future · Estanislao Masiá',acc:22729, frac:1, ref:1, cap:3453746},
  {n:'Luis Javier Cué de la Fuente',acc:22529, frac:1, ref:1, cap:500000},
  /* lo que queda dentro de cada vehículo tras salir los suyos */
- {n:'El Pontigu (Javier, Estanis, Borchi, Óscar, Manzanilla)', acc:19411, frac:4488366/PON_TODO, ref:0, cap:4488366},
- {n:'Struchture (Cejudo, Javier y Manzanilla)',     acc:3386,  frac:595000/STR_TODO,  ref:0, cap:595000},
+ {n:'El Pontigu (Javier, Estanis, Borchi, Óscar)', acc:18516, frac:3988366/PON_TODO, ref:0, cap:3988366},
+ {n:'Struchture (Cejudo y Javier)',                acc:3021,  frac:145000/STR_TODO,  ref:0, cap:145000},
+ /* Manzanilla cobra dividendo por sus propias acciones: 895 de El Pontigu +
+    365 de Struchture + 7,660 suscritas en la refundación. No es refundador,
+    así que no paga la recompra. */
+ {n:'Jorge Manzanilla (directo)',                  acc:8920,  frac:1, ref:0, cap:1170000},
  {n:'Serie D · vesting de Javier Puente',          acc:SERIE_D_VIVA, frac:1, ref:0, cap:1547333}
 ];
 
