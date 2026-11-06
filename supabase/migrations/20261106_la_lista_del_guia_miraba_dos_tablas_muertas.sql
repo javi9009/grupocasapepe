@@ -1,0 +1,63 @@
+-- 6-nov-2026 · La lista del guía miraba dos tablas muertas.
+--
+-- Por WhatsApp, desde el martes: «No me aparece la lista». Y hoy: «Buen día
+-- Javi, aún no aparece la lista de hoy». La pantalla de verificar boleto decía
+-- «Ese día no tienes ninguna salida».
+--
+-- Era mentira, y Javi preguntó lo correcto: «¿cuándo va a aparecer la lista?».
+-- La respuesta era: nunca. No había nada que esperar.
+--
+-- `sinc_puede_validar` reconocía al guía de una salida así:
+--
+--   from sinc_asignaciones a join guias g on g.id = a.guia_id
+--
+-- Dos tablas que no se usan. `sinc_asignaciones` tiene CERO filas y no ha
+-- tenido ninguna nunca; `guias` es el padrón viejo, con 9. Mientras tanto, la
+-- programación escribe el guía donde de verdad vive: `sinc_salidas.guia_id` y
+-- `sinc_salidas.guia_ids`, apuntando al padrón de «Mi equipo»
+-- (tour_operador_usuarios).
+--
+-- Es el fallo del doc 228 otra vez —dos padrones de guías y el código leyendo
+-- el que no es—, pero girado: aquí la puerta preguntaba por una tabla que
+-- nadie llena. Un `exists` contra una tabla vacía no da error: da «no». Por eso
+-- el guía leía una frase tranquila y falsa en vez de un fallo.
+--
+-- Se añade la rama que mira donde está el dato. La vía vieja se queda debajo,
+-- por si alguien llega a llenarla:
+--
+--   if p_salida is not null and v_mail <> '' and exists (
+--     select 1 from sinc_salidas s
+--       join tour_operador_usuarios u
+--         on u.id = s.guia_id or u.id = any(coalesce(s.guia_ids, '{}'::uuid[]))
+--      where s.id = p_salida and u.activo
+--        and lower(coalesce(u.email,'')) = v_mail
+--   ) then return true; end if;
+--
+-- Cuerpo vigente: select pg_get_functiondef('public.sinc_puede_validar'::regproc);
+
+-- Y AL ABRIRSE LA LISTA, LO QUE ENSEÑABA ESTABA MAL.
+--
+-- `sinc_dia_boletos` no filtraba los intentos. Para la Noche Mexicana de esta
+-- noche habría puesto delante del guía 97 personas y $12,918 por cobrar cuando
+-- son 86 y $3,444.80: ocho reservas que nunca se pagaron (doc 230), con el guía
+-- esperando gente que no viene y cuentas que no son. Los intentos ya se habían
+-- sacado de las ventas, del cierre y de la programación; esta pantalla se quedó
+-- con ellos porque se arregló por donde dolía y no por donde se leía.
+--
+--   where coalesce(r.estado,'') <> 'cancelada'
+--     and coalesce(r.intento,false) = false
+--
+-- Comprobado después: Noche Mexicana 33 reservas, 86 personas, $3,444.80 por
+-- cobrar, pide_id en true.
+--
+-- LO QUE QUEDA, y es de hoy mismo:
+--
+--   · Keren, uno de los guías apuntados a la salida de esta noche, no tiene
+--     correo en su ficha. Sin correo no hay sesión que casar, así que la lista
+--     no le va a salir aunque esté asignada. Hace falta dárselo.
+--   · En `guia_ids` de esa salida hay un tercer id —c08fb135-…— que no existe
+--     en tour_operador_usuarios. Un guía apuntado que no es nadie.
+--   · `sinc_salidas.cupo_tomado` dice 4 y van 86. El contador vuelve a estar
+--     desincronizado: es un número que se incrementa, no una cuenta de lo que
+--     hay, y cuando algo entra por otra puerta —aquí, el manifiesto de Capital
+--     Bus cargado de golpe a las 13:44— deja de decir la verdad.
