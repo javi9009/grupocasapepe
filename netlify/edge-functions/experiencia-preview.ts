@@ -91,7 +91,11 @@ export default async (request: Request, context: any) => {
 
     const quien = (f.operador || '').trim() || 'Sincrético';
     const titulo = f.nombre;
-    const desc = 'Reserva con ' + quien + ' tu próxima experiencia. ' + recorta(f.resumen || '', 110);
+    /* Algunas fichas tienen de resumen su propio nombre -«Taller de Piñatas»-,
+       y repetirlo detrás del título deja una tarjeta que se tartamudea. */
+    const res0 = String(f.resumen || '').trim();
+    const extra = (res0 && res0.toLowerCase() !== titulo.trim().toLowerCase()) ? ' ' + recorta(res0, 110) : '';
+    const desc = 'Reserva con ' + quien + ' tu próxima experiencia.' + extra;
 
     let html = await res.text();
 
