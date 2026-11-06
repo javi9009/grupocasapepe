@@ -340,6 +340,7 @@
   .cm-toggle.on{background:#1d9e75;color:#fff;border-color:#1d9e75}
   .cm-toggle:disabled{opacity:.5;cursor:not-allowed}
   .cm-dishinput{width:100%;padding:8px;border:1px solid var(--bd);border-radius:9px;font-size:14px;margin-top:2px}
+  .cm-priceinput{width:100%;padding:8px;border:1px solid var(--bd);border-radius:9px;font-size:14px;margin-top:4px}
   /* Valoraciones */
   .va-card{background:var(--bg2);border:1px solid var(--bd2);border-radius:14px;padding:14px;margin-bottom:12px}
   .va-card h4{margin:0 0 8px;font-size:13px;color:var(--txt2);font-weight:800;letter-spacing:.3px}
@@ -3148,8 +3149,8 @@ async function cmLoadWeek(){
   $('cm-sub').textContent=CM.chef?'Sube el menú y revisa cuántos van apuntados':'Apúntate los días que trabajas (corte 12:00)';
   const d0=hzFmt(dates[0]), d6=hzFmt(dates[6]); const empId=EMP||HZ.empId;
 
-  let menu={}, work={}, counts={}, mine={}, quien={};
-  try{ const {data}=await sb.from('comidas_menu').select('fecha,platillo').eq('property_id',CM.propId).gte('fecha',d0).lte('fecha',d6); (data||[]).forEach(m=>menu[m.fecha]=m.platillo||''); }catch(e){}
+  let menu={}, prec={}, work={}, counts={}, mine={}, quien={};
+  try{ const {data}=await sb.from('comidas_menu').select('fecha,platillo,precio').eq('property_id',CM.propId).gte('fecha',d0).lte('fecha',d6); (data||[]).forEach(m=>{menu[m.fecha]=m.platillo||''; prec[m.fecha]=m.precio;}); }catch(e){}
   // FIX 1 — Cruce del turno por employee_id (NO por texto del nombre). Si la ficha tiene employee_id,
   // filtramos los horarios por ese id: así "trabaja" es robusto aunque el nombre_display del horario
   // no coincida con el del perfil (p.ej. "Jimena" vs "Jime"). Solo si la cuenta no tiene employee_id
@@ -3174,6 +3175,16 @@ async function cmLoadWeek(){
     else { right='<span class="cnt">'+(motivo||'—')+'</span>'; }
     const dishHtml=CM.chef
       ? '<input class="cm-dishinput" autocomplete="off" data-fecha="'+ds+'" placeholder="Platillo del día" value="'+dish.replace(/"/g,'&quot;')+'">'
+        /* EL PRECIO, SOLO EN VIRREYES. Javi, 6-nov-2026: en el Ateneo quien
+           baja a comer es un ateneísta y paga; en CDMX y Puebla come el
+           personal y no se cobra. El mismo menú, la misma pantalla, y un
+           campo más donde hace falta. Sin precio no se puede apuntar nadie:
+           la base no deja abrir un cobro de cero. */
+        + (CM.propId===ATENEO_PROP
+           ? '<input class="cm-priceinput" type="number" min="0" step="5" inputmode="numeric" '
+             + 'data-fecha="'+ds+'" placeholder="$ por persona" value="'
+             + (prec[ds]==null?'':String(prec[ds]))+'">'
+           : '')
       : '<div class="dish">'+(dish?('🍲 '+dish):'<i>Sin menú aún</i>')+(trabaja?(' · '+cnt+' apuntados'):'')+'</div>';
     const _gest=_mando; const whoList=_mando?('<div class="cm-who-list" id="who-'+ds+'" style="display:none">'+((quien[ds]&&quien[ds].length)?quien[ds].map(function(p){return '<span class="cm-who-chip'+(p.ext?' ext':'')+'">'+String(p.n).replace(/</g,'&lt;')+(p.ext?' 👤':'')+((_gest&&p.ext)?'<b class="cm-rmext" data-id="'+p.id+'">×</b>':'')+'</span>';}).join(''):'<i style="opacity:.6">Nadie apuntado</i>')+(_gest?'<button class="cm-addext" data-fecha="'+ds+'">+ Externo</button>':'')+'</div>'):'';
     return '<div class="cm-daywrap"><div class="cm-row"><div class="d"><div class="day">'+hzLbl(dt)+'</div></div><div style="flex:1">'+dishHtml+'</div><div class="right">'+right+'</div></div>'+whoList+'</div>';
@@ -3272,7 +3283,12 @@ async function cmAvisarComida(fecha){
 async function cmSaveMenu(){
   const empId=EMP||HZ.empId;
   const inputs=[...document.querySelectorAll('#cm-body .cm-dishinput')];
-  const filas=inputs.map(i=>({ property_id:CM.propId, fecha:i.dataset.fecha, platillo:(i.value||'').trim()||null, by_emp:empId||null, updated_at:new Date().toISOString() }));
+    /* El precio viaja junto al platillo. Si la casilla va vacía se guarda
+       nulo, que es lo que significa "ese día no se cobra". */
+    const pre={}; [...document.querySelectorAll('#cm-body .cm-priceinput')]
+      .forEach(i=>{ const v=(i.value||'').trim(); pre[i.dataset.fecha] = v===''?null:Number(v); });
+    const filas=inputs.map(i=>({ property_id:CM.propId, fecha:i.dataset.fecha, platillo:(i.value||'').trim()||null, precio:(CM.propId===ATENEO_PROP?(pre[i.dataset.fecha]??null):undefined), by_emp:empId||null, updated_at:new Date().toISOString() }));
+    filas.forEach(f=>{ if(f.precio===undefined) delete f.precio; });
   const btn=$('cm-savemenu'); const t=btn.textContent; btn.disabled=true; btn.textContent='Guardando…';
   try{ const {error}=await sb.from('comidas_menu').upsert(filas,{onConflict:'property_id,fecha'}); if(error) throw error; btn.textContent='✓ Menú guardado'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},1500); }
   catch(e){ btn.textContent='Error al guardar'; btn.disabled=false; }
