@@ -61,6 +61,32 @@ async function ficha(id: string): Promise<Ficha | null> {
   }
 }
 
+/* LA FIRMA DE LA TARJETA. Javi, 6-nov-2026: «en la página quita cualquier cosa
+   de Casa Pepe y ahí sí pon la identidad de marca de Tekpan Tours... o la
+   empresa que sea». Si la liga que se comparte es la del canal propio de una
+   touroperadora, la tarjeta tampoco debe firmar Sincrético.
+   Sólo con un código de canal válido: el mismo `?c=` lleva también el QR del
+   concierge de un hotel, y ahí no toca. Quien decide es la base. */
+const MARCAS = new Map<string, { t: number; n: string | null }>();
+
+async function marcaCanal(cod: string): Promise<string | null> {
+  const y = MARCAS.get(cod);
+  if (y && Date.now() - y.t < VIDA) return y.n;
+  try {
+    const r = await fetch(SB + '/rest/v1/rpc/sinc_canal_marca', {
+      method: 'POST',
+      headers: { apikey: KEY, Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_codigo: cod }),
+    });
+    const j = r.ok ? await r.json() : null;
+    const n = (j && j[0] && j[0].nombre) ? String(j[0].nombre) : null;
+    MARCAS.set(cod, { t: Date.now(), n });
+    return n;
+  } catch (_) {
+    return null;
+  }
+}
+
 function atrib(s: string): string {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -89,7 +115,11 @@ export default async (request: Request, context: any) => {
     const f = await ficha(id);
     if (!f || !f.nombre) return res;
 
-    const quien = (f.operador || '').trim() || 'Sincrético';
+    /* Si la liga viene del canal propio, firma la touroperadora de ese canal;
+       si no, la de la ficha; y si la ficha es de la casa, Sincrético. */
+    const cod = (url.searchParams.get('c') || '').trim();
+    const deCanal = cod ? await marcaCanal(cod) : null;
+    const quien = (deCanal || f.operador || '').trim() || 'Sincrético';
     const titulo = f.nombre;
     /* Algunas fichas tienen de resumen su propio nombre -«Taller de Piñatas»-,
        y repetirlo detrás del título deja una tarjeta que se tartamudea. */
@@ -106,7 +136,7 @@ export default async (request: Request, context: any) => {
 
     const og = [
       '<meta property="og:type" content="website">',
-      '<meta property="og:site_name" content="Sincrético">',
+      '<meta property="og:site_name" content="' + atrib(deCanal || 'Sincrético') + '">',
       '<meta property="og:locale" content="es_MX">',
       '<meta property="og:title" content="' + atrib(titulo) + '">',
       '<meta property="og:description" content="' + atrib(desc) + '">',
