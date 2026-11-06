@@ -1,0 +1,68 @@
+-- 6-nov-2026 · El candado miraba el papel equivocado, y se lo contaba al cliente.
+--
+-- Javi mandó la foto: un huésped con la tarjeta ya puesta, y encima del
+-- formulario de pago esta frase —
+--
+--   «No se le puede mandar un cliente a Tours con Benito: falta una
+--    identificación de quien responde: RFC, CURP o pasaporte, y el convenio
+--    firmado.»
+--
+-- Dos fallos en una sola línea.
+--
+-- 1) ERA MENTIRA. Benito tiene su pasaporte puertorriqueño (654940171) y su
+--    convenio firmado el 30-oct, los dos en su ficha de ateneísta. Lo que pasa
+--    es que al darle capacidad de eventos se le crea una ficha de PRODUCTORA
+--    satélite que nace vacía —sólo lleva la capacidad— y tercero_candado_op
+--    mira la productora primero. Encontraba sus campos en blanco y daba por
+--    bueno que el hombre no había entregado nada.
+--
+--    Es el mismo fallo que el de los dos padrones de guías: dos tablas para la
+--    misma persona y el código mirando la que no es. Y la regla ya estaba
+--    escrita en el doc 194: el hotel y el ateneísta no se fusionan, se SUMAN
+--    papeles. Ahora la rama de productora hereda identidad, convenio, correo y
+--    teléfono del ateneísta del que cuelga; su ficha propia sigue mandando en
+--    lo que es suyo: su póliza, su Stripe y su forma de cobro.
+--
+--    De paso queda confirmado lo que preguntaba Javi: el extranjero sin
+--    actividad empresarial no necesita RFC. La rama de touroperador ya
+--    aceptaba RFC, CURP, pasaporte o identificador fiscal extranjero
+--    —cualquiera de los cuatro— y ahora la de productora hace lo mismo.
+--
+--    Esto desatascó a ocho: Benito, Alejandro Rivera, Caro's Tours, Fin del
+--    Turno, Papi Tours, Taller de Rótulos Pase ud, Tepito Chido Tour y, por el
+--    camino, cualquiera que venga después. Alfredo Villar sigue bloqueado y
+--    está bien: no tiene identificación en ninguna de las dos fichas.
+--
+-- 2) NO ERA ASUNTO DEL CLIENTE. Javi: «al cliente NUNCA le mandes información
+--    administrativa sobre los errores de alta de los proveedores; SIEMPRE
+--    resuelve positivamente avanzando». Le estábamos contando a un huésped que
+--    a nuestro proveedor le falta el RFC, y encima dejándolo sin salida: el
+--    mensaje no decía qué hacer.
+--
+--    El candado se queda —es el que impide mandarle gente a quien no ha
+--    firmado— pero cambia lo que se dice y a quién: al huésped, una frase que
+--    avanza («no se puede reservar en línea ahora; escríbenos y te la
+--    apartamos»); el motivo de verdad, al log del servidor y a la pantalla de
+--    alta del tercero, que ya lo enseña con todas sus letras.
+--
+--    La regla, para que no vuelva: nada de lo que el huésped lee puede nombrar
+--    a un proveedor ni a un papel suyo.
+--
+-- Los dos cuerpos completos están aplicados en la base. Verlos con:
+--   select pg_get_functiondef('public.tercero_candado'::regproc);
+--   select pg_get_functiondef('public.sinc_reserva_tercero_listo'::regproc);
+--
+-- El cambio de la rama de productora en tercero_candado:
+--
+--   select p.nombre_comercial,
+--          (coalesce(nullif(trim(p.rfc),''), nullif(trim(p.curp),''), nullif(trim(p.pasaporte_numero),''),
+--                    nullif(trim(o.rfc),''), nullif(trim(o.curp),''), nullif(trim(o.pasaporte_numero),''),
+--                    nullif(trim(o.id_fiscal_ext),'')) is not null) as ident,
+--          ...
+--          (coalesce(p.contrato_firmado_at, o.contrato_firmado_at) is not null) as convenio,
+--     from productoras p
+--     left join tour_operadores o on o.id = p.tour_operador_id
+--    where p.id = p_id;
+--
+-- Y el de sinc_reserva_tercero_listo: el `raise exception` con el motivo pasa a
+-- ser `raise log` con el motivo + `raise exception` con la frase neutra.
