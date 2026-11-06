@@ -116,7 +116,17 @@
              cuando las respuestas posibles se cuentan con los dedos.
              Javi, 5-nov-2026. */
           var i;
-          if (c.tipo === 'select') {
+          /* UNA FOTO TAMBIEN ES UN CAMPO. Javi, 6-nov-2026: la ficha del guia
+             se pide desde Programacion y lleva su retrato. Un <input type=file>
+             no devuelve texto sino un archivo, asi que para estos campos lo que
+             sale en el resultado es el File -o null si no eligio ninguno-, y
+             quien llama lo sube donde toque. */
+          if (c.tipo === 'file') {
+            i = document.createElement('input');
+            i.className = 'cpd-in';
+            i.type = 'file';
+            if (c.acepta) i.accept = c.acepta;
+          } else if (c.tipo === 'select') {
             i = document.createElement('select');
             i.className = 'cpd-in';
             (c.opciones || []).forEach(function (o) {
@@ -179,7 +189,10 @@
       }
       function acepta() {
         if (opc.tipo === 'varios') {
-          var faltan = campos.filter(function (c) { return c.req && !c.el.value.trim(); });
+          var faltan = campos.filter(function (c) {
+            if (c.el.type === 'file') return c.req && !(c.el.files && c.el.files.length);
+            return c.req && !c.el.value.trim();
+          });
           if (faltan.length) {
             aviso.textContent = opc.falta + ' ' + faltan.map(function (c) { return c.et; }).join(', ');
             aviso.hidden = false;
@@ -187,7 +200,11 @@
             return;
           }
           var out = {};
-          campos.forEach(function (c) { out[c.k] = c.el.value.trim(); });
+          campos.forEach(function (c) {
+            out[c.k] = (c.el.type === 'file')
+              ? ((c.el.files && c.el.files[0]) || null)
+              : c.el.value.trim();
+          });
           fin(out);
           return;
         }
@@ -230,7 +247,7 @@
       campos: campos.map(function (c) {
         return { k: c.k, et: T(c.et || c.k), req: !!c.req, valor: c.valor == null ? '' : String(c.valor),
                  marca: c.marca ? T(c.marca) : '', tipo: c.tipo || 'text',
-                 opciones: c.opciones || null };
+                 acepta: c.acepta || '', opciones: c.opciones || null };
       }),
       si: T(o.si || 'Guardar'), no: T(o.no || 'Cancelar'),
       falta: T(o.falta || 'Falta por rellenar:')
