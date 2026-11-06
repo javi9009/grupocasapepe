@@ -63,6 +63,25 @@
       'text-transform:uppercase;color:var(--gris,var(--muted,#6E665C));margin:0 0 4px}',
     '.cpd-et .cpd-in{margin-top:4px}',
     '.cpd-mal{font:13px/1.4 Inter,system-ui,sans-serif;color:var(--error,#9E3B2E);margin:0 0 10px}',
+    /* El retrato: se ve el que hay, y si no hay se ve que no hay. Un campo de
+       archivo a secas no dice si la persona ya tiene foto. Javi, 6-nov-2026. */
+    /* El numero del telefono viene de tel-pais y se vestia con lo que hubiera
+       en la pagina de debajo: al lado de los demas campos del dialogo parecia
+       de otro formulario. Se le pone la misma ropa. */
+    '.cpd-caja .tp-num{font:15px/1.4 inherit;padding:10px 12px;color:inherit;',
+      'background:var(--papel,var(--ground,#FBF7F2));',
+      'border:1px solid var(--linea,var(--rule,#E6DFD6));border-radius:10px}',
+    '.cpd-caja .tp-num:focus{outline:2px solid var(--naranja,var(--green,#C9501A));outline-offset:1px}',
+    '.cpd-caja .tp-pais{border-radius:10px;border-width:1px;padding-top:10px;padding-bottom:10px}',
+    '.cpd-foto{display:flex;align-items:center;gap:12px;margin:4px 0 14px}',
+    '.cpd-ret{width:68px;height:68px;border-radius:50%;flex:none;background-size:cover;',
+      'background-position:center;border:1.5px solid var(--linea,var(--rule,#E6DFD6));',
+      'background-color:var(--papel,var(--ground,#FBF7F2))}',
+    '.cpd-ret.vacio{background-image:url("data:image/svg+xml;utf8,',
+      '%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E',
+      '%3Cg fill=%27%23C3BBAE%27%3E%3Ccircle cx=%2712%27 cy=%279%27 r=%273.6%27/%3E',
+      '%3Cpath d=%27M4.8 19.2c0-3.4 3.2-5.4 7.2-5.4s7.2 2 7.2 5.4z%27/%3E%3C/g%3E%3C/svg%3E");',
+      'background-size:74%;background-repeat:no-repeat}',
     '@media (max-width:420px){.cpd-pie{flex-direction:column-reverse}.cpd-b{width:100%}}'
   ].join('');
 
@@ -95,7 +114,7 @@
       p.textContent = opc.texto;
       caja.appendChild(p);
 
-      var campo = null, campos = null;
+      var campo = null, campos = null, porMontar = [];
       if (opc.tipo === 'pide') {
         campo = document.createElement('input');
         campo.className = 'cpd-in';
@@ -115,13 +134,61 @@
              `opciones:[[valor,texto],...]` se elige, que es lo que toca
              cuando las respuestas posibles se cuentan con los dedos.
              Javi, 5-nov-2026. */
-          var i;
+          var i, yaPuesto = false;
           /* UNA FOTO TAMBIEN ES UN CAMPO. Javi, 6-nov-2026: la ficha del guia
              se pide desde Programacion y lleva su retrato. Un <input type=file>
              no devuelve texto sino un archivo, asi que para estos campos lo que
              sale en el resultado es el File -o null si no eligio ninguno-, y
              quien llama lo sube donde toque. */
-          if (c.tipo === 'file') {
+          /* EL CELULAR, CON SU BANDERA. Javi, 6-nov-2026: «pon la opcion de
+             seleccionar prefijo en el celular». Es su regla de siempre: un
+             telefono sin lada no sirve para escribirle a nadie. Se reusa
+             tel-pais.js, que ya hace esto en el alta y en el checkout; si la
+             pantalla no lo carga, se queda un campo de texto normal y no se
+             rompe nada. El valor que sale es el numero ya internacional. */
+          if (c.tipo === 'tel' && global.telPais && global.telPais.monta) {
+            /* Se deja el hueco y se monta DESPUES, cuando el dialogo ya esta
+               en la pagina: tel-pais busca sus campos con getElementById y
+               antes de eso todavia no existen. */
+            var cajaT = document.createElement('div');
+            l.appendChild(cajaT);
+            porMontar.push({ k: c.k, caja: cajaT, valor: c.valor || '' });
+            i = document.createElement('input');
+            i.type = 'hidden';
+            yaPuesto = true;
+            l.appendChild(i);
+          } else if (c.tipo === 'foto') {
+            /* Lo que se ve es el retrato; el <input type=file> va escondido
+               detras del boton. Devuelve el File igual que 'file'. */
+            var cajaF = document.createElement('div');
+            cajaF.className = 'cpd-foto';
+            var ret = document.createElement('div');
+            ret.className = 'cpd-ret';
+            var hay = /^https?:\/\//i.test(String(c.valor || ''));
+            if (hay) ret.style.backgroundImage = 'url("' + String(c.valor).replace(/["\\]/g, '') + '")';
+            else ret.className += ' vacio';
+            var bot = document.createElement('button');
+            bot.type = 'button';
+            bot.className = 'cpd-b no';
+            bot.textContent = T(hay ? 'Cambiar la foto' : 'Subir una foto');
+            i = document.createElement('input');
+            i.type = 'file';
+            i.accept = c.acepta || 'image/*';
+            i.style.display = 'none';
+            bot.onclick = function () { i.click(); };
+            i.onchange = function () {
+              var f = i.files && i.files[0];
+              if (!f) return;
+              try {
+                ret.style.backgroundImage = 'url("' + URL.createObjectURL(f) + '")';
+                ret.className = 'cpd-ret';
+              } catch (_) {}
+              bot.textContent = T('Cambiar la foto');
+            };
+            cajaF.appendChild(ret);
+            cajaF.appendChild(bot);
+            l.appendChild(cajaF);
+          } else if (c.tipo === 'file') {
             i = document.createElement('input');
             i.className = 'cpd-in';
             i.type = 'file';
@@ -143,7 +210,9 @@
             i.value = c.valor;
             if (c.marca) i.placeholder = c.marca;
           }
-          l.appendChild(i);
+          /* El de telefono ya vive dentro de su fila con el desplegable:
+             volver a colgarlo de la etiqueta lo sacaria de ahi. */
+          if (!yaPuesto) l.appendChild(i);
           caja.appendChild(l);
           campos.push({ k: c.k, et: c.et, req: c.req, el: i });
         });
@@ -191,6 +260,7 @@
         if (opc.tipo === 'varios') {
           var faltan = campos.filter(function (c) {
             if (c.el.type === 'file') return c.req && !(c.el.files && c.el.files.length);
+            if (c.el._tp) return c.req && !c.el._tp.valido();
             return c.req && !c.el.value.trim();
           });
           if (faltan.length) {
@@ -203,7 +273,7 @@
           campos.forEach(function (c) {
             out[c.k] = (c.el.type === 'file')
               ? ((c.el.files && c.el.files[0]) || null)
-              : c.el.value.trim();
+              : (c.el._tp ? c.el._tp.valor() : c.el.value.trim());
           });
           fin(out);
           return;
@@ -219,6 +289,14 @@
 
       document.addEventListener('keydown', tecla, true);
       (document.body || document.documentElement).appendChild(fondo);
+
+      /* Ya esta en la pagina: ahora si se pueden montar los telefonos. */
+      porMontar.forEach(function (m) {
+        var tp = global.telPais.monta(m.caja, { valor: m.valor });
+        if (!tp || !tp.input) return;
+        tp.input._tp = tp;
+        campos.forEach(function (c) { if (c.k === m.k) c.el = tp.input; });
+      });
       try { ((campos && campos[0] && campos[0].el) || campo || bSi).focus(); if (campo) campo.select(); } catch (_) {}
     });
   }
