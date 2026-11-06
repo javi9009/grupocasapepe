@@ -416,6 +416,9 @@
       'Mes anterior':'Previous month',
       'Mes siguiente':'Next month',
       'Reservas gestionadas por':'Bookings handled by',
+      /* El pie del canal propio de una touroperadora: ahi la marca es suya y
+         lo unico que firmamos es el cobro. */
+      'Pagos y reservas procesados por':'Payments and bookings processed by',
       'Ver con sonido':'Watch with sound',
       'más':'more',
       'Abrir el recorrido en Google Maps':'Open the route in Google Maps',

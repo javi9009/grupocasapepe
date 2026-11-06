@@ -1,3 +1,15 @@
+/* LA CASA DEL ESCAPARATE. Sincretico se sirve por dos puertas
+   -grupocasapepe.netlify.app/sinc/ y casapepe.mx/sincretico/- y este archivo
+   lo carga ademas la app del huesped desde /apepe/. Una liga absoluta como
+   «/boleto» solo existe en la primera de las tres, asi que se arma a partir
+   de donde estamos. Si no reconoce la casa, cae en la de siempre. */
+function casaSinc(){
+  var p = location.pathname, i;
+  i = p.indexOf('/sincretico/'); if (i >= 0) return p.slice(0, i) + '/sincretico/';
+  i = p.indexOf('/sinc/');       if (i >= 0) return p.slice(0, i) + '/sinc/';
+  return '/sinc/';
+}
+
 /* --- el campo de WhatsApp con su lada, compartido por las dos hojas ---
    Se apoya en /sinc/tel-pais.js. Si por lo que sea no cargara, cae a un campo
    llano: vale más una lada tecleada que ningún teléfono. CUTEL guarda el
@@ -642,7 +654,7 @@ window.sincCuenta = (function () {
         '<p>' + esc(yo.email) + (de ? '<br>' + esc(de) : '') + '</p>' +
         '<div class="cuErr" id="cuErr"></div>' +
         '<a class="cuBtn" style="display:block;text-align:center;text-decoration:none" ' +
-          'href="/boleto">' + esc(T('Mis boletos')) + '</a>' +
+          'href="' + casaSinc() + 'boleto.html">' + esc(T('Mis boletos')) + '</a>' +
         '<button class="cuBtn plano" id="cuEdita">' + esc(T('Cambiar mi nombre o teléfono')) + '</button>' +
         '<button class="cuBtn plano" id="cuSalir">' + esc(T('Cerrar sesión')) + '</button>' +
         '<p class="cuPie">' + esc(T('Tus boletos viajan a este correo. Si te equivocaste, cierra sesión y entra con el bueno.')) + '</p>';

@@ -1,0 +1,75 @@
+-- 6-nov-2026 · «Si abre y no ve nada, mejor no habilites».
+--
+-- Javi, mirando por qué Producciones Pa Lante daba error: «¿cómo puedes
+-- configurar que Stripe está subido? Si abre y no ve nada mejor no habilites».
+--
+-- Tenía razón, y el fallo estaba escrito con todas sus letras en el candado:
+--
+--   (o.stripe_estado = 'vinculado'
+--     or coalesce(o.forma_pago,'') is distinct from 'stripe_connect') as cobro
+--
+-- El candado preguntaba por una PALABRA guardada en la ficha, no por lo que
+-- Stripe contesta. `stripe_estado` lo escribe quien pasó por ahí —la
+-- vinculación por OAuth, el pegado a mano, la revisión— y puede decir
+-- «vinculado» sin que nadie lo haya comprobado nunca. Es el mismo patrón de
+-- `aviso_operador_at` (doc 230): una columna que alguien llena a mano acaba
+-- diciendo lo que le conviene al que la llenó, no lo que pasa.
+--
+-- Al lado, lo que sí sabe la verdad estaba ya en la tabla y sin usar:
+-- `stripe_charges_enabled`, que es literalmente `charges_enabled` tal como lo
+-- devuelve Stripe, y que graban tanto sinc-stripe-connect al vincular como
+-- stripe-revision al revisar.
+--
+-- DOS CAMBIOS.
+--
+-- 1) La condición pasa a mirar el hecho, no la palabra:
+--
+--      (coalesce(o.stripe_charges_enabled,false)
+--        or coalesce(o.forma_pago,'') is distinct from 'stripe_connect') as cobro
+--
+--    Igual en la rama de productora, con p. Quien cobra por «anticipo ahora,
+--    resto al guía» sigue sin necesitar Stripe y no se ve afectado.
+--
+-- 2) Cobrar deja de esperar a enero. Los demás pendientes tienen prórroga
+--    hasta el 6-ene porque son trámites: un papel que falta se entrega tarde y
+--    no pasa nada. Éste no es un trámite. Si eligió cobrar por su Stripe y
+--    Stripe todavía no le deja cobrar, la venta no se retrasa: se cae el día
+--    que alguien compre, con el huésped y la tarjeta delante. Eso ya pasó el
+--    5-nov con Capital Bus (doc 229) y es lo que se evita aquí.
+--
+--      if not cobro then
+--        bloq := bloq || jsonb_build_object('clave','cobro','que','su Stripe todavia no puede cobrar');
+--      end if;
+--
+-- Lo que lee el huésped no cambia ni nombra a nadie: el bloqueo sale por
+-- sinc_reserva_tercero_listo, que desde ayer dice sólo «esta experiencia no se
+-- puede reservar en línea en este momento; escríbenos y te la apartamos».
+--
+-- MEDIDO ANTES DE APLICAR, porque endurecer un candado puede cortar ventas
+-- vivas. Los 14 operadores activos con stripe_connect y sin poder cobrar no
+-- tienen NI UNA experiencia publicada ni una reserva en 60 días. Y los 6 que sí
+-- venden hoy siguen vendiendo: Capital Bus, Mexican Tales y Tekpan porque su
+-- cuenta cobra de verdad (comprobado hoy a las 12:18), y Tours con Benito,
+-- Jorge Ruvalcaba y Culturizate porque van por anticipo y no necesitan Stripe.
+-- Comprobado después del cambio, uno por uno: los 6 con `bloquea` vacío.
+--
+-- Quedan bloqueados los dos que no podían cobrar: Flow Latino Mx (cuenta a
+-- medias, abierta ayer) y Producciones Pa Lante Mx por sus dos papeles. Ninguno
+-- tenía nada a la venta.
+--
+-- Aplicado con parche textual sobre pg_get_functiondef.
+-- Cuerpo vigente: select pg_get_functiondef('public.tercero_candado'::regproc);
+--
+-- LO QUE QUEDA ABIERTO, y es del mismo color. En sinc-pago:
+--
+--   if (op?.stripe_account_id && op.stripe_charges_enabled !== false) cuenta = op.stripe_account_id;
+--
+-- «distinto de false» deja pasar el null, que es justo el estado de una cuenta
+-- que nadie ha comprobado nunca. Es decir: el cobro todavía puede salir hacia
+-- una cuenta de la que no sabemos si cobra. Cambiarlo a `=== true` manda ese
+-- cargo a nuestra cuenta en vez de a la suya, así que no se toca sin decidirlo:
+-- cambia a dónde cae el dinero, no sólo si el cargo pasa.
+--
+-- Y una segunda: `stripe_charges_enabled` sólo se refresca cuando alguien abre
+-- la pantalla de Stripe del panel. Hoy se refrescó a las 12:18 porque alguien
+-- entró. Debería correr solo.
