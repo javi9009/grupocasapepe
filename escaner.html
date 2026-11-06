@@ -304,6 +304,26 @@ function abreHoja(html){
 function cierraHoja(){ $('modal').classList.remove('on'); $('hoja').innerHTML=''; }
 $('modal').onclick = e => { if(e.target===$('modal')) cierraHoja(); };
 
+/* LOS DOS SELLOS DE UNA RESERVA. Uno por lado: el ateneista que opera -aqui
+   Capital Bus- y Casa Pepe. Cuando los dos han pasado y no dan el mismo numero
+   se dice en rojo, porque ese descuadre es el que luego no cuadra en caja. */
+function sello(et, d){
+  if(!d || d.n===null || d.n===undefined) return '<div class="mini">○ '+esc(et)+': sin escanear</div>';
+  return '<div class="mini">✓ <b>'+esc(et)+'</b>: '+d.n+' persona'+(Number(d.n)===1?'':'s')+
+    (d.por?' &middot; '+esc(d.por):'')+(d.at?' &middot; '+esc(cuando(d.at)):'')+'</div>';
+}
+function sellos(b){
+  if(!b || (!b.op && !b.casa)) return '';
+  var op=b.op||{}, ca=b.casa||{};
+  var hayDos = (op.n!==null&&op.n!==undefined) && (ca.n!==null&&ca.n!==undefined);
+  var mal = hayDos && Number(op.n)!==Number(ca.n);
+  return '<div class="idbox" style="margin-top:8px'+(mal?';border-color:#b3261e':'')+'">'+
+    sello(esc(b.opera||'El touroperador'), op)+
+    sello('Casa Pepe', ca)+
+    (mal?'<div class="mini" style="margin-top:4px;color:#b3261e"><b>No cuadran.</b></div>':
+     hayDos?'<div class="mini" style="margin-top:4px">Los dos cuadran.</div>':'')+
+  '</div>';
+}
 function pintaGrupo(b){
   const pax = Number(b.pax);
   const llegaron = Number(b.llegaron||0);
@@ -323,7 +343,14 @@ function pintaGrupo(b){
       '<div class="mini" style="margin-top:3px">'+esc(b.codigo||'')+'</div>'+
       /* Quien autorizo el paso. Javi, 30-oct-2026: «En el detalle se ha de
          poner que usuario escaneo o autorizo pasar». */
-      (b.llego_por ? '<div class="mini" style="margin-top:6px">Lo paso <b>'+esc(b.llego_por)+'</b>'+
+      /* LOS DOS ESCANEOS. Javi, 6-nov-2026: una salida con coste asociado se
+         escanea dos veces -primero el touroperador con su gente, despues Casa
+         Pepe, que valida la venta que va a Poster- y las dos tienen que
+         cuadrar. Aqui se ven los dos sellos, para que quien llega segundo sepa
+         si el otro lado ya paso, con cuantos y quien. */
+      sellos(b)+
+      (b.llego_por && !(b.op&&b.op.n)&&!(b.casa&&b.casa.n)
+        ? '<div class="mini" style="margin-top:6px">Lo paso <b>'+esc(b.llego_por)+'</b>'+
           (b.llego_at?' &middot; '+esc(cuando(b.llego_at)):'')+'</div>' : '')+
       (Number(b.por_cobrar)>0 ? '<div class="mini" style="margin-top:6px"><b>Por cobrar en la puerta:</b> '+
         pesos(b.por_cobrar)+' ('+pesos(b.por_persona)+' por persona)</div>' : '')+
@@ -428,6 +455,21 @@ function pintaGrupo(b){
         $('listo').onclick = cierraHoja;
         vibra([40]);
         if($('tabLista').style.display!=='none') cargaLista();
+      }else if(r && r.motivo==='ya_escaneado'){
+        /* Ese lado ya paso a TODO el grupo. No es un fallo: es que se esta
+           escaneando dos veces lo mismo. El otro lado sigue pudiendo pasar. */
+        abreHoja('<div class="res ojo" style="margin-top:6px">'+
+          '<div class="big">Esto ya lo pasaste</div>'+
+          '<div class="mini" style="margin-top:2px"><b>'+esc(r.titular||'')+'</b></div>'+
+          '<div class="mini" style="margin-top:6px">'+
+            esc(r.lado==='casa'?'Casa Pepe':'El touroperador')+' ya paso a '+
+            (r.llegaron||0)+' de '+(r.pax||0)+' persona'+((r.pax===1)?'':'s')+
+            (r.por?' &middot; '+esc(r.por):'')+(r.cuando?' &middot; '+esc(cuando(r.cuando)):'')+
+          '</div>'+
+          '<div class="mini" style="margin-top:6px">Si el otro lado todavia no ha pasado, que escanee con su cuenta.</div>'+
+          '<div style="margin-top:12px"><button class="btn ancho" id="listo">Listo</button></div>'+
+        '</div>');
+        $('listo').onclick = cierraHoja; vibra([80,60,80]);
       }else{
         btn.disabled=false; btn.textContent=antes;
         $('idNota') && ($('idNota').textContent=(r&&(r.message||r.motivo))||'No se pudo confirmar');
@@ -476,7 +518,18 @@ async function cargaLista(){
             (s.no_shows?' · '+s.no_shows+' no llegó':'')+
             (s.sin_id?' · '+s.sin_id+' sin ID':'')+
             (Number(s.por_cobrar)>0?' · por cobrar '+pesos(s.por_cobrar):'')+
-          '</div></div>'+
+          '</div>'+
+          /* EL REPORTE DE LOS DOS ESCANEOS, de un vistazo. Si los dos lados han
+             empezado a pasar gente y no llevan el mismo numero, sale en rojo:
+             ese descuadre es el que luego no cuadra en caja. */
+          ((Number(s.paso_op)||Number(s.paso_casa))
+            ? '<div class="mini" style="margin-top:3px'+(s.cuadra?'':';color:#b3261e')+'">'+
+                'Touroperador '+(s.paso_op||0)+' · Casa Pepe '+(s.paso_casa||0)+
+                (s.cuadra?' · cuadran':' · NO CUADRAN'+
+                  (Number(s.descuadres)?' ('+s.descuadres+' reserva'+(Number(s.descuadres)===1?'':'s')+')':''))+
+              '</div>'
+            : '')+
+        '</div>'+
         '<div class="sal-b">'+ (r.length ? r.map(x => {
           const e = ETQ[x.estado]||['',''];
           return '<div class="fila"><div class="n"><b>'+esc(x.nombre)+'</b>'+
