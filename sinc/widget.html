@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reservar · Sincrético</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+/* EL RECUADRO QUE EL TOUROPERADOR PEGA EN SU WEB. Javi, 6-nov-2026:
+   «debe de poder ser un widget que muestra el recuadro de la experiencia en su
+   web... que vean la info y selector de fechas y horarios y puedan avanzar en
+   la reserva».
+   Vive dentro de un iframe en una web ajena, así que no hereda nada de ella ni
+   le impone nada: todo el estilo va aquí dentro y la altura se le dicta al
+   anfitrión por postMessage. Fondo blanco y no papel, porque se incrusta sobre
+   fondos que no controlamos. */
+:root{
+  --naranja:#F2682A; --naranja-oscuro:#C9501A; --naranja-suave:#FDE7DC;
+  --tinta:#1E1A16; --tinta-2:#3C3630; --gris:#6E665C; --tenue:#A9A096;
+  --linea:#E6DFD6; --hueso:#F4EFE8;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent}
+body{font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--tinta);font-size:15px;line-height:1.5}
+.caja{background:#fff;border:1px solid var(--linea);border-radius:16px;overflow:hidden;
+  box-shadow:0 1px 1px rgba(30,26,22,.04),0 14px 34px -26px rgba(30,26,22,.45)}
+.foto{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:var(--hueso)}
+.cuerpo{padding:16px 17px 18px}
+.quien{font-family:Oswald;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--gris);margin:0 0 5px}
+h1{font-family:Oswald;font-weight:600;font-size:21px;line-height:1.2;margin:0 0 7px;letter-spacing:.01em}
+.resumen{color:var(--tinta-2);font-size:13.5px;line-height:1.45;margin:0 0 13px;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.precio{display:flex;align-items:baseline;gap:7px;margin:0 0 14px;padding:0 0 14px;border-bottom:1px solid var(--linea)}
+.precio b{font-family:Oswald;font-size:27px;font-weight:600;letter-spacing:.01em}
+.precio span{color:var(--gris);font-size:12.5px}
+.et{font-family:Oswald;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--gris);margin:0 0 7px}
+.dias{display:flex;gap:7px;overflow-x:auto;padding:1px 1px 7px;scrollbar-width:thin}
+.dia{flex:0 0 auto;border:1.5px solid var(--linea);background:#fff;border-radius:11px;
+  padding:7px 11px;cursor:pointer;text-align:center;min-width:56px;font:inherit;color:inherit}
+.dia small{display:block;font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--gris)}
+.dia b{display:block;font-family:Oswald;font-size:17px;font-weight:600;line-height:1.25}
+.dia.on{border-color:var(--naranja);background:var(--naranja-suave)}
+.dia.on small{color:var(--naranja-oscuro)}
+.horas{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+.hora{border:1.5px solid var(--linea);background:#fff;border-radius:999px;padding:6px 14px;
+  cursor:pointer;font:inherit;font-size:13.5px;color:inherit}
+.hora.on{border-color:var(--naranja);background:var(--naranja-suave);color:var(--naranja-oscuro);font-weight:600}
+.btn{display:block;width:100%;margin-top:16px;border:0;border-radius:11px;background:var(--naranja);
+  color:#fff;font-family:Oswald;font-weight:600;font-size:14px;letter-spacing:.05em;text-transform:uppercase;
+  padding:13px 18px;cursor:pointer;text-align:center;text-decoration:none}
+.btn:hover{background:var(--naranja-oscuro)}
+.btn[disabled]{background:var(--tenue);cursor:default}
+.pie{margin:11px 0 0;font-size:11.5px;color:var(--tenue);text-align:center}
+.pie a{color:var(--tenue)}
+.vacio{color:var(--gris);font-size:13px;margin:9px 0 0}
+.cargando{padding:34px 18px;text-align:center;color:var(--gris);font-size:13.5px}
+.mal{padding:22px 18px;color:var(--naranja-oscuro);font-size:13.5px}
+</style>
+</head>
+<body>
+<div id="app"><div class="caja"><div class="cargando">Cargando…</div></div></div>
+
+<script>
+(function(){
+'use strict';
+var SB_URL='https://rehophywchakfapivsbh.supabase.co';
+var SB_KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
+var sb=window.supabase?supabase.createClient(SB_URL,SB_KEY):null;
+
+var U=new URLSearchParams(location.search);
+var ID=(U.get('id')||'').trim();
+var COD=(U.get('c')||'').trim();
+var BASE=location.origin;
+
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function dinero(n){return '$'+Math.round(Number(n)||0).toLocaleString('es-MX');}
+
+/* LA ALTURA SE LA DECIMOS A LA WEB QUE NOS INCRUSTA. Un iframe no sabe crecer
+   solo: sin esto, el recuadro sale cortado o con un hueco debajo. */
+function avisaAlto(){
+  var h=document.documentElement.scrollHeight;
+  try{ parent.postMessage({sincWidget:'alto', id:ID, alto:h}, '*'); }catch(_){}
+}
+var _ro=new ResizeObserver(avisaAlto);
+_ro.observe(document.documentElement);
+if(document.body) _ro.observe(document.body);
+window.addEventListener('load', avisaAlto);
+
+var MESES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+var SEM=['dom','lun','mar','mié','jue','vie','sáb'];
+function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+
+var E=null, DISP=[], diaSel=null, horaSel=null;
+
+async function rpc(f,p){
+  try{ var r=await sb.rpc(f,p); if(r.error) return null; return r.data; }catch(_){ return null; }
+}
+
+async function carga(){
+  if(!sb||!/^[0-9a-f-]{36}$/i.test(ID)){ malo('No se pudo cargar la experiencia.'); return; }
+
+  var r=await sb.from('v_exp_publica').select('*').eq('id',ID).limit(1);
+  E=(r.data||[])[0];
+  if(!E){ malo('Esta experiencia no está disponible ahora mismo.'); return; }
+
+  var m=await sb.from('v_exp_media_publica').select('url_h,url,orden')
+          .eq('experiencia_id',ID).order('orden',{ascending:true}).limit(1);
+  E._foto=((m.data||[])[0]||{}).url_h||((m.data||[])[0]||{}).url||'';
+
+  /* Los días que de verdad se pueden reservar los dice la base, no el
+     calendario de la ficha: ahí ya están contados el cupo, los bloqueos y la
+     hora de cierre. */
+  var hoy=new Date(), hasta=new Date(); hasta.setDate(hasta.getDate()+60);
+  DISP=(await rpc('sinc_disponibilidad',{p_op_exp:ID,p_desde:ymd(hoy),p_hasta:ymd(hasta)}))||[];
+  DISP=DISP.filter(function(d){ return d.estado==='libre' && Number(d.libres)>0; });
+
+  pinta();
+}
+
+function malo(t){
+  document.getElementById('app').innerHTML='<div class="caja"><div class="mal">'+esc(t)+'</div></div>';
+  avisaAlto();
+}
+
+function diasUnicos(){
+  var vis={}, out=[];
+  DISP.forEach(function(d){ if(!vis[d.fecha]){ vis[d.fecha]=1; out.push(d.fecha); } });
+  return out.slice(0,14);
+}
+function horasDe(f){
+  return DISP.filter(function(d){ return d.fecha===f; })
+             .map(function(d){ return String(d.hora).slice(0,5); })
+             .filter(function(h,i,a){ return a.indexOf(h)===i; }).sort();
+}
+
+function liga(){
+  var q='id='+encodeURIComponent(ID);
+  if(COD) q+='&c='+encodeURIComponent(COD);
+  if(diaSel) q+='&f='+encodeURIComponent(diaSel);
+  if(horaSel) q+='&h='+encodeURIComponent(horaSel);
+  return BASE+'/sinc/exp.html?'+q;
+}
+
+function pinta(){
+  var dias=diasUnicos();
+  var horas=diaSel?horasDe(diaSel):[];
+  var listo=!!(diaSel&&horaSel);
+
+  document.getElementById('app').innerHTML=
+    '<div class="caja">'+
+      (E._foto?'<img class="foto" src="'+esc(E._foto)+'" alt="'+esc(E.nombre||'')+'" loading="lazy">':'')+
+      '<div class="cuerpo">'+
+        (E.operador?'<p class="quien">'+esc(E.operador)+'</p>':'')+
+        '<h1>'+esc(E.nombre||'')+'</h1>'+
+        (E.resumen?'<p class="resumen">'+esc(E.resumen)+'</p>':'')+
+        '<div class="precio"><b>'+dinero(E.pvp_adulto)+'</b><span>por persona</span></div>'+
+
+        (dias.length
+          ? '<p class="et">Elige el día</p>'+
+            '<div class="dias">'+dias.map(function(f){
+                var p=f.split('-'), d=new Date(+p[0],+p[1]-1,+p[2]);
+                return '<button class="dia'+(f===diaSel?' on':'')+'" data-f="'+esc(f)+'">'+
+                  '<small>'+SEM[d.getDay()]+'</small><b>'+(+p[2])+'</b>'+
+                  '<small>'+MESES[+p[1]-1]+'</small></button>';
+              }).join('')+'</div>'+
+            (diaSel
+              ? '<p class="et" style="margin-top:13px">A qué hora</p>'+
+                '<div class="horas">'+horas.map(function(h){
+                    return '<button class="hora'+(h===horaSel?' on':'')+'" data-h="'+esc(h)+'">'+esc(h)+'</button>';
+                  }).join('')+'</div>'
+              : '')
+          : '<p class="vacio">No hay fechas abiertas ahora mismo. Escríbenos y lo vemos.</p>')+
+
+        '<a class="btn" id="irA" href="'+esc(liga())+'" target="_blank" rel="noopener">'+
+          (listo?'Reservar este día':'Ver fechas y reservar')+'</a>'+
+        '<p class="pie">Reservas gestionadas por <a href="'+esc(BASE)+'/sinc/" target="_blank" rel="noopener">Sincrético</a></p>'+
+      '</div>'+
+    '</div>';
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-f]'),function(b){
+    b.onclick=function(){ diaSel=b.getAttribute('data-f'); horaSel=null;
+      var hs=horasDe(diaSel); if(hs.length===1) horaSel=hs[0]; pinta(); };});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-h]'),function(b){
+    b.onclick=function(){ horaSel=b.getAttribute('data-h'); pinta(); };});
+
+  avisaAlto();
+}
+
+carga();
+})();
+</script>
+</body>
+</html>
