@@ -3,7 +3,26 @@
    solicitud de devolucion del huesped, y sinc_reserva_mueve cuando una
    reserva cambia de dia. Cada motivo tiene su asunto y su reparto.
    Sin JWT: lo llama la base. Exige el secreto compartido de
-   privado.tokens_integracion, o la service role. */
+   privado.tokens_integracion, o la service role.
+
+   TRES COSAS, 6-nov-2026.
+
+   1. QUEDA ESCRITO QUE SALIO. La reserva tiene desde siempre las columnas
+      aviso_operador_at y aviso_operador_error y nadie las escribia nunca, asi
+      que a la pregunta «le llego el correo a la operadora?» la base contestaba
+      que no en las 181 reservas, cuando en realidad el correo salia. Una
+      columna que nadie llena no es un dato que falte: es un dato que miente.
+
+   2. EL COBRO DIVIDIDO, DICHO. En un tour de dos cobros -Capital Bus- el
+      huesped nos paga por tarjeta solo nuestra comision y le liquida el resto
+      al operador al llegar. El aviso decia «Paga $1,148» y nada mas, asi que
+      quien lo leia no sabia si tenia que cobrar algo ni cuanto. Ahora va el
+      estado del anticipo y, aparte, lo que hay que cobrar en la salida.
+
+   3. UN INTENTO NO SE AVISA. Cuando el cobro falla y el huesped vuelve a darle
+      al boton nace una reserva nueva cada vez: el 5-nov, Capital Bus recibio
+      ocho avisos de dos personas. Si la reserva esta marcada como intento, de
+      aqui no sale nada. */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const URL_SB = Deno.env.get("SUPABASE_URL") ?? "";
@@ -29,6 +48,20 @@ async function sb(path: string, init: RequestInit = {}) {
   const t = await r.text();
   let b: any = null; try { b = t ? JSON.parse(t) : null; } catch { b = t; }
   return { ok: r.ok, status: r.status, body: b };
+}
+
+/* El sello del aviso. Si esto falla no se devuelve error: el correo ya salio y
+   decir que no salio es peor que no tener el sello. */
+async function sella(reservaId: string, ok: boolean, detalle: string | null) {
+  try {
+    await sb(`sinc_reservas?id=eq.${encodeURIComponent(reservaId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        aviso_operador_at: ok ? new Date().toISOString() : null,
+        aviso_operador_error: ok ? null : (detalle ?? "no se pudo mandar"),
+      }),
+    });
+  } catch (_) { /* el sello es un dato, no el trabajo */ }
 }
 
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -131,6 +164,9 @@ Deno.serve(async (req) => {
     const x = r.body?.[0];
     if (!x) return json({ ok: false, aviso: "esa reserva no existe" });
 
+    /* Un reintento de pago que no paso no es una reserva: no se avisa de el. */
+    if (x.intento) return json({ ok: true, correo: false, aviso: "es un intento, no se avisa" });
+
     const mov = motivo === "movida";
     const { para, quien } = await destinatarios(String(reserva_id), mov);
     if (!para.length) return json({ ok: true, correo: false, aviso: "sin destinatarios configurados" });
@@ -147,15 +183,29 @@ Deno.serve(async (req) => {
     const dela = !x.touroperadora || x.touroperadora === "Sincretico";
     const cuando = fechaLarga(x.fecha_salida) + (x.hora_salida ? ` a las ${String(x.hora_salida).slice(0, 5)}` : "");
 
+    /* EL DINERO, DICHO COMO SE PREGUNTA EN LA PUERTA. En un tour de dos cobros
+       lo que entro por tarjeta es nuestra comision, no su dinero: lo que el
+       operador necesita saber es cuanto tiene que cobrar al llegar. */
+    const pagado = String(x.pago_estado_crudo ?? x.pago_estado ?? "") === "pagado";
+    const resto = Number(x.pago_resto ?? 0);
+    const dividido = !!x.cobro_dividido && resto > 0;
+
     const filas: Array<[string, string]> = [
       ["Tour", String(x.tour ?? "-") + (dela ? " - de la casa" : ` - ${x.touroperadora}`)],
       ["Cuando", cuando],
       ["Quien", String(x.huesped ?? "-")],
       ["Personas", String(x.pax ?? 0)],
       ["Paga", pesos(x.total)],
-      ["Canal", String(x.canal ?? "-")],
-      ["Folio", String(x.folio ?? "-")],
     ];
+    if (dividido) {
+      filas.push(["Anticipo con nosotros",
+        (pagado ? "pagado " : "SIN pagar ") + pesos(x.pago_ahora ?? x.pago_total)]);
+      filas.push(["Cobrar en la salida", pesos(resto)]);
+    } else {
+      filas.push(["Pago", pagado ? "cobrado" : "pendiente de cobro"]);
+    }
+    filas.push(["Canal", String(x.canal ?? "-")]);
+    filas.push(["Folio", String(x.folio ?? "-")]);
     if (x.email) filas.push(["Correo", String(x.email)]);
     if (x.telefono) filas.push(["Telefono", String(x.telefono)]);
     if (x.hotel) filas.push(["Hotel", String(x.hotel)]);
@@ -168,7 +218,8 @@ Deno.serve(async (req) => {
       ? `${esc(x.huesped ?? "")} pidio la devolucion desde su boleto. Hay que mirar que se gasto ya (boletos, apartados, alimentos, nomina) y devolverle lo que todavia se pueda liberar.`
       : mov
       ? `${esc(x.huesped ?? "")} ya no viene${antesTx ? ` el ${esc(antesTx)}` : ""}: viene el ${esc(cuando)}. Su boleto ya apunta al dia nuevo.`
-      : `Entro una reserva${dela ? " de un tour nuestro" : ""}.`;
+      : `Entro una reserva${dela ? " de un tour nuestro" : ""}.` +
+        (dividido ? ` Es de dos cobros: hay que cobrarle ${esc(pesos(resto))} en el punto de encuentro.` : "");
 
     const html = `
       <div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:15px;line-height:1.6;color:#1F1B16;max-width:520px">
@@ -197,7 +248,10 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ from: "Sincretico <no-reply@casapepe.mx>", to: para, subject: asunto, html }),
     });
 
-    return json({ ok: true, correo: env.ok, para, quien, detalle: env.ok ? null : (await env.text()).slice(0, 300) });
+    const detalle = env.ok ? null : (await env.text()).slice(0, 300);
+    await sella(String(reserva_id), env.ok, detalle);
+
+    return json({ ok: true, correo: env.ok, para, quien, detalle });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

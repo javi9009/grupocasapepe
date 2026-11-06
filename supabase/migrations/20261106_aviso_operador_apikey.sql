@@ -1,0 +1,33 @@
+-- 6-nov-2026 · Las tres puertas que llaman a sinc-aviso-reserva necesitan la
+-- llave publicable en la cabecera.
+--
+-- Al redesplegar la función edge, Supabase la dejó con verify_jwt activado, y
+-- las tres funciones de la base que la llaman mandaban sólo el secreto
+-- compartido `x-sinc-aviso`: sin apikey, la puerta de Supabase contesta 401
+-- antes de que la función exista, así que el aviso al operador habría dejado de
+-- salir en silencio. Se les añade la llave publicable —que es pública a
+-- propósito y es la misma que usan los crons— delante del secreto.
+--
+-- Las tres: sinc_reservas_avisa (trigger al insertar la reserva),
+-- sinc_reserva_mueve (cambio de día) y sinc_pide_devolucion.
+--
+-- Aplicado con un parche textual sobre pg_get_functiondef de cada una, para no
+-- reescribir tres cuerpos enteros por una cabecera:
+--
+--   do $do$
+--   declare r record; v_def text; v_new text;
+--     v_viejo text := '''Content-Type'',''application/json'',''x-sinc-aviso''';
+--     v_bueno text := '''Content-Type'',''application/json'',''apikey'',''<publicable>'',''x-sinc-aviso''';
+--   begin
+--     for r in select p.oid from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+--               where p.prokind='f' and n.nspname in ('public','privado')
+--                 and pg_get_functiondef(p.oid) like '%sinc-aviso-reserva%'
+--     loop
+--       v_def := pg_get_functiondef(r.oid);
+--       v_new := replace(v_def, v_viejo, v_bueno);
+--       if v_new <> v_def then execute v_new; end if;
+--     end loop;
+--   end $do$;
+--
+-- Comprobado de punta a punta por la misma vía del trigger: la función contesta
+-- 200 con {"ok":true,"correo":false,"aviso":"es un intento, no se avisa"}.
