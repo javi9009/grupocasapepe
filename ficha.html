@@ -736,6 +736,28 @@ gmp-place-autocomplete,.gmpac{
         <div class="hint">Pon a qué hora sale la primera y a qué hora termina. De ahí sacamos cuánto dura, y las demás salidas se calculan solas.</div>
         <div id="salidas"></div>
         <div class="ft" style="justify-content:flex-start"><button class="btn fantasma sm" id="addSalida">＋ Añadir salida</button></div>
+
+        <!-- DOBLE ESCANEO. Javi, 7-nov-2026: «este es un tour de doble escaneo:
+             ateneísta y espacio. Este tipo de tour permite que el ateneísta
+             valide el acceso y el espacio lo confirme. Esto no ocurre cuando
+             hay un tour en la calle o es el ateneísta el que da su servicio».
+             De momento es la Noche Mexicana en La Cósmica, pero el día que una
+             experiencia se dé en Cumbre, en Virreyes o en cualquier espacio de
+             un tercero, se enciende aquí y ya. -->
+        <div id="bloqueDoble" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--linea)">
+          <label class="check" style="display:flex;gap:9px;align-items:flex-start">
+            <input type="checkbox" id="dobleEscaneo" style="margin-top:3px">
+            <span><b>Ocurre en un espacio y se valida dos veces</b>
+              <div class="mini">El ateneísta pasa a su gente y el espacio lo confirma en su tablet de
+                entrada. Déjalo apagado si el tour es en la calle o lo da el propio ateneísta.</div></span>
+          </label>
+          <div id="fldTourEspacio" class="fld" style="margin-top:12px;max-width:420px;display:none">
+            <label>¿En qué espacio?</label>
+            <select id="tourEspacio"></select>
+            <div class="ay" id="tourEspacioAy">La tablet de ese espacio será la única que pueda confirmar
+              esta experiencia. Si un día ocurre en otro sitio, se cambia en esa salida.</div>
+          </div>
+        </div>
       </div>
       <div class="card">
         <h3>¿Cuándo sale?</h3>
@@ -2490,7 +2512,7 @@ gmp-place-autocomplete,.gmpac{
   /* horas_dias es de ayer (6-nov-2026) y la vista v_op_experiencias todavía no
      la trae; sin esto la ficha abriría siempre con los días de cada salida en
      blanco y al guardar los borraría. */
-  var FALTAN_EN_VISTA='pickup_zonas,horas_dias';
+  var FALTAN_EN_VISTA='pickup_zonas,horas_dias,doble_escaneo,espacio_id';
   async function completaDeTabla(ficha){
     if(!ficha)return ficha;
     try{
@@ -2639,6 +2661,7 @@ gmp-place-autocomplete,.gmpac{
     /* Al cambiar los días de la ficha hay que repintar las salidas: sus chips
        son un recorte de éstos, y si no, se quedan ofreciendo un día que ya no
        existe -o escondiendo el que se acaba de añadir-. */
+    try{ pintaDoble(); }catch(_){}
     pintaIdiomas();chips('chDias',DIAS,function(){
       try{ guardaSalidas(); pintaSalidas(); }catch(_){}
     });
@@ -2740,6 +2763,41 @@ gmp-place-autocomplete,.gmpac{
     var gratis = Number(E.pvp_adulto||E.precio_adulto||0)===0;
     var nota=$('evNotaGratis'); if(nota) nota.style.display = gratis ? '' : 'none';
   }
+
+  /* EL DOBLE ESCANEO, EN LA FICHA DEL TOUR. El espacio es una sola columna
+     -`espacio_id`- y se elige en dos sitios: el de un evento, que siempre
+     ocurre en un sitio, y el de un tour que además se valida en casa. Por eso
+     este selector NO lleva `data-c`: con dos elementos diciendo lo mismo,
+     ganaba el último del documento y el evento se llevaba por delante al tour.
+     Aquí se lee y se escribe a mano, y sólo para lo que se esté editando. */
+  async function pintaDoble(){
+    var caja=$('bloqueDoble'); if(!caja) return;
+    /* Un evento ya ocurre en un espacio y tiene su propio selector arriba:
+       aquí sobra. */
+    caja.style.display = esTour() ? '' : 'none';
+    if(!esTour()) return;
+
+    if(!ESPACIOS.length){
+      try{ ESPACIOS=await get('ev_espacios?select=id,nombre,capacidad,sede&activo=is.true&order=orden'); }
+      catch(_){ ESPACIOS=[]; }
+    }
+    var sel=$('tourEspacio');
+    if(sel && sel.options.length!==ESPACIOS.length+1){
+      sel.innerHTML='<option value="">— elige el espacio —</option>'+
+        ESPACIOS.map(function(x){
+          return '<option value="'+x.id+'">'+esc(x.nombre)+(x.sede?' · '+esc(x.sede):'')+'</option>';
+        }).join('');
+    }
+    var on=(E.doble_escaneo===true);
+    $('dobleEscaneo').checked=on;
+    if(sel) sel.value=E.espacio_id||'';
+    $('fldTourEspacio').style.display = on ? '' : 'none';
+  }
+  if($('dobleEscaneo')) $('dobleEscaneo').onchange=function(){
+    E.doble_escaneo=this.checked;
+    $('fldTourEspacio').style.display = this.checked ? '' : 'none';
+  };
+  if($('tourEspacio')) $('tourEspacio').onchange=function(){ E.espacio_id=this.value||null; };
 
   /* El tope de aforo también vive en la base, pero avisar aquí evita que
      alguien escriba 200 y se entere al guardar. */
@@ -6786,6 +6844,16 @@ gmp-place-autocomplete,.gmpac{
        paga quien llega de la calle: borrarlo aquí era regalar el tour a todo
        el mundo. */
     if(b.apepe_gratuito===true && !esTour()){ b.neto_adulto=0; b.neto_menor=null; }
+
+    /* El doble escaneo y su espacio, a mano y sólo en un tour: en un evento el
+       espacio lo manda el selector de arriba, que sí lleva `data-c`. Y sin
+       espacio no hay doble escaneo que valga -no habría tablet que lo
+       confirmara-, así que se apaga en vez de guardar medio ajuste. */
+    if(esTour()){
+      var _te=$('tourEspacio'), _de=$('dobleEscaneo');
+      b.espacio_id    = (_te && _te.value) ? _te.value : null;
+      b.doble_escaneo = !!(_de && _de.checked && b.espacio_id);
+    }
     /* `categoria` (texto heredado) se mantiene al dia con el nombre de la
        categoria elegida: hay pantallas viejas que todavia lo leen. Y la ficha
        deja de estar marcada como siembra en cuanto alguien la firma aqui. */
