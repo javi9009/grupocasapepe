@@ -479,6 +479,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   border:1px solid var(--linea);background:#fff;cursor:pointer;user-select:none}
 .pgllega.si{background:var(--ok-bg,#E1F0E7);color:var(--ok);border-color:var(--ok);cursor:default}
 .pgnum{width:62px;padding:6px 8px;border:1px solid var(--linea);border-radius:9px;font:inherit}
+/* LOS DOS SELLOS, con la misma forma redonda que «Llegó» y «Pagado» para que
+   se lean en la misma pasada. Quien no ha pasado va en gris; cuando los dos
+   pasaron y no dan el mismo numero, los dos se ponen en rojo. */
+.pgsello{font-size:11px;font-weight:700;border-radius:999px;padding:4px 10px;font-family:'Oswald';
+  letter-spacing:.06em;border:1px solid var(--linea);background:#fff;color:#8A8178;user-select:none}
+.pgsello.si{background:var(--ok-bg,#E1F0E7);color:var(--ok);border-color:var(--ok)}
+.pgsello.mal{background:#FBE9E7;color:#B3261E;border-color:#B3261E}
 /* El estado de notificado, con la misma forma que «Llegó» y «Pagado»: son las
    tres cosas que se miran de un vistazo en la fila de cada reserva. */
 .pgavisa{font-size:11px;font-weight:700;border-radius:999px;padding:4px 12px;font-family:'Oswald';
@@ -2338,6 +2345,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         var rc=await fetch(SB+'/rest/v1/sinc_reservas?select=id,salida_id,nombre,pax,adultos,menores,idioma,email,telefono,'+
           'pickup,pickup_lugar,pickup_hora,pickup_lat,pickup_lng,pago_estado,total,notas,cancelada_at,encuentro_estado,recordatorio_3h_at,'+
           'canal,restricciones,llegaron,llego_at,folio,hotel_id,adultos,menores,llegue_aviso_at,llegue_aviso_min,'+
+          /* LOS DOS SELLOS. Javi, 7-nov-2026: «¿cómo sé las que pasó Casa
+             Pepe?». En la programación sólo estaba el «Llegó» de siempre,
+             que no dice quién lo pasó: una salida con coste asociado se
+             escanea dos veces y las dos tienen que cuadrar. */
+          'llego_op,llego_op_at,llego_op_por,llego_casa,llego_casa_at,llego_casa_por,'+
           'intento,intento_nota,created_at'+
           '&salida_id=in.('+sids.join(',')+')&cancelada_at=is.null&order=pickup_hora',{headers:hdr()});
         if(rc.ok)(await rc.json()).forEach(function(c){
@@ -2556,6 +2568,26 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       '<div class="pgfila"><button class="btn sm gris" data-abrir-evento="1">Abrir en Eventos</button>'+
         '<div class="mini">Lo que se cambia de un evento se cambia ahí: su sala, su precio, su montaje y sus boletos.</div></div>'+
     '</div>';
+  }
+
+  /* LOS DOS SELLOS DE UNA RESERVA. Javi, 7-nov-2026: «¿cómo sé las que pasó
+     Casa Pepe?». Hasta ayer había un solo «Llegó» y no decía quién lo había
+     pasado, así que en una salida que se escanea dos veces no había nada que
+     cuadrar. Aquí se ven los dos: el de la casa que opera y el de Casa Pepe,
+     que es quien valida la venta que se sube a Poster. */
+  function dosSellos(c){
+    var op = (c.llego_op  === null || c.llego_op  === undefined) ? null : Number(c.llego_op);
+    var ca = (c.llego_casa=== null || c.llego_casa=== undefined) ? null : Number(c.llego_casa);
+    if(op===null && ca===null) return '';
+    var mal = (op!==null && ca!==null && op!==ca);
+    function uno(et, n, por, at){
+      var t = n===null ? et+': sin pasar'
+            : et+': '+n+(por?' · '+por:'')+(at?' · '+String(at).slice(11,16):'');
+      return '<span class="pgsello'+(mal?' mal':(n===null?'':' si'))+'" title="'+esc(t)+'">'+
+        esc(et)+' '+(n===null?'—':n)+'</span>';
+    }
+    return uno(esc(cur&&cur.nombre_comercial||'Operador'), op, c.llego_op_por, c.llego_op_at)+
+           uno('Casa Pepe', ca, c.llego_casa_por, c.llego_casa_at);
   }
 
   function pintaSalida(s){
@@ -2897,6 +2929,11 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
                 : '')+
               '<span class="pgllega'+(c.llegaron!=null?' si':'')+'" data-llego="'+c.id+'">'+
                 (c.llegaron!=null?('Llegaron '+c.llegaron+' de '+(Number(c.pax)||1)):'Llegó')+'</span>'+
+              /* QUIÉN LA PASÓ, DE LOS DOS LADOS. El de la casa que opera y el
+                 de Casa Pepe, que valida la venta. Si los dos pasaron y no dan
+                 el mismo número, se dice: ese descuadre es el que luego no
+                 cuadra en caja. */
+              dosSellos(c)+
               (c.llegaron!=null
                 ? '<input class="pgnum" type="number" min="0" max="'+(Number(c.pax)||1)+'" value="'+Number(c.llegaron)+'" data-llegn="'+c.id+'">'
                 : '')+
@@ -3075,6 +3112,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         : '<div class="pgdt"><span>Teléfono</span><b style="color:var(--alerta,#8C6212)">no lo dejó</b></div>')+
       li('Folio', c.folio||'')+
       (c.llego_at?li('Llegó', String(c.llego_at).slice(0,16).replace('T',' a las ')):'')+
+      /* QUIÉN LO PASÓ POR CADA LADO, con nombre y hora: es lo que se mira
+         cuando el cuadre no da y hay que saber a quién preguntar. */
+      (c.llego_op_at?li('Lo pasó '+(cur&&cur.nombre_comercial||'el operador'),
+         (c.llego_op||0)+' pers. · '+(c.llego_op_por||'')+' · '+String(c.llego_op_at).slice(11,16)):'')+
+      (c.llego_casa_at?li('Lo pasó Casa Pepe',
+         (c.llego_casa||0)+' pers. · '+(c.llego_casa_por||'')+' · '+String(c.llego_casa_at).slice(11,16)):'')+
       '</div>';
   }
 
