@@ -1,0 +1,54 @@
+-- 7-nov-2026 · Un intento caduca cuando su salida se va.
+--
+-- Javi mandó la foto de la pantalla de Leo, de Capital Bus, en la puerta de la
+-- Noche Mexicana: seis reservas de Daniel Grabenbauer y Féline ten Cate, cada
+-- una con su «por cobrar $861.20» y su botón naranja de YA LLEGÓ. Y preguntó
+-- lo correcto: «Estas reservas no deben aparecer porque no se pagaron, ¿no?
+-- ¿Las puedes borrar?».
+--
+-- No deben aparecer, y ya no aparecían: el filtro de intentos en
+-- sinc_dia_boletos se puso el 6-nov sobre las 16:00 y la foto era anterior.
+--
+-- PERO NO SE BORRAN. Un intento es el rastro de que alguien puso su tarjeta y
+-- no pasó: es lo que deja ver cuánta venta se está cayendo y por qué. Si se
+-- borra, el problema desaparece de la vista y sigue costando dinero — que es
+-- exactamente lo que ocurrió el 5-nov, cuando Noche Mexicana llevaba días sin
+-- cobrar y no había forma de verlo (doc 229). Por eso quedaron marcados como
+-- intento en vez de borrados (doc 230): para no estorbar donde no pintan nada
+-- y seguir contando donde sí.
+--
+-- LO QUE SÍ FALTABA: CERRARLOS.
+--
+-- Mientras la salida está por venir, un intento sigue vivo y es una venta por
+-- rescatar: el huésped puede volver y pagar. Daniel lo hizo —después de cinco
+-- tarjetas rechazadas en Noche Mexicana volvió el 5-nov a las 17:25 y compró
+-- el Tour a Teotihuacán, pagado y sin nada pendiente.
+--
+-- Cuando la salida ya ocurrió, en cambio, ese intento deja de ser nada: ni
+-- venta ni descarte. Se queda en un limbo del que vuelve a asomar en cualquier
+-- pantalla nueva que olvide filtrarlo. Y como el filtro hay que acordarse de
+-- ponerlo en cada sitio, la próxima pantalla lo olvidará otra vez.
+--
+-- Se cierran como cancelada, con el motivo escrito, conservando intento=true:
+--
+--   create or replace function public.sinc_intentos_caducan() returns integer ...
+--     update sinc_reservas r
+--        set estado='cancelada', cancelada_at=now(),
+--            cancel_motivo='Intento no pagado; la salida ya ocurrió'
+--       from sinc_salidas s
+--      where s.id = r.salida_id
+--        and coalesce(r.intento,false)
+--        and coalesce(r.estado,'') <> 'cancelada'
+--        and (s.fecha + s.hora) < (now() at time zone 'America/Mexico_City');
+--
+-- Cerrados de una vez los 8 de la Noche Mexicana del 6-nov: cuatro de Daniel
+-- Grabenbauer y tres de Féline ten Cate (más uno). Quedan 0 intentos vivos de
+-- salidas pasadas.
+--
+-- La hora se compara en CDMX, no en UTC, por lo del doc 239: con current_date
+-- un intento de una salida de las 18:00 habría caducado en el momento de
+-- salir, con el huésped todavía pudiendo pagar en la puerta.
+--
+-- PENDIENTE: engancharlo a un cron diario. Mientras no lo esté, hay que
+-- llamarlo a mano, y una limpieza que depende de que alguien se acuerde es la
+-- que no se hace.
