@@ -61,6 +61,22 @@ a.cb:hover{text-decoration:underline}
 .vacio{padding:26px 8px;text-align:center;color:var(--muted)}
 .nota{font-size:.8rem;color:var(--muted);margin-top:10px}
 #aviso{font-size:.84rem;margin:8px 0 0;min-height:1.2em}
+/* EL EMBUDO. Javi, 9-nov-2026: «para ubicar las reservas en cada etapa».
+   Siete pasos en fila; se toca uno y la lista de abajo se queda con esa etapa. */
+.emb{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 2px}
+.paso{flex:1 1 128px;min-width:128px;text-align:left;background:#fff;border:1px solid var(--linea);
+  border-radius:12px;padding:10px 12px;cursor:pointer;font:inherit;color:inherit;transition:.12s}
+.paso:hover{border-color:#C9A98F;transform:translateY(-1px)}
+.paso[aria-pressed="true"]{border-color:#1F1B16;box-shadow:inset 0 0 0 1px #1F1B16}
+.paso .pn{font-size:.72rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+  display:block;line-height:1.25;min-height:2.3em}
+.paso .pc{font-size:1.45rem;font-weight:700;line-height:1.15}
+.paso .pi{font-size:.78rem;color:var(--muted)}
+.paso .ph{display:inline-block;margin-top:4px;font-size:.72rem;font-weight:700;color:#fff;
+  background:#B4531E;border-radius:999px;padding:1px 7px}
+.paso.off .pc{color:var(--muted);font-weight:600}
+.emb .flecha{align-self:center;color:var(--muted);font-size:1rem;padding:0 1px}
+@media(max-width:760px){.emb .flecha{display:none}}
 </style>
   <link rel="stylesheet" href="/cp-movil.css">
 </head>
@@ -123,6 +139,13 @@ a.cb:hover{text-decoration:underline}
       <button class="btn" id="bVencidas">Poner al día las vencidas</button>
     </div>
     <div id="aviso"></div>
+  </div>
+
+  <div class="card">
+    <h2>El embudo</h2>
+    <p class="lead">Dónde está cada reserva. Toca una etapa y la lista de abajo se queda con ella.</p>
+    <div class="emb" id="emb"></div>
+    <p class="nota" id="embNota"></p>
   </div>
 
   <div class="card">
@@ -205,6 +228,58 @@ async function carga(){
   }
   FILAS=await r.json();
   pinta();
+  pintaEmbudo();
+}
+
+/* El embudo se pide APARTE de la lista. La lista está filtrada por lo que elegiste;
+   la barra tiene que enseñar el embudo entero. Si se contara sobre lo filtrado, al
+   mirar «pagadas» las demás etapas saldrían en cero y parecería que no queda nada
+   por perseguir. */
+async function pintaEmbudo(){
+  const cont=document.getElementById("emb"), nota=document.getElementById("embNota");
+  if(!cont) return;
+  const casa=document.getElementById("fCasa").value;
+  let d=null;
+  try{
+    const r=await fetch(SB+"/rest/v1/rpc/nonref_funnel",{method:"POST",headers:H(),
+      body:JSON.stringify({p_casa:casa||null})});
+    if(r.ok) d=await r.json();
+  }catch(e){ /* si falla, la lista sigue sirviendo */ }
+  if(!Array.isArray(d)){ cont.innerHTML=""; nota.textContent="No se pudo leer el embudo; la lista de abajo sí está al día."; return; }
+
+  const sel=document.getElementById("fEstado").value;
+  const VIVAS=["pendiente","no_paso","avisado","confirmacion_pendiente","ultimo_aviso"];
+  /* Las etapas de cola (no show, perdonadas) sólo se enseñan si tienen algo:
+     una fila de ceros no ayuda a ubicar nada. */
+  const pasos=d.filter(x=>VIVAS.includes(x.etapa)||x.etapa==="cobrado"||x.etapa==="cancelado"||x.n>0);
+
+  cont.innerHTML=pasos.map(function(x,i){
+    const sep = (i>0 && (x.etapa==="cobrado")) ? '<span class="flecha">&rarr;</span>' : (i>0?'<span class="flecha">&rarr;</span>':'');
+    return sep+
+      '<button type="button" class="paso'+(x.n?'':' off')+'" data-e="'+esc(x.etapa)+'" aria-pressed="'+(sel===x.etapa)+'">'+
+        '<span class="pn">'+esc(x.nombre)+'</span>'+
+        '<span class="pc">'+x.n+'</span> '+
+        '<span class="pi">'+P(x.importe)+'</span>'+
+        (x.tocan_hoy?'<br><span class="ph">'+x.tocan_hoy+' toca hoy</span>':'')+
+      '</button>';
+  }).join("");
+
+  cont.querySelectorAll("button[data-e]").forEach(function(b){
+    b.onclick=function(){
+      const e=b.getAttribute("data-e");
+      const f=document.getElementById("fEstado");
+      f.value = (f.value===e) ? "abiertas" : e;   /* otra vez para soltar el filtro */
+      carga();
+    };
+  });
+
+  const abiertas=d.filter(x=>VIVAS.includes(x.etapa));
+  const hoy=abiertas.reduce((a,x)=>a+x.tocan_hoy,0);
+  const nv=abiertas.reduce((a,x)=>a+x.n,0);
+  const ni=abiertas.reduce((a,x)=>a+Number(x.importe||0),0);
+  nota.textContent = nv
+    ? (nv+" reservas abiertas por "+P(ni)+(hoy?" \u00b7 "+hoy+" con un paso vencido hoy":" \u00b7 ninguna vencida hoy"))
+    : "No queda ninguna reserva abierta.";
 }
 
 function pinta(){
