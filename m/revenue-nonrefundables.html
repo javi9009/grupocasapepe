@@ -105,6 +105,8 @@ a.cb:hover{text-decoration:underline}
         <option value="pendiente">Pendientes · sin tocar</option>
         <option value="no_paso">El cobro no pasó</option>
         <option value="avisado">Avisadas, esperando</option>
+          <option value="confirmacion_pendiente">Confirmación pendiente</option>
+          <option value="ultimo_aviso">Último aviso mandado</option>
         <option value="perdonado">Perdonadas</option>
         <option value="no_show">No show · no vino</option>
         <option value="cancelado">Canceladas</option>
@@ -189,7 +191,7 @@ async function carga(){
   const est=document.getElementById("fEstado").value;
   let q="nonref_dia?select=*&order=check_in.asc&limit=400";
   if(casa) q+="&property=eq."+encodeURIComponent(casa);
-  if(est==="abiertas") q+="&estado=in.(pendiente,no_paso,avisado)";
+  if(est==="abiertas") q+="&estado=in.(pendiente,no_paso,avisado,confirmacion_pendiente,ultimo_aviso)";
   else if(est!=="todas") q+="&estado=eq."+encodeURIComponent(est);
   let r;
   try{ r=await fetch(SB+"/rest/v1/"+q,{headers:H()}); }
@@ -212,7 +214,7 @@ function pinta(){
   const est=document.getElementById("fEstado").value;
   const soloAbiertas = est==="abiertas" || est==="todas";
   const cuenta = soloAbiertas
-    ? FILAS.filter(f=>["pendiente","no_paso","avisado"].includes(f.estado))
+    ? FILAS.filter(f=>["pendiente","no_paso","avisado","confirmacion_pendiente","ultimo_aviso"].includes(f.estado))
     : FILAS;
   document.getElementById("eN").textContent = soloAbiertas ? "Reservas abiertas" : "Reservas en la lista";
   document.getElementById("eD").textContent = soloAbiertas ? "Sin cobrar" : "Suman";
@@ -237,7 +239,13 @@ function pinta(){
              : f.estado==="perdonado" ? '<span class="et av">Perdonado</span>'
              : f.estado==="no_show" ? '<span class="et no">No show</span>'
              : f.estado==="cancelado" ? '<span class="et av">Cancelada</span>'
+             : f.estado==="confirmacion_pendiente" ? '<span class="et no">Confirmación pendiente</span>'
+             : f.estado==="ultimo_aviso" ? '<span class="et no">Último aviso mandado</span>'
              : '';
+    /* Cuándo toca el paso siguiente del funnel. Si ya venció, toca HOY. */
+    const vence = f.vence_at ? (new Date(f.vence_at) <= new Date()
+        ? '<span class="plan" style="color:#B4531E;font-weight:700">⏰ Toca hoy</span>'
+        : '<span class="plan">Siguiente paso: '+fd(String(f.vence_at).slice(0,10))+'</span>') : '';
     const quien = f.tocado_por ? '<div class="plan">'+esc(f.tocado_por)+'</div>' : '';
     const liga="https://hotels.cloudbeds.com/connect/"+CB_PID[f.property]+"#/reservations/"+encodeURIComponent(f.reservation_id);
     return '<tr class="'+(cerrada?"hecha":"")+'" data-id="'+esc(f.id)+'">'+
@@ -249,13 +257,14 @@ function pinta(){
       '<td>'+et+'</td>'+
       '<td><b>'+P(f.saldo)+'</b></td>'+
       '<td>'+(f.tiene_tarjeta?esc(f.tarjeta||"Sí"):'<span style="color:var(--bad)">Sin tarjeta</span>')+'</td>'+
-      '<td>'+es+quien+'</td>'+
+      '<td>'+es+vence+quien+'</td>'+
       '<td><div class="acc">'+
         '<a class="cb" href="'+esc(liga)+'" target="_blank" rel="noopener">Abrir en Cloudbeds &rarr;</a>'+
         (cerrada?'':
           '<button class="btn pri" data-a="cobrado">Cobrado</button>'+
           '<button class="btn mal" data-a="no_paso">No pasó</button>'+
           '<button class="btn" data-a="avisar">Avisarle</button>'+
+          '<button class="btn" data-a="ultimo">Último aviso</button>'+
           '<button class="btn mal" data-a="cancelar">Cancelar</button>')+
       '</div></td></tr>';
   }).join("");
@@ -290,6 +299,22 @@ async function accion(id, que, btn){
       if(r&&r.ok){ di("Aviso enviado a "+r.a+"."); }
       else if(r&&r.motivo==="sin_correo"){ di("Esa reserva no tiene correo. Hay que escribirle por otro lado.",true); }
       else { di((r&&r.error)||"No se pudo mandar el aviso.",true); }
+    } else if(que==="ultimo"){
+      if(btn.getAttribute("data-conf")!=="1"){
+        btn.setAttribute("data-conf","1");
+        btn.textContent="Última llamada a "+(fila.email||"—");
+        di("Este correo le dice que mañana se cancela si no paga. Toca otra vez para mandarlo.");
+        btn.disabled=false;
+        setTimeout(function(){ if(btn.getAttribute("data-conf")==="1"){ btn.removeAttribute("data-conf"); btn.textContent=old; di(""); } }, 8000);
+        return;
+      }
+      btn.removeAttribute("data-conf"); btn.textContent="Mandando…";
+      const r=await fetch(SB+"/functions/v1/revenue-nonref-ultimo-aviso",{method:"POST",headers:H(),
+        body:JSON.stringify({id:id})}).then(x=>x.json());
+      if(r&&r.ok){ di("Última llamada enviada a "+r.a+". Si mañana sigue sin pagar, el reloj la cancela."); }
+      else if(r&&r.motivo==="ya_pagada"){ di("Esa reserva ya estaba pagada. La quité de la lista."); }
+      else if(r&&r.motivo==="sin_correo"){ di("Esa reserva no tiene correo. Hay que escribirle por otro lado.",true); }
+      else { di((r&&r.error)||"No se pudo mandar la última llamada.",true); }
     } else if(que==="cancelar"){
       /* Ya avisamos y no contestó: se cancela en Cloudbeds y se le avisa. Dos
          toques, porque esto libera el cuarto y manda un correo de verdad. */
