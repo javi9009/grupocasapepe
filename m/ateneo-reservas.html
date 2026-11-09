@@ -360,6 +360,21 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
         '<div class="pie"><button class="btn" id="aGuarda">Guardar</button>'+
           '<button class="btn peligro sm" id="aCancela">Cancelar la reserva</button></div>'+
       '</div>'+
+      /* ARMARLE EL CONTRATO. Javi, 6-nov-2026: «cuando recibamos una
+         solicitud ponme que le pueda configurar qué espacio, qué plan, qué
+         plazo, qué renta, qué lugar, qué depósito y qué inicio para mandarle
+         el contrato».
+
+         Esto nace de un susto real. La solicitud de José Jesús generó sola
+         un contrato con lo que él marcó en el formulario -Ateneísta, 6
+         meses, $800- y se lo mandó firmable, cuando lo acordado era otra
+         cosa. Lo que el cliente pide es una intención; lo que se firma lo
+         decide la casa. Por eso el contrato sale de aquí y no del
+         formulario. */
+      (ES_COWORKING(x) ?
+        '<div class="sec">Armarle el contrato</div>'+
+        '<div class="acc" id="cwCaja"><div class="mini">Cargando los planes…</div></div>'
+      : '')+
       '<div class="sec">Cambiarla de día</div>'+
       '<div class="acc" id="aMueve">'+(x.tipo==='Cine'
         ? '<div class="mini">Cargando las funciones que quedan…</div>'
@@ -385,6 +400,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       if(!confirm('¿Cancelar la reserva de '+(x.nombre||'')+'? Se puede volver a poner en confirmada después.')) return;
       manda(x, {p_estado:'cancelada', p_nota:($('aNota').value||'').trim()||null}, 'Cancelada');
     };
+    if(ES_COWORKING(x)) cwMonta(x);
     if(x.tipo==='Cine'){ destinosCine(x); }
     else {
       $('aMover').onclick=function(){
@@ -395,6 +411,147 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     }
 
     $('cajon').classList.add('on'); $('cajonBg').classList.add('on');
+  }
+
+  /* ===================== EL CONTRATO DEL COWORKER =====================
+     Una solicitud de coworking no es una reserva de sala: es alguien
+     pidiendo sitio. Lo que sale de aquí es el contrato, y el contrato es lo
+     único que después abre derechos (`ate_contrato_activar`).
+
+     EL ORDEN, QUE IMPORTA: se configura aquí → se manda → lo firma → pone
+     su tarjeta → se le cobra → se le abre el lugar. Nada se adelanta.
+
+     Si ya había un contrato suyo sin firmar, NO se hace otro: se reescribe
+     ese. Dos ligas vivas con condiciones distintas en el mismo correo es
+     como se firma la que no era. */
+  function ES_COWORKING(x){
+    return String(x.donde||'')==='Coworking' || String(x.que||'')==='Coworking';
+  }
+  var CWPLANES=null;
+  function cwPrecio(p){ return Number(p.precio_lanzamiento||0)>0 ? Number(p.precio_lanzamiento) : Number(p.precio||0); }
+  function cwEsOficina(slug){ return String(slug||'').indexOf('oficina-')===0 && slug!=='oficina-virtual'; }
+
+  async function cwMonta(x){
+    var caja=$('cwCaja'); if(!caja) return;
+    try{
+      if(!CWPLANES){
+        var r=await fetch(SB+'/rest/v1/ateneo_planes?select=slug,nombre,precio,precio_lanzamiento,requiere_contrato&activo=eq.true&order=orden',{headers:hdr()});
+        CWPLANES=r.ok?await r.json():[];
+      }
+    }catch(_){ CWPLANES=[]; }
+    if(!CWPLANES.length){ caja.innerHTML='<div class="mini">No pudimos leer los planes.</div>'; return; }
+
+    /* Si ya tiene contrato, se dice: el botón no significa lo mismo cuando
+       hay uno enviado que cuando no hay ninguno. */
+    var ya=null;
+    try{
+      var rc=await fetch(SB+'/rest/v1/ateneo_contratos?select=id,folio,estado,firmado_at,plan_slug,meses,importe,deposito,desde,lugar_id'+
+        '&email=eq.'+encodeURIComponent(String(x.email||''))+'&estado=neq.cancelado&order=created_at.desc&limit=1',{headers:hdr()});
+      ya=rc.ok?(await rc.json())[0]||null:null;
+    }catch(_){ }
+
+    var hoy=new Date().toISOString().slice(0,10);
+    var slug=(ya&&ya.plan_slug)||'coworker';
+    var pl=CWPLANES.filter(function(p){return p.slug===slug;})[0]||CWPLANES[0];
+    if(pl) slug=pl.slug;
+
+    caja.innerHTML=
+      (ya?('<div class="mini" style="margin-bottom:10px">Ya tiene el contrato <b>'+esc(ya.folio)+'</b> en estado <b>'+esc(ya.estado)+'</b>'+
+           (ya.firmado_at?' y <b>ya lo firm\u00f3</b>.':'. Si cambias algo aqu\u00ed se reescribe ese mismo, sin cambiarle la liga.')+'</div>'):'')+
+      '<div class="par">'+
+        '<div><label for="cwPlan">Espacio y plan</label><select id="cwPlan">'+
+          CWPLANES.map(function(p){return '<option value="'+esc(p.slug)+'"'+(p.slug===slug?' selected':'')+'>'+esc(p.nombre)+'</option>';}).join('')+
+        '</select></div>'+
+        '<div><label for="cwMeses">Plazo (meses)</label><input type="number" min="1" max="60" id="cwMeses" value="'+((ya&&ya.meses)||12)+'"></div>'+
+      '</div>'+
+      '<div class="par">'+
+        '<div><label for="cwRenta">Renta al mes</label><input type="number" min="0" step="50" id="cwRenta" value="'+((ya&&ya.importe)||(pl?cwPrecio(pl):0))+'"></div>'+
+        '<div><label for="cwDep">Dep\u00f3sito</label><input type="number" min="0" step="50" id="cwDep" value="'+((ya&&ya.deposito!=null)?ya.deposito:(cwEsOficina(slug)?(pl?cwPrecio(pl):0):0))+'"></div>'+
+      '</div>'+
+      '<div class="par">'+
+        '<div><label for="cwDesde">Empieza el</label><input type="date" id="cwDesde" value="'+esc((ya&&ya.desde)||hoy)+'"></div>'+
+        '<div><label for="cwLugar">Su lugar</label><select id="cwLugar"><option value="">\u2014 sin asignar todav\u00eda \u2014</option></select></div>'+
+      '</div>'+
+      '<div><label for="cwNota">Condiciones especiales (sale en el contrato)</label>'+
+        '<input id="cwNota" placeholder="El dep\u00f3sito se cubre junto con la primera mensualidad\u2026"></div>'+
+      '<div class="pie"><button class="btn" id="cwManda">'+(ya&&!ya.firmado_at?'Corregir y reenviar el contrato':'Mandar el contrato')+'</button>'+
+        '<span class="mini" id="cwMsg"></span></div>';
+
+    if(ya&&ya.firmado_at){
+      $('cwManda').disabled=true;
+      $('cwMsg').textContent='Ya est\u00e1 firmado: eso no se reescribe. Si cambia el trato, hay que hacer uno nuevo.';
+    }
+
+    function alCambiarPlan(){
+      var sl=$('cwPlan').value;
+      var p=CWPLANES.filter(function(q){return q.slug===sl;})[0];
+      if(p){ $('cwRenta').value=cwPrecio(p); $('cwDep').value=cwEsOficina(sl)?cwPrecio(p):0; }
+      cwLugares(sl);
+    }
+    $('cwPlan').onchange=alCambiarPlan;
+    $('cwDesde').onchange=function(){ cwLugares($('cwPlan').value); };
+    $('cwManda').onclick=function(){ cwEnvia(x, ya); };
+    cwLugares(slug, ya&&ya.lugar_id);
+  }
+
+  /* Los lugares, con los ocupados a la vista pero sin poder elegirlos: saber
+     que la C est\u00e1 tomada y por qui\u00e9n es parte de decidir. */
+  async function cwLugares(slug, sel){
+    var sl=$('cwLugar'); if(!sl) return;
+    var d=($('cwDesde')&&$('cwDesde').value)||new Date().toISOString().slice(0,10);
+    var m=Number(($('cwMeses')&&$('cwMeses').value)||12)||12;
+    var h=new Date(d+'T12:00:00'); h.setMonth(h.getMonth()+m);
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/ate_lugares_libres',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p_plan:slug,p_desde:d,p_hasta:h.toISOString().slice(0,10)})});
+      var l=r.ok?await r.json():[];
+      sl.innerHTML='<option value="">\u2014 sin asignar todav\u00eda \u2014</option>'+
+        l.map(function(x){
+          return '<option value="'+esc(x.id)+'"'+(x.libre?'':' disabled')+(sel&&x.id===sel?' selected':'')+'>'+
+                 esc(x.numero)+(x.libre?'':' \u2014 ocupado'+(x.quien?' por '+esc(x.quien):''))+'</option>';
+        }).join('');
+      if(!l.length) sl.innerHTML='<option value="">\u2014 este plan no lleva lugar \u2014</option>';
+    }catch(_){ }
+  }
+
+  async function cwEnvia(x, ya){
+    var b=$('cwManda'), msg=$('cwMsg');
+    b.disabled=true; msg.textContent='Armando el contrato\u2026';
+    var cuerpo={
+      plan_slug:$('cwPlan').value,
+      meses:Number($('cwMeses').value||12),
+      desde:$('cwDesde').value||null,
+      importe:Number($('cwRenta').value||0),
+      deposito:Number($('cwDep').value||0),
+      email:x.email||null,
+      cliente:x.quien||x.nombre||null,
+      nota_cortesia:($('cwNota').value||'').trim()
+    };
+    if(ya&&!ya.firmado_at){ cuerpo.accion='rehacer'; cuerpo.folio=ya.folio; }
+    else { cuerpo.accion='invitar'; }
+    try{
+      var r=await fetch(SB+'/functions/v1/contrato-admin',{method:'POST',headers:hdr(),body:JSON.stringify(cuerpo)});
+      var j=await r.json();
+      if(!j||!j.ok){ msg.textContent=(j&&j.error)||'No se pudo.'; b.disabled=false; return; }
+
+      /* El lugar se guarda en el contrato, no en la solicitud: es el contrato
+         el que despu\u00e9s lo ocupa de verdad, al activarse. */
+      var lug=$('cwLugar').value;
+      if(lug){
+        var cid=(ya&&ya.id)||null;
+        if(!cid){
+          var rc=await fetch(SB+'/rest/v1/ateneo_contratos?select=id&folio=eq.'+encodeURIComponent(j.folio)+'&limit=1',{headers:hdr()});
+          cid=rc.ok?((await rc.json())[0]||{}).id:null;
+        }
+        if(cid){
+          await fetch(SB+'/rest/v1/rpc/ate_contrato_lugar',{method:'POST',headers:hdr(),
+            body:JSON.stringify({p_contrato:cid,p_lugar:lug})}).catch(function(){});
+        }
+      }
+      msg.textContent='';
+      toast(j.correo_enviado?('Contrato '+j.folio+' enviado a '+(x.email||'')):('Contrato '+j.folio+' listo'));
+      cwMonta(x);
+    }catch(e){ msg.textContent='No se pudo.'; b.disabled=false; }
   }
 
   /* Lo que se puede elegir a mano. 'en_lista' solo tiene sentido en el cine,
