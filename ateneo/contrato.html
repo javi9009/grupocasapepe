@@ -86,6 +86,65 @@ function aviso(t,x){
     +'<p class="pie">Ateneo de Virreyes · José María Izazaga 8, piso 1, Centro Histórico, CDMX · javi@casapepe.mx</p></div>';
 }
 
+/* ================== EL PRIMER PAGO ==================
+   Javi, 9-nov-2026: «este contrato va asociado al link de pago? Recuerda que
+   ha de pagar el depósito en garantía cuando paga el primer mes». No lo
+   estaba: la página terminaba en la firma y ahí se acababa el camino. El
+   cliente firmaba y nadie le decía cómo pagar.
+
+   LAS CIFRAS NO SE CALCULAN AQUÍ. Se le piden a `ate-cobro-alta`, que es la
+   misma función que después le cobra: así lo que lee en pantalla es, por
+   construcción, lo que Stripe le va a cargar. Si la pantalla sumara por su
+   cuenta, el día que cambie una regla del cobro habría dos verdades.
+
+   Y esa función exige contrato firmado y lugar asignado antes de abrir nada.
+   Si falta algo lo dice con sus palabras, que es mejor que un botón que no
+   hace nada. */
+let PAGO=null;
+async function montaCobro(){
+  const caja=$('cobro'); if(!caja) return;
+  caja.innerHTML='<div class="box"><h4>'+T('El primer pago')+'</h4>'
+    +'<p style="color:var(--muted);font-size:13.5px">'+T('Preparando tu pago\u2026')+'</p></div>';
+  let j=null;
+  try{
+    const r=await fetch(SB_URL+'/functions/v1/ate-cobro-alta',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({token:TOKEN})});
+    j=await r.json();
+  }catch(_){ j=null; }
+
+  if(j&&j.ya){
+    caja.innerHTML='<div class="box"><h4>'+T('El primer pago')+'</h4>'
+      +'<p style="color:#dbe6cd;font-size:14px">\u2705 '+esc(j.mensaje||T('Tu pago ya est\u00e1 hecho.'))+'</p></div>';
+    return;
+  }
+  if(!j||!j.url){
+    caja.innerHTML='<div class="box"><h4>'+T('El primer pago')+'</h4>'
+      +'<p style="color:#dbe6cd;font-size:14px">'+esc((j&&j.error)||T('Todav\u00eda no podemos abrir el pago.'))+'</p>'
+      +'<p style="color:var(--muted);font-size:13px;margin-top:8px">'
+      +T('Escr\u00edbenos y lo resolvemos: ateneo@casapepe.mx')+'</p></div>';
+    return;
+  }
+  PAGO=j;
+  const ren=Number(j.renta||0), dep=Number(j.deposito||0);
+  caja.innerHTML='<div class="box"><h4>'+T('El primer pago')+'</h4>'
+    +'<div class="res" style="margin:0 0 14px">'
+      +'<div class="p"><i>'+T('Primera mensualidad')+'</i><b>'+dinero(ren)+'</b></div>'
+      +(dep>0?'<div class="p"><i>'+T('Dep\u00f3sito en garant\u00eda')+'</i><b>'+dinero(dep)+'</b></div>':'')
+      +'<div class="p"><i>'+T('Total hoy')+'</i><b>'+dinero(j.primer_cargo||(ren+dep))+'</b></div>'
+    +'</div>'
+    +'<p style="font-size:13.5px;color:#dbe6cd">'
+      +(dep>0?T('El dep\u00f3sito en garant\u00eda se cubre una sola vez, junto con tu primera mensualidad.')+' ':'')
+      +(j.siguiente_cobro?(T('A partir de ah\u00ed se cobra s\u00f3lo la renta, el d\u00eda 1 de cada mes; el pr\u00f3ximo ser\u00e1 el')+' '+esc(j.siguiente_cobro)+'.'):'')
+    +'</p>'
+    +'<button class="btn" id="bPagar">'+T('Pagar y guardar mi tarjeta')+'</button>'
+    +'<div class="msg" id="cobroErr"></div></div>';
+  $('bPagar').onclick=function(){
+    this.disabled=true;
+    this.innerHTML='<span class="spin"></span> '+T('Abriendo el pago\u2026');
+    location.href=PAGO.url;
+  };
+}
+
 function pinta(c){
   const cab='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div class="top"><b>Ateneo de Virreyes</b><span>· '+T('Contrato')+' '+esc(c.folio)+'</span></div><div id="idioma"></div></div>';
   const res='<div class="res">'
@@ -94,11 +153,15 @@ function pinta(c){
     +(c.meses?'<div class="p"><i>'+T('Vigencia')+'</i><b>'+c.meses+' '+T('meses')+'</b></div>':'')
     +'</div>';
 
-  if(c.estado==='firmado'){
+  /* Contrafirmado es firmado por las dos partes: tambien entra aqui. Antes
+     solo se miraba 'firmado', asi que a quien ya habiamos contrafirmado le
+     volvia a salir el formulario de firma, como si no hubiera firmado. */
+  if(c.estado==='firmado'||c.estado==='contrafirmado'){
     const a=c.acuse||{};
     $('app').innerHTML=cab
       +'<div class="ok"><div class="tick">✅</div><h1>'+T('Contrato firmado')+'</h1>'
       +'<p>'+T('Lo firmó')+' '+esc(a.firmante||c.cliente||'')+' '+T('el')+' '+esc(a.fecha_local||c.firmado_at||'')+'. '+T('Abajo queda el documento tal como se firmó; también te llegó por correo.')+'</p></div>'
+      +'<div id="cobro"></div>'
       +res+'<div class="doc">'+(c.cuerpo_html||'')+'</div>'
       +'<div class="acuse"><b>'+T('ACUSE DE FIRMA ELECTRÓNICA')+'</b><br>'
       +T('Folio:')+' '+esc(c.folio)+'<br>'+T('Firmó:')+' '+esc(a.firmante||'')+'<br>'
@@ -106,6 +169,7 @@ function pinta(c){
       +T('Navegador:')+' '+esc(String(a.ua||'').slice(0,120))+'</div>'
       +'<p class="pie">Ateneo de Virreyes · José María Izazaga 8, piso 1, Centro Histórico, CDMX</p>';
     idi();
+    if(c.estado==='firmado') montaCobro();
     return;
   }
 
