@@ -452,7 +452,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
        hay uno enviado que cuando no hay ninguno. */
     var ya=null;
     try{
-      var rc=await fetch(SB+'/rest/v1/ateneo_contratos?select=id,folio,estado,firmado_at,plan_slug,meses,importe,deposito,desde,lugar_id'+
+      var rc=await fetch(SB+'/rest/v1/ateneo_contratos?select=id,folio,estado,firmado_at,plan_slug,meses,importe,deposito,desde,lugar_id,token'+
         '&reserva_id=eq.'+encodeURIComponent(String(x.id))+'&estado=neq.cancelado&order=created_at.desc&limit=1',{headers:hdr()});
       ya=rc.ok?(await rc.json())[0]||null:null;
     }catch(_){ }
@@ -481,8 +481,13 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
       '</div>'+
       '<div><label for="cwNota">Condiciones especiales (sale en el contrato)</label>'+
         '<input id="cwNota" placeholder="El dep\u00f3sito se cubre junto con la primera mensualidad\u2026"></div>'+
-      '<div class="pie"><button class="btn" id="cwManda">'+(ya&&!ya.firmado_at?'Corregir y reenviar el contrato':'Mandar el contrato')+'</button>'+
-        '<span class="mini" id="cwMsg"></span></div>';
+      '<div class="pie">'+
+        '<button class="btn ghost" id="cwVer">Revisar el contrato</button>'+
+        '<button class="btn" id="cwManda">'+(ya&&!ya.firmado_at?'Corregir y reenviar el contrato':'Mandar el contrato')+'</button>'+
+        '<span class="mini" id="cwMsg"></span></div>'+
+      (ya&&ya.folio?('<div class="mini" style="margin-top:8px">Su liga: '+
+        '<a href="https://grupocasapepe.netlify.app/ateneo/contrato.html?t='+esc(ya.token||'')+'" target="_blank" rel="noopener">abrir el contrato '+esc(ya.folio)+' \u2192</a></div>'):'')+
+      '<div id="cwPrev"></div>';
 
     if(ya&&ya.firmado_at){
       $('cwManda').disabled=true;
@@ -498,6 +503,7 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
     $('cwPlan').onchange=alCambiarPlan;
     $('cwDesde').onchange=function(){ cwLugares($('cwPlan').value); };
     $('cwManda').onclick=function(){ cwEnvia(x, ya); };
+    $('cwVer').onclick=function(){ cwPrevia(x, ya); };
     cwLugares(slug, ya&&ya.lugar_id);
   }
 
@@ -519,6 +525,51 @@ if(window.cpAcceso&&!cpAcceso.exige()){throw new Error("sin sesion");}</script>
         }).join('');
       if(!l.length) sl.innerHTML='<option value="">\u2014 este plan no lleva lugar \u2014</option>';
     }catch(_){ }
+  }
+
+  /* VER EL PAPEL ANTES DE MANDARLO. Javi, 9-nov-2026: «permíteme revisar el
+     contrato antes de mandarlo para verificar».
+
+     No lo arma la pantalla: se lo pide a la MISMA función que después lo
+     manda, con la acción `previa`, que rellena la plantilla y no guarda nada.
+     Así lo que se revisa es el documento de verdad, no una aproximación.
+     También dice cuántos huecos quedan: los normales son las cuatro líneas de
+     firma y fecha: si salen más, falta un dato. */
+  async function cwPrevia(x, ya){
+    var caja=$('cwPrev'), b=$('cwVer');
+    if(!caja) return;
+    b.disabled=true;
+    caja.innerHTML='<div class="mini" style="padding:10px 0">Armando la previa\u2026</div>';
+    var cuerpo={
+      accion:'previa',
+      plan_slug:$('cwPlan').value,
+      meses:Number($('cwMeses').value||12),
+      desde:$('cwDesde').value||null,
+      importe:Number($('cwRenta').value||0),
+      deposito:Number($('cwDep').value||0),
+      email:x.email||null,
+      cliente:x.quien||x.nombre||null,
+      nota_cortesia:($('cwNota').value||'').trim()
+    };
+    if(ya&&ya.folio) cuerpo.folio=ya.folio;
+    try{
+      var r=await fetch(SB+'/functions/v1/contrato-admin',{method:'POST',headers:hdr(),
+            body:JSON.stringify(cuerpo)});
+      var j=await r.json();
+      if(!j||!j.ok){ caja.innerHTML='<div class="mini" style="color:var(--bad)">'+esc((j&&j.error)||'No se pudo armar la previa.')+'</div>'; b.disabled=false; return; }
+      caja.innerHTML=
+        '<div style="margin-top:12px;border-top:1px solid var(--linea);padding-top:12px">'+
+        '<div class="mini" style="margin-bottom:8px"><b>'+esc(j.plan||'')+'</b> \u00b7 '+
+        j.meses+' meses \u00b7 '+money(j.importe)+' al mes'+
+        (Number(j.deposito)>0?(' \u00b7 dep\u00f3sito '+money(j.deposito)):'')+
+        ' \u00b7 del '+esc(j.desde||'')+' al '+esc(j.hasta||'')+
+        ' \u00b7 '+(j.huecos>4?('<span style="color:var(--bad)">'+j.huecos+' huecos \u2014 revisa</span>')
+                             :(j.huecos+' huecos (las firmas)'))+'</div>'+
+        '<div style="max-height:46vh;overflow:auto;background:var(--blanco);border:1px solid var(--linea);'+
+        'border-radius:10px;padding:16px 18px;font-size:13px;line-height:1.55">'+(j.html||'')+'</div>'+
+        '<div class="mini" style="margin-top:6px">As\u00ed se ver\u00e1 el contrato. Todav\u00eda no se ha mandado nada.</div></div>';
+    }catch(e){ caja.innerHTML='<div class="mini" style="color:var(--bad)">No se pudo armar la previa.</div>'; }
+    b.disabled=false;
   }
 
   async function cwEnvia(x, ya){
