@@ -1,0 +1,37 @@
+-- 11-nov-2026 · Lo que operamos para un touroperador también es venta.
+--
+-- Javi: «recuerda también poner ahí las ventas que generamos a Capital Bus,
+-- porque también son parte de Sincrético. Las que suben ellos manualmente y
+-- que nosotros operamos, que las tienes en la conciliación, básicamente son
+-- ingresos que tienen que entrar ahí en ventas».
+--
+-- La pantalla de ventas leía una sola fuente: las reservas con cobro por
+-- Stripe. Las 19 noches que Capital Bus subió a mano y operamos nosotros
+-- —748 personas, $290,630— vivían solo en la conciliación: el dinero estaba,
+-- pero no donde se mira cuánto vende Sincrético.
+--
+-- EL IMPORTE, Y LO QUE DESTAPÓ. Javi confirmó hoy que los $350 por persona
+-- llevan el IVA dentro, o sea $301.72 de neto. En la base, sólo 2 de las 19
+-- líneas están así: las otras 17 llevan 350 de neto, que con IVA son 406 por
+-- persona. Son $28,830 de más sobre lo acordado.
+--
+-- No se corrige desde aquí a propósito: las líneas están en ticket, y cambiar
+-- el precio sin recalcular el ticket deja la conciliación descuadrada. La
+-- vista marca `precio_fuera` y la pantalla lo dice en rojo en la propia fila.
+-- Un descuadre que sólo se ve en un informe aparte es un descuadre que nadie
+-- ve. Nada está facturado ni cobrado todavía, así que se corrige a tiempo.
+--
+-- EL REPARTO. Aquí no hay parte para el operador: el servicio lo damos
+-- nosotros y se lo facturamos a él. Comisión 100%, neto del operador 0, y el
+-- touroperador sale como quien trae la gente, no como quien la opera —Capital
+-- Bus es cliente, no proveedor (doc 197)—.
+--
+-- LA FECHA. `reservada_at` es la noche del servicio, que es la que manda en
+-- los filtros de periodo, tomada en hora de CDMX para que una noche no se
+-- corra de día ni de quincena.
+--
+-- VISTA APARTE, no dentro de v_sinc_ventas: de ésa cuelgan también
+-- sinc-inicio y soypepe/experiencias, y meterles estas filas les cambiaría
+-- KPIs y comisiones sin que nadie lo haya pedido.
+--
+-- El cuerpo completo está aplicado en la base con este mismo nombre.
