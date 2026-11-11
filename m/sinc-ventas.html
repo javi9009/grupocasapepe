@@ -247,19 +247,31 @@ tbody tr:hover{background:var(--surface-3)}
       var r=await fetch(SB+'/rest/v1/v_sinc_ventas?select=*&intento=is.false&order=reservada_at.desc',{headers:hdr()});
       if(!r.ok)throw new Error('La base respondió '+r.status);
       V=await r.json();
-      /* LA CONCILIACION NO SE SUMA AQUI: SERIA CONTAR DOS VECES.
-         11-nov-2026. Traje las noches de la conciliacion como una segunda
-         fuente, y estaban ya en la primera: las mismas noches viven aqui como
-         las reservas que Capital Bus sube una a una -33 reservas y 86 pax el
-         6-nov- y alla como una linea por noche con el pax del escaneo -81-.
-         Sumarlas daba el ingreso dos veces.
-         Lo que falla de verdad es otra cosa y esta en estas mismas filas: esas
-         reservas salen «pagada» con cero pesos, porque Capital Bus no cobra
-         por Stripe y nadie les puso el precio del servicio. El ingreso no
-         falta por falta de una fuente, falta porque la reserva vale cero.
-         La vista v_sinc_ventas_servicios se queda en la base, sin consumir,
-         hasta decidir cual de las dos cuenta: lo reservado o lo escaneado. */
+      /* LA SEGUNDA FUENTE: LAS NOCHES OPERADAS PARA UN TOUROPERADOR.
+         El dinero de estas noches NO esta en las reservas. Capital Bus sube
+         una reserva por grupo y esas reservas valen cero -de 106, solo 4
+         llevan importe- porque no cobra por Stripe: se le factura despues por
+         conciliacion. Asi que el ingreso sale de aqui, una linea por noche,
+         con el pax del escaneo y la tarifa de la ficha del servicio.
+         Por eso las dos fuentes no se pisan aunque hablen de la misma noche:
+         las reservas ponen quien viene, esta pone cuanto vale. Un rato estuvo
+         sumando las dos y contaba el ingreso dos veces.
+         Si esto falla, la pantalla sigue con las reservas, pero lo dice: la
+         primera version se lo tragaba con un catch vacio y el resultado fue
+         Javi mirando la pantalla sin saber por que faltaban. */
       NSERV=0; FALLOSERV='';
+      try{
+        var rs=await fetch(SB+'/rest/v1/v_sinc_ventas_servicios?select=*&order=reservada_at.desc',{headers:hdr()});
+        if(rs.ok){
+          var sv=await rs.json();
+          NSERV=sv.length;
+          V=V.concat(sv).sort(function(a,b){
+            return String(b.reservada_at||'').localeCompare(String(a.reservada_at||''));
+          });
+        } else {
+          FALLOSERV='la base respondió '+rs.status+' al pedir las noches de touroperador';
+        }
+      }catch(x){ FALLOSERV='no pude pedir las noches de touroperador ('+x.message+')'; }
     }catch(x){ $('sub').textContent='No pude cargar las ventas: '+x.message; return; }
 
     var ops={};
@@ -405,7 +417,10 @@ tbody tr:hover{background:var(--surface-3)}
           (v.es_servicio
             ? '<div class="mini">por facturar '+money(v.total_venta)+
               ' · '+esc(String(v.pax||0))+' × '+money(v.precio_cliente)+
-              (v.precio_fuera?'<br><b style="color:#B3261E">no son $350 por persona</b>':'')+'</div>'
+              (v.precio_fuera
+                ? '<br><b style="color:#B3261E">la conciliación le factura '+money(v.precio_linea)+
+                  ' · '+money(v.desvio_mxn)+' de más</b>'
+                : '')+'</div>'
             : '')+'</td>'+
         /* LA COMISION DEL CONCIERGE, FILA A FILA. Estaba sumada en «Quién
            vendió» pero no se veía por venta, que es donde se le explica a un
