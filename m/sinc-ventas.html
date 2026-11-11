@@ -119,6 +119,27 @@ tbody tr:hover{background:var(--surface-3)}
       <option value="a la cuenta de Casa Pepe">A la cuenta de Casa Pepe</option>
     </select>
     <input id="fBusca" placeholder="Folio, huésped o experiencia">
+    <!-- LOS PERIODOS DE SIEMPRE. Javi, 11-nov-2026: «permíteme filtrar: Hoy,
+         Este mes, quincena pasada, Mes pasado, Esta quincena».
+         Las dos cajas de fecha ya permitían cualquier rango, pero las cinco
+         preguntas que de verdad se hacen -¿cuánto llevo hoy?, ¿cómo va la
+         quincena?, ¿qué cerré el mes pasado?- obligaban a teclear dos fechas
+         cada vez, y la quincena a ponerse a contar.
+         No es un filtro nuevo: rellena estas mismas cajas, que se quedan a la
+         vista. Asi se ve el rango exacto que se aplico y se puede corregir a
+         mano; si se corrige, el atajo se suelta solo para no decir «este mes»
+         sobre otras fechas.
+         Va sobre RESERVADA, no sobre la salida: esta pantalla es la del
+         dinero, y el dinero entra el dia que se vende, no el dia que sale el
+         tour. Para lo otro estan las cajas de «Sale». -->
+    <select id="fPeriodo" title="Periodo de las reservas">
+      <option value="">Cualquier fecha</option>
+      <option value="hoy">Hoy</option>
+      <option value="quincena">Esta quincena</option>
+      <option value="quincena-1">Quincena pasada</option>
+      <option value="mes">Este mes</option>
+      <option value="mes-1">Mes pasado</option>
+    </select>
     <span class="rango"><span class="et">Reservada</span><span class="cajas">
       <input id="fRdesde" type="date" title="Reservas hechas desde"><input id="fRhasta" type="date" title="Reservas hechas hasta"></span></span>
     <span class="rango"><span class="et">Sale</span><span class="cajas">
@@ -136,7 +157,8 @@ tbody tr:hover{background:var(--surface-3)}
     <table><thead><tr>
       <th>Folio</th><th>Reservada</th><th>Sale</th><th>Experiencia</th><th>Quién la opera</th>
       <th>Quién la vendió</th><th>Pago</th><th>A dónde cayó</th>
-      <th class="n">Cobrado</th><th class="n">Nuestra comisión</th><th class="n">Para el operador</th>
+      <th class="n">Cobrado</th><th class="n">Comisión del concierge</th>
+      <th class="n">Nuestra comisión</th><th class="n">Para el operador</th>
       <th></th>
     </tr></thead><tbody id="tb"></tbody></table>
     <div class="empty" id="vacio" style="display:none">Todavía no hay ventas que enseñar.</div>
@@ -344,6 +366,14 @@ tbody tr:hover{background:var(--surface-3)}
           (Number(v.devuelto||0)>0
             ? '<div class="mini">cobrado '+money(v.pago_total)+'<br>devuelto '+money(v.devuelto)+'</div>'
             : '')+'</td>'+
+        /* LA COMISION DEL CONCIERGE, FILA A FILA. Estaba sumada en «Quién
+           vendió» pero no se veía por venta, que es donde se le explica a un
+           concierge lo que gana. Mismo prorrateo que las otras dos columnas:
+           si la reserva se devolvió a medias, su bono también. Sin concierge
+           no hay bono, y se dice con una raya, no con un cero. */
+        '<td class="n">'+((v.concierge && Number(v.cobrado_neto||0)>0)
+            ? money(Number(v.bono_concierge||0)*Number(v.factor_neto==null?1:v.factor_neto))
+            : '—')+'</td>'+
         '<td class="n">'+(Number(v.cobrado_neto||0)>0?money(Number(v.nuestra_comision||0)*Number(v.factor_neto==null?1:v.factor_neto)):'—')+'</td>'+
         '<td class="n">'+(Number(v.cobrado_neto||0)>0?money(Number(v.neto_operador||0)*Number(v.factor_neto==null?1:v.factor_neto)):'—')+'</td>'+
         '<td class="n"><button class="btn ghost sm" data-res="'+esc(v.id)+'">Ver detalle</button></td>'+
@@ -673,7 +703,12 @@ tbody tr:hover{background:var(--surface-3)}
     var filas=l.map(function(v){return [
       v.folio, v.huesped, v.pax, v.reservada_at, v.pagado_at, v.fecha_salida,
       v.experiencia, v.operador, v.clase,
-      v.concierge||'', v.codigo_venta||'', v.hotel||'', v.bono_concierge||'',
+      v.concierge||'', v.codigo_venta||'', v.hotel||'',
+      /* Prorrateado igual que en la columna nueva de la tabla: el CSV promete
+         arriba llevar lo mismo que se ve, y un bono sin prorratear sobre una
+         reserva devuelta a medias no es lo que se ve. */
+      (v.concierge && Number(v.cobrado_neto||0)>0)
+        ? Number(v.bono_concierge||0)*Number(v.factor_neto==null?1:v.factor_neto) : '',
       v.pago_estado, v.donde_cayo,
       v.stripe_destino||'', v.pago_total,
       v.pago_estado==='pagado'?v.nuestra_comision:'',
@@ -692,11 +727,64 @@ tbody tr:hover{background:var(--surface-3)}
     a.click(); URL.revokeObjectURL(a.href);
   };
 
+  /* LOS PERIODOS. El dia se toma en hora de CDMX y no en la del navegador:
+     con la hora del equipo, quien abra esto desde otro huso -o el servidor,
+     que corre en UTC- veria «hoy» cambiando de dia a las seis de la tarde.
+     Ya paso con las salidas (doc 239) y la cuenta de una quincena es
+     exactamente igual de sensible: el dia 15 a las 19:00 pasaria a la
+     siguiente.
+     La quincena es la mexicana de nomina: del 1 al 15 y del 16 a fin de mes.
+     Por eso «quincena pasada» puede caer en el mes anterior, que es justo el
+     caso en el que contar a mano se falla. */
+  function hoyCdmx(){
+    try{
+      return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',
+        year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    }catch(_){
+      var d=new Date();
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+  }
+  function ymd(a,m,d){ return a+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+  function finMes(a,m){ return new Date(Date.UTC(a,m,0)).getUTCDate(); }   // m va 1-12
+  function rangoPeriodo(k){
+    var h=hoyCdmx(), a=+h.slice(0,4), m=+h.slice(5,7), d=+h.slice(8,10), pa, pm;
+    if(k==='hoy')   return [h,h];
+    if(k==='mes')   return [ymd(a,m,1), ymd(a,m,finMes(a,m))];
+    if(k==='mes-1'){ pa=(m===1?a-1:a); pm=(m===1?12:m-1);
+                     return [ymd(pa,pm,1), ymd(pa,pm,finMes(pa,pm))]; }
+    if(k==='quincena') return d<=15 ? [ymd(a,m,1), ymd(a,m,15)]
+                                    : [ymd(a,m,16), ymd(a,m,finMes(a,m))];
+    if(k==='quincena-1'){
+      if(d<=15){ pa=(m===1?a-1:a); pm=(m===1?12:m-1);
+                 return [ymd(pa,pm,16), ymd(pa,pm,finMes(pa,pm))]; }
+      return [ymd(a,m,1), ymd(a,m,15)];
+    }
+    return ['',''];
+  }
+
   ['fEstado','fOper','fConc','fHotel','fTour','fDonde','fRdesde','fRhasta','fSdesde','fShasta']
     .forEach(function(i){$(i).onchange=pinta;});
+
+  $('fPeriodo').onchange=function(){
+    var r=rangoPeriodo(this.value);
+    $('fRdesde').value=r[0]; $('fRhasta').value=r[1];
+    pinta();
+  };
+  /* Si toca las fechas a mano, el atajo se suelta: mas vale el selector en
+     blanco que uno diciendo «Este mes» encima de otro rango. */
+  ['fRdesde','fRhasta'].forEach(function(i){
+    $(i).onchange=function(){
+      var k=$('fPeriodo').value;
+      if(k){ var r=rangoPeriodo(k);
+             if($('fRdesde').value!==r[0] || $('fRhasta').value!==r[1]) $('fPeriodo').value=''; }
+      pinta();
+    };
+  });
+
   $('fBusca').oninput=pinta;
   $('btnLimpia').onclick=function(){
-    ['fEstado','fOper','fConc','fHotel','fTour','fDonde','fRdesde','fRhasta','fSdesde','fShasta','fBusca']
+    ['fEstado','fOper','fConc','fHotel','fTour','fDonde','fPeriodo','fRdesde','fRhasta','fSdesde','fShasta','fBusca']
       .forEach(function(i){$(i).value='';});
     pinta();
   };
