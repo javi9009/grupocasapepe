@@ -1,0 +1,39 @@
+-- 13-nov-2026 · El servicio especial no funcionó nunca, y la tabla lo decía.
+--
+-- Sarahí mandó «No se pudo programar.» y busqué dos horas en el sitio
+-- equivocado. La causa estaba en op_servicios_dados, en dos CHECK que llevan
+-- ahí desde siempre y que no miré antes de escribir la función:
+--
+--   estado: por_conciliar | en_ticket | facturado | cobrado | anulado
+--   origen: escaneo | manual | excel | importado
+--
+-- Mi función insertaba estado='programado' y origen='especial'. Ninguno de los
+-- dos existe. Falló en el primer intento y en todos: ni la versión de anteayer
+-- ni la corrección de ayer escribieron una sola fila, y di por funcionando las
+-- dos. La lección es de método y es la que la guía de Supabase pone primero:
+-- mirar la tabla antes de escribir en ella. Inventé un estado cuando la tabla
+-- ya tenía exactamente el que quería.
+--
+-- `por_conciliar` es eso: dado y todavía no en el ticket. El constraint de
+-- estado no se toca. El de origen sí se amplía con 'especial', que es aditivo:
+-- un servicio fuera de tarifa no es ni un escaneo ni un Excel.
+--
+-- DOS FALLOS MÁS, encontrados al crear el de Huawei:
+--
+-- · Buscaba «su» salida por experiencias.operador_id = el touroperador, y la
+--   Noche Mexicana no la opera Capital Bus: la operamos nosotros. Capital Bus
+--   es cliente, no proveedor (doc 197) — lo tengo escrito y lo busqué al revés.
+--   Ahora se busca por las reservas que ese touroperador cargó ese día, que es
+--   lo que de verdad los relaciona.
+--
+-- · Y ordenaba por hora, así que cogía la primera salida del día: el extra de
+--   Huawei quedó colgado de la de las 06:20 en vez de la Noche Mexicana de las
+--   18:30. Manda el número de personas suyas; la hora sólo desempata.
+--
+-- El cuerpo aplicado está en la base bajo estos mismos nombres:
+--   20261113_el_especial_nunca_paso_del_candado
+--   20261113_capital_bus_no_opera_la_noche_la_trae
+--   20261113_su_noche_es_la_que_mas_gente_suya_lleva
+--
+-- Queda creado el de Huawei: 20 personas × $50 netos = $1,000 ($1,160 con
+-- IVA), colgado de la Noche Mexicana del 13-nov, estado por_conciliar.
