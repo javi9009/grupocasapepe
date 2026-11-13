@@ -2488,6 +2488,39 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         PG.salidas = rs.ok ? await rs.json() : [];
       }
 
+      /* LOS DÍAS QUE SE VENDEN Y TODAVÍA NO TIENEN NADIE. Javi, 13-nov-2026:
+         «que puedan ajustar disp o cerrar venta de forma individual para cada
+         tour aunque no tengan reservas asignadas. Mexican Tales hoy no pudo
+         pasar por la cliente y para mañana ya no tiene disponibilidad».
+         Una salida sólo nace cuando alguien reserva, así que esta pantalla
+         enseñaba el lunes vacío y no había nada que cerrar para el martes. El
+         calendario de la ficha sí sabe qué días se ofrecen: se le preguntan y
+         se pintan los que no tienen fila, para poder decir «ese día no» antes
+         de que llegue nadie. */
+      PG.huecos=[];
+      try{
+        var puestas={};
+        PG.salidas.forEach(function(x){
+          puestas[x.experiencia_id+'|'+x.fecha+'|'+String(x.hora).slice(0,5)]=1; });
+        var dis=await Promise.all(opIds.map(function(oid){
+          return cmRpc('sinc_disponibilidad',{p_op_exp:oid,p_desde:desde,p_hasta:hasta})
+                 .then(function(d){ return {oid:oid, dias:d||[]}; })
+                 .catch(function(){ return {oid:oid, dias:[]}; });
+        }));
+        dis.forEach(function(d){
+          var e=null;
+          Object.keys(PG.exps).forEach(function(k){ if(PG.exps[k].id===d.oid) e=PG.exps[k]; });
+          if(!e) return;
+          d.dias.forEach(function(x){
+            var h=String(x.hora).slice(0,5);
+            if(puestas[e.experiencia_id+'|'+x.fecha+'|'+h]) return;   /* ya tiene fila */
+            PG.huecos.push({ op_exp:d.oid, experiencia_id:e.experiencia_id,
+              nombre:e.nombre, fecha:x.fecha, hora:h,
+              estado:x.estado, cupo_max:x.cupo_max, libres:x.libres });
+          });
+        });
+      }catch(_){ PG.huecos=[]; }
+
       /* LAS QUE PREGUNTARON FUERA DE HORA. Javi, 1-nov-2026: «cuando el
          cliente solicite reserva extemporánea generale en programación una
          ficha con el dato de pendiente de confirmación y pago». No son
@@ -2592,6 +2625,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   }
 
   function pgDeDia(f){ return PG.salidas.filter(function(x){ return x.fecha===f; }); }
+  function pgHuecosDeDia(f){ return (PG.huecos||[]).filter(function(x){ return x.fecha===f; }); }
 
   function pintaProg(){
     var DIAS=['DOM','LUN','MAR','MIÉ','JUE','VIE','SÁB'];
@@ -2646,8 +2680,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       : '';
     var ba=$('pgAvisar'); if(ba) ba.onclick=function(){ avisaVispera(deMan, this); };
 
-    var hay=pgDeDia(PG.dia), hayEv=pgEvDeDia(PG.dia);
-    if(!hay.length && !hayEv.length){
+    var hay=pgDeDia(PG.dia), hayEv=pgEvDeDia(PG.dia), huecos=pgHuecosDeDia(PG.dia);
+    if(!hay.length && !hayEv.length && !huecos.length){
       $('pgLista').innerHTML='<div class="mini" style="padding:22px 0">'+
         (Object.keys(PG.exps).length || (PG.eventos||[]).length
           ? 'Ese día no tienes nada. '+(PG.dia<hoy?'':'Las salidas vienen del calendario de cada experiencia: si falta una, es que su ficha no la ofrece ese día.')
@@ -2694,6 +2728,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var nViejas=viejas.length+viejasEv.length;
     var muestra = PG.verViejas ? hay : vivas;
     var muestraEv = PG.verViejas ? hayEv : vivasEv;
+    /* Un hueco que ya pasó no se puede cerrar: no se pinta nunca, ni con «ver
+       las que pasaron». */
+    var huecosVivos = huecos.filter(function(x){ return !pasada(x); });
 
     $('pgLista').innerHTML=
       (nViejas
@@ -2705,7 +2742,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       (muestra.length||muestraEv.length
         ? muestra.map(function(x){ return (pasada(x)?'<div class="pgvieja">':'<div>')+pintaSalida(x)+'</div>'; }).join('')+
           muestraEv.map(function(x){ return (pasada(x)?'<div class="pgvieja">':'<div>')+pintaEvDia(x)+'</div>'; }).join('')
-        : '<div class="mini" style="padding:18px 0">Ya no queda nada por salir hoy.</div>');
+        : (huecosVivos.length ? '' : '<div class="mini" style="padding:18px 0">Ya no queda nada por salir hoy.</div>'))+
+      /* Y debajo, lo que se vende ese día y todavía no tiene a nadie. */
+      (huecosVivos.length
+        ? '<div class="mini" style="margin:16px 0 8px;font-family:\'Oswald\';letter-spacing:.09em;text-transform:uppercase">'+
+          'Se vende ese día y nadie ha reservado todavía</div>'+
+          huecosVivos.map(pintaHueco).join('')
+        : '');
     var bv=$('pgViejas');
     if(bv) bv.onclick=function(){ PG.verViejas=!PG.verViejas; pintaProg(); };
     enganchaProg();
@@ -3661,7 +3704,68 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     return true;
   }
 
+  /* UN DÍA QUE SE VENDE Y NO TIENE A NADIE. No es una salida: es una casilla
+     del calendario. Por eso se pinta distinto -con el borde punteado- y sólo
+     trae las dos cosas que se pueden hacer con un día vacío: cerrarle la venta
+     y ponerle cuántos lugares caben. En cuanto se toca cualquiera de las dos,
+     la salida nace de verdad y al recargar aparece ya como una salida normal,
+     con sus botones de siempre. */
+  function pintaHueco(h){
+    var cl = (h.estado && h.estado!=='libre') ? h.estado : '';
+    var nota = cl==='cerrada'      ? 'La venta ya cerró por la hora de cierre de la ficha.'
+             : cl==='consultable'  ? 'Cerró la venta, pero todavía se puede preguntar.'
+             : cl==='bloqueada'    ? 'Bloqueada en el calendario.'
+             : '';
+    return '<div style="border:1.5px dashed var(--linea);border-radius:12px;'+
+      'padding:12px 14px;margin:0 0 10px;background:transparent">'+
+      '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'+
+        '<b style="font-family:\'Oswald\';font-size:17px">'+esc(String(h.hora).slice(0,5))+'</b>'+
+        '<span>'+esc(h.nombre||'')+'</span>'+
+        '<span class="mini">· sin reservas</span>'+
+      '</div>'+
+      (nota?'<div class="mini" style="margin-top:4px">'+esc(nota)+'</div>':'')+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">'+
+        '<button class="btn sm gris" data-huecocierra="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
+          'Cerrar la venta de este día</button>'+
+        '<span class="mini">o caben</span>'+
+        '<input type="number" min="0" step="1" style="width:76px;padding:6px 8px;border:1.5px solid var(--linea);'+
+          'border-radius:8px;font:inherit" value="'+esc(h.cupo_max==null?'':h.cupo_max)+'" '+
+          'data-huecocupo="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
+        '<button class="btn fantasma sm" data-huecoponer="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
+          'Poner</button>'+
+      '</div></div>';
+  }
+
+  /* Las dos acciones van por la misma puerta: la base crea la salida si no
+     existe y aplica el cambio. Desde aquí no se inventa ninguna fila. */
+  async function huecoAjusta(clave, cerrar, cupo, btn){
+    var p=String(clave).split('|');
+    var txt = btn ? btn.textContent : '';
+    if(btn){ btn.disabled=true; btn.textContent='Un momento…'; }
+    try{
+      await cmRpc('sinc_salida_ajusta',{
+        p_op_exp:p[0], p_fecha:p[1], p_hora:p[2],
+        p_cerrar: (cerrar===null||cerrar===undefined) ? null : cerrar,
+        p_cupo:   (cupo===null||cupo===undefined||cupo==='') ? null : Number(cupo)
+      });
+      await cargaProg();
+    }catch(e){
+      if(btn){ btn.disabled=false; btn.textContent=txt; }
+      var m=String(e.message||e);
+      try{ m=JSON.parse(m).message||m; }catch(_){}
+      toast(m, true);
+    }
+  }
+
   function enganchaProg(){
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-huecocierra]'),function(b){
+      b.onclick=function(){ huecoAjusta(b.getAttribute('data-huecocierra'), true, null, b); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-huecoponer]'),function(b){
+      b.onclick=function(){
+        var k=b.getAttribute('data-huecoponer');
+        var inp=$('pgLista').querySelector('[data-huecocupo="'+k.replace(/"/g,'')+'"]');
+        huecoAjusta(k, null, inp?inp.value:null, b);
+      };});
     /* Del evento del día a su pestaña. No lleva el id dentro de la liga porque
        el asistente abre por token, no por evento: lo que se evita con esto es
        que alguien busque Eventos en el menú con la pantalla ya delante. */
