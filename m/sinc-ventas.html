@@ -368,44 +368,62 @@ tbody tr:hover{background:var(--surface-3)}
       return s+Number(v[k]||0)*Number(v.factor_neto==null?1:v.factor_neto);},0);};
     var devuelto=suma(cobradas,'devuelto');
     var conDev=cobradas.filter(function(v){return Number(v.devuelto||0)>0;});
-    var vivas=cobradas.filter(function(v){return Number(v.cobrado_neto||0)>0;});
-    var alOper=vivas.filter(function(v){return v.stripe_destino;});
-    var aCasa =vivas.filter(function(v){return !v.stripe_destino;});
 
-    /* ESTA PANTALLA ES DE VENTAS, NO DE COBROS. Javi, 11-nov-2026: «quiero
-       saber ventas no cobros. Lo de esa pantalla no son cobros, son ventas».
-       Las seis tarjetas partian todas del mismo filtro de pagadas, asi que
-       median caja con nombre de ventas. Una venta a credito -las noches que
-       operamos para un touroperador y se liquidan despues por conciliacion-
-       valia cero en el tablero hasta el dia que entraba el dinero.
-       Ahora manda lo VENDIDO: lo que se vendio en el periodo, se haya cobrado
-       o no. El cobro no desaparece, baja a su sitio: debajo, y con lo que
-       queda por cobrar al lado. Un fallido no es una venta y no cuenta; un
-       reembolso si lo fue, y se resta. */
+    /* VENTAS, Y NADA DE COBROS. Javi, 13-nov-2026: «¿cómo puede ser que
+       nuestra comisión sea inferior a lo por cobrar?» y «lo pendiente de
+       cobro no va aquí».
+       Las dos cosas son la misma. Había tarjetas de tres cortes distintos
+       mezcladas en la misma fila: lo vendido, el reparto de lo vendido y el
+       estado del cobro. Comparar una con otra no significaba nada —«nuestra
+       comisión» es una parte de la venta y «por cobrar» es la venta entera
+       sin cobrar, así que la primera puede ser menor sin que nada esté mal—,
+       pero puestas una al lado de otra invitaban justo a esa comparación.
+       Ahora las tarjetas cuentan UNA sola historia, de arriba abajo: qué se
+       vendió, cuánto se va, cuánto queda, y de lo que queda, de dónde sale.
+       El cobro se mira en conciliación, que es donde vive.
+
+       EL REPARTO CUADRA ASÍ:
+         venta = operadora + concierge + hotel + lo nuestro
+       y lo nuestro se parte en dos negocios distintos: lo que ganamos
+       vendiendo lo de otros y lo que ganamos operando nosotros. Son dos cosas
+       que se gestionan distinto y hasta hoy iban sumadas en un solo número. */
     var ventas=l.filter(function(v){ return String(v.pago_estado||'')!=='fallido'; });
-    var vendido=sumaNeta(ventas,'total_venta');
-    var cobrado=suma(cobradas,'cobrado_neto');
-    var porCobrar=vendido-cobrado;
-    var nochesPC=ventas.filter(function(v){ return v.es_servicio && v.pago_estado!=='pagado'; });
+    var vendido   = sumaNeta(ventas,'total_venta');
+    var aOperador = sumaNeta(ventas,'neto_operador');
+    var netos     = vendido - aOperador;
+    var aConcierge= sumaNeta(ventas,'bono_concierge');
+    var nuestra   = sumaNeta(ventas,'nuestra_comision');
+    /* Lo que va al hotel no tiene columna propia en esta fuente -vive en
+       v_sinc_portal como al_hotel-, así que sale de lo que falta para cuadrar
+       el reparto. Va dicho en el pie: un número calculado por diferencia
+       arrastra todos los redondeos de los otros tres. */
+    var aHotel    = Math.max(0, netos - aConcierge - nuestra);
+
+    /* Los dos negocios. Una noche que operamos nosotros para un touroperador
+       es operación aunque la venda él; un tour de tercero que vendemos es
+       comisión aunque salga de nuestra puerta. */
+    function esOperacion(v){ return v.es_servicio===true || String(v.clase||'')==='propio'; }
+    var porOperacion = sumaNeta(ventas.filter(esOperacion),'nuestra_comision');
+    var porComision  = nuestra - porOperacion;
+
+    function pct(x){ return vendido>0 ? ' · '+Math.round(1000*x/vendido)/10+'% de la venta' : ''; }
 
     $('kpis').innerHTML=
-      tarjeta('', money(vendido), 'Ventas',
-              'se haya cobrado o no · '+ventas.length+' venta'+(ventas.length===1?'':'s'))+
-      tarjeta('ok', money(sumaNeta(ventas,'nuestra_comision')), 'Nuestra comisión', 'de lo vendido')+
-      tarjeta('', money(sumaNeta(ventas,'neto_operador')), 'Para los operadores', 'de lo vendido')+
-      tarjeta('', money(cobrado), 'Ya cobrado',
-              vivas.length+' de '+ventas.length+' venta'+(ventas.length===1?'':'s'))+
-      (porCobrar>0.5
-        ? tarjeta('warn', money(porCobrar), 'Por cobrar',
-                  'vendido y todavía sin entrar'+
-                  (nochesPC.length? ' · '+nochesPC.length+' noche'+(nochesPC.length===1?'':'s')+' de touroperador':''))
-        : '')+
+      tarjeta('', money(vendido), 'Ventas netas totales',
+              ventas.length+' venta'+(ventas.length===1?'':'s')+
+              (devuelto>0?' · ya sin las devoluciones':'')+' · se haya cobrado o no')+
+      tarjeta('', money(aOperador), 'Comisión a operadoras', 'lo que se llevan ellos'+pct(aOperador))+
+      tarjeta('ok', money(netos), 'Ingresos totales netos', 'lo que queda en casa'+pct(netos))+
+      tarjeta('', money(aConcierge), 'Comisión a concierge', 'de quien la vendió'+pct(aConcierge))+
+      tarjeta('', money(aHotel), 'Comisión a hoteles',
+              'por diferencia · falta el campo propio en esta fuente')+
+      tarjeta('ok', money(porComision), 'Ingreso por comisiones', 'vendiendo lo de otros')+
+      tarjeta('ok', money(porOperacion), 'Ingreso por operación',
+              'Noche Mexicana y otros servicios que damos nosotros')+
       (devuelto>0
         ? tarjeta('bad', money(devuelto), 'Devuelto',
                   conDev.length+' devolución'+(conDev.length===1?'':'es')+' · no es ingreso ni gasto')
-        : '')+
-      tarjeta('', money(suma(alOper,'cobrado_neto')), 'Cayó en cuentas de operador', alOper.length+' de '+vivas.length)+
-      tarjeta('warn', money(suma(aCasa,'cobrado_neto')), 'Cayó en Casa Pepe', aCasa.length+' de '+vivas.length);
+        : '');
 
     pintaConc(l);
 
