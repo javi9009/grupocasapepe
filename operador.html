@@ -3040,6 +3040,24 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
                 : 'Abierta')+'</div>'+
             '<button class="btn sm'+(s.venta_cerrada_at?'':' gris')+'" data-venta="'+s.id+'">'+
               (s.venta_cerrada_at?'Volver a abrirla':'Cerrar la venta')+'</button>'+
+            /* LOS LUGARES QUE QUEDAN. Javi, 13-nov-2026: «pon no sólo cerrar
+               sino el número de lugares disponibles y que los puedan bajar y
+               guardar. Hay 14 disp (había 15 pero se vendió uno) y le pueden
+               bajar a 5 y guardar».
+               Se escribe lo que QUEDA, no el total: es lo que dice quien está
+               en la calle —«hoy sólo me caben cinco más»— y nadie tiene que
+               restar de cabeza. El total lo recalcula la base al guardar,
+               sumándole los que ya van. */
+            '<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;'+
+              'margin-top:10px;padding-top:10px;border-top:1px solid var(--linea)">'+
+              '<span class="mini">Quedan</span>'+
+              '<input type="number" min="0" step="1" data-lug="'+s.id+'" '+
+                'style="width:72px;padding:6px 8px;border:1.5px solid var(--linea);'+
+                'border-radius:8px;font:inherit" value="'+
+                (tope ? Math.max(tope - pax, 0) : '')+'">'+
+              '<span class="mini">lugares'+(tope?' (de '+tope+', '+pax+' vendido'+(pax===1?'':'s')+')':'')+'</span>'+
+              '<button class="btn fantasma sm" data-lugguarda="'+s.id+'">Guardar</button>'+
+            '</div>'+
           '</div>');
 
         /* 4 · EL «YA NOS VAMOS», solo donde hay camion que recoge al grupo.
@@ -3727,12 +3745,13 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">'+
         '<button class="btn sm gris" data-huecocierra="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
           'Cerrar la venta de este día</button>'+
-        '<span class="mini">o caben</span>'+
+        '<span class="mini">o quedan</span>'+
         '<input type="number" min="0" step="1" style="width:76px;padding:6px 8px;border:1.5px solid var(--linea);'+
-          'border-radius:8px;font:inherit" value="'+esc(h.cupo_max==null?'':h.cupo_max)+'" '+
+          'border-radius:8px;font:inherit" value="'+esc(h.libres==null?'':h.libres)+'" '+
           'data-huecocupo="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
+        '<span class="mini">lugares</span>'+
         '<button class="btn fantasma sm" data-huecoponer="'+esc(h.op_exp)+'|'+esc(h.fecha)+'|'+esc(h.hora)+'">'+
-          'Poner</button>'+
+          'Guardar</button>'+
       '</div></div>';
   }
 
@@ -3743,11 +3762,18 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     var txt = btn ? btn.textContent : '';
     if(btn){ btn.disabled=true; btn.textContent='Un momento…'; }
     try{
-      await cmRpc('sinc_salida_ajusta',{
-        p_op_exp:p[0], p_fecha:p[1], p_hora:p[2],
-        p_cerrar: (cerrar===null||cerrar===undefined) ? null : cerrar,
-        p_cupo:   (cupo===null||cupo===undefined||cupo==='') ? null : Number(cupo)
-      });
+      /* Dos puertas distintas a propósito: cerrar/abrir es una cosa y los
+         lugares son otra, y la base hace la suma de los lugares con los que ya
+         van. Si se mezclaran en una llamada, guardar lugares reabriría una
+         venta cerrada sin que nadie lo pidiera. */
+      if(cupo!==null && cupo!==undefined && cupo!==''){
+        await cmRpc('sinc_salida_lugares',{
+          p_op_exp:p[0], p_fecha:p[1], p_hora:p[2], p_libres:Number(cupo) });
+      } else {
+        await cmRpc('sinc_salida_ajusta',{
+          p_op_exp:p[0], p_fecha:p[1], p_hora:p[2],
+          p_cerrar: (cerrar===null||cerrar===undefined) ? null : cerrar });
+      }
       await cargaProg();
     }catch(e){
       if(btn){ btn.disabled=false; btn.textContent=txt; }
@@ -3757,7 +3783,31 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     }
   }
 
+  /* Los lugares de una salida que ya existe. Va por la misma función que el
+     hueco: la base ya sabe sumar los que van, y así una sola verdad. */
+  async function lugaresGuarda(sid, btn){
+    var s=PG.salidas.filter(function(x){return x.id===sid;})[0]; if(!s) return;
+    var e=PG.exps[s.experiencia_id]||{};
+    var inp=$('pgLista').querySelector('[data-lug="'+sid+'"]');
+    if(!inp || inp.value==='') return;
+    var txt=btn?btn.textContent:'';
+    if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
+    try{
+      await cmRpc('sinc_salida_lugares',{ p_op_exp:e.id, p_fecha:s.fecha,
+        p_hora:String(s.hora).slice(0,5), p_libres:Number(inp.value) });
+      await cargaProg();
+      toast('Lugares guardados');
+    }catch(err){
+      if(btn){ btn.disabled=false; btn.textContent=txt; }
+      var m=String(err.message||err);
+      try{ m=JSON.parse(m).message||m; }catch(_){}
+      toast(m, true);
+    }
+  }
+
   function enganchaProg(){
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-lugguarda]'),function(b){
+      b.onclick=function(){ lugaresGuarda(b.getAttribute('data-lugguarda'), b); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-huecocierra]'),function(b){
       b.onclick=function(){ huecoAjusta(b.getAttribute('data-huecocierra'), true, null, b); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-huecoponer]'),function(b){
