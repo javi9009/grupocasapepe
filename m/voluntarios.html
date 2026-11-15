@@ -401,9 +401,21 @@ function tarjeta(r){
     if(vs.length) via='<div class="meta">'+vs.join(' ')+'</div>';
   }
 
+  /* EL «+» DE QUIEN PIDE QUEDARSE. Se lee de un golpe entre cien fichas y dice
+     cuanto pide, no solo que pidio: «+15 d» es una decision que puedes tomar
+     sin abrir nada. */
+  const ex=EXT[r.id];
+  const masTiempo = ex
+    ? '<span title="Pide quedarse más tiempo" style="display:inline-block;margin-left:6px;'+
+      'background:var(--green,#1d9e75);color:#fff;font-weight:800;font-size:10.5px;'+
+      'padding:2px 7px;border-radius:7px;white-space:nowrap">+'+(ex.dias||'')+' d</span>'
+    : '';
+
   return '<div class="cand" onclick="ficha(\''+r.id+'\')" title="'+esc(r.email||'')+'">'+
-    '<b>'+esc(r.nombre||'(sin nombre)')+' '+bandera(r)+'</b>'+
+    '<b>'+esc(r.nombre||'(sin nombre)')+' '+bandera(r)+masTiempo+'</b>'+
     vacChip(r)+chipSede(r)+
+    (ex?'<div class="meta" style="color:var(--green,#1d9e75);font-weight:700">Pide quedarse hasta el '+
+        f(ex.fin)+'</div>':'')+
     (cuando?'<div class="meta">'+cuando+'</div>':'')+
     (nota?'<div class="meta">'+esc(nota)+'</div>':'')+
     via+
@@ -424,6 +436,8 @@ function casa(r){
 
 function pinta(){ if(TODO_EMB) dibuja(TODO_EMB); }
 let TODO_EMB=null;
+/* Las peticiones de quedarse mas tiempo, por solicitud_id. */
+let EXT={};
 
 /* LA CIUDAD. Desde el 21-oct-2026 el voluntariado tambien es de Puebla, asi que
    cada solicitud nace con su sede y esta pantalla se mira por ciudad. Quien solo
@@ -570,6 +584,11 @@ async function bandeja(){
   try{
     await cargaSedes();
     const todo=await rpc('vol_embudo');
+    /* QUIEN PIDIO QUEDARSE MAS. Javi, 15-nov-2026: «en voluntariado en su ficha
+       aparezca un +». Va en una llamada aparte y no dentro de vol_embudo()
+       para no tocar la funcion que pinta toda la pantalla. Si falla, la
+       pantalla sigue: el «+» es un aviso, no el contenido. */
+    try{ EXT=(await rpc('vol_extensiones'))||{}; }catch(e){ EXT={}; }
     TODO_EMB=todo;
     if(!todo.length){c.innerHTML='<p class="vacio">Todavía no hay candidatos con correo.</p>';return;}
     dibuja(todo);
@@ -670,6 +689,36 @@ function dibuja(todo){
 const CAMINO=[['solicitud','Solicitud'],['preparando','Preparando'],
               ['carta_enviada','Carta enviada'],['carta_aceptada','Firmada'],
               ['checkin','En la casa']];
+
+/* LA PETICION DE QUEDARSE, ARRIBA DE SU FICHA. Antes esto llegaba por WhatsApp
+   y se resolvia moviendo la fecha a mano, sin que quedara constancia de quien
+   lo pidio ni de cuando. Aqui se ve lo que pide, sobre que fecha, y se cierra
+   en el sitio donde ya se extienden las fechas. */
+function extensionHtml(id){
+  const ex=EXT[id]; if(!ex) return '';
+  return '<div class="ahora" style="border-color:var(--green,#1d9e75)">'+
+    '<h3>+ Pide quedarse '+(ex.dias||'')+' día(s) más</h3>'+
+    '<p>Su convenio termina el <b>'+f(ex.hasta_actual)+'</b> y pide hasta el <b>'+f(ex.fin)+'</b>.'+
+    (ex.motivo?'<br>«'+esc(ex.motivo)+'»':'')+'</p>'+
+    '<p style="margin-top:8px">Para concedérselo, extiéndele las fechas abajo. '+
+    'Cuando lo hayas resuelto, ciérralo aquí para que deje de aparecer el «+».</p>'+
+    '<p style="margin-top:8px">'+
+      '<button class="bt ok" onclick="cierraExt(\''+ex.inc_id+'\',true)">Concedido</button> '+
+      '<button class="bt" onclick="cierraExt(\''+ex.inc_id+'\',false)">No se puede</button>'+
+    '</p></div>';
+}
+
+async function cierraExt(inc, ok){
+  const nota=await cpPide(ok
+      ? '¿Le quieres decir algo? (se lo verá en SoyPepe · opcional)'
+      : '¿Por qué no se puede? (se lo verá en SoyPepe)', '', {si:'Guardar'});
+  if(nota===null) return;
+  const d=await rpc('vol_extension_cierra',{p_inc:inc, p_ok:!!ok, p_nota:nota||null});
+  if(!d || d.error){ await cpAviso((d&&d.error)||'No se pudo cerrar.'); return; }
+  delete EXT[Object.keys(EXT).find(k=>EXT[k].inc_id===inc)];
+  await cpAviso(ok?'Concedido. Acuérdate de extenderle las fechas si no lo has hecho.':'Anotado.');
+  bandeja();
+}
 
 function pasosHtml(fr, a, id){
   const et=fr.etapa||'solicitud';
@@ -785,7 +834,9 @@ async function ficha(id){
   try{ ALTA=await rpc('vol_estado_alta',{p_id:id}); }catch(e){}
   const prog=(d.progreso||[]).map(p=>'<div class="kv"><b>'+esc(p.tour)+'</b>'+p.puntos+' pts '+(p.desbloqueado?'<span class="ok">✓</span>':'')+'</div>').join('');
   const w=(d.taller||[])[0], j=(d.juego||[])[0];
-  let h=pasosHtml(FILA[id]||{}, ALTA, id);
+  /* Si pidió quedarse, eso es lo primero que hay que leer de su ficha: es lo
+     único que está esperando una respuesta tuya. */
+  let h=extensionHtml(id)+pasosHtml(FILA[id]||{}, ALTA, id);
   h+='<div class="card"><h2>'+esc(s.nombre||'(sin nombre)')+' '+bandera(s)+' · '+esc(s.email)+'</h2>';
   const vc=d.vacante||null;
   h+='<p style="margin:-4px 0 12px">'+chipVac({vacante:s.vacante,vacante_nombre:vc&&vc.nombre_es,
