@@ -749,8 +749,18 @@ async function productividad(){
                      ' → <b>'+pesos(g.tours_gana)+'</b> suyos</div>';
     if(g.conc_n) l+='<div>Concierge · '+g.conc_n+' venta(s) por '+pesos(g.conc_vendido)+
                      ' → <b>'+pesos(g.conc_gana)+'</b> suyos</div>';
+    if((g.pagado_mano||0)>0) l+='<div>Ya cobrado en mano · '+pesos(g.pagado_mano)+'</div>';
     l+='<div style="margin-top:3px"><b>Ingreso total · '+pesos(g.total_gana)+'</b>'+
-       ((g.tours_debe||0)>0 ? ' <span style="color:#8a6420">(sin liquidar)</span>' : '')+'</div>';
+       ((g.tours_debe||0)>0
+         ? ' <span style="color:#8a6420">· le debemos '+pesos(g.tours_debe)+'</span>'
+         : ' <span style="color:#1D6B4A">· al corriente</span>')+'</div>';
+    /* Apuntar lo que se le pagó en mano. Javi, 15-nov-2026: «Benito ya lo
+       cobró en efectivo». Sin esto el sistema solo sabía de transferencias de
+       Stripe y le mantenía la deuda entera a quien ya había cobrado. */
+    if((g.tours_debe||0)>0){
+      l+='<div style="margin-top:6px"><button class="btn" onclick="event.stopPropagation();'+
+         'pagoMano(\''+esc(v.email)+'\','+(+g.tours_debe||0)+')">Apuntar que ya le pagamos</button></div>';
+    }
     return '<div class="meta" style="margin-top:7px;padding-top:6px;border-top:1px dashed #e4ded1;'+
            'line-height:1.6">'+l+'</div>';
   }
@@ -790,6 +800,22 @@ async function productividad(){
   });
   c.innerHTML=h;
 }
+
+
+/* Registrar un pago en mano. Lo que se paga en efectivo no pasa por Stripe y
+   el sistema no se enteraba: quedaba como deuda viva para siempre. */
+window.pagoMano=async function(email, sugerido){
+  const v=await cpPide('¿Cuánto se le pagó?', String(sugerido||''));
+  if(v===null) return;
+  const monto=parseFloat(String(v).replace(/[^0-9.]/g,''));
+  if(!(monto>0)){ cpAviso('Ese monto no vale.'); return; }
+  const nota=await cpPide('¿Alguna nota? (opcional)', '');
+  let d=null;
+  try{ d=await rpc('vol_pago_registrar',{p_email:email,p_monto:monto,p_forma:'efectivo',p_nota:nota||null}); }
+  catch(e){ d=null; }
+  if(!d || d.error){ cpAviso((d&&d.error)||'No se pudo guardar el pago.'); return; }
+  productividad();
+};
 
 /* LA PETICION DE QUEDARSE, ARRIBA DE SU FICHA. Antes esto llegaba por WhatsApp
    y se resolvia moviendo la fecha a mano, sin que quedara constancia de quien
@@ -1350,8 +1376,13 @@ async function planPanel(id){
       ? '<p class="vacio" style="margin-top:12px">El intercambio no lleva plan de referencias: con sus fechas y su Instagram ya puedes decidir.</p>'
       : '<p class="vacio" style="margin-top:12px">Todavía no ha pegado ninguna referencia.</p>';
   } else {
-    for(let w=1;w<=4;w++){
-      const ls=pz.filter(x=>x.semana===w); if(!ls.length) continue;
+    /* Por las semanas que HAYA, no de la 1 a la 4. Desde que ellos pueden
+       proponer sus propias piezas en «Lo que viene» (Javi, 15-nov-2026), un
+       plan puede llegar a la semana 6 o a la que sea, y lo que no se pintaba
+       aquí no lo validaba nadie. */
+    const SEMS=[...new Set(pz.map(x=>+x.semana||0))].filter(n=>n>0).sort((a,b)=>a-b);
+    for(const w of SEMS){
+      const ls=pz.filter(x=>(+x.semana||0)===w); if(!ls.length) continue;
       h+='<h3 style="margin:14px 0 6px;font-size:14px">Semana '+w+'</h3>';
       h+=ls.map(x=>{
         const mal = x.estado==='descartada', ok = x.estado==='aprobada';
@@ -1361,6 +1392,13 @@ async function planPanel(id){
           '<a href="'+esc(x.url)+'" target="_blank" rel="noopener" style="word-break:break-all">'+esc(x.url)+'</a>'+
           (x.idea?'<div class="chk" style="margin-top:3px">'+esc(x.idea)+'</div>':'')+
           (x.nota_equipo?'<div class="chk" style="margin-top:3px"><b>Tu nota:</b> '+esc(x.nota_equipo)+'</div>':'')+
+          /* Lo entregado y el día en que lo publicó: es lo que cuenta en su
+             barra semanal, así que aquí se puede comprobar contra la liga. */
+          (x.url_hecho
+            ? '<div class="chk" style="margin-top:4px;color:#1D6B4A"><b>Entregada</b>'+
+              (x.fecha_pub?' · publicada el '+f(x.fecha_pub):'')+' · <a href="'+esc(x.url_hecho)+
+              '" target="_blank" rel="noopener" style="word-break:break-all">ver</a></div>'
+            : '<div class="chk" style="margin-top:4px;color:#8a6420">Sin entregar</div>')+
           '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+
             '<button class="btn g" onclick="planPieza(\''+id+'\',\''+x.id+'\',\'aprobada\')">Grabamos ésta</button>'+
             '<button class="btn r" onclick="planPieza(\''+id+'\',\''+x.id+'\',\'descartada\')">Ésta no</button>'+

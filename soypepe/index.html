@@ -3823,12 +3823,22 @@ const PF_DOCS=[
 async function openPerfil(){
   $('perfilSheet').classList.add('show');
   const body=$('perfil-body'); const empId=EMP||HZ.empId;
-  if(!empId){ body.innerHTML='<div class="ph"><div class="ico">👤</div><div class="d">Tu cuenta aún no está ligada a tu ficha. Avisa a RH.</div></div>'; return; }
+  if(!empId){
+    body.innerHTML='<div id="pf-convenio"></div>'+
+      '<div class="ph"><div class="ico">👤</div><div class="d">Tu cuenta aún no está ligada a tu ficha. Avisa a RH.</div></div>';
+    try{ pintaConvenio(); }catch(e){}
+    return;
+  }
   let p={}; try{ const {data}=await sb.from('employees').select('id,empleado_id,nombre,apellido,direccion,contacto_nombre,contacto_cel,cv_url,acta_nacimiento_url,id_oficial_url,rfc_doc_url,comprobante_domicilio_url,comprobante_estudios_url').eq('id',empId).maybeSingle(); if(data) p=data; }catch(e){}
   /* RFC / NSS / CURP viven detras de una funcion: cada quien solo los suyos */
   try{ const {data:ms}=await sb.rpc('mi_ficha_sensible'); if(ms) Object.assign(p,ms); }catch(e){}
   const req=(r)=> r?' <span style="color:#b03434">*</span>':'';
-  let h='<div class="ssub" style="margin-top:-2px">Completa tu alta: los marcados con <b style="color:#b03434">*</b> son obligatorios.</div>';
+  /* El convenio del voluntario vive aqui. Javi, 15-nov-2026: «la carta vive
+     en Mi Perfil». Hasta hoy se firmaba en la pagina vieja de alta, que es lo
+     unico que la sostenia en pie. Va primero: quien entra con la carta sin
+     firmar tiene eso y nada mas que hacer. */
+  let h='<div id="pf-convenio"></div>';
+  h+='<div class="ssub" style="margin-top:-2px">Completa tu alta: los marcados con <b style="color:#b03434">*</b> son obligatorios.</div>';
   h+='<div class="pf-head">Datos</div>';
   h+='<div class="pf-row"><span class="ic">🧑</span><div><div class="l">Nombre</div><div class="v">'+(p.nombre||'—')+'</div></div></div>';
   h+='<div class="pf-row"><span class="ic">✉️</span><div><div class="l">Correo</div><div class="v">'+($('meEmail').textContent||'—')+'</div></div></div>';
@@ -3844,6 +3854,7 @@ async function openPerfil(){
       +(ok?'<button class="pf-ver" data-path="'+((p[f[0]]||'').toString().replace(/"/g,'&quot;'))+'" style="background:transparent;border:1px solid var(--bd);color:var(--txt2);border-radius:8px;padding:6px 10px;font-size:12.5px;cursor:pointer">Ver</button>':'')
       +'<label class="pf-up">'+(ok?'Reemplazar':'Subir')+'<input type="file" data-col="'+f[0]+'" accept="image/*,application/pdf" style="display:none"></label></div></div>'; });
   body.innerHTML=h;
+  try{ pintaConvenio(); }catch(e){}
   $('pf-save').onclick=savePerfil;
   body.querySelectorAll('.pf-up input[type=file]').forEach(inp=> inp.onchange=()=>subirDoc(inp));
   body.querySelectorAll('.pf-ver').forEach(b=> b.onclick=async()=>{ const path=b.dataset.path; if(!path) return; const t=b.textContent; b.textContent='…'; b.disabled=true; try{ const r=await sb.storage.from('empleados').createSignedUrl(path.replace(/^\/?empleados\//,''),3600); if(r.error||!r.data) throw r.error; window.open(r.data.signedUrl,'_blank'); }catch(e){ alert('No se pudo abrir el documento.'); } finally{ b.textContent=t; b.disabled=false; } });
@@ -3873,6 +3884,104 @@ async function subirDoc(inp){
   finally{ inp.value=''; }
 }
 $('perfilSheet').onclick=(e)=>{ if(e.target.id==='perfilSheet') $('perfilSheet').classList.remove('show'); };
+
+/* ===== EL CONVENIO DEL VOLUNTARIO, EN MI PERFIL =====
+   Javi, 15-nov-2026: «la página vieja no tiene sentido tenerla, tu semana
+   está en SoyPepe en Mi Casa Pepe, y la carta vive en Mi Perfil».
+   Se firma de puño y letra: la rúbrica dibujada, el nombre como viene en la
+   identificación, la fecha, el aparato y la IP son la constancia. */
+let FIRMA_CV=null;
+
+/* A quien todavia no ha firmado se le abre Mi perfil, que es donde esta su
+   convenio, en vez de mandarlo a otra pagina. */
+function avisaConvenio(){
+  try{ if(typeof openPerfil==='function') openPerfil(); }catch(e){}
+}
+
+async function pintaConvenio(){
+  const box=$('pf-convenio'); if(!box) return;
+  let c=null; try{ const r=await sb.rpc('vol_carta_mia'); c=r&&r.data; }catch(e){ return; }
+  if(!c || !c.id || c.error){ box.innerHTML=''; return; }
+  if(c.estatus==='aceptada'){
+    box.innerHTML='<div class="pf-head">Mi convenio</div>'+
+      '<div class="pf-doc"><div><div class="l">Convenio de voluntariado</div>'+
+      '<div class="dst ok">✓ Firmado'+(c.aceptada_at?' el '+fFecha(c.aceptada_at):'')+'</div></div>'+
+      '<button class="pf-ver" id="cv-ver" style="background:transparent;border:1px solid var(--bd);'+
+      'color:var(--txt2);border-radius:8px;padding:6px 10px;font-size:12.5px;cursor:pointer">Leer</button></div>'+
+      '<div id="cv-texto" hidden style="font-size:13.5px;line-height:1.55;background:#fbf9f4;'+
+      'border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px">'+(c.cuerpo_html||'')+'</div>';
+    const v=$('cv-ver'), t=$('cv-texto');
+    if(v&&t) v.onclick=()=>{ t.hidden=!t.hidden; v.textContent=t.hidden?'Leer':'Cerrar'; };
+    return;
+  }
+  box.innerHTML='<div class="pf-head">Mi convenio</div>'+
+    '<div style="border:2px solid #cd9a4b;border-radius:12px;padding:13px;margin-bottom:12px">'+
+      '<div style="font-weight:800;font-size:15px;margin-bottom:3px">📜 Te falta un paso: firma tu convenio</div>'+
+      '<div style="font-size:12.5px;color:var(--txt2);margin-bottom:9px">Léelo y fírmalo aquí de tu puño y letra. '+
+        'Tu firma es lo que nos compromete a los dos: hasta que no firmes, tu lugar no está confirmado.</div>'+
+      '<div style="font-size:13.5px;line-height:1.55">'+(c.cuerpo_html||'')+'</div>'+
+      '<button class="vac-btn" id="cv-btn" style="margin-top:10px">Leer y firmar</button>'+
+      '<div id="cv-conf" hidden style="margin-top:14px;padding:13px;border:1px solid #cd9a4b;border-radius:10px">'+
+        '<div style="font-weight:700;margin-bottom:3px">Firma aquí</div>'+
+        '<div style="font-size:12px;color:var(--txt2);margin-bottom:8px">Dibuja tu firma con el dedo.</div>'+
+        '<canvas id="cv-pad" style="width:100%;height:170px;display:block;background:#fff;'+
+          'border:1px dashed #b9ae95;border-radius:8px;touch-action:none;cursor:crosshair"></canvas>'+
+        '<button class="vac-btn" type="button" id="cv-borrar" style="margin:8px 0 0;background:#f2efe8;color:#4a463d">Borrar y repetir</button>'+
+        '<div style="margin-top:12px"><label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px">'+
+          'Tu nombre como viene en tu identificación</label>'+
+          '<input id="cv-nombre" type="text" autocomplete="name" value="'+String(c.nombre||'').replace(/"/g,'&quot;')+'" '+
+          'style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--bd);border-radius:8px;font:inherit"></div>'+
+        '<div style="font-size:11.5px;color:var(--txt2);margin:10px 0">Al firmar aceptas todo lo que dice arriba. '+
+          'Guardamos tu firma, la fecha, tu dispositivo y tu IP como constancia.</div>'+
+        '<button class="vac-btn" id="cv-si">Firmar</button>'+
+      '</div>'+
+      '<div id="cv-msg" style="font-size:12.5px;margin-top:8px"></div>'+
+    '</div>';
+  const btn=$('cv-btn'), conf=$('cv-conf');
+  btn.onclick=()=>{ conf.hidden=false; btn.hidden=true; padConvenio(); };
+  $('cv-si').onclick=()=>firmaConvenio(c.id);
+}
+
+/* El lienzo se dimensiona en píxeles reales del aparato; en una pantalla densa,
+   si no, la firma sale pixelada y gorda. */
+function padConvenio(){
+  const cv=$('cv-pad'); if(!cv) return;
+  const r=window.devicePixelRatio||1, caja=cv.getBoundingClientRect();
+  cv.width=Math.round(caja.width*r); cv.height=Math.round(caja.height*r);
+  const g=cv.getContext('2d');
+  g.scale(r,r); g.lineWidth=2.2; g.lineCap='round'; g.lineJoin='round'; g.strokeStyle='#1E2415';
+  let pinta=false, hubo=false;
+  const donde=ev=>{ const b=cv.getBoundingClientRect(); const t=(ev.touches&&ev.touches[0])||ev;
+    return [t.clientX-b.left, t.clientY-b.top]; };
+  const baja=ev=>{ ev.preventDefault(); pinta=true; hubo=true; const p=donde(ev); g.beginPath(); g.moveTo(p[0],p[1]); };
+  const mueve=ev=>{ if(!pinta) return; ev.preventDefault(); const p=donde(ev); g.lineTo(p[0],p[1]); g.stroke(); };
+  const sube=()=>{ if(!pinta) return; pinta=false; FIRMA_CV = hubo ? cv.toDataURL('image/png') : null; };
+  cv.addEventListener('pointerdown',baja); cv.addEventListener('pointermove',mueve);
+  window.addEventListener('pointerup',sube); window.addEventListener('pointercancel',sube);
+  cv.addEventListener('touchstart',baja,{passive:false});
+  cv.addEventListener('touchmove',mueve,{passive:false});
+  cv.addEventListener('touchend',sube);
+  FIRMA_CV=null;
+  $('cv-borrar').onclick=()=>{ g.clearRect(0,0,cv.width,cv.height); FIRMA_CV=null; hubo=false;
+    const m=$('cv-msg'); if(m) m.textContent=''; };
+}
+
+async function firmaConvenio(id){
+  const m=$('cv-msg'), si=$('cv-si');
+  const nombre=(($('cv-nombre')||{}).value||'').trim();
+  const rojo=t=>{ if(m) m.innerHTML='<span style="color:#9E3B2E">'+t+'</span>'; };
+  if(!FIRMA_CV){ rojo('Dibuja tu firma antes de enviar.'); return; }
+  if(nombre.length<3){ rojo('Escribe tu nombre completo.'); return; }
+  if(si) si.disabled=true;
+  if(m){ m.style.color=''; m.textContent='Guardando tu firma…'; }
+  let r=null;
+  try{ r=await sb.rpc('vol_carta_firmar',{p_id:id,p_device:(navigator.userAgent||'').slice(0,170),
+        p_firma:FIRMA_CV,p_nombre:nombre}); }catch(e){ r=null; }
+  const d=r&&r.data;
+  if(d&&d.ok){ FIRMA_CV=null; pintaConvenio(); return; }
+  if(si) si.disabled=false;
+  rojo('No se pudo guardar tu firma. Inténtalo otra vez.'+(d&&d.error?' ('+d.error+')':''));
+}
 
 /* ===== Configuración ===== */
 function openConfig(){
@@ -5481,11 +5590,11 @@ function openGuias(){
        Salvo que ya haya firmado: entonces no es un candidato y su sitio es
        esta app, aunque todavia no se le haya abierto casi nada. */
     if(await yaFirmo()) return 'voluntario';
-    try{
-      var lg=localStorage.getItem('cp_vol_lang'); lg=(lg==='es'||lg==='en')?lg:'';
-      location.replace('/soypepe/quiero-ser-pepe.html'+(lg?('?lang='+lg):''));
-      return 'candidato';
-    }catch(e){}
+    /* Ya no se le echa fuera. Javi, 15-nov-2026: «la pagina vieja no tiene
+       sentido tenerla, la carta vive en Mi Perfil». Su convenio esta en esta
+       misma app, asi que se queda aqui y se le abre donde se firma. */
+    try{ avisaConvenio(); }catch(e){}
+    return 'candidato';
     function limpia(){
       document.querySelectorAll('.circle').forEach(function(b){
         var mio = b.getAttribute('data-perm')==='PAG-SP-QUIEROSER';
@@ -5556,8 +5665,11 @@ function openGuias(){
        repartir a cada quien su portal. */
     /* Y aqui tampoco: quien firmo se queda en su app. */
     if(await yaFirmo()) return;
-    var destino = (quien==='quieroser') ? '/soypepe/quiero-ser-pepe.html' : '/acceso.html';
-    try{ location.replace(destino); }catch(e){}
+    /* Quien tiene modulo de voluntario se queda: su convenio se firma en Mi
+       Perfil, aqui dentro. Al resto, a la puerta de la casa, que ya sabe
+       repartir a cada quien su portal. */
+    if(quien==='quieroser'){ try{ avisaConvenio(); }catch(e){} return; }
+    try{ location.replace('/acceso.html'); }catch(e){}
   }
   window.addEventListener('load', function(){
     var n=0;
@@ -5578,8 +5690,7 @@ function openGuias(){
     if(!/[?&]ir=quieroser/i.test(location.search)) return;
     (async function(){
       if(await yaFirmo()) return;             // ya es de la casa: se queda
-      var lg=''; try{ lg=localStorage.getItem('cp_vol_lang'); lg=(lg==='es'||lg==='en')?lg:''; }catch(e){}
-      location.replace('/soypepe/quiero-ser-pepe.html'+(lg?('?lang='+lg):''));
+      try{ avisaConvenio(); }catch(e){}       // y si no, a firmar, aqui mismo
     })();
   });
 })();
