@@ -89,8 +89,8 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 
 <header class="top">
   <div class="wrap">
-    <h1>Valoración de jefes</h1>
-    <span class="sub">Lo que su equipo dice de ellos, en anónimo</span>
+    <h1>Valoraciones anónimas</h1>
+    <span class="sub">Lo que el equipo dice de sus jefes, y lo que los compañeros dicen de cada quien</span>
     <span id="estado"></span>
   </div>
 </header>
@@ -98,6 +98,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 <nav class="secnav" aria-label="Secciones">
   <div class="secnav-in" id="tabs">
     <button data-t="jefes"      aria-selected="true">Jefes</button>
+    <button data-t="pares"      aria-selected="false">Compañeros</button>
     <button data-t="resultados" aria-selected="false">Resultados</button>
     <button data-t="preguntas"  aria-selected="false">Las preguntas</button>
   </div>
@@ -126,12 +127,18 @@ const rpc=(n,b)=>api('/rpc/'+n,{method:'POST',body:JSON.stringify(b||{})});
 const BLOQ={trato:'Cómo te trata', escucha:'Cómo te escucha', herramientas:'Para poder trabajar',
   desempeno:'Mi desempeño en Casa Pepe', equipo:'El equipo', abierta:'Lo que quieras contar'};
 
-let JEFES=[], PREG=[], TAB='jefes', RES=null, RONDA=null;
+let JEFES=[], PARES=[], PREG=[], PREGP=[], TAB='jefes', RES=null, RONDA=null;
 
 async function cargar(){
   estado('cargando…');
   JEFES = await rpc('enc_panel_jefes') || [];
+  /* EL TRABAJO EN EQUIPO SON LAS ENCUESTAS ENTRE COMPAÑEROS. Javi, 15-nov-2026.
+     La maquinaria llevaba meses armada y sin lanzar: enc_rondas tipo 'pares',
+     sus 7 preguntas y enc_resultado() ya existían. Lo que faltaba era desde
+     dónde lanzarlas. Esta pestaña es ese botón. */
+  try{ PARES = await rpc('enc_panel_pares') || []; }catch(e){ PARES=[]; }
   PREG  = await api('/enc_preguntas?select=*&tipo_encuesta=eq.jefe&order=orden') || [];
+  try{ PREGP = await api('/enc_preguntas?select=*&tipo_encuesta=eq.pares&order=orden') || []; }catch(e){ PREGP=[]; }
   estado('');
   pinta();
 }
@@ -181,14 +188,58 @@ function vJefes(){
   return h+'</tbody></table></div></div>';
 }
 
+/* ───────────────────────────── compañeros ──────────────────────────── */
+function vPares(){
+  if(!PARES.length) return '<p class="vacia">No se pudo leer la plantilla, o esta cuenta no es de RH.</p>';
+  let h='<div class="nota"><b>Esta es la nota de Trabajo en equipo.</b> Se le pregunta a 5 compañeros '
+   +'de su misma sede, al azar, y las respuestas se guardan sin nombre ni hora. No se enseña nada hasta '
+   +'que haya 3 contestadas; mientras no haya ronda, el criterio sigue saliendo del test del jefe y la '
+   +'ficha del colaborador dice que es provisional.</div>'
+   +'<div class="card"><div class="scroll"><table><thead><tr>'
+   +'<th>Quién</th><th>Compañeros en su sede</th><th>Última ronda</th><th class="num">Contestadas</th>'
+   +'<th class="num">Nota</th><th></th></tr></thead><tbody>';
+  let areaActual=null;
+  PARES.forEach(function(j){
+    if(j.area!==areaActual){ areaActual=j.area;
+      h+='<tr><td colspan="6" style="background:var(--surface-2,#efe9dd);font-weight:600;font-size:.8rem">'
+        +esc(j.area||'Sin área')+'</td></tr>'; }
+    const chico=(j.companeros||0)<3;
+    const abierta=j.ronda_estado==='abierta';
+    let ronda='<span class="faint">nunca</span>';
+    if(j.ronda){ ronda = abierta
+      ? '<span class="pill warn">abierta</span> cierra '+esc(j.ronda_cierra||'')
+      : '<span class="pill">cerrada</span> '+esc(String(j.lanzada||'').slice(0,10)); }
+    const nota=(j.promedio_0_10!=null && (j.contestadas||0)>=3)
+      ? '<b>'+j.promedio_0_10+'</b> <span class="faint">/10</span>'
+      : ((j.contestadas||0)>0 ? '<span class="faint">aún no</span>' : '—');
+    h+='<tr><td><b>'+esc(j.nombre)+'</b><div class="meta">'+esc(j.rol||'')
+      +(j.sede?' · '+esc(j.sede):'')+'</div></td>'
+      +'<td>'+(j.companeros||0)+(chico?'<div><span class="pill bad">sede chica</span></div>':'')+'</td>'
+      +'<td>'+ronda+'</td>'
+      +'<td class="num">'+(j.ronda?((j.contestadas||0)+' / '+(j.invitados||0)):'—')+'</td>'
+      +'<td class="num">'+nota+'</td>'
+      +'<td style="text-align:right;white-space:nowrap">'
+      +(j.ronda?'<button class="btn ghost mini" data-ver="'+j.ronda+'">Ver</button> ':'')
+      +(abierta
+         ? '<button class="btn ghost mini" data-cerrar="'+j.ronda+'">Cerrar</button>'
+         : (chico ? '<span class="faint" style="font-size:.74rem">hacen falta 3</span>'
+                  : '<button class="btn mini" data-pares="'+j.id+'">Lanzar</button>'))
+      +'</td></tr>';
+  });
+  return h+'</tbody></table></div></div>'
+    +'<p class="meta" style="margin-top:10px">Las 7 preguntas de compañeros están en «Las preguntas».</p>';
+}
+
 /* ───────────────────────────── resultados ──────────────────────────── */
 function vResultados(){
-  const conRonda = JEFES.filter(function(j){return j.ronda;});
+  const conRonda = JEFES.filter(function(j){return j.ronda;}).map(function(j){return {ronda:j.ronda,nombre:j.nombre,ronda_estado:j.ronda_estado,contestadas:j.contestadas,invitados:j.invitados,que:'jefe'};})
+    .concat(PARES.filter(function(j){return j.ronda;}).map(function(j){return {ronda:j.ronda,nombre:j.nombre,ronda_estado:j.ronda_estado,contestadas:j.contestadas,invitados:j.invitados,que:'compañeros'};}));
   if(!conRonda.length) return '<p class="vacia">Todavía no se ha lanzado ninguna ronda.</p>';
 
   let h='<div class="card"><label class="meta">Ronda</label><br><select id="selR" style="margin-top:4px;min-width:280px">';
   conRonda.forEach(function(j){
     h+='<option value="'+j.ronda+'"'+(RONDA===j.ronda?' selected':'')+'>'+esc(j.nombre)
+      +' · '+j.que
       +' · '+(j.ronda_estado==='abierta'?'abierta':'cerrada')
       +' · '+(j.contestadas||0)+' de '+(j.invitados||0)+'</option>';
   });
@@ -251,7 +302,7 @@ function pintaResultado(){
 
 /* ───────────────────────────── preguntas ───────────────────────────── */
 function vPreguntas(){
-  let h='<div class="nota">Son '+PREG.length+' preguntas. La escala va de 1 a 5 y cada pregunta '
+  let h='<div class="nota"><b>Las del jefe:</b> '+PREG.length+' preguntas. La escala va de 1 a 5 y cada pregunta '
    +'dice qué significa cada extremo, para que nadie tenga que adivinar. La nota final es el promedio '
    +'×2, así queda en una escala de 0 a 10 — la misma que usa el plan de carrera.</div>'
    +'<div class="card"><div class="scroll"><table><thead><tr>'
@@ -265,6 +316,16 @@ function vPreguntas(){
       +'<td class="faint">'+esc(p.polo_alto||'')+'</td>'
       +'<td>'+(p.cuenta_promedio?'sí':'<span class="faint">no</span>')+'</td></tr>';
   });
+  h+='</tbody></table></div></div>';
+  h+='<div class="nota"><b>Las de compañeros:</b> '+PREGP.length+' preguntas, la misma escala de 1 a 5. '
+   +'Son las que dan el criterio de Trabajo en equipo.</div>'
+   +'<div class="card"><div class="scroll"><table><thead><tr>'
+   +'<th>#</th><th>Pregunta</th><th>Suma</th></tr></thead><tbody>';
+  PREGP.forEach(function(p,i){
+    h+='<tr><td class="num">'+(i+1)+'</td>'
+      +'<td>'+esc(p.pregunta)+(p.tipo==='texto'?' <span class="pill">texto libre</span>':'')+'</td>'
+      +'<td>'+(p.cuenta_promedio&&p.tipo!=='texto'?'sí':'<span class="faint">no</span>')+'</td></tr>';
+  });
   return h+'</tbody></table></div></div>';
 }
 
@@ -272,6 +333,7 @@ function vPreguntas(){
 function pinta(){
   const v=$('vista');
   if(TAB==='jefes')      v.innerHTML=vJefes();
+  else if(TAB==='pares') v.innerHTML=vPares();
   else if(TAB==='resultados') { v.innerHTML=vResultados(); engancharRonda(); }
   else                   v.innerHTML=vPreguntas();
 }
@@ -297,6 +359,21 @@ document.getElementById('tabs').onclick=function(e){
 };
 
 document.addEventListener('click', async function(e){
+  const pares=e.target.closest('[data-pares]');
+  if(pares){
+    const j=PARES.find(function(x){return x.id===pares.dataset.pares;})||{};
+    if(!confirm('¿Preguntarle a sus compañeros cómo es trabajar con '+(j.nombre||'')+'?\n\n'
+      +'Se les pregunta a 5 compañeros de '+(j.sede||'su sede')+' al azar y queda abierta 10 días.\n'
+      +'Es anónima y no se enseña nada hasta que haya 3 respuestas.\n'
+      +'Esto es lo que da su nota de Trabajo en equipo.')) return;
+    pares.disabled=true; pares.textContent='Lanzando…';
+    try{
+      const r=await rpc('enc_lanzar_ronda',{p_employee:j.id,p_n:5,p_dias:10});
+      if(r && r.error){ alert(r.error); }
+      else estado('✓ preguntada a '+((r&&r.invitados)||0)+' compañeros','ok');
+    }catch(err){ alert('No se pudo: '+err.message); }
+    await cargar(); return;
+  }
   const lanzar=e.target.closest('[data-lanzar]');
   const cerrar=e.target.closest('[data-cerrar]');
   const ver=e.target.closest('[data-ver]');
