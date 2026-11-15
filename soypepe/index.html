@@ -206,7 +206,15 @@
     transition:transform .18s}
   .area.open .area-h .chev{transform:rotate(90deg)}
   .area > .circles{display:none}
-  .area.open > .circles{display:flex}
+  /* AL ABRIR, SIGUE SIENDO REJILLA. Javi, 15-nov-2026: «revisa la distribucion
+     de los botones porque se salen de la zona» y «pon dos filas mejor no, no
+     tan juntos».
+     Esto ponia display:flex, y un flex sin wrap no parte la linea: los ocho
+     botones de Huespedes se metian en una sola fila, se comprimian hasta
+     partir los titulos en cuatro renglones -«Check-in huésped es»- y el
+     ultimo se salia de la tarjeta. Volviendo a grid se respetan las cuatro
+     columnas y salen dos filas de cuatro, que es lo que pidio. */
+  .area.open > .circles{display:grid}
   /* De qué equipo es cada botón. Sin marca = es de todos. */
   .circle .eq{position:absolute;top:2px;right:6px;width:17px;height:17px;border-radius:50%;
     font-size:9.5px;font-weight:800;line-height:17px;text-align:center;letter-spacing:0}
@@ -3508,6 +3516,12 @@ function vaCard(titulo,serie,color){
   return '<div class="va-card"><h4>'+titulo+'</h4><div class="va-score"><b>'+(last!=null?last.toFixed(1):'—')+'</b><span class="delta '+dCls+'">'+dTxt+'</span><span style="font-size:11px;color:var(--txt3);margin-left:auto">vs mes previo</span></div>'+vaSpark(serie,color)+'</div>';
 }
 async function openValoraciones(){
+  /* Escapador propio. Javi, 15-nov-2026: «valoraciones se queda cargando».
+     Yo habia usado _ev() aqui, que vive en OTRO ambito: al llamarla saltaba
+     un ReferenceError que nadie capturaba, la funcion moria antes de pintar y
+     la hoja se quedaba con el «Cargando…» inicial para siempre. */
+  var _ev=function(s){ return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
   $('valoraSheet').classList.add('show');
   const body=$('va-body');
   body.innerHTML='<div class="ssub" style="margin:-4px 0 10px">Cargando…</div>';
@@ -3553,10 +3567,10 @@ async function openValoraciones(){
           var diez=Number(x.nota)>=10;
           h+='<div style="border-top:1px solid var(--bd);padding:7px 0;font-size:13.5px">'+
              '<b>'+(diez?'10':(x.nota==null?'—':x.nota))+'</b>'+
-             ' <span style="color:#888;font-size:12px">'+esc(x.plataforma||'')+' · '+
+             ' <span style="color:#888;font-size:12px">'+_ev(x.plataforma||'')+' · '+
              String(x.fecha||'').slice(0,10)+'</span>'+
              (diez?' <span style="color:#1d9e75;font-weight:700">✓ cuenta</span>':'')+
-             '<div style="color:#5f5e5a;margin-top:2px">'+esc(String(x.texto||'').slice(0,180))+'</div>'+
+             '<div style="color:#5f5e5a;margin-top:2px">'+_ev(String(x.texto||'').slice(0,180))+'</div>'+
              '</div>';
         });
       }
@@ -3591,7 +3605,7 @@ async function openValoraciones(){
      vacia colaba como CDMX y se quedaba con los «Carlos» que son de Don
      Charly. Eso se arreglo en reputacion_equipo, y ya sale el. Se quita la
      etiqueta del periodo, que era lo que sobraba del titulo. */
-  if((d.menciones||[]).length){ h+='<div style="font-weight:800;font-size:13px;margin:10px 0 4px">Mencionados por huéspedes</div>'+d.menciones.slice(0,6).map(function(m,i){return '<div style="font-size:14px;padding:3px 0">'+(i+1)+'. '+esc(m.nombre)+' <span style="color:#888">· '+m.menciones+' menc.</span></div>';}).join(''); }
+  if((d.menciones||[]).length){ h+='<div style="font-weight:800;font-size:13px;margin:10px 0 4px">Mencionados por huéspedes</div>'+d.menciones.slice(0,6).map(function(m,i){return '<div style="font-size:14px;padding:3px 0">'+(i+1)+'. '+_ev(m.nombre)+' <span style="color:#888">· '+m.menciones+' menc.</span></div>';}).join(''); }
   body.innerHTML=h;
   body.querySelectorAll('.va-tema').forEach(function(el){ el.onclick=function(){ verTema(el.getAttribute('data-t'), el.getAttribute('data-s'), el.getAttribute('data-l')); }; });
 }
@@ -5171,6 +5185,22 @@ function openGuias(){
   /* Botones que son suyos sin colgar de un permiso. */
   var VOL_IDS=['cirExtension','cirMisValora','cirLector'];
 
+  /* La carta firmada es el hecho que distingue a un candidato de alguien de
+     la casa. No vale el rol -pasa de «Voluntario aceptado» a «Voluntario»
+     solo al hacer el check-in- ni auth.uid(), que no siempre esta. */
+  var _YAFIRMO=null;
+  async function yaFirmo(){
+    if(_YAFIRMO!==null) return _YAFIRMO;
+    var t=tok(); if(!t) return false;
+    try{
+      var r=await fetch(VOL_URL+'/rest/v1/rpc/vol_ya_firmo',{method:'POST',
+        headers:{'Content-Type':'application/json','apikey':VOL_KEY,'Authorization':'Bearer '+t},body:'{}'});
+      _YAFIRMO = r.ok ? (await r.json())===true : false;
+    }catch(e){ _YAFIRMO=false; }
+    return _YAFIRMO;
+  }
+  window.yaFirmo=yaFirmo;
+
   async function modoVoluntario(){
     var t=tok(); if(!t) return false;
     var si=false;
@@ -5306,7 +5336,10 @@ function openGuias(){
        luego que no es equipo, su sitio es su modulo y no la puerta de la casa. */
     if(operativas.length) return 'quieroser';
     /* El candidato ya no vive dentro de Soy Pepe: su módulo es una página aparte
-       con su propio login. Se le manda directo, con su idioma. */
+       con su propio login. Se le manda directo, con su idioma.
+       Salvo que ya haya firmado: entonces no es un candidato y su sitio es
+       esta app, aunque todavia no se le haya abierto casi nada. */
+    if(await yaFirmo()) return 'voluntario';
     try{
       var lg=localStorage.getItem('cp_vol_lang'); lg=(lg==='es'||lg==='en')?lg:'';
       location.replace('/soypepe/quiero-ser-pepe.html'+(lg?('?lang='+lg):''));
@@ -5380,6 +5413,8 @@ function openGuias(){
        suya, pero tampoco en el aire: a quien tiene modulo de voluntario se le
        manda a su modulo, y al resto a la puerta de la casa, que ya sabe
        repartir a cada quien su portal. */
+    /* Y aqui tampoco: quien firmo se queda en su app. */
+    if(await yaFirmo()) return;
     var destino = (quien==='quieroser') ? '/soypepe/quiero-ser-pepe.html' : '/acceso.html';
     try{ location.replace(destino); }catch(e){}
   }
@@ -5391,12 +5426,20 @@ function openGuias(){
     }, 800);
   });
 
-  /* La liga de correo trae ?ir=quieroser: ese módulo ahora es una página aparte
-     con su propio login, así que se redirige directo. */
+  /* La liga de correo trae ?ir=quieroser: ese módulo es una página aparte con
+     su propio login, así que se redirige directo.
+     PERO NO A QUIEN YA FIRMO. Javi, 15-nov-2026: «a Antonio le pasó lo que te
+     pedí que borrara para que no le ocurriera: lo mandó a la página de
+     voluntarios vieja y no a SoyPepe». Este bloque redirigia sin mirar nada:
+     bastaba con que abriera un correo viejo con ese parametro para acabar en
+     el formulario de su propia solicitud en vez de en su app. */
   window.addEventListener('load', function(){
     if(!/[?&]ir=quieroser/i.test(location.search)) return;
-    var lg=''; try{ lg=localStorage.getItem('cp_vol_lang'); lg=(lg==='es'||lg==='en')?lg:''; }catch(e){}
-    location.replace('/soypepe/quiero-ser-pepe.html'+(lg?('?lang='+lg):''));
+    (async function(){
+      if(await yaFirmo()) return;             // ya es de la casa: se queda
+      var lg=''; try{ lg=localStorage.getItem('cp_vol_lang'); lg=(lg==='es'||lg==='en')?lg:''; }catch(e){}
+      location.replace('/soypepe/quiero-ser-pepe.html'+(lg?('?lang='+lg):''));
+    })();
   });
 })();
 
