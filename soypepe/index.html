@@ -1657,7 +1657,7 @@ async function fMiDesempeno(quien){
      Lo que suma puntos no es leer: es el test del documento. Pero si no sabes
      qué te toca leer, el test no aparece de la nada. */
   var LEC=[];
-  try{ var rl=await sb.rpc('desemp_mis_lecturas', OTRO?{p_emp:VIENDO}:{}); LEC=rl.data||[]; }catch(_){}
+  try{ var rl=await sb.rpc('proc_mis_lecturas', OTRO?{p_emp:VIENDO}:{}); LEC=rl.data||[]; }catch(_){}
   var lecPend = LEC.filter(function(x){ return !x.quiz_ok; });
   var lecTxt = '', lecLista = '';
   if(lecPend.length){
@@ -1669,11 +1669,17 @@ async function fMiDesempeno(quien){
        documentos a leer o test a hacer?». Aquí. */
     lecLista = '<div style="margin-top:8px;border-left:3px solid #6C4FA1;padding-left:9px">'
       + lecPend.slice(0,12).map(function(x){
+          /* ABRE EL PDF Y, AL FINAL, EL TEST. Javi, 15-nov-2026: «permítele entrar
+             a ver el pdf del documento directo y al test que tiene que entrar».
+             leer.html abre el PDF de Drive, cuenta el tiempo en el servidor y
+             destapa el test cuando de verdad lo leyó. */
           return '<div style="padding:3px 0;font-size:12.5px;line-height:1.35">'
             + '<span style="color:#aaa;font-size:11px">'+e(x.codigo||'—')+'</span> '
-            + e(x.titulo)
+            + (OTRO ? e(x.titulo)
+                    : '<a href="/soypepe/leer.html?doc='+e(x.documento_id)+'" style="color:inherit;text-decoration:underline;text-decoration-color:#6C4FA1">'+e(x.titulo)+'</a>')
             + ((x.preguntas||0)>0 ? ' <span style="color:#6C4FA1;font-weight:700">· test de '+x.preguntas+'</span>' : ' <span style="color:#bbb">· sin test todavía</span>')
             + (x.requiere_firma ? ' <span style="color:#8c6212">· se firma</span>' : '')
+            + (x.leido ? ' <span style="color:#1d6b4a">· leído</span>' : '')
             + '</div>'; }).join('')
       + (lecPend.length>12 ? '<div style="font-size:11.5px;color:#999;padding-top:4px">…y '+(lecPend.length-12)+' más</div>' : '')
       + '<div style="padding-top:6px"><a href="/soypepe/procedimientos.html" style="color:#6C4FA1;font-weight:700;font-size:12.5px">Abrir la lista completa</a></div>'
@@ -1686,11 +1692,38 @@ async function fMiDesempeno(quien){
   var tip=function(k,v){
     if(v!=null&&v>=19)return {c:'#1d6b4a',t:'Vas muy bien — mantenlo.'};
     if(k==='puntualidad'){var d=(cr.puntualidad&&cr.puntualidad.detalle)||{}; if(v==null)return {c:'#8c6212',t:'Aún sin turnos suficientes. Checa a tiempo para empezar a sumar.'}; return {c:'#8c6212',t:'Llevas '+(d.retardo||0)+' retardo(s) y '+(d.falta||0)+' falta(s). Checa a tiempo: con quincenas limpias recuperas puntos.'};}
-    if(k==='actitud'){var bajos=(act||[]).filter(function(x){return Number(x.valor)<5;}).sort(function(a,b){return a.valor-b.valor;});
-      if(!bajos.length)return {c:'#1d6b4a',t:'Trato impecable. ¡Mantenlo!'};
+    if(k==='actitud'){
+      /* EL TRABAJO EN EQUIPO SON LAS ENCUESTAS ENTRE COMPAÑEROS. Javi, 15-nov-2026.
+         Si ya corrió una ronda de pares, manda esa; si no, lo que haya del test
+         del jefe, diciendo que es provisional. */
+      var da=(cr.actitud&&cr.actitud.detalle)||{};
+      if(da.via==='encuesta_pares') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'Lo dicen tus compañeros: <b>'+(da.media_1a5||'—')+' de 5</b> en la encuesta anónima ('+(da.contestaron||0)+' de '+(da.companeros_invitados||0)+' contestaron).'};
+      var bajos=(act||[]).filter(function(x){return Number(x.valor)<5;}).sort(function(a,b){return a.valor-b.valor;});
+      if(!bajos.length&&v==null)return {c:'#8c6212',t:'Todavía no hay encuesta de compañeros. En cuanto corra una ronda, esta nota la ponen ellos.'};
+      if(!bajos.length)return {c:'#1d6b4a',t:'Trato impecable. ¡Mantenlo! (Provisional: viene del test del jefe hasta que corra la encuesta de compañeros.)'};
       var lab=function(s){return String(s||'').split('(')[0].replace(/^¿/,'').replace(/\?.*/,'').trim();};
       return {c:'#8c6212',t:'A mejorar: '+bajos.map(function(x){return e(lab(x.pregunta))+' ('+x.valor+'/5)';}).join('; ')+'.'};}
-    if(k==='desempeno')return esHK?{c:'#8c6212',t:'Registra el tiempo real de cada tarea y termina todo lo asignado. Si lo haces más rápido, subes hasta 150%.'}:{c:'#8c6212',t:'Se mide por los objetivos de tus bonos. Pregúntale a tu jefe cuáles tienes.'};
+    /* DE DÓNDE SALE LA PRODUCTIVIDAD, POR ÁREA. Javi, 15-nov-2026: «revisa esto
+       por colaborador para asociar bien su productividad: adll/housekeeping y
+       mantenimiento por sus indicadores, revenue por el forecast de ventas del
+       mes, front por los objetivos de PepeFeliz del mes, terraza y sincrético
+       por sus ventas vs forecast». Cada vía trae su detalle de eval_calc. */
+    if(k==='desempeno'){
+      var dd=(cr.desempeno&&cr.desempeno.detalle)||{}, via=dd.via||null;
+      if(via==='housekeeping') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'Tus tareas de limpieza: terminaste <b>'+(dd.tareas_terminadas||0)+' de '+(dd.tareas_asignadas||0)+'</b> ('+(dd.cobertura_pct||0)+'% de los minutos asignados) en '+(dd.dias||0)+' días. Termina todo lo asignado y registra el tiempo real; si lo haces más rápido subes hasta 150%.'};
+      if(via==='mantenimiento') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'Tus tickets de los últimos 90 días: cerraste <b>'+(dd.terminados||0)+' de '+(dd.tickets||0)+'</b> ('+(dd.cobertura_pct||0)+'% de los minutos programados). Tu eficiencia en los que cerraste es '+(dd.eficiencia_pct||'—')+'%.'+((dd.tickets_con_minutos_absurdos||0)>0?' Ojo: '+dd.tickets_con_minutos_absurdos+' tickets tienen minutos imposibles (quedaron abiertos) y no cuentan para la eficiencia.':'')};
+      if(via==='revenue') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'Ventas de hospedaje contra el forecast del mes cerrado: <b>'+(dd.pct_cumplimiento||0)+'%</b> del plan.'};
+      if(via==='front_pepefeliz') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'PepeFeliz de tu casa: la nota del equipo en reseñas va en <b>'+(dd.nota_staff||'—')+'</b> sobre 100 y el objetivo del mes es '+(dd.objetivo||'—')+'. Cada punto vale 10% de tu productividad.'};
+      if(via==='ayb_ventas') return {c:v>=19?'#1d6b4a':'#8c6212',
+        t:'Ventas de A&amp;B de tu casa contra el forecast del mes cerrado: <b>'+(dd.pct_cumplimiento||0)+'%</b> del plan.'};
+      return esHK?{c:'#8c6212',t:'Registra el tiempo real de cada tarea y termina todo lo asignado. Si lo haces más rápido, subes hasta 150%.'}
+                 :{c:'#8c6212',t:'Todavía no hay un indicador automático para tu puesto: hoy se mide por los objetivos de tus bonos. Pregúntale a tu jefe cuáles tienes.'};
+    }
     if(k==='conocimiento'){var g=guia.conocimiento; var ls=g?(' Haz estos en el Gym: <b>'+e(g)+'</b>.'):' Entra al Gym de PepeQuiz.'; if(v==null)return {c:'#9e3b2e',t:'<b>0/20</b> — todavía no entras al PepeQuiz.'+ls+lecTxt+lecLista}; return {c:'#8c6212',t:'Te falta cubrir el 90% del banco.'+ls+lecTxt+lecLista};}
     if(k==='discurso'){var g2=guia.discurso; var ls2=g2?(' Haz estos en el Gym: <b>'+e(g2)+'</b>'):' contesta los quizzes de Casa Pepe'; return esHK?{c:'#8c6212',t:'Dos partes: sube la limpieza de tu casa en reseñas (meta 9.3) y los tests de Casa Pepe:'+ls2+'.'}:{c:'#8c6212',t:'Son los tests de Casa Pepe:'+ls2+'.'};}
     return {c:'#999',t:''};
@@ -4638,11 +4671,17 @@ async function start(){
     /* El selector de dirección, al lado de su propio desempeño. */
     if(email==='javi@casapepe.mx'){
       try{
-        var rD=await sb.from('employees').select('id,nombre,rol').not('rol','is',null).order('nombre');
+        /* SOLO LOS ACTUALES. Javi, 15-nov-2026: «en el listado de desempeño no me
+           pongas socios ni vacantes ni antiguos colaboradores, solo los actuales».
+           eval_pila ya los filtra en la vista (activo, sin Socio*, sin voluntariado,
+           sin vacantes ni pruebas), así que el selector lee de ahí y no de employees. */
+        var rD=await sb.from('eval_pila').select('id,nombre,rol,area').eq('periodo','hist').order('area').order('nombre');
         var gente=rD.data||[]; var sel=$('dirQuien'), cont=$('dirSel');
         if(sel&&cont&&gente.length){
-          sel.innerHTML='<option value="">— el mío —</option>'+gente.map(function(g){
-            return '<option value="'+g.id+'">'+((g.nombre||'')+' · '+(g.rol||'')).replace(/[<>&"]/g,'')+'</option>';}).join('');
+          var areas=[]; gente.forEach(function(g){ var a=g.area||'Sin área'; if(areas.indexOf(a)<0) areas.push(a); });
+          sel.innerHTML='<option value="">— el mío —</option>'+areas.map(function(a){
+            return '<optgroup label="'+a.replace(/[<>&"]/g,'')+'">'+gente.filter(function(g){return (g.area||'Sin área')===a;}).map(function(g){
+              return '<option value="'+g.id+'">'+((g.nombre||'')+' · '+(g.rol||'')).replace(/[<>&"]/g,'')+'</option>';}).join('')+'</optgroup>';}).join('');
           cont.hidden=false;
           sel.onchange=function(){ fMiDesempeno(sel.value||null); };
         }
