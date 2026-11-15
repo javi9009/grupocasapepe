@@ -2,7 +2,14 @@
  * Estrategia: network-first para no servir datos viejos; cae al caché offline.
  * Cachea el cascarón (shell) para que la PWA sea instalable y abra sin conexión.
  */
-const CACHE = 'soypepe-shell-v22';
+/* v23 — Javi, 15-nov-2026: «le doy a actualizar pero no aparece». El index ya
+   estaba publicado con los botones del voluntario y su teléfono seguía
+   sirviendo el de antes: el shell se cachea al instalar y, aunque la
+   estrategia sea network-first, el fetch puede resolverse del caché HTTP del
+   propio navegador. Subir este número es lo único que obliga al service
+   worker a reinstalarse y a tirar los cachés viejos. Se sube cada vez que un
+   cambio del armazón tenga que llegar sí o sí. */
+const CACHE = 'soypepe-shell-v23';
 const SHELL = [
   './',
   './index.html',
