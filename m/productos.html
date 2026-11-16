@@ -146,6 +146,7 @@ h1{font:700 26px Oswald;letter-spacing:.03em;text-transform:uppercase;margin:0}
 </style>
   <link rel="stylesheet" href="/cp-movil.css"><script src="/cp-foto.js" defer></script>
 <script src="/uso.js" defer></script>
+<script src="/cp-dialogo.js"></script>
 </head><body>
 <div class="wrap">
 
@@ -721,6 +722,14 @@ function abreCajon(id){
         : '<button class="btn sm verde" data-publicar="'+esc(p.id)+'">Publicar</button>';
   }
   if(p.estado==='publicada') acc+='<button class="btn sm" data-despublicar="'+esc(p.id)+'">Despublicar</button>';
+  /* HEREDAR. Javi, 16-nov-2026: «permítenos en la ficha del tour que nosotros
+     internamente podamos heredar tours de un ateneísta a otro, cambiando toda
+     la info personal y sacándolo íntegramente del anterior. Solo manteniendo la
+     parte de contenido (...) pero también trasladas las reservas».
+     Solo para lo que tiene dueño: un tour de la casa no se hereda, se reasigna
+     el guía y ya. */
+  if(!p._ev && p.operador_id)
+    acc+='<button class="btn sm" data-heredar="'+esc(p.id)+'">Heredar a otro ateneísta</button>';
   acc += (p.estado==='publicada')
     ? gris('Borrar','Quítala de la venta primero')
     : '<button class="btn sm rojo" data-borrar="'+esc(p.id)+'">Borrar</button>';
@@ -866,6 +875,54 @@ function engancha(caja){
     b.onclick=function(){ cambiaEstado(b.getAttribute('data-publicar'),'publicar',b); };});
   Array.prototype.forEach.call(caja.querySelectorAll('[data-despublicar]'),function(b){
     b.onclick=function(){ cambiaEstado(b.getAttribute('data-despublicar'),'despublicar',b); };});
+  Array.prototype.forEach.call(caja.querySelectorAll('[data-heredar]'),function(b){
+    b.onclick=function(){ abreHeredar(b.getAttribute('data-heredar'), b); };});
+}
+
+/* ---------- HEREDAR UN TOUR ----------
+   Lo que se hereda es el trabajo -ruta, paradas, descripción, precio, horarios-
+   y la gente que ya compró. Lo que NO viaja es lo de la persona: su nombre en
+   el título, sus fotos, su marca, su enlace de reseñas, su costeo. La ficha del
+   anterior se retira del escaparate, pero no se borra: sus ventas pasadas
+   tienen que seguir colgando de algún sitio. */
+async function abreHeredar(id, btn){
+  var p=(TODOS||[]).filter(function(x){return x.id===id;})[0]; if(!p) return;
+  var lista=Object.keys(OPS).filter(function(k){ return k!==p.operador_id && OPS[k]; })
+    .sort(function(a,b){ return String(OPS[a]).localeCompare(String(OPS[b])); });
+  if(!lista.length){ avisa('No hay otro ateneísta a quien pasárselo.'); return; }
+
+  var base=String(p.nombre||'').replace(/\s+con\s+.*$/i,'');
+  var manana=new Date(Date.now()+864e5).toISOString().slice(0,10);
+  var quien=p._dueno||OPS[p.operador_id]||'su dueño';
+
+  var d=await cpPideVarios(
+    'Se lleva la ruta, las paradas, la descripción, el precio y los horarios, y las '+
+    'salidas futuras se mudan con sus reservas.\n\n'+
+    'No se lleva las fotos, la marca ni el costeo de '+quien+': eso lo pone quien lo recibe.\n\n'+
+    '«'+p.nombre+'» sale del escaparate de '+quien+', pero no se borra.',
+    [{k:'quien', et:'¿Quién lo recibe?', req:true, tipo:'select',
+      /* cp-dialogo espera [[valor, texto], ...]. La primera va vacia a
+         proposito: elegir a quien se lo pasas tiene que ser un acto, no el
+         resultado de no tocar nada. */
+      opciones:[['','— elige —']].concat(lista.map(function(k){ return [k, OPS[k]]; }))},
+     {k:'nombre', et:'Cómo se va a llamar', valor:base, req:true},
+     {k:'desde', et:'Desde qué día se mudan las salidas', valor:manana, tipo:'date', req:true}],
+    {si:'Heredar', no:'Mejor no'});
+  if(!d || !d.quien) return;
+
+  if(btn){ btn.disabled=true; btn.textContent='Heredando…'; }
+  try{
+    var r=await api(SB+'/rest/v1/rpc/op_exp_heredar',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_origen:id, p_destino:d.quien,
+        p_nombre:(d.nombre||'').trim()||null, p_desde:d.desde||null})});
+    var j=await r.json();
+    if(!r.ok || (j && j.error)){ avisa('No se pudo heredar: '+((j&&j.error)||('la base respondió '+r.status))); return; }
+    await cpAviso('Heredada a '+(OPS[d.quien]||'')+'.\n\n'+
+      (j.paradas||0)+' parada(s) copiadas y '+(j.reservas_movidas||0)+' reserva(s) movidas a '+
+      (j.salidas_movidas||0)+' salida(s) suyas.\n\nQuien la recibe tiene que ponerle sus fotos.');
+    cierraCajon(); carga();
+  }catch(e){ avisa('No se pudo heredar: '+((e&&e.message)||e)); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='Heredar a otro ateneísta'; } }
 }
 
 /* La foto principal: la primera de su galería. En una experiencia vive en
