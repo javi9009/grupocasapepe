@@ -162,8 +162,19 @@ h2{font-size:16px;margin:0 0 8px}
           (hecho
             ? '<label>'+(AJENO?'Lo que grabó':'Lo que grabaste')+'</label>'+
               '<a class="ref" href="'+esc(z.hecho)+'" target="_blank" rel="noopener">'+esc(z.hecho)+'</a>'+
-              '<div class="muted" style="margin-top:6px">Subida el '+f(z.subido_at)+'.'+
-              (AJENO?'':' <a href="#" onclick="return cambiar(\''+esc(z.id)+'\')">Cambiar la liga</a>')+'</div>'
+              /* EL DÍA QUE MANDA ES EL DE PUBLICACIÓN, no el de subida: es el
+                 que decide en qué semana cuenta. Se enseña y se puede corregir
+                 sin tener que volver a pegar la liga. Javi, 16-nov-2026: Jesús
+                 subió ocho piezas de semanas pasadas y las ocho se fueron a
+                 ésta, porque la fecha venía puesta con el día de hoy. */
+              '<div class="muted" style="margin-top:6px">'+
+                (z.fecha_pub
+                  ? 'Publicada el <b>'+f(z.fecha_pub)+'</b>'
+                  : '<span style="color:#9a7b16">Sin fecha de publicación: cuenta en la semana en que la subiste</span>')+
+                (AJENO?'':
+                  ' · <a href="#" onclick="return editaFecha(\''+esc(z.id)+'\',\''+esc(String(z.fecha_pub||'').slice(0,10))+'\')">Cambiar el día</a>'+
+                  ' · <a href="#" onclick="return cambiar(\''+esc(z.id)+'\')">Cambiar la liga</a>')+
+              '</div>'
             : (AJENO
               ? '<div class="muted">Todavía sin entregar.</div>'
               : '<label>Cuando la tengas, pega aquí su liga</label>'+
@@ -193,9 +204,10 @@ h2{font-size:16px;margin:0 0 8px}
       var cOpts='<option value="">¿De qué cuenta?</option>';
       Object.keys(CUENTAS).forEach(function(c){ cOpts+='<option value="'+c+'">'+CUENTAS[c]+'</option>'; });
       h+='<div class="card" id="prop" style="margin-top:20px">'+
-        '<h2>Lo que viene</h2>'+
-        '<p class="muted">Apunta aquí lo que vas a grabar las próximas semanas. '+
-        'Una por una: el equipo lo ve y te dice si hay que ajustar algo.</p>'+
+        '<h2>Añadir una pieza</h2>'+
+        '<p class="muted">Para lo que vas a grabar y también para lo que ya publicaste '+
+        'y no estaba en tu plan. Marca abajo si ya está publicada y pon su liga y su día: '+
+        'cada pieza cuenta en la semana en que salió, no en la que la subes.</p>'+
         '<div class="hecho" style="border-top:0;padding-top:4px">'+
           '<div class="fila" style="margin-bottom:8px">'+
             '<select id="p-sem" style="flex:1 1 140px;min-width:0;padding:12px;'+
@@ -209,8 +221,26 @@ h2{font-size:16px;margin:0 0 8px}
           '<div class="fila" style="margin-bottom:8px">'+
             '<input id="p-idea" type="text" placeholder="Qué vas a hacer">'+
           '</div>'+
-          '<div class="fila">'+
+          '<div class="fila" style="margin-bottom:10px">'+
             '<input id="p-ref" type="url" placeholder="Referencia (opcional)" inputmode="url">'+
+          '</div>'+
+          /* LO QUE YA ESTÁ HECHO. Quien llega con semanas de trabajo a cuestas
+             no tenía por dónde meterlo: sólo se podía pegar la liga de una
+             pieza que el equipo hubiera abierto antes. Javi, 16-nov-2026:
+             «permítele que añada contenido subido y asigne a la semana». */
+          '<label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:8px">'+
+            '<input type="checkbox" id="p-ya" onchange="pintaYa()" style="width:18px;height:18px">'+
+            'Ya la publiqué</label>'+
+          '<div id="p-yabox" hidden>'+
+            '<div class="fila" style="margin-bottom:8px">'+
+              '<input id="p-url" type="url" placeholder="Su liga: https://instagram.com/reel/…" inputmode="url">'+
+            '</div>'+
+            '<label>¿Qué día salió?</label>'+
+            '<div class="fila" style="margin-bottom:8px">'+
+              '<input id="p-fecha" type="date" max="'+HOY+'">'+
+            '</div>'+
+          '</div>'+
+          '<div class="fila">'+
             '<button class="btn" onclick="propone()">Añadirla</button>'+
           '</div>'+
           '<div class="msg" id="p-msg"></div>'+
@@ -221,23 +251,66 @@ h2{font-size:16px;margin:0 0 8px}
     ligaSelector();
   }
 
+  /* La fecha sólo se pide cuando dice que ya está publicada: a nadie se le
+     pregunta cuándo salió algo que todavía no ha grabado. */
+  window.pintaYa=function(){
+    var c=document.getElementById('p-ya'), b=document.getElementById('p-yabox');
+    if(!c||!b) return;
+    b.hidden=!c.checked;
+    var f=document.getElementById('p-fecha');
+    if(c.checked && f && !f.value) f.value=HOY;
+  };
+
   window.propone=async function(){
     var m=document.getElementById('p-msg');
     var sem=+(document.getElementById('p-sem')||{}).value||0;
     var idea=((document.getElementById('p-idea')||{}).value||'').trim();
-    if(!idea){ m.className='msg err'; m.textContent='Dinos qué vas a hacer.'; return; }
+    if(!idea){ m.className='msg err'; m.textContent='Dinos qué es.'; return; }
+    var ya=!!(document.getElementById('p-ya')||{}).checked;
+    var url=((document.getElementById('p-url')||{}).value||'').trim();
+    var fecha=((document.getElementById('p-fecha')||{}).value||'');
+    if(ya && !url){ m.className='msg err'; m.textContent='Pega la liga de la pieza.'; return; }
+    if(ya && !fecha){ m.className='msg err'; m.textContent='Dinos qué día salió.'; return; }
     m.className='msg'; m.textContent='Guardando…';
     try{
+      /* Van SIEMPRE los siete parámetros, aunque vayan vacíos: la base todavía
+         tiene la firma vieja de cinco y, si mando cinco, no sabe cuál llamar. */
       var r=await sb.rpc('vol_pieza_proponer',{
         p_semana:sem,
         p_cuenta:((document.getElementById('p-cta')||{}).value||'')||null,
         p_formato:((document.getElementById('p-fmt')||{}).value||'').trim()||null,
         p_idea:idea,
-        p_ref:((document.getElementById('p-ref')||{}).value||'').trim()||null});
+        p_ref:((document.getElementById('p-ref')||{}).value||'').trim()||null,
+        p_url_hecho: ya ? url : null,
+        p_fecha_pub: ya ? fecha : null});
       var d=r && r.data;
       if(!d || d.error){ m.className='msg err'; m.textContent=(d&&d.error)||'No se pudo guardar.'; return; }
-      m.className='msg ok'; m.textContent='✓ Añadida';
+      m.className='msg ok'; m.textContent=(d && d.entregada) ? '✓ Añadida y contada en su semana' : '✓ Añadida';
       setTimeout(carga, 600);
+    }catch(e){ m.className='msg err'; m.textContent='No se pudo guardar.'; }
+  };
+
+  /* Corregir el día de una pieza ya entregada, sin tocar la liga. */
+  window.editaFecha=function(id, actual){
+    var p=document.getElementById('pz-'+id); if(!p) return false;
+    var c=p.querySelector('.hecho');
+    c.innerHTML='<label>¿Qué día se publicó de verdad?</label><div class="fila">'+
+      '<input id="d-'+id+'" type="date" value="'+(actual||HOY)+'" max="'+HOY+'">'+
+      '<button class="btn" onclick="guardaFecha(\''+id+'\')">Guardar</button></div>'+
+      '<div class="msg" id="m-'+id+'"></div>';
+    return false;
+  };
+  window.guardaFecha=async function(id){
+    var i=document.getElementById('d-'+id), m=document.getElementById('m-'+id);
+    if(!i||!m) return;
+    if(!i.value){ m.className='msg err'; m.textContent='Falta el día.'; return; }
+    m.className='msg'; m.textContent='Guardando…';
+    try{
+      var r=await sb.rpc('vol_pieza_fecha',{p_pieza:id,p_fecha:i.value});
+      var d=r && r.data;
+      if(!d || d.error){ m.className='msg err'; m.textContent=(d&&d.error)||'No se pudo guardar.'; return; }
+      m.className='msg ok'; m.textContent='✓ Guardado';
+      setTimeout(carga, 500);
     }catch(e){ m.className='msg err'; m.textContent='No se pudo guardar.'; }
   };
 
