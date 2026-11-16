@@ -4704,20 +4704,46 @@ async function start(){
         var VOLMAP={}, volRows=[];
         try{ var vr=await sb.rpc('vol_productividad'); if(vr&&Array.isArray(vr.data)) volRows=vr.data; }catch(_){}
         var eS=function(x){return String(x==null?'':x).replace(/[<>&"]/g,'');};
+        var fd=function(x){ if(!x) return ''; var p=String(x).slice(0,10).split('-'); return p.length===3?(p[2]+'/'+p[1]):String(x); };
+        var pz=function(n){ n=+n||0; return '$'+n.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); };
         function volBars(row){
           var S=row.semanas||[];
           var h='<div style="font-weight:800;font-size:14px">'+eS(row.nombre||row.alias||row.email||'Voluntario')+'</div>'
             +'<div style="font-size:12px;color:#888;margin:1px 0 10px">Voluntario · '+(row.completas||0)+' semana(s) completa(s)'+((row.falladas||0)?(' · '+row.falladas+' sin completar'):'')+'</div>';
           if(!S.length) return h+'<div style="font-size:13px;color:#999">Sin convenio de voluntariado vigente.</div>';
           h+='<div style="display:flex;gap:5px;align-items:flex-end;margin-bottom:10px">';
-          S.forEach(function(s){ var d=Math.min(s.dias||0,5), pct=Math.round(d/5*100);
+          S.forEach(function(s,si){ var d=Math.min(s.dias||0,5), pct=Math.round(d/5*100);
             var col=s.completa?'#1d9e75':(s.futura?'#e9e6df':(s.corriendo?'#C9A227':'#d98b8b'));
-            h+='<div style="flex:1;min-width:0;text-align:center"><div style="height:52px;display:flex;align-items:flex-end;background:#f3f1ea;border-radius:7px;overflow:hidden"><div style="width:100%;height:'+Math.max(pct,3)+'%;background:'+col+'"></div></div><div style="font-size:10px;color:#8e8c85;margin-top:3px">S'+s.n+(s.prueba?'<br><span style=\"font-size:8.5px\">prueba</span>':'')+'</div></div>'; });
+            h+='<div data-wk="'+si+'" style="flex:1;min-width:0;text-align:center;cursor:pointer"><div style="height:52px;display:flex;align-items:flex-end;background:#f3f1ea;border-radius:7px;overflow:hidden"><div style="width:100%;height:'+Math.max(pct,3)+'%;background:'+col+'"></div></div><div style="font-size:10px;color:#8e8c85;margin-top:3px">S'+s.n+(s.prueba?'<br><span style=\"font-size:8.5px\">prueba</span>':'')+'</div><div style="font-size:8.5px;color:#b0aea8;line-height:1.2">'+fd(s.ini)+'</div></div>'; });
           h+='</div>';
+          h+='<div style="font-size:11px;color:#b0aea8;margin:0 0 8px">Toca una semana para ver sus tours, personas y lo captado.</div>';
           var act=null,i; for(i=0;i<S.length;i++){if(S[i].corriendo){act=S[i];break;}}
           if(!act){for(i=S.length-1;i>=0;i--){if(!S[i].futura){act=S[i];break;}}}
-          if(act){ h+='<div style="font-size:13.5px;line-height:1.5"><b>Semana '+act.n+'</b>'+(act.prueba?' · de prueba':'')+'<br><span style="color:'+((act.dias||0)>=5?'#1d9e75':'#8e8c85')+';font-weight:700">'+(act.dias||0)+' de 5 experiencias</span> <span style="color:#8e8c85">· '+(act.menciones||0)+' de 1 comentario</span></div>'; }
+          if(act){ h+='<div style="font-size:13.5px;line-height:1.5"><b>Semana '+act.n+'</b>'+(act.prueba?' · de prueba':'')+' <span style="color:#8e8c85">· '+fd(act.ini)+'–'+fd(act.fin)+'</span><br><span style="color:'+((act.dias||0)>=5?'#1d9e75':'#8e8c85')+';font-weight:700">'+(act.dias||0)+' de 5 experiencias</span> <span style="color:#8e8c85">· '+(act.menciones||0)+' de 1 comentario</span></div>'; }
+          h+='<div id="volWkDet"></div>';
           return h;
+        }
+        async function wireVolBars(box,row){
+          var S=row.semanas||[]; var det=box.querySelector('#volWkDet'); if(!det) return;
+          box.querySelectorAll('[data-wk]').forEach(function(bar){
+            bar.onclick=async function(){
+              var idx=+bar.getAttribute('data-wk'), s=S[idx]; if(!s) return;
+              if(det.getAttribute('data-open')===String(idx)){ det.innerHTML=''; det.removeAttribute('data-open'); return; }
+              det.setAttribute('data-open',String(idx));
+              det.innerHTML='<div style="font-size:12px;color:#999;padding:8px 0">Cargando semana '+s.n+'…</div>';
+              var d=null; try{ var r=await sb.rpc('vol_semana_detalle',{p_email:row.email,p_ini:s.ini,p_fin:s.fin}); d=r.data; }catch(e){}
+              if(!d || d.error){ det.innerHTML='<div style="font-size:12.5px;color:#999;padding:8px 0">No se pudo cargar el detalle.</div>'; return; }
+              var sal=d.salidas||[];
+              var hh='<div style="margin-top:6px;border-top:1px solid #eee;padding-top:8px"><div style="font-weight:800;font-size:13px">Semana '+s.n+(s.prueba?' · prueba':'')+' · '+fd(s.ini)+'–'+fd(s.fin)+'</div>';
+              if(!sal.length){ hh+='<div style="font-size:12.5px;color:#999;margin-top:4px">Sin tours con gente esta semana.</div>'; }
+              else {
+                hh+='<div style="margin-top:6px">'+sal.map(function(x){ return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:3px 0;border-bottom:1px solid #f2f1ec"><span>'+fd(x.fecha)+' · '+eS(x.experiencia)+' <span style="color:#8e8c85">· '+(x.personas||0)+' pers.</span></span><b style="white-space:nowrap">'+pz(x.captado)+'</b></div>'; }).join('')+'</div>';
+                hh+='<div style="display:flex;justify-content:space-between;margin-top:7px;font-size:13px"><b>Total</b><span><b>'+(d.personas||0)+' personas</b> · '+pz(d.captado)+' captado</span></div>';
+                hh+='<div style="font-size:11.5px;color:#8e8c85;margin-top:2px;text-align:right">Les toca: '+pz(d.le_toca)+'</div>';
+              }
+              hh+='</div>'; det.innerHTML=hh;
+            };
+          });
         }
         if(sel&&cont&&(gente.length||volRows.length)){
           var areas=[]; gente.forEach(function(g){ var a=g.area||'Sin área'; if(areas.indexOf(a)<0) areas.push(a); });
@@ -4731,7 +4757,7 @@ async function start(){
           sel.innerHTML=html; cont.hidden=false;
           sel.onchange=function(){ var val=sel.value||'';
             if(val.indexOf('vol:')===0){ var box=document.getElementById('miDesempenoCard'); var row=VOLMAP[val.slice(4)];
-              if(box) box.innerHTML = row ? volBars(row) : '<div style="font-size:13px;color:#999">Sin datos de este voluntario.</div>';
+              if(box){ if(row){ box.innerHTML=volBars(row); try{ wireVolBars(box,row); }catch(e){} } else { box.innerHTML='<div style="font-size:13px;color:#999">Sin datos de este voluntario.</div>'; } }
             } else { fMiDesempeno(val||null); }
           };
         }
