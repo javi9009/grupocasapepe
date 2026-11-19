@@ -151,6 +151,7 @@ var SB='https://rehophywchakfapivsbh.supabase.co';
 var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ses=null, YO='', FALLO='', CARGANDO=true;
 var EXPS=[], EVTS=[], ATES=[], CAND={}, OPS={};
+var BORR=[];   /* las que el operador dejó en borrador y nunca mandó */
 /* LAS OTRAS DOS COSAS QUE LA CASA AUTORIZA. Javi, 30-oct-2026: «en el
    dashboard no tenemos ningún lugar donde autorizar salas, ¿dónde está?».
    Sí estaba —🗝️ Peticiones de sala— pero esa pantalla solo enseñaba las
@@ -229,6 +230,29 @@ async function patch(tabla,id,cambios){
   var r=await fetch(SB+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id),
     {method:'PATCH',headers:Object.assign(hdr(),{Prefer:'return=minimal'}),body:JSON.stringify(cambios)});
   if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
+}
+
+/* PASAR A REVISIÓN UNA QUE SIGUE EN BORRADOR. No es aprobarla: es ponerla en
+   la cola para poder mirarla. Lo normal es que lo haga el operador desde su
+   ficha; esto es para las que se quedaron atrás cuando no había botón.
+   Javi, 19-nov-2026. */
+async function aRevision(id){
+  var it=null;
+  for(var i=0;i<BORR.length;i++) if(BORR[i].id===id) it=BORR[i];
+  if(!it) return;
+  var falta=[];
+  if(!String(it.nombre||'').trim())  falta.push('el nombre');
+  if(!(Number(it.duracion_min)>0))   falta.push('cuánto dura');
+  if(!(Number(it.cupo_max)>0))       falta.push('cuánta gente cabe');
+  if(!(Number(it.neto_adulto)>0) && !(Number(it.precio_adulto)>0)) falta.push('el precio');
+  if(falta.length && !confirm('A «'+(it.nombre||'esta ficha')+'» le falta '+falta.join(', ')+
+      '.\n\nSi la pasas a revisión vas a tener que mirarla así.\n\n¿La paso igual?')) return;
+  try{
+    await patch('op_experiencias',id,{estado:'en_revision'});
+    await historia('experiencia',id,'pasada a revisión',{desde:'borrador', por:'el equipo'});
+    avisa('«'+(it.nombre||'La ficha')+'» pasa a revisión · ya la puedes aprobar o devolver');
+    carga();
+  }catch(e){ avisa('No se pudo: '+((e&&e.message)||e)); }
 }
 
 /* ---------- aprobar y rechazar ---------- */
@@ -535,6 +559,35 @@ function tarjeta(tipo,it,icono,titulo,sub,cuando,enlace){
   '</div>';
 }
 
+/* Una tarjeta sin Aprobar ni Devolver: lo que se puede hacer con un borrador
+   es mirarlo y, si está listo, ponerlo en la cola. Aprobar algo que su dueño
+   no ha mandado sería publicarlo a sus espaldas. */
+function tarjetaBorrador(x, sub){
+  var foto=portadaDe(x);
+  var dias=horas(x.updated_at||x.created_at);
+  dias = dias==null ? '' : (dias<24 ? 'tocada hoy' : 'sin tocar desde hace '+Math.floor(dias/24)+' día'+(Math.floor(dias/24)===1?'':'s'));
+  var texto=String(x.resumen||x.descripcion||'').replace(/\s+/g,' ').trim();
+  var falta=[];
+  if(!(Number(x.duracion_min)>0)) falta.push('duración');
+  if(!(Number(x.cupo_max)>0))     falta.push('cupo');
+  if(!(Number(x.neto_adulto)>0) && !(Number(x.precio_adulto)>0)) falta.push('precio');
+  if(!texto) falta.push('resumen');
+  return '<div class="fila">'+
+    '<div class="shot"'+(foto?' style="background-image:url(\''+esc(foto)+'\')"':'')+'>'+(foto?'':'✎')+'</div>'+
+    '<div class="mid">'+
+      '<div class="nom"><b>'+esc(x.nombre||'(sin nombre)')+'</b></div>'+
+      '<div class="donde">'+esc(sub)+'</div>'+
+      (dias?'<div class="espera">'+esc(dias)+'</div>':'')+
+      (texto?'<div class="texto">'+esc(texto)+'</div>':'')+
+      (falta.length?'<div class="candado on">Le falta '+esc(falta.join(' · '))+'</div>':'')+
+    '</div>'+
+    '<div class="acc">'+
+      '<button class="btn sm verde" onclick="aRevision(\''+esc(x.id)+'\')">Pasar a revisión</button>'+
+      '<a class="btn sm gris" target="_top" href="/ficha.html?id='+encodeURIComponent(x.id)+'">Ver ↗</a>'+
+    '</div>'+
+  '</div>';
+}
+
 function pinta(){
   var caja=$('cuerpo');
   if(EST==='cal'){
@@ -556,12 +609,13 @@ function pinta(){
   var total=EXPS.length+EVTS.length+ATES.length+SALAS.length+HOT.length+EXPOK.length+EVTOK.length+EVTNO.length;
   var viejos=0;
   EXPS.concat(EVTS).forEach(function(x){ var h=horas(x.updated_at||x.created_at); if(h!=null&&h>=48) viejos++; });
-  $('cuenta').innerHTML= total
+  var borrTxt = BORR.length ? ' · <b>'+BORR.length+'</b> en borrador sin mandar' : '';
+  $('cuenta').innerHTML= (total
     ? '<b>'+total+'</b> esperando'+(viejos?' · <b style="color:#9E3B2E">'+viejos+'</b> con más de 48 h':'')
-    : 'Nada esperando';
+    : 'Nada esperando') + borrTxt;
 
   var h='';
-  if(!total){
+  if(!total && !BORR.length){
     /* «La cola está limpia» hablaba de la cola, no del trabajo. Javi,
        30-oct-2026: lo que importa saber es que no queda nada por aprobar. */
     h+='<div class="vacio"><b>'+(EST==='pend'?'No queda nada por aprobar':'Nada que enseñar aquí')+'</b>'+
@@ -582,6 +636,19 @@ function pinta(){
           : Number(x.neto_adulto)>0 ? ' · $'+Number(x.neto_adulto).toLocaleString('es-MX')+' neto'
           : ' · sin precio'),
         x.updated_at,'/ficha.html?id='+encodeURIComponent(x.id));
+    }).join('');
+  }
+  if(BORR.length){
+    h+='<h2>En borrador, sin mandar <em>'+BORR.length+'</em></h2>'+
+       '<div style="font-size:12.5px;color:var(--gris);margin:-4px 0 10px">'+
+       'Fichas que su dueño empezó y nunca mandó a revisión, así que no están esperando nada: '+
+       'nadie las ha pedido mirar. Hasta el 18 de noviembre no había botón para mandarlas, '+
+       'por eso hay tantas de atrás. Si ves alguna lista, pásala tú.</div>'+
+       BORR.map(function(x){
+      return tarjetaBorrador(x, (OPS[x.operador_id]||(x.tipo==='propio'?'Casa Pepe':'sin dueño'))+
+        (Number(x.precio_adulto)>0 ? ' · $'+Number(x.precio_adulto).toLocaleString('es-MX')
+          : Number(x.neto_adulto)>0 ? ' · $'+Number(x.neto_adulto).toLocaleString('es-MX')+' neto'
+          : ' · sin precio'));
     }).join('');
   }
   if(EVTS.length){
@@ -735,6 +802,13 @@ async function carga(){
       'fotos,duracion_min,ciudad,categoria,resumen,descripcion,cupo_max,cupo_min,cer_inicio_lugar,punto_encuentro';
     var res=await Promise.all([
       vePend()? trae('op_experiencias?select='+campos+'&estado=eq.en_revision&order=updated_at') : [],
+      /* LAS QUE NADIE MANDÓ. Hasta el 18-nov-2026 el editor del operador no
+         tenía botón para mandar a revisión, así que 24 fichas de 14 operadores
+         se quedaron en borrador esperando una aprobación que nadie podía pedir.
+         Ya hay botón, pero las de atrás siguen ahí y no se ven desde ninguna
+         pantalla. Javi, 19-nov-2026: «muéstrame todos los que están en borrador
+         en Aprobación y permíteme a mí pasarlos a en revisión». */
+      vePend()? trae('op_experiencias?select='+campos+'&estado=eq.borrador&order=updated_at.desc') : [],
       vePend()? trae('eventos?select='+'id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
         'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&estado=eq.propuesto&order=created_at') : [],
       /* LAS ALTAS YA NO PASAN POR AQUI. Javi, 26-oct-2026: «lo que si me
@@ -767,23 +841,23 @@ async function carga(){
       veNo()? trae('eventos?select='+'id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
         'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&devuelto_at=gte.'+DESDE+'&order=devuelto_at.desc&limit=60') : []
     ]);
-    EXPS=res[0]; EVTS=res[1]; ATES=res[2];
+    EXPS=res[0]; BORR=res[1]||[]; EVTS=res[2]; ATES=res[3];
     CAND={}; OPS={};
-    res[3].forEach(function(a){ CAND[a.id]=a.candado; OPS[a.id]=a.nombre_comercial; });
-    SALAS=res[4]||[]; HOT=res[5]||[];
+    res[4].forEach(function(a){ CAND[a.id]=a.candado; OPS[a.id]=a.nombre_comercial; });
+    SALAS=res[5]||[]; HOT=res[6]||[];
     FOTO={};
-    (res[6]||[]).forEach(function(m){
+    (res[7]||[]).forEach(function(m){
       if(!m.experiencia_id || FOTO[m.experiencia_id]) return;
       FOTO[m.experiencia_id]=m.url;
     });
     PRODN={}; PRODSTRIPE={};
-    (res[7]||[]).forEach(function(x){
+    (res[8]||[]).forEach(function(x){
       PRODN[x.id]=x.nombre_comercial;
       /* Con Stripe de verdad es cuando puede cobrar, no cuando empezo el
          alta: `liga_enviada` y `pendiente` son los dos a medias. */
       PRODSTRIPE[x.id] = (x.stripe_charges_enabled===true) || x.stripe_estado==='vinculado';
     });
-    EXPOK=res[8]||[]; EVTOK=res[9]||[]; EVTNO=res[10]||[];
+    EXPOK=res[9]||[]; EVTOK=res[10]||[]; EVTNO=res[11]||[];
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   CARGANDO=false; pinta();
 }
