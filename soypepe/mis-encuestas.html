@@ -18,6 +18,13 @@ h1.t{font-size:19px;margin:0 0 2px}
 .state{text-align:center;color:var(--muted);padding:24px}
 .note{background:#eef4fc;border-left:3px solid var(--azul);border-radius:8px;padding:10px 12px;font-size:12.5px;color:#28537f;line-height:1.45}
 .note.gold{background:#fff7e6;border-color:var(--gold);color:#6b5320}
+.note.verde{background:#e8f6ef;border-color:var(--accent);color:#14573f}
+.card.oblig{border:2px solid var(--accent);background:#f3fbf7}
+.card.reco{border:2px solid var(--azul);background:#f5f9ff}
+.etq{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;border-radius:999px;padding:3px 9px;margin-bottom:6px;color:#fff}
+.etq.v{background:var(--accent)}.etq.a{background:var(--azul)}
+.card.oblig .go{color:var(--accent)}.row .ok{color:var(--accent);font-weight:700;font-size:12.5px;white-space:nowrap}
+.tabs button .bd{display:inline-block;background:var(--accent);color:#fff;border-radius:999px;font-size:11px;padding:1px 7px;margin-left:4px}
 .cap{font-size:12.5px;color:var(--soft);background:#eef4fc;border:1px solid #cfe0f5;border-radius:10px;padding:8px 11px;margin-bottom:10px}
 .cap b{color:var(--azul)}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding:12px 2px;cursor:pointer}
@@ -84,7 +91,7 @@ const $=id=>document.getElementById(id);
 function esc(s){return (''+(s==null?'':s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const MARCET='https://www.reasonwhy.es/actualidad/xavier-marcet-management-humanista-foro-lideres-proposito-2024';
 const BLOQUES={ilusion:'Ilusión',compromiso:'Compromiso',potencial:'Potencial',cierre:''};
-let D=null, TAB='pend', TARGET=null, TNOMBRE='', VAL={};
+let D=null, TAB='pend', TARGET=null, TNOMBRE='', VAL={}, EQUIPO=[];
 
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
@@ -106,13 +113,33 @@ async function cargar(){
   $('wrap').innerHTML='<div class="state">Cargando…</div>';
   const {data,error}=await sb.functions.invoke('pares-mis-encuestas',{body:{}});
   if(error||!data||!data.ok){ $('wrap').innerHTML='<div class="card"><div class="state">No se pudo cargar: '+esc((data&&data.error)||(error&&error.message)||'')+'</div></div>'; return; }
-  D=data; render();
+  D=data; EQUIPO=await cargarEquipo(); render();
 }
+/* Evaluaciones OBLIGATORIAS de mi equipo (soy su jefe): eval_ciclos.
+   Por cada colaborador, el ciclo abierto si hay; si no, el último contestado. */
+async function cargarEquipo(){
+  try{
+    const {data:{user}}=await sb.auth.getUser(); if(!user) return [];
+    const {data:me}=await sb.from('employees').select('id').eq('user_id',user.id).maybeSingle(); if(!me) return [];
+    const {data:cic}=await sb.from('eval_ciclos').select('id,employee_id,numero,vence,tipo_jefe,estado,contestado_at').eq('jefe_id',me.id).order('vence');
+    if(!cic||!cic.length) return [];
+    const ids=[...new Set(cic.map(function(c){return c.employee_id;}))];
+    const {data:pp}=await sb.from('v_empleados_publico').select('id,nombre,nombre_display').in('id',ids);
+    const nm={}; (pp||[]).forEach(function(e){ nm[e.id]=e.nombre_display||e.nombre; });
+    return ids.map(function(id){
+      const mios=cic.filter(function(c){return c.employee_id===id;});
+      const abierto=mios.find(function(c){return c.estado==='pendiente'||c.estado==='notificado';});
+      const ult=mios.filter(function(c){return c.estado==='contestado';}).sort(function(a,b){return (b.contestado_at||'').localeCompare(a.contestado_at||'');})[0];
+      return {nombre:nm[id]||'—', abierto:abierto||null, ult:ult||null, tipo:(abierto||ult||{}).tipo_jefe||''};
+    }).sort(function(a,b){ return (b.abierto?1:0)-(a.abierto?1:0) || (a.nombre||'').localeCompare(b.nombre||''); });
+  }catch(_){ return []; }
+}
+function oblPend(){ return EQUIPO.filter(function(x){return x.abierto;}).length; }
 
 function render(){
   quitarBarra();
   let html='<div class="tabs">'
-    +'<button data-t="pend" class="'+(TAB==='pend'?'on':'')+'">Pendientes</button>'
+    +'<button data-t="pend" class="'+(TAB==='pend'?'on':'')+'">Pendientes'+(oblPend()?'<span class="bd">'+oblPend()+'</span>':'')+'</button>'
     +'<button data-t="hechas" class="'+(TAB==='hechas'?'on':'')+'">Contestadas</button>'
     +'<button data-t="mias" class="'+(TAB==='mias'?'on':'')+'">Mis valoraciones</button>'
     +'</div><div id="tabc"></div>';
@@ -123,28 +150,33 @@ function render(){
 
 function tabPend(){
   let h='';
-  if(D.soyJefe){
-    h+='<div class="card"><h1 class="t">Evaluaciones de tu equipo</h1>'
-      +'<div class="sub">Te toca valorar a tu gente este periodo.</div>';
-    h+=D.jefe_pendientes.map(function(j){
-      return '<div class="row" data-ciclo="1"><div><div class="n">'+esc(j.evaluado)+'</div><div class="a">'+esc(j.tipo_jefe||'')+(j.vence?' · vence '+esc(j.vence):'')+'</div></div><div class="go">Contestar →</div></div>';
+  if(EQUIPO.length){
+    const np=oblPend();
+    h+='<div class="card oblig"><span class="etq v">Obligatoria</span><h1 class="t">Evaluaciones de tu equipo</h1>'
+      +'<div class="sub">Como jefe, te toca evaluar a tu gente en cada periodo. No es opcional.</div>'
+      +(np?'<div class="note verde">Tienes <b>'+np+'</b> pendiente'+(np==1?'':'s')+'.</div>':'<div class="note verde">✓ Estás al día con tu equipo. Te avisaremos cuando abra el siguiente periodo.</div>');
+    const hoy=new Date().toISOString().slice(0,10);
+    h+=EQUIPO.map(function(x){
+      if(x.abierto){ const venc=x.abierto.vence&&x.abierto.vence<hoy;
+        return '<div class="row" data-ciclo="1"><div><div class="n">'+esc(x.nombre)+'</div><div class="a">'+esc(x.tipo)+(x.abierto.vence?' · '+(venc?'<b style="color:var(--bad)">venció '+esc(x.abierto.vence)+'</b>':'vence '+esc(x.abierto.vence)):'')+'</div></div><div class="go">Contestar →</div></div>'; }
+      return '<div class="row" style="cursor:default"><div><div class="n">'+esc(x.nombre)+'</div><div class="a">'+esc(x.tipo)+(x.ult&&x.ult.contestado_at?' · contestada '+esc(String(x.ult.contestado_at).slice(0,10)):'')+'</div></div><div class="ok">✓ Hecha</div></div>';
     }).join('');
     h+='<div style="font-size:11.5px;color:#999;margin-top:8px">La del jefe pesa como 3 compañeros en el KPI de Trabajo en equipo.</div></div>';
   }
-  h+='<div class="card"><h1 class="t">Valora a tus compañeros</h1>'
+  h+='<div class="card reco"><span class="etq a">Recomendada</span><h1 class="t">Valora a tus compañeros</h1>'
    +'<div class="sub">Cada cuatrimestre ('+esc(D.cuatri)+'): mínimo '+D.min+', máximo '+D.tope+'. Es anónima y proactiva.</div>'
    +'<div class="cap">Llevas <b>'+(D.usados||0)+'</b> · te quedan <b>'+(D.restante||0)+'</b> este cuatrimestre.</div>';
   if((D.restante||0)<=0){
     h+='<div class="note">Ya valoraste a '+(D.usados||0)+' compañeros este cuatrimestre. ¡Gracias! El cupo se renueva el próximo.</div>';
   }else{
-    h+='<div class="note gold">Te sugerimos a estos 3, con quienes compartes procedimientos:</div>';
+    h+='<div class="note">Te sugerimos a estos 3, con quienes compartes procedimientos:</div>';
     h+=(D.sugeridos||[]).map(fila).join('')||'<div class="state">No hay sugeridos ahora.</div>';
     h+='<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><div class="sub">¿Prefieres a otro compañero?</div>'
       +'<input class="buscar" id="busca" placeholder="Buscar por nombre…"><div id="lista"></div></div>';
   }
   h+='</div>';
   $('tabc').innerHTML=h;
-  document.querySelectorAll('[data-ciclo]').forEach(function(el){ el.onclick=function(){ location.href='/m/rh-eval.html'; }; });
+  document.querySelectorAll('[data-ciclo]').forEach(function(el){ el.onclick=function(){ location.href='/rh-eval.html'; }; });
   cablearFilas();
   const inp=$('busca');
   if(inp){ inp.oninput=function(){ const q=inp.value.trim().toLowerCase(); $('lista').innerHTML=(D.candidatos||[]).filter(function(c){return (c.nombre||'').toLowerCase().indexOf(q)>=0;}).slice(0,40).map(fila).join('')||'<div class="state">Nadie coincide.</div>'; cablearFilas(); }; }
