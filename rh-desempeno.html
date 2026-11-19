@@ -141,7 +141,14 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
     <h2>La pila</h2>
     <p class="lead">Una barra por colaborador, cinco segmentos en el mismo orden siempre.</p>
     <div class="barra">
-      <select id="f-per" title="Temporalidad: qué ventana de tiempo estás viendo"></select>
+      <!-- Sin selector de temporalidad: base = últimos 6 meses y un calendario para elegir
+           cualquier rango (calcular_ventana('rango',…)). Javi, 19-nov-2026. -->
+      <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:.78rem;color:var(--muted)">Del <input type="date" id="f-desde" style="font:inherit;padding:6px 8px;border:1px solid var(--rule-2);border-radius:6px"></label>
+        <label style="font-size:.78rem;color:var(--muted)">al <input type="date" id="f-hasta" style="font:inherit;padding:6px 8px;border:1px solid var(--rule-2);border-radius:6px"></label>
+        <button type="button" id="f-aplicar" style="font:inherit;font-weight:600;padding:7px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer">Ver</button>
+        <button type="button" id="f-6m" style="font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--rule-2);background:var(--surface);cursor:pointer">Últimos 6 meses</button>
+      </span>
       <select id="f-sede"></select>
       <select id="f-jefe"></select>
       <select id="f-orden">
@@ -213,7 +220,7 @@ const COLORES = {puntualidad:"var(--c1)", actitud:"var(--c2)", desempeno:"var(--
 const $ = s => document.querySelector(s);
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num = v => v===null||v===undefined ? null : Number(v);
-let PER='trimestre';
+let PER='semestre', RANGO=null;
 const PERL={quincena:'Última quincena',mes:'Último mes',trimestre:'Último trimestre',semestre:'Último semestre',anio:'Último año',hist:'Histórico'};
 const PILAV = () => {
   const l = PILA.filter(p=>p.periodo===PER);
@@ -228,13 +235,14 @@ document.querySelectorAll(".secnav button").forEach(b=>b.onclick=()=>{
   $("#tab-"+b.dataset.t).classList.remove("hide");
 });
 
+/* El aviso decía «hoy sólo se calcula puntualidad» leyendo la foto de agosto que trae la
+   página. Javi, 19-nov-2026: «esto no es cierto». Ya no se enseña la foto: si no carga en
+   vivo, se dice; si carga, los cinco criterios se calculan y lo rayado es solo quien no
+   tiene dato todavía. */
 function aviso(){
-  const sinMedir = CRIT.filter(c=>c.estado_fuente!=='activa');
-  if(!sinMedir.length){ $("#aviso-top").innerHTML=""; return; }
-  $("#aviso-top").innerHTML = '<div class="aviso"><strong>De los cinco criterios, hoy sólo se calcula '
-    + CRIT.filter(c=>c.estado_fuente==='activa').map(c=>c.nombre.toLowerCase()).join(" y ")
-    + '.</strong> Los otros ' + sinMedir.length + ' aparecen rayados: no es que la gente saque cero, es que '
-    + 'todavía no hay con qué calificarlos. Un score de 18 sobre 20 medibles no es un 18 sobre 100.</div>';
+  if(window.__VIVO){ $("#aviso-top").innerHTML=""; return; }
+  $("#aviso-top").innerHTML = '<div class="aviso"><strong>No se pudo cargar la pila en vivo.</strong> '
+    + 'Entra desde la plataforma con tu sesión y vuelve a abrir esta pantalla. No mostramos datos viejos para no confundir.</div>';
 }
 
 function ordenados(){
@@ -273,7 +281,7 @@ function pintaPila(){
   pintaCabecera();
   const total = CRIT.reduce((a,c)=>a+Number(c.peso),0) || 100;
   const l = ordenados();
-  $("#conteo").textContent = l.length + " de " + PILAV().length + " colaboradores · " + (PERL[PER]||PER);
+  $("#conteo").textContent = l.length + " de " + PILAV().length + " colaboradores · " + (PER==='rango'&&RANGO?(RANGO.d+" → "+RANGO.a):(PERL[PER]||PER));
   $("#rows").innerHTML = l.map(p=>{
     const cr = p.criterios || {};
     const pesoDe = c => { const d = cr[c.codigo]||{}; return Number(d.peso!=null?d.peso:c.peso); };
@@ -556,16 +564,29 @@ function filtros(){
   $("#f-sede").innerHTML = '<option value="">Todas las sedes</option>'+sedes.map(s=>`<option>${esc(s)}</option>`).join("");
   $("#f-jefe").innerHTML = '<option value="">Todos los jefes</option>'+jefes.map(s=>`<option>${esc(s)}</option>`).join("");
   ["#f-sede","#f-jefe","#f-orden"].forEach(s=>$(s).onchange = pintaPila);
-  const pers = [...new Set(PILA.map(p=>p.periodo))];
-  const conVentanas = Object.keys(PERL).filter(k=>pers.includes(k));
-  if(conVentanas.length){
-    if(!pers.includes(PER)) PER = conVentanas[0];
-    $("#f-per").innerHTML = conVentanas.map(k=>`<option value="${k}"${k===PER?" selected":""}>${PERL[k]}</option>`).join("");
-  } else {
-    PER = pers[0]||'';
-    $("#f-per").innerHTML = `<option value="${esc(PER)}">${esc(PER||'—')}</option>`;
-  }
-  $("#f-per").onchange = () => { PER = $("#f-per").value; pintaPila(); pintaPuntualidad(); if(typeof pintaPesosPersona==='function') pintaPesosPersona(); };
+  const iso = d => d.toISOString().slice(0,10);
+  const hoy = new Date(), seis = new Date(); seis.setMonth(seis.getMonth()-6);
+  if(!$("#f-desde").value){ $("#f-desde").value = iso(seis); $("#f-hasta").value = iso(hoy); }
+  const repinta = () => { aviso(); filtrosSedeJefe(); pintaPila(); pintaPuntualidad(); if(typeof pintaPesosPersona==='function') pintaPesosPersona(); };
+  $("#f-6m").onclick = async () => { $("#f-desde").value = iso(seis); $("#f-hasta").value = iso(hoy); PER='semestre'; RANGO=null;
+    $("#conteo").textContent="Cargando…"; await carga(); repinta(); };
+  $("#f-aplicar").onclick = async () => {
+    const d=$("#f-desde").value, a=$("#f-hasta").value;
+    if(!d||!a||d>a){ alert("Elige un rango válido: la fecha de inicio antes que la de fin."); return; }
+    $("#conteo").textContent="Calculando "+d+" → "+a+"… (unos segundos)";
+    try{
+      const r = await fetch(SB.url+"/rpc/calcular_ventana",{method:"POST",headers:HDRS(true),body:JSON.stringify({p_periodo:"rango",p_desde:d,p_hasta:a})});
+      if(!r.ok) throw new Error(await r.text());
+    }catch(e){ $("#conteo").textContent="No se pudo calcular ese rango."; return; }
+    PER='rango'; RANGO={d:d,a:a}; await carga(); repinta();
+  };
+}
+function filtrosSedeJefe(){
+  const sedes = [...new Set(PILA.map(p=>p.sede).filter(Boolean))].sort();
+  const jefes = [...new Set(PILA.map(p=>p.jefe).filter(Boolean))].sort();
+  const vs=$("#f-sede").value, vj=$("#f-jefe").value;
+  $("#f-sede").innerHTML = '<option value="">Todas las sedes</option>'+sedes.map(s=>`<option${s===vs?" selected":""}>${esc(s)}</option>`).join("");
+  $("#f-jefe").innerHTML = '<option value="">Todos los jefes</option>'+jefes.map(s=>`<option${s===vj?" selected":""}>${esc(s)}</option>`).join("");
 }
 
 async function carga(){
@@ -574,7 +595,7 @@ async function carga(){
     const h = HDRS();
     const g = async p => (await fetch(SB.url+p,{headers:h})).json();
     const [a,c] = await Promise.all([
-      g("/eval_pila?select=*&order=nombre"), g("/eval_criterios?select=*&order=orden")]);
+      g("/eval_pila?select=*&periodo=eq."+encodeURIComponent(PER)+"&order=nombre"), g("/eval_criterios?select=*&order=orden")]);
     try{
       const [k,sc] = await Promise.all([
         g("/kpi_catalogo?select=*&activo=eq.true&order=grupo,nombre"),
@@ -582,8 +603,8 @@ async function carga(){
       if(Array.isArray(k)) KPIC=k;
       if(Array.isArray(sc)) SUBC=sc;
     }catch(e){}
-    if(Array.isArray(a)&&a.length&&Array.isArray(c)&&c.length){
-      PILA=a; CRIT=c;
+    if(Array.isArray(a)&&Array.isArray(c)&&c.length){
+      PILA=a; CRIT=c; window.__VIVO=true;
       $("#fuente").textContent="en vivo"; $("#fuente").className="badge";
     }
   }catch(e){}
@@ -610,7 +631,7 @@ async function carga(){
 (async function(){
   $("#fuente").textContent="snapshot"; $("#fuente").className="badge off";
   await carga();
-  if($("#fuente").textContent!=="en vivo"){
+  if($("#fuente").textContent!=="en vivo"){ PILA=[];
     $("#fuente").textContent = window.__CONSESION ? "snapshot · sin acceso en vivo" : "snapshot · entra desde la plataforma para verlo en vivo";
   }
   aviso(); pintaLeyenda(); filtros(); pintaPila(); pintaPuntualidad(); pintaCriterios(); pintaPesos();
