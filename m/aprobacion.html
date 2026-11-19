@@ -132,6 +132,7 @@ h2 em{font:600 11px Inter;font-style:normal;color:var(--gris);background:var(--h
     <button data-e="pend" aria-selected="true">Por decidir</button>
     <button data-e="ok" aria-selected="false">Confirmadas</button>
     <button data-e="no" aria-selected="false">Rechazadas</button>
+    <button data-e="borr" aria-selected="false">En borrador</button>
     <button data-e="" aria-selected="false">Todas</button>
     <!-- EL CALENDARIO, AQUÍ DENTRO. Javi, 30-oct-2026: «replica la pestaña de
          calendario de salas aquí también». Cuando dos piden la misma noche, la
@@ -152,6 +153,7 @@ var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ses=null, YO='', FALLO='', CARGANDO=true;
 var EXPS=[], EVTS=[], ATES=[], CAND={}, OPS={};
 var BORR=[];   /* las que el operador dejó en borrador y nunca mandó */
+var FOTOOK={}; /* qué fichas tienen al menos una foto en estado listo */
 /* LAS OTRAS DOS COSAS QUE LA CASA AUTORIZA. Javi, 30-oct-2026: «en el
    dashboard no tenemos ningún lugar donde autorizar salas, ¿dónde está?».
    Sí estaba —🗝️ Peticiones de sala— pero esa pantalla solo enseñaba las
@@ -171,7 +173,11 @@ var EST='pend';
 var EXPOK=[], EVTOK=[], EVTNO=[];
 /* Dos meses hacia atrás, en el formato que entiende PostgREST. */
 var DESDE=new Date(Date.now()-60*24*3600*1000).toISOString();
-function vePend(){ return EST==='pend' || EST===''; }
+function vePend(){ return (EST==='pend' || EST==='') && !veBorr(); }
+/* Los borradores tienen pestaña propia. Javi, 19-nov-2026: «ponme los que
+   están en borrador como una pestaña más, al lado de rechazadas». No son cola:
+   nadie ha pedido mirarlos, así que no deben mezclarse con lo que espera. */
+function veBorr(){ return EST==='borr'; }
 function veOk(){   return EST==='ok'   || EST===''; }
 function veNo(){   return EST==='no'   || EST===''; }
 /* Las dos salas que además pasan por su sede: lo que la casa valida aquí,
@@ -232,6 +238,21 @@ async function patch(tabla,id,cambios){
   if(!r.ok) throw new Error('la base respondió '+r.status+' · '+(await r.text()).slice(0,140));
 }
 
+/* LO QUE DE VERDAD LA RETIENE. No vale inventarse la lista: hay un disparador
+   -sinc_exp_recoloca- que, en cuanto la ficha pasa a revisión, comprueba esto
+   mismo y si falta algo la devuelve a borrador en el acto. Javi lo vio con el
+   Tepito de Toño: le daba a pasar a revisión y se quedaba. Lo que le faltaba
+   era el lugar de salida. Javi, 19-nov-2026. */
+function leFaltaDeVerdad(x){
+  var f=[];
+  if(!(Number(x.neto_adulto)>0) && (x.formato||'tour')==='tour') f.push('el precio');
+  if(!(Number(x.duracion_min)>0)) f.push('cuánto dura');
+  if(!FOTOOK[x.id]) f.push('una foto lista');
+  if(!String(x.cer_inicio_lugar||'').trim() && !String(x.punto_encuentro||'').trim())
+    f.push('de dónde sale');
+  return f;
+}
+
 /* PASAR A REVISIÓN UNA QUE SIGUE EN BORRADOR. No es aprobarla: es ponerla en
    la cola para poder mirarla. Lo normal es que lo haga el operador desde su
    ficha; esto es para las que se quedaron atrás cuando no había botón.
@@ -240,13 +261,14 @@ async function aRevision(id){
   var it=null;
   for(var i=0;i<BORR.length;i++) if(BORR[i].id===id) it=BORR[i];
   if(!it) return;
-  var falta=[];
-  if(!String(it.nombre||'').trim())  falta.push('el nombre');
-  if(!(Number(it.duracion_min)>0))   falta.push('cuánto dura');
-  if(!(Number(it.cupo_max)>0))       falta.push('cuánta gente cabe');
-  if(!(Number(it.neto_adulto)>0) && !(Number(it.precio_adulto)>0)) falta.push('el precio');
-  if(falta.length && !confirm('A «'+(it.nombre||'esta ficha')+'» le falta '+falta.join(', ')+
-      '.\n\nSi la pasas a revisión vas a tener que mirarla así.\n\n¿La paso igual?')) return;
+  var f=leFaltaDeVerdad(it);
+  if(f.length){
+    /* Antes aquí se preguntaba «¿la paso igual?». Era mentira: la base la
+       devolvía a borrador y parecía que el botón no hacía nada. */
+    avisa('No se puede todavía: a «'+(it.nombre||'esta ficha')+'» le falta '+f.join(', ')+
+          '. Mientras falte, el sistema la devuelve sola a borrador.');
+    return;
+  }
   try{
     await patch('op_experiencias',id,{estado:'en_revision'});
     await historia('experiencia',id,'pasada a revisión',{desde:'borrador', por:'el equipo'});
@@ -567,11 +589,7 @@ function tarjetaBorrador(x, sub){
   var dias=horas(x.updated_at||x.created_at);
   dias = dias==null ? '' : (dias<24 ? 'tocada hoy' : 'sin tocar desde hace '+Math.floor(dias/24)+' día'+(Math.floor(dias/24)===1?'':'s'));
   var texto=String(x.resumen||x.descripcion||'').replace(/\s+/g,' ').trim();
-  var falta=[];
-  if(!(Number(x.duracion_min)>0)) falta.push('duración');
-  if(!(Number(x.cupo_max)>0))     falta.push('cupo');
-  if(!(Number(x.neto_adulto)>0) && !(Number(x.precio_adulto)>0)) falta.push('precio');
-  if(!texto) falta.push('resumen');
+  var falta=leFaltaDeVerdad(x);
   return '<div class="fila">'+
     '<div class="shot"'+(foto?' style="background-image:url(\''+esc(foto)+'\')"':'')+'>'+(foto?'':'✎')+'</div>'+
     '<div class="mid">'+
@@ -579,10 +597,14 @@ function tarjetaBorrador(x, sub){
       '<div class="donde">'+esc(sub)+'</div>'+
       (dias?'<div class="espera">'+esc(dias)+'</div>':'')+
       (texto?'<div class="texto">'+esc(texto)+'</div>':'')+
-      (falta.length?'<div class="candado on">Le falta '+esc(falta.join(' · '))+'</div>':'')+
+      (falta.length
+        ? '<div class="candado on">No puede pasar a revisión: le falta '+esc(falta.join(' · '))+
+          '. Si se fuerza, el sistema la devuelve sola.</div>'
+        : '<div class="candado">Está completa: se puede pasar a revisión.</div>')+
     '</div>'+
     '<div class="acc">'+
-      '<button class="btn sm verde" onclick="aRevision(\''+esc(x.id)+'\')">Pasar a revisión</button>'+
+      (falta.length ? '' :
+        '<button class="btn sm verde" onclick="aRevision(\''+esc(x.id)+'\')">Pasar a revisión</button>')+
       '<a class="btn sm gris" target="_top" href="/ficha.html?id='+encodeURIComponent(x.id)+'">Ver ↗</a>'+
     '</div>'+
   '</div>';
@@ -808,7 +830,7 @@ async function carga(){
          Ya hay botón, pero las de atrás siguen ahí y no se ven desde ninguna
          pantalla. Javi, 19-nov-2026: «muéstrame todos los que están en borrador
          en Aprobación y permíteme a mí pasarlos a en revisión». */
-      vePend()? trae('op_experiencias?select='+campos+'&estado=eq.borrador&order=updated_at.desc') : [],
+      veBorr()? trae('op_experiencias?select='+campos+'&estado=eq.borrador&order=updated_at.desc') : [],
       vePend()? trae('eventos?select='+'id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
         'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&estado=eq.propuesto&order=created_at') : [],
       /* LAS ALTAS YA NO PASAN POR AQUI. Javi, 26-oct-2026: «lo que si me
@@ -828,7 +850,7 @@ async function carga(){
       trae('hoteles?select=id,nombre_comercial,ciudad,cuartos,email,etapa,estado,contrato_firmado_at,created_at,updated_at'+
            '&etapa=eq.alta&estado='+(veOk()&&!vePend()?'eq.activo':'neq.activo')+'&order=created_at'),
       /* Las portadas de lo que está en la cola, para verlo sin abrir la ficha. */
-      trae('sinc_media?select=experiencia_id,url,etiqueta,orden&tipo=eq.foto&order=orden&limit=3000'),
+      trae('sinc_media?select=experiencia_id,url,etiqueta,orden,estado&tipo=eq.foto&order=orden&limit=3000'),
       /* Y el nombre de quien monta cada evento: hasta hoy la cola solo decía
          en qué sala era. */
       trae('productoras?select=id,nombre_comercial,stripe_estado,stripe_charges_enabled&limit=1000'),
@@ -845,10 +867,13 @@ async function carga(){
     CAND={}; OPS={};
     res[4].forEach(function(a){ CAND[a.id]=a.candado; OPS[a.id]=a.nombre_comercial; });
     SALAS=res[5]||[]; HOT=res[6]||[];
-    FOTO={};
+    FOTO={}; FOTOOK={};
     (res[7]||[]).forEach(function(m){
-      if(!m.experiencia_id || FOTO[m.experiencia_id]) return;
-      FOTO[m.experiencia_id]=m.url;
+      if(!m.experiencia_id) return;
+      /* La base no cuenta cualquier foto: cuenta las que están LISTAS. Si aquí
+         se mira otra cosa, la pantalla promete algo que el servidor deshace. */
+      if(m.estado==='listo') FOTOOK[m.experiencia_id]=true;
+      if(!FOTO[m.experiencia_id]) FOTO[m.experiencia_id]=m.url;
     });
     PRODN={}; PRODSTRIPE={};
     (res[8]||[]).forEach(function(x){
