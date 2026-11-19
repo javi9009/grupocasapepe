@@ -9,7 +9,7 @@
    propio navegador. Subir este número es lo único que obliga al service
    worker a reinstalarse y a tirar los cachés viejos. Se sube cada vez que un
    cambio del armazón tenga que llegar sí o sí. */
-const CACHE = 'soypepe-shell-v56';
+const CACHE = 'soypepe-shell-v57';
 const SHELL = [
   './',
   './index.html',
