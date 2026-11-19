@@ -96,6 +96,7 @@ body.cargandoficha .cargaf{display:flex}
 .sug button:hover,.sug button:focus{background:var(--hueso,#F4EFE8)}
 .sug button b{display:block;font-size:14px;color:var(--tinta,#1E1A16)}
 .sug button span{display:block;font-size:12px;color:var(--gris,#6E665C);margin-top:1px}
+.sug .sugmsg{padding:9px 12px;font-size:12.5px;color:var(--gris,#6E665C);line-height:1.5}
 
 .btn{font-family:'Oswald';font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:12.5px;border-radius:9px;cursor:pointer;padding:10px 17px;border:2px solid var(--naranja);background:var(--naranja);color:#fff}
 .btn:hover{background:var(--naranja-oscuro);border-color:var(--naranja-oscuro)}
@@ -5135,16 +5136,8 @@ gmp-place-autocomplete,.gmpac{
     /* LOS CAMPOS DEL CATALOGO NO SE ESCONDEN. Google tapaba el buscador de la
        casa y con el los 62 lugares propios. Aqui Google es el plan B, debajo y
        con su etiqueta. Javi, 19-nov-2026. */
-    if(el.getAttribute('data-cat')==='1'){
-      var et=document.createElement('div');
-      et.className='ay'; et.style.marginTop='10px';
-      et.textContent='¿No está en la lista? Búscalo en Google:';
-      el.parentNode.insertBefore(et,el.nextSibling);
-      el.parentNode.insertBefore(g,et.nextSibling);
-    }else{
-      el.style.display='none';
-      el.parentNode.insertBefore(g,el.nextSibling);
-    }
+    el.style.display='none';
+    el.parentNode.insertBefore(g,el.nextSibling);
     el._gmp=g;
     if(el.hasAttribute('data-c')){
       var eco=document.createElement('div');eco.className='ay eco';
@@ -5288,34 +5281,61 @@ gmp-place-autocomplete,.gmpac{
      encuentra nunca. Y como Google escondía el campo, el catálogo quedaba
      inalcanzable: 26 de las 36 fichas en borrador están paradas por no haber
      podido poner de dónde salen. Javi, 19-nov-2026. */
+  var SUGT={}, SUGV={};
   function sugiere(cual){
     var campo=cual==='ini'?'cerIni':'cerFin', caja=$(cual==='ini'?'sugIni':'sugFin');
     if(!caja) return;
-    /* Sin tildes a los dos lados: en el móvil nadie escribe «cósmica» con
-       acento, y «cosmica» no encontraba nada. */
-    var pela=function(x){ return String(x||'').normalize('NFD')
-      .replace(/[\u0300-\u036f]/g,'').toLowerCase(); };
-    var t=pela($(campo).value).trim();
+    var t=($(campo).value||'').trim();
     if(t.length<2){ caja.classList.add('oculto'); caja.innerHTML=''; return; }
-    var ciu=ciudadFicha();
-    var v=LUG.filter(function(l){
-      if(l.ciudad && ciu && l.ciudad!==ciu) return false;
-      return pela([l.nombre,l.barrio,l.direccion].join(' ')).indexOf(t)>=0;
-    }).slice(0,8);
-    if(!v.length){ caja.classList.add('oculto'); caja.innerHTML=''; return; }
+    /* Se escribe deprisa: sin esperar un momento se manda una consulta por
+       tecla y llegan desordenadas. */
+    clearTimeout(SUGT[cual]);
+    SUGT[cual]=setTimeout(function(){ buscaLugar(cual,t); },260);
+  }
+  async function buscaLugar(cual,t){
+    var caja=$(cual==='ini'?'sugIni':'sugFin'); if(!caja) return;
+    caja.classList.remove('oculto');
+    caja.innerHTML='<div class="sugmsg">Buscando…</div>';
+    var r;
+    try{
+      var resp=await fetch(SB+'/functions/v1/lugar-busca',{method:'POST',headers:hdr(),
+        body:JSON.stringify({q:t, ciudad:ciudadFicha()||''})});
+      r=await resp.json();
+    }catch(e){ r=null; }
+    /* Si mientras tanto siguió escribiendo, esta respuesta ya no vale. */
+    var ahora=($(cual==='ini'?'cerIni':'cerFin').value||'').trim();
+    if(ahora!==t) return;
+    var v=(r&&r.resultados)||[];
+    SUGV[cual]=v;
+    if(!v.length){
+      caja.innerHTML='<div class="sugmsg">No encontramos «'+esc(t)+'»'+
+        ((r&&r.aviso_google)?'. El buscador de Google no está contestando, así que por ahora solo salen los lugares de la casa'+
+          '. Si el tuyo no está, escríbelo a mano tal cual.':'. Escríbelo a mano tal cual.')+'</div>';
+      return;
+    }
     caja.innerHTML=v.map(function(l,i){
       return '<button type="button" data-i="'+i+'"><b>'+esc(l.nombre)+'</b>'+
-        (l.barrio?'<span>'+esc(l.barrio)+'</span>':'')+'</button>';
-    }).join('');
-    caja.classList.remove('oculto');
+        '<span>'+esc(l.direccion||l.barrio||'')+(l.fuente==='casa'?' · de la casa':'')+'</span></button>';
+    }).join('') + ((r&&r.aviso_google)
+      ? '<div class="sugmsg">Google no está contestando ahora mismo; estos son los lugares de la casa.</div>' : '');
     Array.prototype.forEach.call(caja.querySelectorAll('button'),function(b){
-      b.onclick=function(){ eligeDelCatalogo(cual, v[Number(b.getAttribute('data-i'))]); };
+      b.onclick=function(){ eligeDelCatalogo(cual, SUGV[cual][Number(b.getAttribute('data-i'))]); };
     });
   }
-  /* Al elegir del catálogo, el barrio se pone solo: es un dato del lugar, no
-     algo que el operador tenga que adivinar antes de buscar. */
-  function eligeDelCatalogo(cual,l){
+  /* Al elegir, el barrio se pone solo: es un dato del lugar, no algo que el
+     operador tenga que adivinar antes de buscar. */
+  async function eligeDelCatalogo(cual,l){
     var campo=cual==='ini'?'cerIni':'cerFin', bar=$(cual==='ini'?'barIni':'barFin');
+    $(cual==='ini'?'sugIni':'sugFin').classList.add('oculto');
+    /* De Google viene solo el nombre: los datos se piden al elegirlo. */
+    if(l.fuente==='google' && l.place_id){
+      try{
+        var resp=await fetch(SB+'/functions/v1/lugar-busca',{method:'POST',headers:hdr(),
+          body:JSON.stringify({detalle:l.place_id})});
+        var d=await resp.json();
+        if(d&&d.ok&&d.lugar) l=Object.assign({},l,d.lugar);
+      }catch(_){}
+    }
     $(campo).value=l.nombre;
     E[cual==='ini'?'cer_inicio_lugar':'cer_final_lugar']=l.nombre;
     if(bar && l.barrio){
@@ -5325,14 +5345,13 @@ gmp-place-autocomplete,.gmpac{
       E[cual==='ini'?'cer_inicio_barrio':'cer_final_barrio']=l.barrio;
     }
     E[cual==='ini'?'cer_inicio_direccion':'cer_final_direccion']=l.direccion||null;
-    E[cual==='ini'?'cer_inicio_place_id':'cer_final_place_id']=l.maps_place_id||null;
+    E[cual==='ini'?'cer_inicio_place_id':'cer_final_place_id']=l.place_id||null;
     if(l.lat!=null && l.lng!=null){
       E[cual==='ini'?'cer_inicio_lat':'cer_final_lat']=Number(l.lat);
       E[cual==='ini'?'cer_inicio_lng':'cer_final_lng']=Number(l.lng);
       montaMapita(cual,Number(l.lat),Number(l.lng));
     }
-    E.lugar_id=l.id;
-    $(cual==='ini'?'sugIni':'sugFin').classList.add('oculto');
+    if(l.fuente==='casa') E.lugar_id=l.id;
     sucio=true;
     try{ infoLugar(); }catch(_){}
     try{ ecoAC($(campo)); }catch(_){}
@@ -5342,7 +5361,7 @@ gmp-place-autocomplete,.gmpac{
     e.addEventListener('input',function(){ sugiere(c); });
     e.addEventListener('focus',function(){ sugiere(c); });
     e.addEventListener('blur',function(){ setTimeout(function(){
-      var caja=$(c==='ini'?'sugIni':'sugFin'); if(caja) caja.classList.add('oculto'); },180); });
+      var caja=$(c==='ini'?'sugIni':'sugFin'); if(caja) caja.classList.add('oculto'); },200); });
   });
 
   /* los dos campos de la ceremonia también buscan en Google */
@@ -5356,8 +5375,12 @@ gmp-place-autocomplete,.gmpac{
     montaMapita(cual,p.lat,p.lng);
     ecoAC($(campo));
   }
-  autocompleta($('cerIni'),function(p){eligeLugar('ini',p);});
-  autocompleta($('cerFin'),function(p){eligeLugar('fin',p);});
+  /* EL WIDGET DE GOOGLE SE VA DE ESTOS DOS CAMPOS. En el teléfono abría una
+     pantalla en blanco -Javi, 19-nov-2026, buscando «Marconi 2»- porque la
+     llave está dando 403 y 429 «Quota exceeded for AutocompletePlacesRequest
+     per day», y el widget se lo tragaba sin decir nada. Ahora busca nuestra
+     propia función, que junta los lugares de la casa con los de Google y, si
+     Google no contesta, lo dice en vez de enseñar una pantalla vacía. */
 
   /* ---------- protagonista nuevo ---------- */
   /* En un tour nuestro no se crea el guía desde aquí: se da de alta en el
