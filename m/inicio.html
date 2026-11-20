@@ -220,7 +220,11 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:system-ui,-a
       <!-- El forecast son nueve columnas de cifras: a media anchura obliga a
            desplazar para leer la mitad de la tabla. Va a lo ancho. -->
       <div class="card" id="ventasAA"></div>
-      <div class="grid2" style="margin-top:14px;align-items:start"><div class="card" id="toursDia"></div><div class="card" id="valoraciones"></div></div></section>
+      <!-- PepeFeliz va a lo ancho, justo debajo del forecast: son dos notas
+           distintas -la que se ve en el buscador y la de lo que acaba de
+           entrar- y a media anchura no caben sin apretarse. Javi, 20-nov. -->
+      <div class="card" id="valoraciones" style="margin-top:14px"></div>
+      <div class="card" id="toursDia" style="margin-top:14px"></div></section>
     <section class="sec"><div class="sec-h"><span class="n">4</span><h2 class="t">Desempeño y equipo</h2></div>
       <!-- DOS COLUMNAS QUE SE LLENAN SOLAS. Javi, 20-oct-2026: «pon lo de
            acelerador de asistencias y pedidos del día debajo de mantenimiento y
@@ -734,108 +738,140 @@ function renderDia(hk, off){
       }; }
     }).catch(function(){ if(vivo()) porcablear('ventasAA','Forecast: no se pudo cargar.'); }); });
 
-  // Valoraciones: PepeFeliz (sin responder) + nota por fuente + reseñas del día (texto)
+  /* PEPEFELIZ: LA NOTA DEL BUSCADOR Y LA DE LO QUE ACABA DE ENTRAR.
+     Javi, 20-nov-2026: «¿ese PepeFeliz es del día en OTAs o de los últimos 30
+     días? Porque en HW tenemos 9.2 y en Booking 8.7». Ninguna de las dos: se
+     enseñaba la nota global publicada tal como se vio en la última captura
+     semanal, y sin decir de qué día era. Por eso no cuadraba con lo que él
+     veía en la pantalla del hotel.
+     Ahora van las dos, cada una con su fecha: lo que hoy se ve en cada
+     buscador -diciendo cuántos días lleva esa captura, que es la única forma
+     honesta de enseñar un número que no se ha vuelto a mirar- y la media de
+     las reseñas que han entrado en 30 días, que es como lo estamos haciendo
+     ahora, no como lo hicimos desde 2017. */
   $('valoraciones').innerHTML='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
   guard(function(){
     var pSin=sb.from('cp_cola_respuestas').select('*',{count:'exact',head:true}).eq('plaza',H.plaza).eq('contestable',true).lte('dias_esperando',14).then(function(r){return r.count;}).catch(function(){return null;});
-    return Promise.all([F2, pSin]).then(function(a){ if(!vivo())return; var f=a[0]||{}, sinResp=a[1]; var rep=(f&&f.reputacion)||{};
-      if(f.__err||!rep.aplica){ porcablear('valoraciones','Valoraciones: sin datos para este hotel.'); return; }
-      var fs=rep.fuentes||[], cs=rep.comentarios||[]; var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
+    var pPF=sb.rpc('pepe_feliz_dia',{p_plaza:H.plaza}).then(function(r){return r.data||null;}).catch(function(){return null;});
+    return Promise.all([F2, pSin, pPF]).then(function(a){ if(!vivo())return;
+      var f=a[0]||{}, sinResp=a[1], PF=a[2]||{};
+      var rep=(f&&f.reputacion)||{};
+      var bus=PF.buscadores||[], u30=PF.ult30||{};
+      if(!bus.length && (f.__err||!rep.aplica)){ porcablear('valoraciones','Valoraciones: sin datos para este hotel.'); return; }
+      var ratC=function(n){ n=+n||0; return n>=85?'var(--ok)':(n>=70?'var(--warn)':'var(--bad)'); };
+      var cs=rep.comentarios||[];
       var hoyC=cs.filter(function(x){ return String(x.fecha||'').slice(0,10)===fecha; });
-      var html='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+(sinResp!=null?(sinResp+' sin responder'):((rep.coment_10d||0)+' · 10d'))+'</span></div>'
+      var html='<div class="hd"><h3>Valoraciones · PepeFeliz</h3>'+bdg('ok')+'<span class="wh">'+(sinResp!=null?(sinResp+' sin responder'):((rep.coment_10d||0)+' · 10d'))+'</span></div>';
+
+      /* Lo que hoy se ve en el buscador. Cada nota dice de cuándo es: una
+         captura de hace dos semanas no es «hoy» por mucho que esté arriba. */
+      html+='<div class="sub-muted" style="font-weight:700;color:var(--ink-2);margin-bottom:6px">En los buscadores</div>'
         +'<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
-        +fs.map(function(x){ return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div><div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div><div class="s">'+esc(x.nota100)+'/100 · '+(x.resenas||0)+'</div></div>'; }).join('')
+        +bus.map(function(x){
+          var d=Number(x.dias||0);
+          var cuando = d<=1?'hoy':(d<=9?('hace '+d+' días'):('<b style="color:var(--warn)">hace '+d+' días</b>'));
+          return '<div class="kpi" style="padding:10px"><div class="l">'+esc(x.fuente)+'</div>'
+            +'<div class="v" style="font-size:1.3rem;color:'+ratC(x.nota100)+'">'+esc(x.rating)+'<small>/'+esc(x.escala)+'</small></div>'
+            +'<div class="s">'+(x.resenas||0)+' reseñas · '+cuando+'</div></div>'; }).join('')
         +'</div>';
+
+      /* Lo que acaba de entrar. Si la media de 30 días va por debajo de la
+         nota publicada, lo de ahora es peor que la media histórica: eso es lo
+         que hay que ver, y la nota global lo esconde durante meses. */
+      var n30=Number(u30.n||0), m30=u30.nota100!=null?Number(u30.nota100):null;
+      html+='<div class="sub-muted" style="font-weight:700;color:var(--ink-2);margin:12px 0 6px">Últimos 30 días</div>';
+      if(!n30){ html+='<div class="sub-muted">Sin reseñas nuevas en 30 días.</div>'; }
+      else {
+        var det=(u30.por_fuente||[]).map(function(x){ return esc(x.fuente)+' '+(Number(x.nota100)/10).toFixed(1)+' ('+x.n+')'; }).join(' · ');
+        html+='<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">'
+          +'<div class="kpi" style="padding:10px"><div class="l">media 30 días</div>'
+          +'<div class="v" style="font-size:1.3rem;color:'+ratC(m30)+'">'+(m30/10).toFixed(1)+'<small>/10</small></div>'
+          +'<div class="s">'+n30+' reseñas nuevas</div></div>'
+          +'<div class="kpi" style="padding:10px;text-align:left"><div class="l">por plataforma</div>'
+          +'<div class="s" style="margin-top:6px;line-height:1.6">'+det+'</div></div>'
+          +'</div>';
+      }
+
       var muestra=hoyC.slice(0,6);
       if(muestra.length){ html+='<div class="sub-muted" style="margin-top:11px;font-weight:700;color:var(--ink-2)">Reseñas que entraron · '+esc(etiqueta)+'</div>'
         +muestra.map(function(x){ return '<div class="row"><span class="dot acc"></span><div class="bd"><div class="t" style="font-weight:500;line-height:1.4">'+esc(x.texto||'(sin texto)')+'</div><div class="d">'+esc(x.plataforma||'')+(x.rating!=null?(' · '+esc(x.rating)):'')+(x.fecha?(' · '+esc(String(x.fecha).slice(0,10))):'')+'</div></div></div>'; }).join(''); }
-      else html+='<div class="sub-muted" style="margin-top:8px">Sin reseñas nuevas '+esc(etiqueta.toLowerCase())+'. (Las reseñas entran con la captura semanal.)</div>';
       $('valoraciones').innerHTML=html;
     });
   }).catch(function(){ if(vivo()) porcablear('valoraciones','Valoraciones: no se pudo cargar.'); });
 
-  /* Tours del día: v_salidas_dia (por sede, con pax de verdad y escaneos)
-
-     LAS MADRUGADAS DE MAÑANA TAMBIÉN. Javi, 24-oct-2026, después de perder un
-     vuelo en globo: lo compraron a mediodía del 22 para el 23 a las 05:00. En
-     el "hoy" del 22 no estaba —era de mañana—, y en el "hoy" del 23 apareció a
-     las cinco de la mañana, cuando ya había despegado. Un tour de madrugada no
-     tiene ningún "hoy" en el que alguien lo vea con tiempo de atenderlo.
+  /* Tours del día: v_salidas_dia (por sede, solo lo vendido, con escaneos)
 
      LA SEDE NO SE ADIVINA LEYENDO UN TEXTO. Javi, 20-nov-2026: «esta parte de
      salidas del tour no la veo tan acertada, hoy había varios Teos». Y era
      verdad: esto decidía la sede mirando si el punto de encuentro DECÍA "casa
-     pepe", así que una salida sin punto escrito —Teotihuacán con 7, Vámonos de
-     Pinta con 3, Noche Mexicana con 61— no aparecía en ninguna parte; y
-     Mexicanismos, que es de Puebla, salía en CDMX porque su pulquería se llama
-     "Cósmica de Casa Pepe". Ahora la sede viene de la vista, de donde vive el
-     dato: el property_id de la salida, y si no lo trae, la ciudad de la ficha.
+     pepe", así que una salida sin punto escrito -Teotihuacán con 7, Noche
+     Mexicana con 61- no aparecía en ninguna parte; y Mexicanismos, que es de
+     Puebla, salía en CDMX porque su pulquería se llama "Cósmica de Casa Pepe".
+     Ahora la sede viene de la vista, de donde vive el dato.
 
-     Y SE VE SI SE ESCANEÓ. Un tour con gente y sin un solo escaneo es lo único
-     de esta tarjeta sobre lo que todavía se puede hacer algo mientras pasa. */
-  var MADRUGADA_HASTA='09:00';
+     SOLO LO QUE SE VENDIÓ. Javi, el mismo día: «los tours sin venta no me los
+     muestres» y «los tours sin pago de la comisión no los necesito saber».
+     Una programación llena de ceros no es información: es ruido que tapa las
+     tres líneas que sí importan. Y los pax son los PAGADOS: un intento de
+     pago a medias no es una venta.
+
+     LOS DOS TICS. Se escaneó -o no- y están alineados: el touroperador asignó
+     guía y todos los clientes que pagaron ya recibieron su aviso. Eso es lo
+     único de esta tarjeta sobre lo que se puede hacer algo antes de la hora.
+
+     (La pestaña de mañana sustituyó al aviso de "hay que dejarlo listo HOY":
+     la madrugada de mañana ya se ve con un clic.) */
   var TOURS={hoy:[],man:[],fecha:'',manana:'',tab:'hoy'};
   $('toursDia').innerHTML='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
   window.toursTab=function(t){ TOURS.tab=(t==='man'?'man':'hoy'); pintaTours(); };
-  function toursFila(x,clase){
-    var pax=Number(x.pax||0), esc_=Number(x.escaneadas||0), paxEsc=Number(x.pax_escaneados||0);
-    var pend=Number(x.pax_pendientes||0);
-    var det=[];
-    if(pax>0) det.push(paxEsc>0 ? (paxEsc+' de '+pax+' escaneados') : 'nadie ha escaneado');
-    if(pend>0) det.push(pend+' sin pagar');
-    if(!pax && !pend) det.push('sin reservas');
-    var d=clase;
-    if(!d){ d = pax===0 ? 'acc' : (paxEsc>=pax ? 'ok' : (toursYaPaso(x) ? 'bad' : 'warn')); }
-    return '<div class="row"><span class="dot '+d+'"></span><div class="bd">'
-      +'<div class="t">'+(x.hora?String(x.hora).slice(0,5)+' · ':'')+esc(x.experiencia||'Tour')+'</div>'
-      +'<div class="d">'+esc(det.join(' · '))+'</div></div>'
-      +'<span class="n">'+pax+' pax</span></div>';
-  }
   function toursYaPaso(x){
     if(String(x.fecha)!==iso(mxNow())) return false;
     var ahora=mxNow(); var hh=String(ahora.getHours()).padStart(2,'0')+':'+String(ahora.getMinutes()).padStart(2,'0');
     return String(x.hora||'23:59').slice(0,5) < hh;
   }
+  function toursFila(x){
+    var pax=Number(x.pax_pagados||0), paxEsc=Number(x.pax_escaneados||0);
+    var porAvisar=Number(x.por_avisar||0);
+    var det=[];
+    det.push(paxEsc>0 ? (paxEsc+' de '+pax+' escaneados') : 'nadie ha escaneado');
+    if(x.alineada) det.push('✓ programado y avisado');
+    else if(!x.con_guia) det.push('sin guía asignado');
+    else if(porAvisar>0) det.push('falta avisar a '+porAvisar);
+    var d = paxEsc>=pax ? 'ok' : (toursYaPaso(x) ? 'bad' : 'warn');
+    return '<div class="row"><span class="dot '+d+'"></span><div class="bd">'
+      +'<div class="t">'+(x.hora?String(x.hora).slice(0,5)+' · ':'')+esc(x.experiencia||'Tour')+(x.alineada?' ✓':'')+'</div>'
+      +'<div class="d">'+esc(det.join(' · '))+'</div></div>'
+      +'<span class="n">'+pax+' pax</span></div>';
+  }
   function pintaTours(){
     var esHoyTab=TOURS.tab!=='man';
     var rows=esHoyTab?TOURS.hoy:TOURS.man;
-    var totPax=rows.reduce(function(s,x){return s+Number(x.pax||0);},0);
+    var totPax=rows.reduce(function(s,x){return s+Number(x.pax_pagados||0);},0);
     var totEsc=rows.reduce(function(s,x){return s+Number(x.pax_escaneados||0);},0);
     var bt='display:inline-block;padding:5px 13px;border-radius:999px;font-weight:700;font-size:.78rem;cursor:pointer;border:1px solid var(--rule);margin-right:6px';
     var on=';background:var(--accent);color:#fff;border-color:var(--accent)';
     var off=';background:var(--surface-3);color:var(--ink-2)';
-    var html='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'</div>'
+    var html='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'<span class="wh">solo con venta</span></div>'
       +'<div style="margin:2px 0 8px">'
       +'<span style="'+bt+(esHoyTab?on:off)+'" onclick="toursTab(\'hoy\')">Hoy</span>'
       +'<span style="'+bt+(esHoyTab?off:on)+'" onclick="toursTab(\'man\')">Mañana</span>'
       +'</div>';
-    if(!rows.length){ html+='<div class="empty">Sin salidas '+(esHoyTab?'hoy':'mañana')+'.</div>'; }
-    else { html+=rows.map(function(x){ return toursFila(x); }).join('');
+    if(!rows.length){ html+='<div class="empty">Sin ventas '+(esHoyTab?'para hoy':'para mañana')+'.</div>'; }
+    else { html+=rows.map(toursFila).join('');
       html+='<div class="row" style="border-top:1px dashed var(--rule)"><div class="bd"><div class="t">'
         +(esHoyTab?'Huéspedes que se mueven hoy':'Huéspedes que se mueven mañana')+'</div>'
         +(esHoyTab?('<div class="d">'+totEsc+' escaneados de '+totPax+'</div>'):'')
         +'</div><span class="n">'+totPax+' pax</span></div>'; }
-    /* Si hay madrugada mañana, se avisa fuerte en la pestaña de hoy: es lo
-       único sobre lo que todavía se puede actuar antes de cerrar el turno. */
-    if(esHoyTab){
-      var prono=TOURS.man.filter(function(x){ return String(x.hora||'23:59').slice(0,5) < MADRUGADA_HASTA; });
-      if(prono.length){
-        html+='<div class="row" style="border-top:2px solid var(--accent);background:var(--accent-soft)">'
-          +'<div class="bd"><div class="t">⏰ Mañana de madrugada — hay que dejarlo listo HOY</div>'
-          +'<div class="d">Sale antes de las '+MADRUGADA_HASTA+': nadie va a verlo a tiempo mañana.</div></div></div>';
-        html+=prono.map(function(x){ return toursFila(x,'warn'); }).join('');
-      }
-    }
-    html+='<div class="sub-muted">% de huéspedes que compraron tour (anoche): <b>por cablear</b>.</div>';
     $('toursDia').innerHTML=html;
   }
   guard(function(){
     var dm=new Date(fecha+'T12:00:00'); dm.setDate(dm.getDate()+1);
     var manana=dm.toISOString().slice(0,10);
-    return sb.from('v_salidas_dia').select('fecha,hora,experiencia,estado,sede,pax,reservas,pax_pendientes,escaneadas,pax_escaneados,cupo_max').in('fecha',[fecha,manana])
+    return sb.from('v_salidas_dia').select('fecha,hora,experiencia,estado,sede,pax_pagados,pax_escaneados,por_avisar,con_guia,alineada').in('fecha',[fecha,manana])
     .then(function(r){ if(!vivo())return;
       var todas=(r.data||[]).filter(function(x){
         if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0) return false;
+        if(Number(x.pax_pagados||0)<=0) return false;   // sin venta, no se enseña
         return String(x.sede||'')===H.sede;
       });
       function ord(a,b){ return String(a.hora||'')<String(b.hora||'')?-1:1; }
