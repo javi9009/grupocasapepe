@@ -104,6 +104,15 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
 .pila-head .cols span{font-size:.67rem;font-weight:700;color:#fff;text-align:center;
   border-radius:3px;padding:3px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
 .pila-head .lbl{font-size:.7rem;color:var(--faint)}
+.pila-head .cols span{cursor:pointer}
+.pila-head .cols span.act{outline:2px solid var(--txt);outline-offset:-2px}
+.dirbtn{padding:7px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--surface);color:var(--txt);font-size:.82rem;cursor:pointer;white-space:nowrap}
+#crit-toggles{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:-4px 0 14px}
+#crit-toggles .tg-lbl{font-size:.75rem;color:var(--muted);font-weight:600;margin-right:2px}
+.tg{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);background:var(--surface);border-radius:999px;padding:5px 11px;font-size:.78rem;cursor:pointer;color:var(--txt)}
+.tg i{width:10px;height:10px;border-radius:2px;display:block;flex:none}
+.tg.on{font-weight:600;border-color:var(--txt)}
+.tg:not(.on){opacity:.5;text-decoration:line-through}
 @media(max-width:640px){
   .row,.escala{grid-template-columns:118px 1fr 70px;gap:9px}
   .pila-head{grid-template-columns:118px 1fr 70px;gap:9px}
@@ -156,8 +165,10 @@ code.k{background:var(--surface-2);border-radius:4px;padding:1px 5px;font-size:.
         <option value="nombre">Ordenar por nombre</option>
         <option value="categoria">Ordenar por categoría</option>
       </select>
+      <button id="f-dir" class="dirbtn" type="button" title="Cambiar el sentido del orden (de mayor a menor / de menor a mayor)">↓ Mayor a menor</button>
       <span class="hint" id="conteo"></span>
     </div>
+    <div id="crit-toggles"></div>
     <div class="leyenda" id="leyenda"></div>
     <div class="pila-head"><span class="lbl">Colaborador</span><div class="cols" id="pila-cols"></div><span class="lbl" style="text-align:right">Score</span></div>
     <div class="pilawrap">
@@ -214,7 +225,7 @@ function flash(el,ok){ if(!el) return; const sp=document.createElement('span');
   sp.textContent = ok?'✓ guardado':'✗ no se guardó (¿tienes sesión?)';
   sp.style.cssText='margin-left:6px;font-size:.72rem;font-weight:700;color:'+(ok?'var(--ok)':'var(--bad)');
   el.appendChild(sp); setTimeout(()=>sp.remove(), 2600); }
-async function recargaTodo(){ await carga(); aviso(); pintaLeyenda(); pintaPila(); pintaPuntualidad(); pintaCriterios(); pintaPesos(); }
+async function recargaTodo(){ await carga(); aviso(); pintaLeyenda(); pintaToggles(); pintaPila(); pintaPuntualidad(); pintaCriterios(); pintaPesos(); }
 const COLORES = {puntualidad:"var(--c1)", actitud:"var(--c2)", desempeno:"var(--c3)",
                  conocimiento:"var(--c4)", discurso:"var(--c5)"};
 const $ = s => document.querySelector(s);
@@ -228,6 +239,23 @@ const PILAV = () => {
   const p0 = (PILA[0]||{}).periodo;
   return PILA.filter(p=>p.periodo===p0);
 };
+
+/* Orden (score/nombre/categoria o crit:<codigo>), sentido (DIR: -1 mayor→menor, 1 menor→mayor),
+   y criterios ocultados por los botones de propiedad. Javi, 20-nov-2026. */
+let ORD='score', DIR=-1, OCULTOS=new Set();
+const critActivos = () => CRIT.filter(c=>!OCULTOS.has(c.codigo));
+function syncDirBtn(){
+  const b=$("#f-dir"); if(!b) return;
+  const esNombre = ORD==='nombre';
+  b.textContent = DIR<0 ? (esNombre?'↓ Z → A':'↓ Mayor a menor') : (esNombre?'↑ A → Z':'↑ Menor a mayor');
+}
+function pintaToggles(){
+  const el=$("#crit-toggles"); if(!el) return;
+  el.innerHTML='<span class="tg-lbl">Mostrar propiedad:</span>'+CRIT.map(c=>{
+    const on=!OCULTOS.has(c.codigo), col=COLORES[c.codigo]||'var(--c3)';
+    return `<button type="button" class="tg${on?' on':''}" data-tg="${c.codigo}"><i style="background:${on?col:'#c9c2b4'}"></i>${esc(c.nombre)}</button>`;
+  }).join("");
+}
 
 document.querySelectorAll(".secnav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".secnav button").forEach(x=>x.setAttribute("aria-selected", x===b));
@@ -246,12 +274,19 @@ function aviso(){
 }
 
 function ordenados(){
-  const s = $("#f-sede").value, j = $("#f-jefe").value, o = $("#f-orden").value;
-  let l = PILAV().filter(p => (!s || p.sede===s) && (!j || p.jefe===j));
+  const s = $("#f-sede").value, j = $("#f-jefe").value;
+  let l = PILAV().filter(p => (!s || p.sede===s) && (!j || (p.cadena_mando||[]).includes(j) || p.jefe===j));
   const pct = p => num(p.puntos_posibles)>0 ? num(p.puntos)/num(p.puntos_posibles) : -1;
-  if(o==="score")     l.sort((a,b)=> pct(a)-pct(b) || a.nombre.localeCompare(b.nombre));
-  else if(o==="nombre") l.sort((a,b)=> a.nombre.localeCompare(b.nombre));
-  else l.sort((a,b)=> (a.categoria_orden||9)-(b.categoria_orden||9) || a.nombre.localeCompare(b.nombre));
+  let key;
+  if(ORD.startsWith("crit:")){ const cod=ORD.slice(5);
+    key = p => { const v=num(((p.criterios||{})[cod]||{}).valor); return v===null?-Infinity:v; }; }
+  else if(ORD==="categoria") key = p => (p.categoria_orden||9);
+  else key = pct; // score
+  l.sort((a,b)=>{
+    let c = (ORD==="nombre") ? a.nombre.localeCompare(b.nombre) : (key(a)-key(b));
+    if(c!==0) return c*DIR;
+    return a.nombre.localeCompare(b.nombre); // desempate estable por nombre
+  });
   return l;
 }
 
@@ -271,10 +306,13 @@ function expliCrit(c){
 }
 function pintaCabecera(){
   const el = $("#pila-cols"); if(!el) return;
-  const total = CRIT.reduce((a,c)=>a+Number(c.peso),0) || 100;
-  el.innerHTML = CRIT.map(c=>{
+  const cs = critActivos();
+  const total = cs.reduce((a,c)=>a+Number(c.peso),0) || 100;
+  el.innerHTML = cs.map(c=>{
     const w = Number(c.peso)/total*100;
-    return `<span style="width:${w}%;background:${COLORES[c.codigo]||"var(--c3)"}" data-tip="${esc(expliCrit(c))}">${esc(c.nombre)}</span>`;
+    const act = ORD==="crit:"+c.codigo;
+    const flecha = act ? (DIR<0?" ▼":" ▲") : "";
+    return `<span class="${act?"act":""}" data-ord="crit:${c.codigo}" style="width:${w}%;background:${COLORES[c.codigo]||"var(--c3)"}" data-tip="${esc(expliCrit(c)+"\n\n(Toca para ordenar por este criterio; toca otra vez para invertir.)")}">${esc(c.nombre)}${flecha}</span>`;
   }).join("");
 }
 function pintaPila(){
@@ -284,9 +322,10 @@ function pintaPila(){
   $("#conteo").textContent = l.length + " de " + PILAV().length + " colaboradores · " + (PER==='rango'&&RANGO?(RANGO.d+" → "+RANGO.a):(PERL[PER]||PER));
   $("#rows").innerHTML = l.map(p=>{
     const cr = p.criterios || {};
+    const cs = critActivos();
     const pesoDe = c => { const d = cr[c.codigo]||{}; return Number(d.peso!=null?d.peso:c.peso); };
-    const totalP = CRIT.reduce((a,c)=>a+pesoDe(c),0) || total;
-    const segs = CRIT.map(c=>{
+    const totalP = cs.reduce((a,c)=>a+pesoDe(c),0) || total;
+    const segs = cs.map(c=>{
       const d = cr[c.codigo] || {};
       const v = num(d.valor);
       const peso = pesoDe(c);
@@ -560,10 +599,28 @@ async function pintaPesosPersona(){
 
 function filtros(){
   const sedes = [...new Set(PILA.map(p=>p.sede).filter(Boolean))].sort();
-  const jefes = [...new Set(PILA.map(p=>p.jefe).filter(Boolean))].sort();
+  const jefes = [...new Set(PILA.flatMap(p=>(p.cadena_mando||[]).concat(p.jefe?[p.jefe]:[])).filter(Boolean))].sort();
   $("#f-sede").innerHTML = '<option value="">Todas las sedes</option>'+sedes.map(s=>`<option>${esc(s)}</option>`).join("");
   $("#f-jefe").innerHTML = '<option value="">Todos los jefes</option>'+jefes.map(s=>`<option>${esc(s)}</option>`).join("");
-  ["#f-sede","#f-jefe","#f-orden"].forEach(s=>$(s).onchange = pintaPila);
+  ["#f-sede","#f-jefe"].forEach(s=>$(s).onchange = pintaPila);
+  $("#f-orden").onchange = () => { ORD=$("#f-orden").value; DIR=(ORD==="nombre"||ORD==="categoria")?1:-1; syncDirBtn(); pintaPila(); };
+  $("#f-dir").onclick = () => { DIR=-DIR; syncDirBtn(); pintaPila(); };
+  $("#pila-cols").addEventListener("click", e => {
+    const h=e.target.closest("[data-ord]"); if(!h) return;
+    const o=h.dataset.ord;
+    if(ORD===o) DIR=-DIR; else { ORD=o; DIR=-1; }
+    if(["score","nombre","categoria"].includes(o)) $("#f-orden").value=o;
+    syncDirBtn(); pintaPila();
+  });
+  $("#crit-toggles").addEventListener("click", e => {
+    const b=e.target.closest("[data-tg]"); if(!b) return;
+    const cod=b.dataset.tg;
+    if(OCULTOS.has(cod)) OCULTOS.delete(cod);
+    else { if(critActivos().length<=1) return; OCULTOS.add(cod);
+           if(ORD==="crit:"+cod){ ORD="score"; DIR=-1; $("#f-orden").value="score"; } }
+    pintaToggles(); syncDirBtn(); pintaPila();
+  });
+  pintaToggles(); syncDirBtn();
   const iso = d => d.toISOString().slice(0,10);
   const hoy = new Date(), seis = new Date(); seis.setMonth(seis.getMonth()-6);
   if(!$("#f-desde").value){ $("#f-desde").value = iso(seis); $("#f-hasta").value = iso(hoy); }
@@ -583,7 +640,7 @@ function filtros(){
 }
 function filtrosSedeJefe(){
   const sedes = [...new Set(PILA.map(p=>p.sede).filter(Boolean))].sort();
-  const jefes = [...new Set(PILA.map(p=>p.jefe).filter(Boolean))].sort();
+  const jefes = [...new Set(PILA.flatMap(p=>(p.cadena_mando||[]).concat(p.jefe?[p.jefe]:[])).filter(Boolean))].sort();
   const vs=$("#f-sede").value, vj=$("#f-jefe").value;
   $("#f-sede").innerHTML = '<option value="">Todas las sedes</option>'+sedes.map(s=>`<option${s===vs?" selected":""}>${esc(s)}</option>`).join("");
   $("#f-jefe").innerHTML = '<option value="">Todos los jefes</option>'+jefes.map(s=>`<option${s===vj?" selected":""}>${esc(s)}</option>`).join("");
