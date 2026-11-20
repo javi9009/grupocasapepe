@@ -821,9 +821,41 @@ function renderDia(hk, off){
 
      (La pestaña de mañana sustituyó al aviso de "hay que dejarlo listo HOY":
      la madrugada de mañana ya se ve con un clic.) */
-  var TOURS={hoy:[],man:[],fecha:'',manana:'',tab:'hoy'};
+  var TOURS={hoy:[],man:[],fecha:'',manana:'',tab:'hoy',pax:{},abiertas:{}};
   $('toursDia').innerHTML='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
   window.toursTab=function(t){ TOURS.tab=(t==='man'?'man':'hoy'); pintaTours(); };
+  /* QUIÉN VIENE, SIN SALIR DE AQUÍ. Javi, 20-nov-2026: al clicar la salida se
+     abre quién viene, y al clicar a un cliente se abre su ficha para revisarla.
+     Los nombres solo se piden cuando alguien abre la salida: en un día cargado
+     son diez consultas que nadie mira. */
+  window.toursAbre=function(id){
+    if(TOURS.abiertas[id]){ delete TOURS.abiertas[id]; pintaTours(); return; }
+    TOURS.abiertas[id]=true; pintaTours();
+    if(TOURS.pax[id]) return;
+    sb.from('v_sinc_portal')
+      .select('id,folio,huesped,email,telefono,pax,pago_estado,recogida_en,hotel,boletos,boletos_usados')
+      .eq('salida_id',id).order('huesped')
+      .then(function(r){ TOURS.pax[id]=Array.isArray(r.data)?r.data:[]; pintaTours(); })
+      .catch(function(){ TOURS.pax[id]=null; pintaTours(); });
+  };
+  function toursPax(id){
+    var l=TOURS.pax[id];
+    var caja='style="background:var(--surface-3);border-radius:10px;padding:8px 10px;margin:2px 0 8px"';
+    if(l===undefined) return '<div '+caja+'><span class="d">Buscando quién viene…</span></div>';
+    if(l===null)      return '<div '+caja+'><span class="d">No pudimos traer los nombres.</span></div>';
+    if(!l.length)     return '<div '+caja+'><span class="d">Esta salida no tiene reservas.</span></div>';
+    return '<div '+caja+'>'+l.map(function(c){
+      var pg=String(c.pago_estado||'sin pago');
+      var esc_=Number(c.boletos_usados||0)>0;
+      var donde=c.recogida_en||c.hotel||'';
+      return '<a target="_top" href="/m/sinc-operacion.html?reserva='+encodeURIComponent(c.id)+'"'
+        +' style="display:flex;gap:10px;align-items:baseline;justify-content:space-between;'
+        +'padding:6px 0;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit">'
+        +'<span><b>'+esc(c.huesped||'—')+'</b>'+(esc_?' ✓':'')
+        +'<br><span class="d">'+esc(pg)+(donde?(' · '+esc(donde)):'')+(c.folio?(' · '+esc(c.folio)):'')+'</span></span>'
+        +'<span class="n" style="white-space:nowrap">'+(c.pax||1)+' pax ›</span></a>';
+    }).join('')+'<div class="d" style="padding-top:6px">Toca a un cliente para abrir su ficha.</div></div>';
+  }
   function toursYaPaso(x){
     if(String(x.fecha)!==iso(mxNow())) return false;
     var ahora=mxNow(); var hh=String(ahora.getHours()).padStart(2,'0')+':'+String(ahora.getMinutes()).padStart(2,'0');
@@ -838,10 +870,13 @@ function renderDia(hk, off){
     else if(!x.con_guia) det.push('sin guía asignado');
     else if(porAvisar>0) det.push('falta avisar a '+porAvisar);
     var d = paxEsc>=pax ? 'ok' : (toursYaPaso(x) ? 'bad' : 'warn');
-    return '<div class="row"><span class="dot '+d+'"></span><div class="bd">'
+    var abierta=!!TOURS.abiertas[x.id];
+    return '<div class="row" style="cursor:pointer" onclick="toursAbre(\''+x.id+'\')">'
+      +'<span class="dot '+d+'"></span><div class="bd">'
       +'<div class="t">'+(x.hora?String(x.hora).slice(0,5)+' · ':'')+esc(x.experiencia||'Tour')+(x.alineada?' ✓':'')+'</div>'
       +'<div class="d">'+esc(det.join(' · '))+'</div></div>'
-      +'<span class="n">'+pax+' pax</span></div>';
+      +'<span class="n">'+pax+' pax '+(abierta?'⌃':'⌄')+'</span></div>'
+      +(abierta?toursPax(x.id):'');
   }
   function pintaTours(){
     var esHoyTab=TOURS.tab!=='man';
@@ -867,7 +902,7 @@ function renderDia(hk, off){
   guard(function(){
     var dm=new Date(fecha+'T12:00:00'); dm.setDate(dm.getDate()+1);
     var manana=dm.toISOString().slice(0,10);
-    return sb.from('v_salidas_dia').select('fecha,hora,experiencia,estado,sede,pax_pagados,pax_escaneados,por_avisar,con_guia,alineada').in('fecha',[fecha,manana])
+    return sb.from('v_salidas_dia').select('id,fecha,hora,experiencia,estado,sede,pax_pagados,pax_escaneados,por_avisar,con_guia,alineada').in('fecha',[fecha,manana])
     .then(function(r){ if(!vivo())return;
       var todas=(r.data||[]).filter(function(x){
         if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0) return false;
@@ -897,6 +932,12 @@ function renderDia(hk, off){
     }).catch(function(){ if(vivo()) porcablear('pedidos','Pedidos del día: no se pudo cargar.'); }); });
 
   /* ---------- 4 · EQUIPO ---------- */
+  window.hkMas=function(i){
+    var d=document.getElementById('hkmas-'+i), b=document.getElementById('hkbtn-'+i);
+    if(!d) return; var cerrado=d.style.display==='none';
+    d.style.display=cerrado?'':'none';
+    if(b) b.textContent=cerrado?'menos ▴':'más ▾';
+  };
   // Pila HK: hk_v_productividad_dia — tarjeta del módulo (otro agente) + filtro SOLO ama de llaves
   $('pilaHK').innerHTML='<div class="hd"><h3>Pila de productividad · Ama de llaves</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
   guard(function(){ return Promise.all([ equipoHK(), sb.from('hk_v_productividad_dia')
@@ -912,7 +953,7 @@ function renderDia(hk, off){
       else {
         var hm=function(m){ return (Math.round(Number(m||0)/60*10)/10)+' h'; };
         var hhmm=function(t){ return t?String(t).slice(0,5):''; };
-        html+=rows.map(function(x){
+        html+=rows.map(function(x,i){
           var ini=x.hora_inicio, fin=x.hora_fin, jornada=8*60;
           if(ini&&fin){ var a1=+String(ini).slice(0,2)*60+ +String(ini).slice(3,5),
                             a2=+String(fin).slice(0,2)*60+ +String(fin).slice(3,5);
@@ -929,32 +970,44 @@ function renderDia(hk, off){
           var ent=x.primera_entrada
             ? new Date(x.primera_entrada).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:'America/Mexico_City'})
             : hhmm(ini);
+          /* SOLO LAS HORAS MEDIDAS, Y EL RESTO DETRÁS DE «MÁS».
+             Javi, 20-nov-2026: «en la pila de recamaristas no me pongas todo el
+             detalle, solo el de horas medidas en tareas del día». Con ocho
+             personas eran ocho bloques de seis cifras cada uno: para comparar a
+             dos había que recorrer media pantalla. La cifra que se mira a
+             diario es la de horas medidas; lo demás se abre cuando alguien
+             quiere explicarse una. */
           return '<div class="pcard'+(extra>0?' sobre':'')+'">'
             +'<div class="ph"><b>'+esc(x.colaborador||'—')+'</b><span>'
               +esc(String(x.turno||'').replace('_',' '))
               +((ini&&fin)?(' · '+hhmm(ini)+'–'+hhmm(fin)):'')+'</span></div>'
-            +'<div class="pet">Horas asignadas</div>'
-            +'<div class="ppila"><i class="'+nv1+'" style="width:'+w(papel)+'%"></i>'
-              +'<span class="marca" style="left:'+w(jornada)+'%"></span></div>'
-            +'<div class="pfila"><span class="ppct '+nv1+'">'+pct+'%</span>'
-              +'<span class="pmin">'+hm(papel)+' de papel · el turno son '+hm(jornada)+'</span>'
-              +(extra>0?'<span class="pext">⚠ '+hm(extra)+' extra</span>':'')+'</div>'
             +'<div class="pet">Horas medidas en tareas</div>'
             +'<div class="ppila"><i class="'+(reales>jornada?'bad':'ok')+'" style="width:'+w(reales)+'%"></i>'
               +'<span class="marca" style="left:'+w(jornada)+'%"></span></div>'
             +'<div class="pfila"><span class="ppct '+(reales>jornada?'bad':'ok')+'">'+hm(reales)+'</span>'
               +'<span class="pmin">medidas en cuartos y áreas · el contrato son '+hm(jornada)+'</span></div>'
-            +'<div class="pgrid">'
-              +'<div><b>'+hechas+'/'+tareas+'</b><span>tareas hechas</span></div>'
-              +'<div class="'+(Number(x.tareas_extra||0)?'ex':'')+'"><b>'+Number(x.tareas_extra||0)+'</b><span>extraordinarias</span></div>'
-              +'<div class="'+(extra>0?'bad':'')+'"><b>'+hm(extra)+'</b><span>horas extra</span></div>'
-              +'<div class="'+(efi==null?'':(efi>=100?'ok':'warn'))+'"><b>'+(efi==null?'—':efi+'%')+'</b><span>eficiencia</span></div>'
+            +'<div id="hkmas-'+i+'" style="display:none">'
+              +'<div class="pet">Horas asignadas</div>'
+              +'<div class="ppila"><i class="'+nv1+'" style="width:'+w(papel)+'%"></i>'
+                +'<span class="marca" style="left:'+w(jornada)+'%"></span></div>'
+              +'<div class="pfila"><span class="ppct '+nv1+'">'+pct+'%</span>'
+                +'<span class="pmin">'+hm(papel)+' de papel · el turno son '+hm(jornada)+'</span>'
+                +(extra>0?'<span class="pext">⚠ '+hm(extra)+' extra</span>':'')+'</div>'
+              +'<div class="pgrid">'
+                +'<div><b>'+hechas+'/'+tareas+'</b><span>tareas hechas</span></div>'
+                +'<div class="'+(Number(x.tareas_extra||0)?'ex':'')+'"><b>'+Number(x.tareas_extra||0)+'</b><span>extraordinarias</span></div>'
+                +'<div class="'+(extra>0?'bad':'')+'"><b>'+hm(extra)+'</b><span>horas extra</span></div>'
+                +'<div class="'+(efi==null?'':(efi>=100?'ok':'warn'))+'"><b>'+(efi==null?'—':efi+'%')+'</b><span>eficiencia</span></div>'
+              +'</div>'
+              +'<div class="ppie"><span><b>'+Math.round(hechoPapel)+'/'+Math.round(papel)+'</b> min de papel</span>'
+                +(noQ?'<span title="No quisieron limpieza: no cuentan en su carga"><b>'+noQ+'</b> no molestar</span>':'')
+                +'<span><b>'+(ent||'—')+'</b> entrada</span>'
+                +(Number(x.privadas_fuera_de_hora||0)?'<span class="mal"><b>'+Number(x.privadas_fuera_de_hora)+'</b> tarde</span>':'')
+              +'</div>'
             +'</div>'
-            +'<div class="ppie"><span><b>'+Math.round(hechoPapel)+'/'+Math.round(papel)+'</b> min de papel</span>'
-              +(noQ?'<span title="No quisieron limpieza: no cuentan en su carga"><b>'+noQ+'</b> no molestar</span>':'')
-              +'<span><b>'+(ent||'—')+'</b> entrada</span>'
-              +(Number(x.privadas_fuera_de_hora||0)?'<span class="mal"><b>'+Number(x.privadas_fuera_de_hora)+'</b> tarde</span>':'')
-            +'</div></div>';
+            +'<div id="hkbtn-'+i+'" onclick="hkMas('+i+')" style="cursor:pointer;color:var(--accent);'
+              +'font-weight:700;font-size:.78rem;padding-top:6px">más ▾</div>'
+            +'</div>';
         }).join('');
         html+='<div class="sub-muted" style="margin-top:6px">El apoyo validado y los minutos entre tareas se cuentan en <b>Ama de llaves</b>: aquí van las horas medidas en cuartos y áreas.</div>';
       }
