@@ -5107,8 +5107,17 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
            '<div><b>'+pers+'</b><span>personas</span></div>'+
            '<div><b>'+ccPesos(neto)+'</b><span>neto</span></div>'+
            '<div class="tot"><b>'+ccPesos(bruto)+'</b><span>con IVA</span></div></div>';
-      if(casa && !hayFactura)
-        c1+='<div class="ccacc"><button class="btn fantasma sm" data-serv-odc="'+esc(t.id)+'">Cambiar el coste</button></div>';
+      /* LA COTIZACIÓN, DESDE LA MISMA FUENTE. Javi, 20-nov-2026: «genera un
+         botón en la ODC que diga Generar Cotización, con todos los servicios,
+         el precio neto, el IVA y el total, con el logo y la info de una
+         especie de factura proforma». Hasta hoy eso se armaba a mano en un
+         correo: salía distinto cada vez y nunca coincidía del todo con lo
+         conciliado, que es como nace una discusión de dinero. */
+      if(casa)
+        c1+='<div class="ccacc">'+
+            (hayFactura?'':'<button class="btn fantasma sm" data-serv-odc="'+esc(t.id)+'">Cambiar el coste</button>')+
+            '<button class="btn sm" data-cot="'+esc(t.id)+'">Generar cotización</button></div>'+
+            '<div id="cot-'+esc(t.id)+'"></div>';
     }else if(casa){
       var ops=CC.serv.map(function(x){ return '<option value="'+esc(x.id)+'">'+esc(x.nombre)+
                 ' · '+ccPesos(x.precio_neto)+'</option>'; }).join('');
@@ -5286,6 +5295,61 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(texto) toast(texto);
     await cargaConc();
     return j;
+  }
+
+  /* La cotización se baja como PDF y, si quieren, se manda. El correo se
+     escribe aquí y no se adivina: quien cobra sabe a quién le toca revisar
+     esto, y el CC es el rastro de que contabilidad se enteró. */
+  async function ccCotiza(id, b, enviarA, cc){
+    var antes=b.textContent; b.disabled=true; b.textContent=enviarA?'Enviando…':'Armando…';
+    try{
+      var cuerpo={ticket_id:id};
+      if(enviarA){ cuerpo.enviar_a=enviarA; cuerpo.cc=cc||[]; }
+      var r=await fetch(SB+'/functions/v1/op-cotizacion',{method:'POST',
+        headers:Object.assign(hdr(),{'Content-Type':'application/json'}),
+        body:JSON.stringify(cuerpo)});
+      var d=await r.json().catch(function(){return null;});
+      if(!d||!d.ok) throw new Error((d&&d.error)||('la función respondió '+r.status));
+
+      /* El PDF siempre se baja, se mande o no: quien lo manda quiere verlo
+         antes, y quien no lo manda igual lo necesita. */
+      var bin=atob(d.pdf_b64), u8=new Uint8Array(bin.length), i;
+      for(i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+      var url=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
+      var a=document.createElement('a'); a.href=url; a.download=d.archivo||'cotizacion.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 8000);
+
+      if(enviarA){
+        toast(d.enviado&&d.enviado.ok ? ('Cotización enviada a '+enviarA)
+                                      : ('El PDF se bajó, pero el correo no salió: '+((d.enviado&&d.enviado.error)||'sin detalle')),
+              !(d.enviado&&d.enviado.ok));
+        if(d.enviado&&d.enviado.ok){ var cj=$('cot-'+id); if(cj) cj.innerHTML='<div class="mini">Enviada a '+esc(enviarA)+'.</div>'; }
+      }else{
+        toast('Cotización '+d.folio+' · '+ccPesos(d.total));
+        ccCajaEnvio(id, d);
+      }
+    }catch(e){ toast('No se pudo: '+((e&&e.message)||e), true); }
+    b.disabled=false; b.textContent=antes;
+  }
+
+  function ccCajaEnvio(id, d){
+    var c=$('cot-'+id); if(!c) return;
+    c.innerHTML='<div class="ccmueve" style="margin-top:9px;flex-wrap:wrap">'+
+      '<input id="cotmail-'+esc(id)+'" type="email" placeholder="Enviar a — correo del cliente" '+
+        'style="flex:1 1 240px;padding:8px 10px;border:1.5px solid var(--linea);border-radius:9px;font:inherit">'+
+      '<input id="cotcc-'+esc(id)+'" placeholder="CC, separados por coma" value="contabilidad@casapepe.mx" '+
+        'style="flex:1 1 240px;padding:8px 10px;border:1.5px solid var(--linea);border-radius:9px;font:inherit">'+
+      '<button class="btn sm" id="cotsend-'+esc(id)+'">Enviar</button></div>'+
+      '<div class="mini">'+esc(d.servicios+' servicio'+(d.servicios===1?'':'s')+' · '+d.pax+' personas · '+
+        ccPesos(d.neto)+' + IVA '+ccPesos(d.iva)+' = '+ccPesos(d.total))+'</div>';
+    var bs=$('cotsend-'+id);
+    if(bs) bs.onclick=function(){
+      var m=($('cotmail-'+id).value||'').trim();
+      if(!/.+@.+\..+/.test(m)){ toast('Falta el correo de quien lo recibe', true); return; }
+      var cc=($('cotcc-'+id).value||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
+      ccCotiza(id, bs, m, cc);
+    };
   }
 
   async function ponCosteODC(id, b){
@@ -5487,6 +5551,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); guardaMontoOC(b.getAttribute('data-omon'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-val]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); validaLinea(b.getAttribute('data-val')); };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-cot]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); ccCotiza(b.getAttribute('data-cot'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-serv-odc]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); ponCosteODC(b.getAttribute('data-serv-odc'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-odc]'),function(b){
