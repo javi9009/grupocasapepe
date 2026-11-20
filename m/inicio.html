@@ -754,7 +754,7 @@ function renderDia(hk, off){
     });
   }).catch(function(){ if(vivo()) porcablear('valoraciones','Valoraciones: no se pudo cargar.'); });
 
-  /* Tours del día: v_salidas_ocupacion (por hotel)
+  /* Tours del día: v_salidas_dia (por sede, con pax de verdad y escaneos)
 
      LAS MADRUGADAS DE MAÑANA TAMBIÉN. Javi, 24-oct-2026, después de perder un
      vuelo en globo: lo compraron a mediodía del 22 para el 23 a las 05:00. En
@@ -762,39 +762,87 @@ function renderDia(hk, off){
      las cinco de la mañana, cuando ya había despegado. Un tour de madrugada no
      tiene ningún "hoy" en el que alguien lo vea con tiempo de atenderlo.
 
-     Así que este bloque mira dos días y enseña aparte lo que sale mañana antes
-     de las 9. Quien cierra el turno de la tarde lo ve antes de irse, que es el
-     único momento en que todavía se puede hacer algo. */
+     LA SEDE NO SE ADIVINA LEYENDO UN TEXTO. Javi, 20-nov-2026: «esta parte de
+     salidas del tour no la veo tan acertada, hoy había varios Teos». Y era
+     verdad: esto decidía la sede mirando si el punto de encuentro DECÍA "casa
+     pepe", así que una salida sin punto escrito —Teotihuacán con 7, Vámonos de
+     Pinta con 3, Noche Mexicana con 61— no aparecía en ninguna parte; y
+     Mexicanismos, que es de Puebla, salía en CDMX porque su pulquería se llama
+     "Cósmica de Casa Pepe". Ahora la sede viene de la vista, de donde vive el
+     dato: el property_id de la salida, y si no lo trae, la ciudad de la ficha.
+
+     Y SE VE SI SE ESCANEÓ. Un tour con gente y sin un solo escaneo es lo único
+     de esta tarjeta sobre lo que todavía se puede hacer algo mientras pasa. */
   var MADRUGADA_HASTA='09:00';
-  $('toursDia').innerHTML='<div class="hd"><h3>Salidas de tours del día</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
-  guard(function(){ var manana=fechaOff(-1);
-    return sb.from('v_salidas_ocupacion').select('fecha,experiencia,hora,cupo_tomado,reservas,punto_encuentro,property_id,estado').in('fecha',[fecha,manana])
-    .then(function(r){ if(!vivo())return; var todas=(r.data||[]).filter(function(x){
-        if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0) return false;
-        if(H.sede==='puebla') return /puebla/i.test(x.punto_encuentro||'') || x.property_id===H.uuid;
-        if(H.sede==='virreyes') return /virrey|ateneo|izazaga/i.test(x.punto_encuentro||'') || x.property_id===H.uuid;
-        return /cdmx|casa pepe/i.test(x.punto_encuentro||'') && !/virrey|ateneo|izazaga|puebla/i.test(x.punto_encuentro||'');
-      });
-      var rows=todas.filter(function(x){ return String(x.fecha)===fecha; });
-      var prono=todas.filter(function(x){ return String(x.fecha)===manana
-        && String(x.hora||'23:59').slice(0,5) < MADRUGADA_HASTA; })
-        .sort(function(a,b){ return String(a.hora||'')<String(b.hora||'')?-1:1; });
-      var totPax=rows.reduce(function(s,x){return s+Number(x.cupo_tomado||x.reservas||0);},0);
-      function fila(x,clase){ return '<div class="row"><span class="dot '+(clase||'acc')+'"></span><div class="bd"><div class="t">'+(x.hora?String(x.hora).slice(0,5)+' · ':'')+esc(x.experiencia||'Tour')+'</div></div><span class="n">'+Number(x.cupo_tomado||x.reservas||0)+' pax</span></div>'; }
-      var html='<div class="hd"><h3>Salidas de tours del día</h3>'+bdg('ok')+'</div>';
-      if(!rows.length){ html+='<div class="empty">Sin salidas hoy.</div>'; }
-      else { html+=rows.map(function(x){ return fila(x); }).join('');
-        html+='<div class="row" style="border-top:1px dashed var(--rule)"><div class="bd"><div class="t">Huéspedes que se movieron hoy</div></div><span class="n">'+totPax+' pax</span></div>'; }
-      /* Si hay madrugada mañana, se avisa fuerte: es lo único de esta tarjeta
-         sobre lo que todavía se puede actuar. */
+  var TOURS={hoy:[],man:[],fecha:'',manana:'',tab:'hoy'};
+  $('toursDia').innerHTML='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'</div><div class="na">Cargando…</div>';
+  window.toursTab=function(t){ TOURS.tab=(t==='man'?'man':'hoy'); pintaTours(); };
+  function toursFila(x,clase){
+    var pax=Number(x.pax||0), esc_=Number(x.escaneadas||0), paxEsc=Number(x.pax_escaneados||0);
+    var pend=Number(x.pax_pendientes||0);
+    var det=[];
+    if(pax>0) det.push(paxEsc>0 ? (paxEsc+' de '+pax+' escaneados') : 'nadie ha escaneado');
+    if(pend>0) det.push(pend+' sin pagar');
+    if(!pax && !pend) det.push('sin reservas');
+    var d=clase;
+    if(!d){ d = pax===0 ? 'acc' : (paxEsc>=pax ? 'ok' : (toursYaPaso(x) ? 'bad' : 'warn')); }
+    return '<div class="row"><span class="dot '+d+'"></span><div class="bd">'
+      +'<div class="t">'+(x.hora?String(x.hora).slice(0,5)+' · ':'')+esc(x.experiencia||'Tour')+'</div>'
+      +'<div class="d">'+esc(det.join(' · '))+'</div></div>'
+      +'<span class="n">'+pax+' pax</span></div>';
+  }
+  function toursYaPaso(x){
+    if(String(x.fecha)!==iso(mxNow())) return false;
+    var ahora=mxNow(); var hh=String(ahora.getHours()).padStart(2,'0')+':'+String(ahora.getMinutes()).padStart(2,'0');
+    return String(x.hora||'23:59').slice(0,5) < hh;
+  }
+  function pintaTours(){
+    var esHoyTab=TOURS.tab!=='man';
+    var rows=esHoyTab?TOURS.hoy:TOURS.man;
+    var totPax=rows.reduce(function(s,x){return s+Number(x.pax||0);},0);
+    var totEsc=rows.reduce(function(s,x){return s+Number(x.pax_escaneados||0);},0);
+    var bt='display:inline-block;padding:5px 13px;border-radius:999px;font-weight:700;font-size:.78rem;cursor:pointer;border:1px solid var(--rule);margin-right:6px';
+    var on=';background:var(--accent);color:#fff;border-color:var(--accent)';
+    var off=';background:var(--surface-3);color:var(--ink-2)';
+    var html='<div class="hd"><h3>Salidas de tours</h3>'+bdg('ok')+'</div>'
+      +'<div style="margin:2px 0 8px">'
+      +'<span style="'+bt+(esHoyTab?on:off)+'" onclick="toursTab(\'hoy\')">Hoy</span>'
+      +'<span style="'+bt+(esHoyTab?off:on)+'" onclick="toursTab(\'man\')">Mañana</span>'
+      +'</div>';
+    if(!rows.length){ html+='<div class="empty">Sin salidas '+(esHoyTab?'hoy':'mañana')+'.</div>'; }
+    else { html+=rows.map(function(x){ return toursFila(x); }).join('');
+      html+='<div class="row" style="border-top:1px dashed var(--rule)"><div class="bd"><div class="t">'
+        +(esHoyTab?'Huéspedes que se mueven hoy':'Huéspedes que se mueven mañana')+'</div>'
+        +(esHoyTab?('<div class="d">'+totEsc+' escaneados de '+totPax+'</div>'):'')
+        +'</div><span class="n">'+totPax+' pax</span></div>'; }
+    /* Si hay madrugada mañana, se avisa fuerte en la pestaña de hoy: es lo
+       único sobre lo que todavía se puede actuar antes de cerrar el turno. */
+    if(esHoyTab){
+      var prono=TOURS.man.filter(function(x){ return String(x.hora||'23:59').slice(0,5) < MADRUGADA_HASTA; });
       if(prono.length){
         html+='<div class="row" style="border-top:2px solid var(--accent);background:var(--accent-soft)">'
           +'<div class="bd"><div class="t">⏰ Mañana de madrugada — hay que dejarlo listo HOY</div>'
           +'<div class="d">Sale antes de las '+MADRUGADA_HASTA+': nadie va a verlo a tiempo mañana.</div></div></div>';
-        html+=prono.map(function(x){ return fila(x,'warn'); }).join('');
+        html+=prono.map(function(x){ return toursFila(x,'warn'); }).join('');
       }
-      html+='<div class="sub-muted">% de huéspedes que compraron tour (anoche): <b>por cablear</b>.</div>';
-      $('toursDia').innerHTML=html;
+    }
+    html+='<div class="sub-muted">% de huéspedes que compraron tour (anoche): <b>por cablear</b>.</div>';
+    $('toursDia').innerHTML=html;
+  }
+  guard(function(){
+    var dm=new Date(fecha+'T12:00:00'); dm.setDate(dm.getDate()+1);
+    var manana=dm.toISOString().slice(0,10);
+    return sb.from('v_salidas_dia').select('fecha,hora,experiencia,estado,sede,pax,reservas,pax_pendientes,escaneadas,pax_escaneados,cupo_max').in('fecha',[fecha,manana])
+    .then(function(r){ if(!vivo())return;
+      var todas=(r.data||[]).filter(function(x){
+        if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0) return false;
+        return String(x.sede||'')===H.sede;
+      });
+      function ord(a,b){ return String(a.hora||'')<String(b.hora||'')?-1:1; }
+      TOURS.fecha=fecha; TOURS.manana=manana; TOURS.tab='hoy';
+      TOURS.hoy=todas.filter(function(x){ return String(x.fecha)===fecha; }).sort(ord);
+      TOURS.man=todas.filter(function(x){ return String(x.fecha)===manana; }).sort(ord);
+      pintaTours();
     }).catch(function(){ if(vivo()) porcablear('toursDia','Salidas de tours: no se pudo cargar.'); }); });
 
   // A&B día anterior: Poster (externo)
@@ -940,9 +988,11 @@ function renderSemana(hk){
   }).catch(function(){ if(vivo()){ setK(0,'—');setK(1,'—');setK(2,'—'); } }); });
 
   // tours pax total
-  guard(function(){ return sb.from('v_salidas_ocupacion').select('cupo_tomado,reservas,punto_encuentro,property_id,estado,fecha').gte('fecha',desde).lte('fecha',hasta).then(function(r){ if(!vivo())return;
-    var rows=(r.data||[]).filter(function(x){ if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0)return false; if(H.sede==='puebla')return /puebla/i.test(x.punto_encuentro||'')||x.property_id===H.uuid; return /cdmx|casa pepe/i.test(x.punto_encuentro||'')&&!/virrey|ateneo|izazaga|puebla/i.test(x.punto_encuentro||''); });
-    var pax=rows.reduce(function(s,x){return s+Number(x.cupo_tomado||x.reservas||0);},0);
+  /* Misma corrección que la tarjeta del día: la sede sale de la vista, no de
+     leer el punto de encuentro, y los pax son la suma de las reservas. */
+  guard(function(){ return sb.from('v_salidas_dia').select('pax,sede,estado,fecha').gte('fecha',desde).lte('fecha',hasta).then(function(r){ if(!vivo())return;
+    var rows=(r.data||[]).filter(function(x){ if(String(x.estado||'').toLowerCase().indexOf('cancel')>=0)return false; return String(x.sede||'')===H.sede; });
+    var pax=rows.reduce(function(s,x){return s+Number(x.pax||0);},0);
     setK(3, pax, rows.length+' salidas');
   }).catch(function(){ if(vivo()) setK(3,'—'); }); });
 
