@@ -284,6 +284,8 @@ var S={
   ficha:null                    /* {que, id} */
 };
 var CAT={transportes:[],exps:[],espacios:[],extras:[],reglas:{},carta:[]};
+var TOKEN=(function(){ try{ return new URLSearchParams(location.search).get('t')||''; }catch(_){ return ''; } })();
+var VOLVIO=false, YACERRADA=false;
 /* PRIMERO QUÉ QUIEREN, LUEGO CÓMO LLEGAN. Javi, 21-nov-2026: «pon primero
    qué experiencia quieren y luego lo del transporte». Preguntar el transporte
    antes de saber a dónde van es pedirle al cliente que decida el camino sin
@@ -960,11 +962,20 @@ function pinta(){
   pintaPasos();
   var cuerpo=[paso1,paso3,pDonde,pHorario,paso2,paso5,paso6,pResumen][S.paso-1]();
   var ultimo=S.paso===8;
-  $('main').innerHTML='<div class="card">'+fichaHtml()+cuerpo+
+  $('main').innerHTML='<div class="card">'+
+    (TOKEN && VOLVIO
+      ? '<div class="nota '+(YACERRADA?'amb':'verde')+'" style="margin-bottom:14px">'+
+        (YACERRADA
+          ? 'Esta cotización ya está confirmada y programada. Si hay que mover algo, escríbenos.'
+          : 'Estás editando <b>tu cotización</b>. Cambia lo que quieras y vuelve a mandarla: '+
+            'conserva su mismo folio.')+'</div>'
+      : '')+
+    fichaHtml()+cuerpo+
     '<div class="navpaso">'+
       '<button type="button" class="btn gris" id="bAnt"'+(S.paso===1?' disabled':'')+'>← Anterior</button>'+
       (ultimo
-        ? '<button type="button" class="btn" id="bEnviar">Recibir mi cotización →</button>'
+        ? '<button type="button" class="btn" id="bEnviar"'+(YACERRADA?' disabled':'')+'>'+
+          (TOKEN?'Guardar y reenviármela →':'Recibir mi cotización →')+'</button>'
         : '<button type="button" class="btn" id="bSig">Siguiente: '+esc(PASOS[S.paso][1])+' →</button>')+
     '</div></div>';
   cablea();
@@ -1000,6 +1011,12 @@ function pintaGracias(){
           '" target="_blank" rel="noopener">Escribir por WhatsApp</a></div>'+
         '<div class="mini">+'+esc(wa)+'</div></div>'+
     '</div>'+
+    (r.token
+      ? '<p style="margin-top:20px"><a class="btn" href="/sinc/proforma.html?t='+esc(r.token)+'">'+
+        'Ver mi cotización completa →</a></p>'+
+        '<p class="mini">Esa liga es tuya: desde ahí la guardas en PDF, la imprimes o la cambias. '+
+        'También te la mandamos por correo.</p>'
+      : '')+
     '<p class="mini" style="margin-top:22px"><a href="/sinc/">Volver a las experiencias</a></p>'+
   '</div>';
   $('cesta').style.display='none';
@@ -1122,6 +1139,42 @@ function cablea(){
   var e=$('bEnviar'); if(e) e.onclick=function(){ envia(e); };
 }
 
+/* ====================== SU SESIÓN ======================
+   Javi, 21-nov-2026: «el link permite entrar a SU sesión de la cotización
+   para editar cosas». No hay cuenta ni contraseña: la llave es el token que
+   sólo está en su correo. Lo que se recupera es el `snapshot` -el payload
+   tal como lo mandó su navegador la última vez-, así que el cotizador vuelve
+   exactamente a donde lo dejó, sin reconstruir nada a mano. */
+async function rehidrata(){
+  try{
+    var r=await fetch(SB+'/rest/v1/rpc/corp_proforma',{method:'POST',
+      headers:{apikey:KEY,'Content-Type':'application/json'},body:JSON.stringify({p_token:TOKEN})});
+    var j=await r.json();
+    if(!r.ok||!j||j.ok!==true) throw new Error((j&&j.error)||'no se pudo');
+    if(j.cot && j.cot.confirmada){ YACERRADA=true; }
+    var p=j.snapshot||{}; if(!p || !Object.keys(p).length) return;
+    S.empresa=p.empresa||''; S.contacto=p.contacto||''; S.email=p.email||'';
+    S.idea=p.idea||''; S.personas=Number(p.personas)||S.personas;
+    S.fecha1=p.fecha1||''; S.fecha2=p.fecha2||'';
+    S.horaIni=p.hora1||''; S.horaFin=p.hora_fin||'';
+    S.lugarModo=p.lugar_modo||'preasignado';
+    S.lugarOtro=(S.lugarModo==='preasignado')?'':(p.lugar_dir||p.lugar_nombre||'');
+    S.comentarios=p.comentarios||'';
+    S.exp=p.experiencia||null;
+    S.recogida=(p.recogida&&p.recogida.dir)||''; S.recogidaHora=(p.recogida&&p.recogida.hora)||'';
+    S.regreso=(p.regreso&&p.regreso.dir)||'';   S.regresoHora=(p.regreso&&p.regreso.hora)||'';
+    S.recorrido=!!p.recorrido_turistico;
+    S.veh={}; (p.transportes||[]).forEach(function(v){ S.veh[v.id]=Number(v.unidades)||0; });
+    S.transpSi=(p.transportes||[]).length>0 || !!S.recogida;
+    S.ab={}; (p.ab||[]).forEach(function(x){ S.ab[x.carta_id]={cant:Number(x.cant)||0, modo:x.modo||'persona'}; });
+    S.abTexto=p.ab_texto||''; S.abSi=(Object.keys(S.ab).length>0 || !!S.abTexto);
+    S.extras={}; (p.extras||[]).forEach(function(x){ S.extras[x.id]=Number(x.horas)||0; });
+    await cargaCarta();
+    S.paso=8;   /* vuelve al resumen, que es desde donde se corrige */
+    VOLVIO=true;
+  }catch(_){ }
+}
+
 /* ====================== ENVIAR ======================
    Lo que se manda es lo ELEGIDO, no los totales: el servidor los recalcula.
    Si el navegador mintiera, no serviría de nada. */
@@ -1168,9 +1221,11 @@ async function envia(b){
     extras:Object.keys(S.extras).map(function(k){ return {id:k, horas:S.extras[k]}; })
   };
   try{
-    var r=await fetch(SB+'/rest/v1/rpc/corp_solicitar',{method:'POST',
+    /* Si venimos de su liga, no nace otra cotización: se reescribe la suya,
+       con su mismo folio, una versión más arriba. */
+    var r=await fetch(SB+'/rest/v1/rpc/'+(TOKEN?'corp_reeditar':'corp_solicitar'),{method:'POST',
       headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json'},
-      body:JSON.stringify({payload:payload})});
+      body:JSON.stringify(TOKEN?{p_token:TOKEN, payload:payload}:{payload:payload})});
     var j=await r.json();
     if(!r.ok || !j || j.ok!==true){
       b.disabled=false; b.textContent='Recibir mi cotización →';
@@ -1184,7 +1239,7 @@ async function envia(b){
     try{
       await fetch(SB+'/functions/v1/corp-correo',{method:'POST',
         headers:{apikey:KEY,'Content-Type':'application/json'},
-        body:JSON.stringify({cotizacion_id:j.id})});
+        body:JSON.stringify(TOKEN?{token:TOKEN}:{cotizacion_id:j.id})});
     }catch(_e){}
   }catch(x){
     b.disabled=false; b.textContent='Recibir mi cotización →';
@@ -1222,6 +1277,7 @@ async function cargaCarta(){
   (res[4]||[]).forEach(function(r){ CAT.reglas[r.clave]=r.valor; });
   var wa=String(regla('whatsapp_seguimiento','+525549305703')).replace(/[^0-9]/g,'');
   var nv=$('navWa'); if(nv){ nv.href='https://wa.me/'+wa; nv.target='_blank'; nv.rel='noopener'; }
+  if(TOKEN) await rehidrata();
   pinta();
 })();
 })();
