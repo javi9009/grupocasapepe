@@ -2640,6 +2640,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       try{
         var rsv=await fetch(SB+'/rest/v1/op_servicios_dados'+
           '?select=id,salida_id,fecha,personas,precio_neto,iva_pct,estado,nota,nombres,'+
+          'requiere_luchador,luchador_neto,cesta,cocina_avisada_at,pago_at,factura_folio,'+
           'servicio:servicio_id(nombre,incluye,unidad)'+
           '&origen=eq.especial&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha',
           {headers:hdr()});
@@ -3395,9 +3396,273 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
           (uni.indexOf('grupo')===0?' (por el grupo)':' ('+(Number(x.personas)||0)+' × '+money(x.precio_neto)+')')+
           ' · '+(x.estado==='por_conciliar'?'entra en tu conciliación cuando pase el día':esc(x.estado))+
         '</div>'+
+        /* LA CESTA, DESGLOSADA. Javi, 20-nov-2026: lo que se pidió de La
+           Cósmica es justo lo que cocina tiene que leer, y un total no se
+           puede cocinar. */
+        (function(){
+          var c=x.cesta; if(!c||!c.length) return '';
+          return '<div class="mini" style="margin-top:6px;padding-left:9px;border-left:2px solid #C79A2E">'+
+            c.map(function(p){ return '<div>'+(Number(p.cant)||0)+' × '+esc(p.nombre||'')+
+              ' · '+money((Number(p.cant)||0)*(Number(p.precio_neto)||0))+' sin IVA</div>'; }).join('')+
+          '</div>';
+        })()+
+        (x.requiere_luchador
+          ? '<div class="mini" style="margin-top:5px;font-weight:700;color:#8C6212">Requiere servicio de luchador'+
+            (Number(x.luchador_neto)>0?' · '+money(x.luchador_neto)+' sin IVA':'')+'</div>'
+          : '')+
         (x.nota?'<div class="mini" style="margin-top:4px;color:var(--gris,#6E655C)">'+esc(x.nota)+'</div>':'')+
+
+        /* EDITAR Y AVISAR A COCINA. Javi, 20-nov-2026: «permítenos editar los
+           servicios especiales porque igual metemos más servicios» y «cuando
+           terminan de editar, un botón que sea enviar a cocina».
+           Lo facturado o pagado ya no se toca: se mira. */
+        (x.pago_at||x.factura_folio
+          ? '<div class="mini" style="margin-top:8px;color:var(--gris,#6E655C)">Ya facturado o pagado: '+
+            'esto ya no se edita desde aquí.</div>'
+          : '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:9px">'+
+            '<button class="btn sm" data-espedit="'+x.id+'">'+
+              (PG.espEdit===x.id?'Dejarlo':'Editar el servicio')+'</button>'+
+            '<button class="btn sm" data-espcocina="'+x.id+'">'+
+              (x.cocina_avisada_at?'Volver a avisar a cocina':'Enviar a cocina')+'</button>'+
+            (x.cocina_avisada_at
+              ? '<span class="mini">Cocina avisada el '+esc(String(x.cocina_avisada_at).slice(8,10))+'/'+
+                esc(String(x.cocina_avisada_at).slice(5,7))+' a las '+
+                esc(new Date(x.cocina_avisada_at).toTimeString().slice(0,5))+'.</span>'
+              : '<span class="mini">Cocina todavía no lo sabe.</span>')+
+          '</div>')+
+        (PG.espEdit===x.id ? espEditHtml(x) : '')+
       '</div>';
     }).join('');
+  }
+
+  /* ============ EDITAR EL SERVICIO ESPECIAL ============
+     Javi, 20-nov-2026. Tres cosas que pidió juntas y son la misma:
+       · poder editarlo, «porque igual metemos más servicios»;
+       · la carta de La Cósmica con el 25% de Capital Bus, como una cesta de la
+         compra que suma el total del servicio;
+       · la casilla de «requiere servicio de luchador».
+
+     Y una regla que no se ve pero manda: la cesta y el luchador son importes
+     DEL GRUPO, no por persona. Si el servicio se quedara «por persona», la
+     conciliación multiplicaría 60 tacos por 20 personas. Por eso al guardar
+     con cesta o con luchador el servicio pasa a cobrarse por el grupo.
+
+     Los precios de la carta vienen CON IVA (precio_incluye_iva). Aquí todo se
+     guarda sin IVA, que es como viaja a la conciliación y a la factura: se
+     aplica el descuento sobre el precio de carta y se divide entre 1.16. */
+  var CESTA={carta:null,desc:0,sel:{}};
+
+  function cestaNetoUnit(p){
+    var pr=Number(p.precio_mxn||0)*(1-(Number(CESTA.desc)||0)/100);
+    return p.precio_incluye_iva===false ? pr : pr/1.16;
+  }
+  function cestaSuma(){
+    var t=0; (CESTA.carta||[]).forEach(function(p){
+      var n=Number(CESTA.sel[p.id]||0); if(n>0) t+=n*cestaNetoUnit(p); });
+    return t;
+  }
+  function espTotal(){
+    var l=$('xeLuch')&&$('xeLuch').checked ? Number(($('xeLuchN')||{}).value||0) : 0;
+    return cestaSuma()+l;
+  }
+  function espPinta(){
+    var c=$('xeTot'); if(!c) return;
+    var cs=cestaSuma(), l=$('xeLuch')&&$('xeLuch').checked?Number(($('xeLuchN')||{}).value||0):0,
+        t=cs+l, pax=Number(($('xeP')||{}).value||0);
+    var dir=$('xePr')&&$('xePr').value!=='' ? Number($('xePr').value) : null;
+    if(t>0){
+      c.innerHTML='Cesta <b>'+money(cs)+'</b>'+(l>0?' + luchador <b>'+money(l)+'</b>':'')+
+        ' = <b>'+money(t)+'</b> sin IVA · '+money(t*1.16)+' con IVA'+
+        (pax>0?' · '+money(t/pax)+' por persona':'')+
+        '<div class="mini">Se guarda como precio del grupo.</div>';
+    }else if(dir!=null){
+      c.innerHTML='<b>'+money(dir)+'</b> sin IVA · '+money(dir*1.16)+' con IVA'+
+        '<div class="mini">Sin cesta: se guarda tal cual, en la unidad que ya tenía.</div>';
+    }else c.innerHTML='';
+  }
+  async function cestaCarga(){
+    if(CESTA.carta) return;
+    try{
+      var r=await fetch(SB+'/rest/v1/cosmica_carta?select=id,seccion,grupo,nombre,gramaje,'+
+        'precio_mxn,precio_incluye_iva&activo=eq.true&order=seccion,orden&limit=400',{headers:hdr()});
+      CESTA.carta = r.ok ? await r.json() : [];
+    }catch(_){ CESTA.carta=[]; }
+    try{
+      if(OPID){
+        var ro=await fetch(SB+'/rest/v1/tour_operadores?select=menu_descuento_pct&id=eq.'+OPID,{headers:hdr()});
+        var jo=ro.ok?await ro.json():[];
+        CESTA.desc = Number((jo[0]||{}).menu_descuento_pct||0);
+      }
+    }catch(_){ CESTA.desc=0; }
+  }
+  function cestaHtml(){
+    var l=CESTA.carta||[];
+    if(!l.length) return '<div class="mini">No pude traer la carta de La Cósmica. '+
+      'Pon el precio a mano y dilo en «qué incluye».</div>';
+    var secs={}, orden=[];
+    l.forEach(function(p){ var k=p.seccion||'Otros';
+      if(!secs[k]){ secs[k]=[]; orden.push(k); } secs[k].push(p); });
+    return orden.map(function(k){
+      var n=0; secs[k].forEach(function(p){ n+=Number(CESTA.sel[p.id]||0); });
+      return '<details'+(n>0?' open':'')+' style="margin:6px 0">'+
+        '<summary class="mini" style="cursor:pointer;font-weight:700">'+esc(k)+
+          (n>0?' · '+n+' en la cesta':'')+'</summary>'+
+        secs[k].map(function(p){
+          return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0">'+
+            '<input type="number" min="0" step="1" data-cesta="'+p.id+'" '+
+              'value="'+(CESTA.sel[p.id]||'')+'" placeholder="0" style="width:62px">'+
+            '<span class="mini" style="flex:1;min-width:0">'+esc(p.nombre||'')+
+              (p.gramaje?' <span style="opacity:.7">'+esc(p.gramaje)+'</span>':'')+'</span>'+
+            '<span class="mini" style="white-space:nowrap">'+money(cestaNetoUnit(p))+' sin IVA</span>'+
+          '</div>';
+        }).join('')+
+      '</details>';
+    }).join('');
+  }
+  function espEditHtml(x){
+    var sv=x.servicio||{};
+    return '<div class="card" style="padding:14px;margin:10px 0 2px;background:#fff">'+
+      '<b style="font-size:14px">'+esc(sv.nombre||'Servicio especial')+'</b>'+
+      '<div class="mini" style="margin:3px 0 10px">Cambia lo que haga falta y guarda. '+
+        'Mientras no se haya facturado, se puede tocar.</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">'+
+        '<label class="mini">El día<input id="xeF" type="date" value="'+
+          esc(String(x.fecha||'').slice(0,10))+'" style="width:100%"></label>'+
+        '<label class="mini">Personas<input id="xeP" type="number" min="1" step="1" value="'+
+          (Number(x.personas)||'')+'" style="width:100%"></label>'+
+        '<label class="mini">Precio sin IVA<input id="xePr" type="number" min="0" step="0.01" value="'+
+          (Number(x.precio_neto)||'')+'" style="width:100%">'+
+          '<span class="mini">Si usas la cesta, lo pone ella.</span></label>'+
+      '</div>'+
+      '<label class="mini" style="display:block;margin-top:9px">Qué incluye'+
+        '<input id="xeI" value="'+esc(sv.incluye||'')+'" style="width:100%"></label>'+
+      '<label class="mini" style="display:block;margin-top:9px">Algo más que debamos saber'+
+        '<input id="xeNo" value="'+esc(x.nota||'')+'" style="width:100%"></label>'+
+
+      '<div style="margin-top:11px;padding-top:10px;border-top:1px solid var(--linea,#E6DFD3)">'+
+        '<label class="mini" style="font-weight:700">'+
+          '<input type="checkbox" id="xeLuch"'+(x.requiere_luchador?' checked':'')+'> '+
+          'Requiere servicio de luchador</label>'+
+        '<div id="xeLuchCaja" style="display:'+(x.requiere_luchador?'':'none')+';margin-top:6px">'+
+          '<label class="mini">Lo que cuesta, sin IVA, por el grupo'+
+            '<input id="xeLuchN" type="number" min="0" step="0.01" value="'+
+            (Number(x.luchador_neto)||'')+'" placeholder="2500" style="width:140px;display:block"></label></div>'+
+      '</div>'+
+
+      '<details id="xeCesta" style="margin-top:11px;padding-top:10px;border-top:1px solid var(--linea,#E6DFD3)"'+
+        ((x.cesta&&x.cesta.length)?' open':'')+'>'+
+        '<summary style="cursor:pointer;font-weight:700;font-size:13px">La carta de La Cósmica'+
+          (CESTA.desc>0?' · '+CESTA.desc+'% de descuento para ustedes':'')+'</summary>'+
+        '<div class="mini" style="margin:5px 0 8px">Pon cuántos de cada cosa. '+
+          'Los precios ya llevan el descuento y se muestran sin IVA.</div>'+
+        '<div id="xeCartaLista">'+cestaHtml()+'</div>'+
+      '</details>'+
+
+      '<div id="xeTot" class="mini" style="margin-top:10px"></div>'+
+      '<div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap">'+
+        '<button class="btn pri" id="xeGo" type="button">Guardar</button>'+
+        '<button class="btn" id="xeNo2" type="button">Dejarlo</button>'+
+      '</div></div>';
+  }
+  async function espAbreEdit(id){
+    if(PG.espEdit===id){ PG.espEdit=null; pintaProg(); return; }
+    var x=null; Object.keys(PG.esp||{}).forEach(function(k){
+      (PG.esp[k]||[]).forEach(function(y){ if(y.id===id) x=y; }); });
+    if(!x) return;
+    await cestaCarga();
+    CESTA.sel={};
+    (x.cesta||[]).forEach(function(p){ if(p&&p.id!=null) CESTA.sel[p.id]=Number(p.cant)||0; });
+    PG.espEdit=id; pintaProg();
+  }
+  /* Los campos del formulario se cablean aquí y no en pintaProg para no
+     repintar la pantalla entera a cada tecla: lo que cambia es sólo el total. */
+  function espCableaEdit(){
+    if(!PG.espEdit) return;
+    var lu=$('xeLuch');
+    if(lu) lu.onchange=function(){
+      var c=$('xeLuchCaja'); if(c) c.style.display=this.checked?'':'none'; espPinta(); };
+    ['xeLuchN','xeP','xePr'].forEach(function(i){ if($(i)) $(i).oninput=espPinta; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-cesta]'),function(inp){
+      inp.oninput=function(){
+        var k=inp.getAttribute('data-cesta'), n=parseInt(inp.value,10);
+        if(n>0) CESTA.sel[k]=n; else delete CESTA.sel[k];
+        var t=espTotal();
+        if(t>0 && $('xePr')) $('xePr').value=t.toFixed(2);
+        espPinta(); };
+    });
+    var g=$('xeGo'); if(g) g.onclick=function(){ espGuarda(PG.espEdit, g); };
+    var n2=$('xeNo2'); if(n2) n2.onclick=function(){ PG.espEdit=null; pintaProg(); };
+    espPinta();
+  }
+  async function espGuarda(id,b){
+    var pax=Number(($('xeP')||{}).value||0);
+    if(!(pax>0)){ await cpAviso('¿Para cuántas personas? Sin eso no sale el importe.'); return; }
+    var cesta=[], tc=0;
+    (CESTA.carta||[]).forEach(function(p){
+      var n=Number(CESTA.sel[p.id]||0); if(!(n>0)) return;
+      var u=cestaNetoUnit(p); tc+=n*u;
+      cesta.push({id:p.id,nombre:p.nombre,cant:n,precio_neto:Number(u.toFixed(2)),
+                  precio_carta:Number(p.precio_mxn)||0,descuento_pct:Number(CESTA.desc)||0});
+    });
+    var luch=!!($('xeLuch')&&$('xeLuch').checked);
+    var luchN=luch?Number(($('xeLuchN')||{}).value||0):0;
+    var conCesta = cesta.length>0 || luch;
+    var precio = conCesta ? (tc+luchN) : Number(($('xePr')||{}).value||0);
+    if(!(precio>0)){ await cpAviso('Falta el precio: pon uno a mano o arma la cesta.'); return; }
+
+    /* LO QUE INCLUYE SE ESCRIBE SOLO cuando hay cesta: es lo que va a leer
+       cocina, y nadie debería tener que teclear dos veces lo que ya eligió. */
+    var inc=String(($('xeI')||{}).value||'').trim();
+    if(cesta.length){
+      var lineas=cesta.map(function(p){ return p.cant+' × '+p.nombre; }).join(', ');
+      inc='La Cósmica'+(CESTA.desc>0?' (−'+CESTA.desc+'%)':'')+': '+lineas+
+          (luch?'. Con servicio de luchador':'')+
+          (inc&&inc.indexOf('La Cósmica')!==0?'. '+inc:'');
+    }else if(luch && inc.toLowerCase().indexOf('luchador')<0){
+      inc=(inc?inc+'. ':'')+'Con servicio de luchador';
+    }
+
+    b.disabled=true; b.textContent='Guardando…';
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/op_especial_guardar',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p_dado:id, p_personas:pax, p_precio:Number(precio.toFixed(2)),
+          p_unidad: conCesta?'grupo':null, p_incluye:inc||null,
+          p_nota:($('xeNo')||{}).value||null, p_fecha:($('xeF')||{}).value||null,
+          p_luchador:luch, p_luchador_neto:luch?luchN:null,
+          p_cesta: cesta.length?JSON.stringify(cesta):null})});
+      var j=await r.json();
+      if(!r.ok||!j||j.ok!==true){
+        await cpAviso((j&&(j.error||j.message))||('No se pudo guardar (la base respondió '+r.status+').'));
+        b.disabled=false; b.textContent='Guardar'; return;
+      }
+      PG.espEdit=null;
+      await cpAviso('Guardado. '+money(precio)+' sin IVA · '+money(precio*1.16)+' con IVA'+
+        (conCesta?' por el grupo':'')+'. Si cocina tiene que saberlo, dale a «Enviar a cocina».');
+      if(typeof cargaProg==='function') cargaProg();
+    }catch(e){
+      await cpAviso('No se pudo guardar: '+e.message);
+      b.disabled=false; b.textContent='Guardar';
+    }
+  }
+  async function espCocina(id,b){
+    if(!await cpPregunta('Esto manda el servicio a la cocina de la azotea y a Puebla, '+
+        'con el día, la hora, las personas y todo lo que lleva. ¿Lo mando?','Sí, mándalo','Ahora no')) return;
+    var t=b.textContent; b.disabled=true; b.textContent='Mandando…';
+    try{
+      var r=await fetch(SB+'/functions/v1/op-especial-cocina',{method:'POST',headers:hdr(),
+        body:JSON.stringify({dado_id:id})});
+      var j=await r.json().catch(function(){return null;});
+      if(!r.ok||!j||j.ok!==true){
+        await cpAviso((j&&j.error)||('No salió el correo (respondió '+r.status+').'));
+        b.disabled=false; b.textContent=t; return;
+      }
+      await cpAviso('Mandado a '+(j.enviado_a||[]).join(' y ')+'. '+
+        'Si algo no se puede dar tal cual, ellos lo dicen hoy.');
+      if(typeof cargaProg==='function') cargaProg();
+    }catch(e){
+      await cpAviso('No salió el correo: '+e.message);
+      b.disabled=false; b.textContent=t;
+    }
   }
 
   /* PENDIENTE DE CONFIRMACIÓN Y PAGO. Javi, 1-nov-2026.
@@ -3964,6 +4229,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         PG.abierto = (PG.abierto===id) ? null : id; pintaProg(); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-nueva]'),function(b){
       b.onclick=function(){ PG.nueva=b.getAttribute('data-nueva'); pintaProg(); };});
+    /* EL SERVICIO ESPECIAL: editarlo y avisar a cocina. Javi, 20-nov-2026. */
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-espedit]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); espAbreEdit(b.getAttribute('data-espedit')); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-espcocina]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); espCocina(b.getAttribute('data-espcocina'), b); };});
+    try{ espCableaEdit(); }catch(_){ }
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solsi]'),function(b){
       b.onclick=function(){ b.disabled=true; contestaSol(b.getAttribute('data-solsi'), true, null); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solno]'),function(b){
