@@ -2826,7 +2826,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       try{
         var rsv=await fetch(SB+'/rest/v1/op_servicios_dados'+
           '?select=id,salida_id,fecha,personas,precio_neto,iva_pct,estado,nota,nombres,'+
-          'requiere_luchador,luchador_neto,cesta,cocina_avisada_at,pago_at,factura_folio,'+
+          'requiere_luchador,luchador_neto,cesta,cocina_avisada_at,pago_at,factura_folio,reserva_id,'+
           'servicio:servicio_id(nombre,incluye,unidad)'+
           '&origen=eq.especial&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha',
           {headers:hdr()});
@@ -3625,6 +3625,34 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
                 esc(new Date(x.cocina_avisada_at).toTimeString().slice(0,5))+'.</span>'
               : '<span class="mini">Cocina todavía no lo sabe.</span>')+
           '</div>')+
+
+        /* EL BOLETO DEL GRUPO. Javi, 21-nov-2026: «este servicio una vez
+           enviado a cocina está confirmado y procede como cualquier otro, con
+           el QR -debes de solicitar el mail del cliente- y los botones de
+           llegó, y se manda a conciliación tras haberse dado el servicio».
+           «Como cualquier otro» no se construye aquí: en cuanto el servicio
+           tiene su reserva, el grupo aparece abajo en la lista de clientes de
+           esta misma salida, con sus botones de llegó y los dos sellos. Esto
+           es sólo el botón que lo convierte. */
+        (function(){
+          if(!x.cocina_avisada_at)
+            return '<div class="mini" style="margin-top:7px">El boleto del grupo se manda '+
+              'después de avisar a cocina.</div>';
+          var res=null;
+          if(x.reserva_id)
+            (PG.clientes[s.id]||[]).forEach(function(c){ if(c.id===x.reserva_id) res=c; });
+          if(!x.reserva_id)
+            return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:7px">'+
+              '<button class="btn sm verde" data-espconf="'+x.id+'">Confirmar y mandar el boleto</button>'+
+              '<span class="mini">Hace falta el correo de quien lleva al grupo.</span></div>';
+          var cod=res?(res.folio||''):'';
+          return '<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:7px">'+
+            '<button class="btn fantasma sm" data-espboleto="'+x.id+'">Volver a mandar el boleto</button>'+
+            '<span class="mini">Confirmado'+(res&&res.nombre?' · '+esc(res.nombre):'')+
+              (res&&res.email?' · '+esc(res.email):'')+
+              (cod?' · <b>'+esc(cod)+'</b>':'')+
+              '. El grupo está abajo, con sus botones de llegó.</span></div>';
+        })()+
         (PG.espEdit===x.id ? espEditHtml(x) : '')+
       '</div>';
     }).join('');
@@ -4246,6 +4274,75 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     }
   }
 
+  /* ============ CONFIRMAR EL SERVICIO Y MANDAR EL BOLETO ============
+     Javi, 21-nov-2026: «este servicio una vez enviado a cocina está confirmado
+     y procede como cualquier otro, con el QR -debes de solicitar el mail del
+     cliente- y los botones de llegó, y se manda a conciliación tras haberse
+     dado el servicio».
+
+     Lo único que hay que pedir es el contacto del grupo, porque es lo único
+     que la base no puede saber: quién lleva a esas veinticinco personas y a
+     qué correo le llega el papel. Lo demás -la reserva, los boletos, el
+     código del grupo- lo monta op_especial_confirmar, y desde ese momento el
+     grupo sale abajo en la lista de clientes de esta salida con sus botones de
+     llegó. Ni una pantalla nueva.
+
+     El teléfono va con selector de país porque un grupo extranjero no se
+     localiza con diez dígitos sueltos. */
+  async function espConfirma(id,b){
+    var d=await cpPideVarios(
+      'El contacto del grupo. A este correo le llega el boleto con el QR; '+
+      'es lo que se escanea en la puerta.',
+      [{k:'nombre', et:'Quién lleva al grupo', req:true},
+       {k:'email',  et:'Su correo', req:true, tipo:'email'},
+       {k:'tel',    et:'Su celular · opcional', tipo:'tel'},
+       {k:'idioma', et:'Idioma del grupo', tipo:'select',
+        opciones:[['es','Español'],['en','Inglés']], valor:'es'}],
+      {si:'Confirmar y mandar'});
+    if(!d) return;
+    if(!d.email || d.email.indexOf('@')<0){
+      await cpAviso('Hace falta un correo donde mandarle el boleto.'); return;
+    }
+    var t=b.textContent; b.disabled=true; b.textContent='Confirmando…';
+    try{
+      var r=await fetch(SB+'/rest/v1/rpc/op_especial_confirmar',{method:'POST',headers:hdr(),
+        body:JSON.stringify({p_dado:id, p_nombre:d.nombre, p_email:d.email.toLowerCase(),
+                             p_tel:d.tel||null, p_idioma:d.idioma||'es'})});
+      var j=await r.json().catch(function(){return null;});
+      if(!r.ok||!j||j.ok!==true){
+        await cpAviso((j&&(j.message||j.error))||('No se pudo confirmar (respondió '+r.status+').'));
+        b.disabled=false; b.textContent=t; return;
+      }
+      b.textContent='Mandando el boleto…';
+      var env=await mandaBoleto(id);
+      await cpAviso('Confirmado. El código del grupo es '+(j.codigo||j.folio)+
+        (env.ok ? ', y el boleto va camino de '+env.enviado_a+'.'
+                : '. El boleto no salió: '+env.error+' Se puede volver a mandar.'));
+      if(typeof cargaProg==='function') cargaProg();
+    }catch(e){
+      await cpAviso('No se pudo confirmar: '+e.message);
+      b.disabled=false; b.textContent=t;
+    }
+  }
+
+  async function mandaBoleto(id){
+    try{
+      var r=await fetch(SB+'/functions/v1/op-especial-boleto',{method:'POST',headers:hdr(),
+        body:JSON.stringify({dado_id:id})});
+      var j=await r.json().catch(function(){return null;});
+      if(!r.ok||!j||j.ok!==true) return {ok:false,error:(j&&j.error)||('respondió '+r.status+'.')};
+      return {ok:true, enviado_a:j.enviado_a, codigo:j.codigo};
+    }catch(e){ return {ok:false, error:e.message}; }
+  }
+
+  async function espBoleto(id,b){
+    var t=b.textContent; b.disabled=true; b.textContent='Mandando…';
+    var env=await mandaBoleto(id);
+    await cpAviso(env.ok ? 'Boleto mandado otra vez a '+env.enviado_a+'.'
+                         : 'No salió el boleto: '+env.error);
+    b.disabled=false; b.textContent=t;
+  }
+
   /* PENDIENTE DE CONFIRMACIÓN Y PAGO. Javi, 1-nov-2026.
      Una solicitud no es una reserva: no ocupa lugar, no cuenta en el cupo y no
      se cobra. Por eso se pinta aparte y no entre los clientes, donde parecería
@@ -4815,6 +4912,10 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); espAbreEdit(b.getAttribute('data-espedit')); };});
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-espcocina]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); espCocina(b.getAttribute('data-espcocina'), b); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-espconf]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); espConfirma(b.getAttribute('data-espconf'), b); };});
+    Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-espboleto]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); espBoleto(b.getAttribute('data-espboleto'), b); };});
     try{ espCableaEdit(); }catch(_){ }
     Array.prototype.forEach.call($('pgLista').querySelectorAll('[data-solsi]'),function(b){
       b.onclick=function(){ b.disabled=true; contestaSol(b.getAttribute('data-solsi'), true, null); };});
