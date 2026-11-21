@@ -309,7 +309,8 @@ var ETAPAS=[
   {k:'pagado',    n:'Pagado',          d:'El dinero cubre el total.'},
   {k:'pasado',    n:'Ya pasó',         d:'El evento se dio o se cayó.'}
 ];
-var TAB='embudo', COTS=[], LIN={}, PAG={}, REGLAS={}, TRANSP=[], abierta=null, DESTINO=null;
+var TAB='embudo', COTS=[], LIN={}, PAG={}, REGLAS={}, TRANSP=[], EXTRAS=[], ESPACIOS=[], EXPS=[],
+    abierta=null, EDIT=null, VERARCH=false;
 
 function regla(k,d){ var v=REGLAS[k]; return v==null||v===''?d:v; }
 function anticipoDe(c){
@@ -337,10 +338,20 @@ function tarjeta(c){
     (etqs.length?'<div class="datos">'+etqs.join('')+'</div>':'')+
   '</button>';
 }
+function vivas(){
+  /* ARCHIVAR, NO BORRAR. Javi, 21-nov-2026. Una cotización que no fue sigue
+     contando -dice qué se pidió y a qué precio-, pero no tiene por qué estar
+     en el tablero de lo que hay que mover. */
+  return COTS.filter(function(c){ return VERARCH ? !!c.archivada_at : !c.archivada_at; });
+}
 function pintaEmbudo(){
-  var h='<div class="tablero">';
+  var nArch=COTS.filter(function(c){ return !!c.archivada_at; }).length;
+  var h='<div class="hoja" style="padding-bottom:0"><div style="display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn '+(VERARCH?'':'fan')+' sm" id="bArch">'+
+      (VERARCH?'← Volver al tablero':'Ver archivadas'+(nArch?' ('+nArch+')':''))+'</button></div></div>'+
+    '<div class="tablero">';
   ETAPAS.forEach(function(e,i){
-    var l=COTS.filter(function(c){ return (c.etapa||'solicitud')===e.k; });
+    var l=vivas().filter(function(c){ return (c.etapa||'solicitud')===e.k; });
     var suma=l.reduce(function(a,c){ return a+Number(c.total||0); },0);
     h+='<section class="col"><div class="cab">'+
         '<div class="num">Paso '+(i+1)+'</div><h2>'+esc(e.n)+'</h2>'+
@@ -359,18 +370,18 @@ function pintaEmbudo(){
    se le paga al ateneísta por transferencia, no por su Stripe; esa deuda la
    lleva sinc_repartos y se mira en «Por pagar». */
 function pintaDinero(){
-  var vivas=COTS.filter(function(c){ return c.etapa!=='pasado'; });
-  var vendido=COTS.filter(function(c){ return c.salida_id; });
-  var cobrado=COTS.reduce(function(a,c){ return a+Number(c.pagado||0); },0);
+  var L=COTS.filter(function(c){ return !c.archivada_at; });
+  var vendido=L.filter(function(c){ return c.salida_id; });
+  var cobrado=L.reduce(function(a,c){ return a+Number(c.pagado||0); },0);
   var porCobrar=vendido.reduce(function(a,c){ return a+faltaDe(c); },0);
-  var pipeline=COTS.filter(function(c){ return c.etapa==='solicitud'; })
-                   .reduce(function(a,c){ return a+Number(c.total||0); },0);
+  var pipeline=L.filter(function(c){ return c.etapa==='solicitud'; })
+                .reduce(function(a,c){ return a+Number(c.total||0); },0);
 
   var h='<div class="hoja">';
   h+='<div class="kpis">'+
       kpi('En el embudo', moneyC(pipeline), (function(n){
         return n===1?'1 solicitud sin confirmar':n+' solicitudes sin confirmar';
-      })(COTS.filter(function(c){return c.etapa==='solicitud';}).length))+
+      })(L.filter(function(c){return c.etapa==='solicitud';}).length))+
       kpi('Vendido', moneyC(vendido.reduce(function(a,c){return a+Number(c.total||0);},0)),
         vendido.length===1?'1 con salida programada':vendido.length+' con salida programada')+
       kpi('Cobrado', moneyC(cobrado), 'anticipos y saldos registrados')+
@@ -407,49 +418,236 @@ function kpi(k,v,d){
 }
 
 /* ===================== EL CATÁLOGO ===================== */
-/* Esto no es un listado: es lo que la página está cotizando AHORA MISMO. Por
-   eso se edita aquí y no en una hoja aparte -una segunda hoja acabaría
-   contradiciendo a la primera-. */
+/* Javi, 21-nov-2026: «en el catálogo necesito que separes en tres: criterios
+   o reglas; exclusivos de corporativo —extras y transporte, y permite crear
+   la ficha; y servicios conectados —espacios, experiencias y menú de A&B—,
+   con un checkbox para decidir si aparecen o no».
+
+   La separación no es de orden, es de propiedad. Lo EXCLUSIVO nace y muere
+   aquí: el autobús y el luchador no existen en ningún otro sitio del grupo,
+   así que su ficha se escribe aquí entera. Lo CONECTADO ya vive en otro lado
+   -Productos, los espacios del Ateneo, la carta de La Cósmica- y aquí sólo se
+   decide si asoma al cotizador: editar su contenido desde dos sitios es la
+   forma más segura de que los dos acaben diciendo cosas distintas. Por eso
+   en el tercer bloque sólo hay interruptores, y un enlace a donde sí se
+   edita. */
 function pintaCatalogo(){
   var h='<div class="hoja">';
-  h+='<div class="tabla"><h3>Las reglas</h3><table class="tb"><tbody>'+
+
+  /* ---------- 1. Criterios o reglas ---------- */
+  h+='<div class="tabla"><h3>1 · Criterios y reglas</h3><table class="tb"><tbody>'+
     [['iva_pct','IVA','%','El que se aplica al subtotal de toda la cotización.'],
      ['anticipo_pct','Anticipo','%','Lo que aparta la fecha. Sale en el correo al cliente.'],
      ['recargo_oficina_pct','Recargo por ir a su oficina','%','Sólo en talleres. Los shows van donde dice su ficha.'],
      ['recargo_oficina_ateneista_pct','De ese recargo, al ateneísta','%','El resto se queda en Sincrético por la coordinación.']]
     .map(function(r){
-      return '<tr><td style="width:40%"><b>'+esc(r[1])+'</b>'+
+      return '<tr><td style="width:46%"><b>'+esc(r[1])+'</b>'+
         '<div style="color:var(--tenue);font-size:11.5px;margin-top:2px">'+esc(r[3])+'</div></td>'+
         '<td class="i"><input class="celda" type="number" step="0.01" min="0" '+
           'data-regla="'+esc(r[0])+'" value="'+esc(regla(r[0],''))+'"> '+esc(r[2])+'</td>'+
         '<td><button class="btn fan sm" data-greg="'+esc(r[0])+'">Guardar</button></td></tr>';
     }).join('')+'</tbody></table></div>';
 
-  h+='<div class="tabla"><h3>El transporte</h3>'+
-    (TRANSP.length?'<table class="tb"><thead><tr><th>Vehículo</th><th>Caben</th><th>Unidades</th>'+
+  /* ---------- 2. Exclusivos de corporativo ---------- */
+  h+='<div class="tabla"><h3>2 · Exclusivos de corporativo</h3>'+
+    '<div style="padding:4px 14px 10px;color:var(--gris);font-size:12.5px">'+
+      'El transporte y los extras sólo existen aquí: su ficha se escribe entera en esta pantalla.</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 12px">'+
+      '<button class="btn sm" data-nuevo="veh">+ Nuevo vehículo</button>'+
+      '<button class="btn sm" data-nuevo="ext">+ Nuevo extra</button></div>'+
+    (TRANSP.length?'<table class="tb"><thead><tr><th>Transporte</th><th>Caben</th><th>Unidades</th>'+
       '<th style="text-align:right">Base sin IVA</th><th style="text-align:right">Horas</th>'+
       '<th style="text-align:right">Hora extra</th><th></th></tr></thead><tbody>'+
       TRANSP.map(function(v){
-        return '<tr><td><b>'+esc(v.nombre)+'</b>'+
-          (v.activo===false?' <span class="etq no">Apagado</span>':'')+'</td>'+
+        return '<tr><td>'+mini(v.fotos&&v.fotos[0])+'<b>'+esc(v.nombre)+'</b>'+
+          (v.activo===false?' <span class="etq no">Apagado</span>':'')+
+          (v.frase?'<div style="color:var(--tenue);font-size:11.5px">'+esc(v.frase)+'</div>':'')+'</td>'+
           '<td class="i">'+(Number(v.capacidad)||0)+'</td>'+
           '<td class="i">'+(Number(v.unidades)||0)+'</td>'+
-          '<td class="i"><input class="celda" type="number" step="0.01" min="0" '+
-            'data-v="'+esc(v.id)+'" data-c="precio_base" value="'+esc(v.precio_base)+'"></td>'+
-          '<td class="i"><input class="celda" style="width:70px" type="number" step="0.5" min="0" '+
-            'data-v="'+esc(v.id)+'" data-c="horas_incluidas" value="'+esc(v.horas_incluidas)+'"></td>'+
-          '<td class="i"><input class="celda" type="number" step="0.01" min="0" '+
-            'data-v="'+esc(v.id)+'" data-c="precio_hora_extra" value="'+esc(v.precio_hora_extra)+'"></td>'+
-          '<td><button class="btn fan sm" data-gveh="'+esc(v.id)+'">Guardar</button></td></tr>';
+          '<td class="i">'+money(v.precio_base)+'</td>'+
+          '<td class="i">'+(Number(v.horas_incluidas)||0)+' h</td>'+
+          '<td class="i">'+money(v.precio_hora_extra)+'</td>'+
+          '<td><button class="btn fan sm" data-ficha="veh:'+esc(v.id)+'">Editar</button></td></tr>';
       }).join('')+'</tbody></table>'
       : '<div class="vacio">No hay vehículos dados de alta.</div>')+
+    (EXTRAS.length?'<table class="tb" style="border-top:8px solid var(--papel)"><thead><tr>'+
+      '<th>Extra</th><th>Cómo se cobra</th><th style="text-align:right">Precio</th>'+
+      '<th style="text-align:right">Horas</th><th style="text-align:right">Hora extra</th><th></th>'+
+      '</tr></thead><tbody>'+
+      EXTRAS.map(function(x){
+        return '<tr><td>'+mini(x.foto_url||(x.fotos&&x.fotos[0]))+'<b>'+esc(x.nombre)+'</b>'+
+          (x.activo===false?' <span class="etq no">Apagado</span>':'')+
+          (x.corporativo===false?' <span class="etq mano">Fuera del cotizador</span>':'')+
+          (x.grupo?'<div style="color:var(--tenue);font-size:11.5px">'+esc(x.grupo)+'</div>':'')+'</td>'+
+          '<td>'+esc(x.unidad==='persona'?'Por persona':'Por el grupo')+
+            '<div style="color:var(--tenue);font-size:11.5px">'+
+            (x.precio_incluye_iva?'precio con IVA':'precio sin IVA')+'</div></td>'+
+          '<td class="i">'+money(x.precio)+'</td>'+
+          '<td class="i">'+(Number(x.horas_incluidas)||0)+' h</td>'+
+          '<td class="i">'+money(x.precio_hora_extra)+'</td>'+
+          '<td><button class="btn fan sm" data-ficha="ext:'+esc(x.id)+'">Editar</button></td></tr>';
+      }).join('')+'</tbody></table>'
+      : '<div class="vacio">No hay extras dados de alta.</div>')+
     '</div>';
 
-  h+='<div class="nota amb">Las experiencias, los espacios y los extras no se editan aquí: '+
-     'viven en <b>Productos</b> y en la ficha de cada ateneísta, que es de donde la página los lee. '+
-     'Lo que decide si una experiencia se ofrece a empresas es su <b>corp_activo</b>, y lo que decide '+
-     'si se puede elegir el lugar es su <b>tipo</b> — taller, show o experiencia.</div>';
+  /* ---------- 3. Servicios conectados ---------- */
+  h+='<div class="tabla"><h3>3 · Servicios conectados</h3>'+
+    '<div style="padding:4px 14px 10px;color:var(--gris);font-size:12.5px">'+
+      'Esto vive en otro sitio y aquí sólo se decide si sale al cotizador. '+
+      'Su contenido se edita donde nace, para que no haya dos versiones.</div>';
+
+  h+='<table class="tb"><thead><tr><th>Espacio</th><th>Sede</th><th style="text-align:right">Aforo</th>'+
+    '<th>Sale al cotizador</th><th>Ofrece su carta</th></tr></thead><tbody>'+
+    (ESPACIOS.length? ESPACIOS.map(function(e){
+      return '<tr><td>'+mini(e.fotos&&e.fotos[0])+'<b>'+esc(e.nombre)+'</b></td>'+
+        '<td>'+esc(e.sede||'—')+'</td><td class="i">'+(Number(e.capacidad)||0)+'</td>'+
+        '<td>'+check('esp',e.id,'corporativo',e.corporativo)+'</td>'+
+        '<td>'+(e.hotel_id? check('esp',e.id,'corp_carta',e.corp_carta!==false)
+                          : '<span style="color:var(--tenue);font-size:12px">sin carta propia</span>')+'</td></tr>';
+    }).join('') : '<tr><td colspan="5"><div class="vacio">Sin espacios.</div></td></tr>')+
+    '</tbody></table>';
+
+  h+='<table class="tb" style="border-top:8px solid var(--papel)"><thead><tr>'+
+    '<th>Experiencia</th><th>Tipo</th><th>Estado</th><th>Protagonista incluido</th>'+
+    '<th>Sale al cotizador</th></tr></thead><tbody>'+
+    (EXPS.length? EXPS.map(function(x){
+      var vende = x.estado==='publicada';
+      return '<tr><td><b>'+esc(x.nombre)+'</b>'+
+          (x.operador?'<div style="color:var(--tenue);font-size:11.5px">'+esc(x.operador)+'</div>':'')+'</td>'+
+        '<td><select class="celda" style="width:120px" data-ex="'+esc(x.id)+'" data-c="corp_tipo">'+
+          ['','gastro','artesanos','shows','experiencias'].map(function(t){
+            return '<option value="'+t+'"'+((x.corp_tipo||'')===t?' selected':'')+'>'+
+              (t===''?'—':t==='gastro'?'Taller gastro':t==='artesanos'?'Taller artesano':
+               t==='shows'?'Show':'Experiencia')+'</option>'; }).join('')+'</select></td>'+
+        '<td>'+(vende?'<span class="etq pub">Publicada</span>'
+                     :'<span class="etq mano">'+esc(x.estado||'—')+'</span>')+
+          (vende?'':'<div style="color:var(--tenue);font-size:11.5px">no se vende hasta publicarla</div>')+'</td>'+
+        '<td><input class="celda" style="width:160px" data-ex="'+esc(x.id)+'" data-c="corp_protagonista" '+
+          'placeholder="el luchador, la drag…" value="'+esc(x.corp_protagonista||'')+'"></td>'+
+        '<td>'+check('exp',x.id,'corp_activo',x.corp_activo)+'</td></tr>';
+    }).join('') : '<tr><td colspan="5"><div class="vacio">Sin experiencias.</div></td></tr>')+
+    '</tbody></table></div>';
+
+  h+='<div class="nota amb">El contenido de estas fichas —fotos, descripción, precio, duración— se '+
+     'edita en <b>Productos</b> y en la ficha de cada ateneísta, que es de donde la página las lee. '+
+     'Aquí sólo mandan los interruptores, el tipo (que decide si se puede elegir el lugar) y quién es '+
+     'el protagonista que ya viene incluido.</div>';
   return h+'</div>';
+}
+function mini(u){
+  return '<span style="display:inline-block;vertical-align:middle;width:34px;height:34px;'+
+    'border-radius:7px;margin-right:8px;background:'+
+    (u?('url('+encodeURI(typeof u==='string'?u:(u.url||''))+') center/cover no-repeat'):'var(--hueso)')+'"></span>';
+}
+function check(que,id,campo,val){
+  return '<label style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">'+
+    '<input type="checkbox" data-sw="'+que+':'+esc(id)+':'+campo+'"'+(val?' checked':'')+
+    ' style="width:18px;height:18px;accent-color:var(--naranja)">'+
+    '<span style="font-size:12.5px;color:var(--gris)">'+(val?'Sí':'No')+'</span></label>';
+}
+
+/* ===== LA FICHA DE UN EXCLUSIVO ===== */
+/* Se escribe entera aquí porque aquí nace. Los campos son los que la página
+   usa de verdad: si un campo no se enseña en el cotizador, no se pide. */
+var CAMPOS={
+  veh:{tabla:'corp_transportes', tit:'Vehículo',
+    campos:[['nombre','Cómo se llama','text',1],['frase','La frase corta','text'],
+      ['descripcion','Descripción','area'],['incluye','Qué incluye','area'],
+      ['capacidad','Cuántos caben','num',1],['unidades','Cuántos tenemos','num',1],
+      ['precio_base','Precio base sin IVA','num',1],['horas_incluidas','Horas incluidas','num',1],
+      ['precio_hora_extra','La hora extra sin IVA','num'],
+      ['foto','Foto (liga)','text'],['notas','Notas internas','area'],
+      ['orden','Orden en la lista','num'],['activo','A la venta','bool']]},
+  ext:{tabla:'op_extras_catalogo', tit:'Extra',
+    campos:[['nombre','Cómo se llama','text',1],['grupo','Grupo (Shows, Talleres…)','text'],
+      ['descripcion','Descripción','area'],['descripcion_larga','Descripción larga','area'],
+      ['duracion','Duración (texto)','text'],
+      ['precio','Precio','num',1],['precio_incluye_iva','El precio ya trae IVA','bool'],
+      ['unidad','Se cobra por','sel',0,[['grupo','El grupo'],['persona','Cada persona']]],
+      ['horas_incluidas','Horas incluidas','num'],['precio_hora_extra','La hora extra','num'],
+      ['foto','Foto (liga)','text'],['notas','Notas internas','area'],
+      ['orden','Orden en la lista','num'],
+      ['corporativo','Sale en el cotizador corporativo','bool'],['activo','Activo','bool']]}
+};
+function fotoDe(o){
+  if(!o) return '';
+  if(o.foto_url) return o.foto_url;
+  var f=o.fotos; if(Array.isArray(f)&&f.length) return typeof f[0]==='string'?f[0]:(f[0].url||'');
+  return '';
+}
+function abreExclusivo(que,id){
+  var def=CAMPOS[que]; if(!def) return;
+  var o = id ? (que==='veh'?TRANSP:EXTRAS).filter(function(x){return String(x.id)===String(id);})[0] : null;
+  o = o || {};
+  EDIT={que:que, id:id||null};
+  $('pNom').textContent = id ? (o.nombre||def.tit) : ('Nuevo '+def.tit.toLowerCase());
+  $('pDon').textContent = 'Exclusivo de corporativo · sólo existe aquí';
+  var h='<div class="bloque">';
+  def.campos.forEach(function(c){
+    var k=c[0], et=c[1], t=c[2], req=c[3], ops=c[4];
+    var v = k==='foto' ? fotoDe(o) : (o[k]==null?'':o[k]);
+    if(t==='bool'){
+      h+='<label style="display:flex;align-items:center;gap:9px;padding:7px 0;font-size:13.5px">'+
+        '<input type="checkbox" id="f_'+k+'"'+((k==='activo'&&!id)||o[k]?' checked':'')+
+        ' style="width:18px;height:18px;accent-color:var(--naranja)"> '+esc(et)+'</label>';
+    }else if(t==='sel'){
+      h+='<label class="cmpl"><span>'+esc(et)+'</span><select class="cmp" id="f_'+k+'">'+
+        ops.map(function(x){ return '<option value="'+x[0]+'"'+(String(v)===x[0]?' selected':'')+'>'+esc(x[1])+'</option>'; }).join('')+
+        '</select></label>';
+    }else if(t==='area'){
+      h+='<label class="cmpl"><span>'+esc(et)+'</span><textarea class="cmp" id="f_'+k+'" rows="3">'+esc(v)+'</textarea></label>';
+    }else{
+      h+='<label class="cmpl"><span>'+esc(et)+(req?' *':'')+'</span><input class="cmp" id="f_'+k+'"'+
+        (t==='num'?' type="number" step="0.01"':'')+' value="'+esc(v)+'"></label>';
+    }
+  });
+  h+='<div class="nota" style="background:var(--hueso)">La foto se pone como liga. '+
+     'Si está en el almacén de fotos, copia de ahí su dirección.</div>'+
+     '<div class="acciones" style="margin-top:12px">'+
+     '<button class="btn sm" id="bGuardaEx">'+(id?'Guardar':'Crear')+'</button>'+
+     (id?'<button class="btn fan sm" id="bApagaEx">'+(o.activo===false?'Encender':'Apagar')+'</button>':'')+
+     '</div></div>';
+  $('pCuerpo').innerHTML=h;
+  $('velo').classList.add('on'); $('panel').classList.add('on');
+  $('panel').setAttribute('aria-hidden','false'); abierta={ficha:true};
+  $('bGuardaEx').onclick=function(){ guardaExclusivo(def); };
+  var ap=$('bApagaEx');
+  if(ap) ap.onclick=async function(){
+    ap.disabled=true;
+    try{ await patch(def.tabla,'id=eq.'+encodeURIComponent(id),{activo:o.activo===false}); cierra(); await carga(); }
+    catch(e){ await avisa('No se pudo: '+e.message); ap.disabled=false; }
+  };
+}
+async function guardaExclusivo(def){
+  var b=$('bGuardaEx'); var cuerpo={};
+  var falta=null;
+  def.campos.forEach(function(c){
+    var k=c[0], t=c[2], req=c[3], el=$('f_'+k); if(!el) return;
+    if(k==='foto') return;
+    if(t==='bool'){ cuerpo[k]=!!el.checked; return; }
+    var v=String(el.value||'').trim();
+    if(req && v===''){ falta=falta||c[1]; }
+    if(t==='num'){ cuerpo[k] = v===''?null:Number(v); }
+    else cuerpo[k] = v===''?null:v;
+  });
+  if(falta){ await avisa('Falta «'+falta+'».'); return; }
+  /* La foto va donde cada tabla la guarda: una liga en el extra, una lista en
+     el vehículo. Un campo en la pantalla, dos formas en la base. */
+  var fu=String(($('f_foto')||{}).value||'').trim();
+  if(EDIT.que==='veh') cuerpo.fotos = fu?[fu]:[];
+  else { cuerpo.foto_url = fu||null; cuerpo.fotos = fu?[fu]:[]; }
+  b.disabled=true; b.textContent='Guardando…';
+  try{
+    if(EDIT.id) await patch(def.tabla,'id=eq.'+encodeURIComponent(EDIT.id),cuerpo);
+    else{
+      var r=await fetch(SB+'/rest/v1/'+def.tabla,{method:'POST',
+        headers:hdr({'Prefer':'return=minimal'}),body:JSON.stringify(cuerpo)});
+      if(!r.ok){ var t=await r.text(); var j=null; try{j=JSON.parse(t);}catch(_){}
+        throw new Error((j&&(j.message||j.hint))||('La base respondió '+r.status)); }
+    }
+    cierra(); await carga();
+  }catch(e){ await avisa('No se pudo guardar: '+e.message);
+    b.disabled=false; b.textContent=EDIT.id?'Guardar':'Crear'; }
 }
 
 /* ===================== LA FICHA ===================== */
@@ -483,7 +681,7 @@ async function abre(id){
 }
 function cierra(){
   $('velo').classList.remove('on'); $('panel').classList.remove('on');
-  $('panel').setAttribute('aria-hidden','true'); abierta=null;
+  $('panel').setAttribute('aria-hidden','true'); abierta=null; EDIT=null;
 }
 function fichaHtml(c){
   var l=LIN[c.id]||[], p=PAG[c.id]||[];
@@ -588,7 +786,19 @@ function fichaHtml(c){
           : '<div style="font-size:12.5px;color:var(--gris)">Nunca salió. Si es de antes del '+
             '21 de noviembre, es que el correo todavía no existía.</div>'));
 
-  h+='<div class="gr">Mover de etapa</div>'+
+  h+='<div class="gr">Archivar</div>'+
+    (c.archivada_at
+      ? '<div class="nota" style="background:var(--hueso)">Archivada el '+
+        esc(String(c.archivada_at).slice(0,10))+
+        (c.archivada_por?' por '+esc(c.archivada_por):'')+'.</div>'+
+        '<div class="acciones" style="margin-top:9px">'+
+        '<button class="btn fan sm" data-arch="0">Devolverla al tablero</button></div>'
+      : '<div style="font-size:12.5px;color:var(--gris)">Se quita del tablero y sigue en la base: '+
+        'lo que no fue también es información.</div>'+
+        '<div class="acciones" style="margin-top:9px">'+
+        '<button class="btn fan sm" data-arch="1">Archivarla</button></div>')+
+
+    '<div class="gr">Mover de etapa</div>'+
     '<div class="acciones">'+
     (c.etapa!=='solicitud'&&c.etapa!=='pagado'
       ? '<button class="btn fan sm" data-etapa="solicitud">Devolver a solicitud</button>':'')+
@@ -636,6 +846,16 @@ function cableaFicha(c){
     }catch(e){ await avisa('No se pudo confirmar: '+e.message);
       bc.disabled=false; bc.textContent='Confirmar y programar'; }
   };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-arch]'),function(b){
+    b.onclick=async function(){
+      var si=b.getAttribute('data-arch')==='1';
+      if(si && window.cpPregunta && !await cpPregunta(
+        'Se quita del tablero. No se borra: sigue en la base y la puedes devolver cuando quieras.',
+        'Sí, archívala','Ahora no')) return;
+      b.disabled=true;
+      try{ await rpc('corp_archivar',{p_cot:c.id, p_si:si}); cierra(); await carga(); }
+      catch(x){ await avisa('No se pudo: '+x.message); b.disabled=false; }
+    };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-etapa]'),function(b){
     b.onclick=async function(){
       var e=b.getAttribute('data-etapa');
@@ -651,10 +871,11 @@ function pinta(){
   Array.prototype.forEach.call($('pest').querySelectorAll('button'),function(b){
     b.setAttribute('aria-selected', b.getAttribute('data-t')===TAB ? 'true':'false'); });
 
-  var sinCorreo=COTS.filter(function(c){ return !c.correo_at && c.etapa==='solicitud'; }).length;
-  $('sub').textContent = COTS.length+' cotizaciones · '+
-    COTS.filter(function(c){return c.etapa==='solicitud';}).length+' sin confirmar · '+
-    COTS.filter(function(c){return c.salida_id;}).length+' programadas';
+  var sinCorreo=COTS.filter(function(c){ return !c.correo_at && c.etapa==='solicitud' && !c.archivada_at; }).length;
+  var L=COTS.filter(function(c){ return !c.archivada_at; });
+  $('sub').textContent = L.length+(L.length===1?' cotización · ':' cotizaciones · ')+
+    L.filter(function(c){return c.etapa==='solicitud';}).length+' sin confirmar · '+
+    L.filter(function(c){return c.salida_id;}).length+' programadas';
 
   $('caja').innerHTML =
     TAB==='embudo'
@@ -674,6 +895,7 @@ function pinta(){
   cablea();
 }
 function cablea(){
+  var ba=$('bArch'); if(ba) ba.onclick=function(){ VERARCH=!VERARCH; pinta(); };
   Array.prototype.forEach.call($('vista').querySelectorAll('[data-cot]'),function(b){
     b.onclick=function(){ abre(b.getAttribute('data-cot')); };});
 
@@ -693,22 +915,40 @@ function cablea(){
         b.disabled=false; b.textContent='Guardar'; }
     };});
 
-  Array.prototype.forEach.call($('vista').querySelectorAll('[data-gveh]'),function(b){
-    b.onclick=async function(){
-      var id=b.getAttribute('data-gveh'), cuerpo={};
-      Array.prototype.forEach.call($('vista').querySelectorAll('[data-v="'+id+'"]'),function(i){
-        var n=Number(i.value);
-        if(!isNaN(n) && i.value!=='') cuerpo[i.getAttribute('data-c')]=n;
-      });
-      if(!Object.keys(cuerpo).length) return;
-      b.disabled=true; b.textContent='…';
-      try{
-        await patch('corp_transportes','id=eq.'+encodeURIComponent(id),cuerpo);
-        TRANSP.forEach(function(v){ if(String(v.id)===String(id)) Object.assign(v,cuerpo); });
-        b.textContent='Guardado';
-        setTimeout(function(){ b.textContent='Guardar'; b.disabled=false; },1400);
-      }catch(e){ await avisa('No se pudo guardar: '+e.message);
-        b.disabled=false; b.textContent='Guardar'; }
+  Array.prototype.forEach.call($('vista').querySelectorAll('[data-nuevo]'),function(b){
+    b.onclick=function(){ abreExclusivo(b.getAttribute('data-nuevo'), null); };});
+  Array.prototype.forEach.call($('vista').querySelectorAll('[data-ficha]'),function(b){
+    b.onclick=function(){ var p=b.getAttribute('data-ficha').split(':');
+      abreExclusivo(p[0], p.slice(1).join(':')); };});
+
+  /* LOS INTERRUPTORES DE LO CONECTADO. Se guardan al tocarlos: un checkbox
+     con botón de guardar al lado es un checkbox que la mitad de la gente deja
+     sin guardar. */
+  Array.prototype.forEach.call($('vista').querySelectorAll('[data-sw]'),function(c){
+    c.onchange=async function(){
+      var p=c.getAttribute('data-sw').split(':');
+      var tabla = p[0]==='esp' ? 'ev_espacios' : 'op_experiencias';
+      var cuerpo={}; cuerpo[p[2]]=!!c.checked;
+      c.disabled=true;
+      try{ await patch(tabla,'id=eq.'+encodeURIComponent(p[1]),cuerpo);
+        (p[0]==='esp'?ESPACIOS:EXPS).forEach(function(x){
+          if(String(x.id)===String(p[1])) x[p[2]]=!!c.checked; });
+        pinta();
+      }catch(e){ c.checked=!c.checked; c.disabled=false;
+        await avisa('No se pudo cambiar: '+e.message); }
+    };});
+
+  /* El tipo y el protagonista se guardan al salir del campo. */
+  Array.prototype.forEach.call($('vista').querySelectorAll('[data-ex]'),function(el){
+    var antes=el.value;
+    el.onchange=async function(){
+      var id=el.getAttribute('data-ex'), campo=el.getAttribute('data-c');
+      var v=String(el.value||'').trim(); var cuerpo={}; cuerpo[campo]= v===''?null:v;
+      try{ await patch('op_experiencias','id=eq.'+encodeURIComponent(id),cuerpo);
+        EXPS.forEach(function(x){ if(String(x.id)===String(id)) x[campo]=cuerpo[campo]; });
+        antes=el.value; el.style.borderColor='var(--ok)';
+        setTimeout(function(){ el.style.borderColor=''; },1200);
+      }catch(e){ el.value=antes; await avisa('No se pudo guardar: '+e.message); }
     };});
 }
 
@@ -718,11 +958,23 @@ async function carga(){
     var res=await Promise.all([
       get('corp_cotizaciones?select=*&order=created_at.desc&limit=500'),
       get('corp_reglas?select=clave,valor'),
-      get('corp_transportes?select=*&order=orden')
+      get('corp_transportes?select=*&order=orden'),
+      get('op_extras_catalogo?select=*&order=orden'),
+      get('ev_espacios?select=id,nombre,sede,capacidad,fotos,hotel_id,corporativo,corp_carta,activo'+
+          '&activo=eq.true&order=nombre'),
+      /* Lo conectable: lo que ya se ofrece y lo que podría ofrecerse. Un
+         borrador no se enseña aquí porque encenderlo no serviría de nada
+         -el cotizador sólo vende lo publicado-, salvo que ya esté encendido,
+         y entonces hay que poder verlo y apagarlo. */
+      get('op_experiencias?select=id,nombre,corp_tipo,corp_activo,corp_protagonista,estado,privado,operador_id'+
+          '&or=(corp_activo.eq.true,estado.eq.publicada)&order=nombre&limit=200'),
+      get('tour_operadores?select=id,nombre_comercial&limit=400')
     ]);
     COTS=res[0]||[];
     REGLAS={}; (res[1]||[]).forEach(function(r){ REGLAS[r.clave]=r.valor; });
-    TRANSP=res[2]||[];
+    TRANSP=res[2]||[]; EXTRAS=res[3]||[]; ESPACIOS=res[4]||[];
+    var ops={}; (res[6]||[]).forEach(function(o){ ops[o.id]=o.nombre_comercial; });
+    EXPS=(res[5]||[]).map(function(x){ x.operador=ops[x.operador_id]||null; return x; });
     pinta();
   }catch(e){
     $('sub').textContent='No se pudo cargar: '+e.message;
