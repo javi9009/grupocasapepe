@@ -267,6 +267,13 @@ function expElegida(){
     if(x.id===S.exp.id && x.origen===S.exp.origen) r=x; });
   return r;
 }
+/* EL LUGAR LO MANDA LA FICHA, NO EL CLIENTE. Javi, 21-nov-2026: «lo de
+   escoger dónde sería sólo para los talleres. Los shows y experiencias deben
+   ser en el lugar que viene en su descripción». Así que el paso del lugar -y
+   el recargo por desplazarnos- sólo existen cuando lo elegido es un taller. */
+function esTaller(e){ return !!e && (e.corp_tipo==='gastro' || e.corp_tipo==='artesanos'); }
+function eligeLugar(){ return esTaller(expElegida()); }
+
 function lineas(){
   var L=[], h=horasViaje();
 
@@ -287,15 +294,18 @@ function lineas(){
     var neto = e.pvp_con_iva==null ? null : Number(e.pvp_con_iva)/1.16;
     L.push({g:'Experiencia',n:e.nombre,q:S.personas+' × '+(neto==null?'—':$$(neto)),
             imp: neto==null?null:Math.round(neto*S.personas*100)/100});
-    if(S.modo==='oficina' && neto!=null){
+    if(S.modo==='oficina' && neto!=null && esTaller(e)){
       var p=pct('recargo_oficina_pct',30);
       L.push({g:'Experiencia',n:'Llevarlo a tu oficina (+'+p+'%)',q:'',
               imp:Math.round(neto*S.personas*p)/100});
     }
   }
-  if(S.espacio){
+  if(S.espacio && eligeLugar()){
     var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
     if(es) L.push({g:'Lugar',n:es.nombre+' · '+(es.sede||''),q:'Incluido',imp:0});
+  }
+  if(e && !esTaller(e) && e.lugar_nombre){
+    L.push({g:'Lugar',n:e.lugar_nombre,q:'Donde se da siempre',imp:0});
   }
   Object.keys(S.ab).forEach(function(k){
     var it=S.ab[k]; if(!it||!it.cant) return;
@@ -408,9 +418,10 @@ function paso2(){
     '</div>';
 
   if(S.modo==='oficina'){
-    h+='<div class="nota amb">Si nos tenemos que desplazar a tu oficina o a un lugar que tú '+
-      'rentes, los costos pueden aumentar hasta un '+pct('recargo_oficina_pct',30)+'%. '+
-      'Ya lo aplicamos en tu cotización.</div>';
+    h+='<div class="nota amb">Los <b>talleres</b> sí se los llevamos a donde digan: '+
+      'desplazarnos puede subir el costo hasta un '+pct('recargo_oficina_pct',30)+'%, '+
+      'y se aplica solo en tu cotización. Los <b>shows y las experiencias</b> se dan '+
+      'en su propio lugar y no se mueven.</div>';
   }
 
   if(S.modo==='recoger'){
@@ -488,6 +499,19 @@ function paso3(){
 }
 
 function paso4(){
+  var exp=expElegida();
+  if(exp && !esTaller(exp)){
+    return '<section class="paso"><div class="kick">Paso 4</div><h2>El lugar</h2>'+
+      '<div class="mini">'+esc(exp.nombre)+' se da siempre en el mismo sitio, '+
+        'así que este paso ya está resuelto.</div>'+
+      '<div class="nota verde" style="margin-top:14px">'+
+        (exp.lugar_nombre?('<b>'+esc(exp.lugar_nombre)+'</b>'):'<b>Lo confirmamos contigo</b>')+
+        (exp.lugar_dir?('<div class="mini" style="margin-top:4px">'+esc(exp.lugar_dir)+'</div>'):'')+
+        (exp.lugar_nota?('<div class="mini" style="margin-top:4px">'+esc(exp.lugar_nota)+'</div>'):'')+
+      '</div>'+
+      '<div class="mini" style="margin-top:12px">¿Lo quieren en su oficina? '+
+        'Eso sí se puede con los talleres: regresen al paso 3 y elijan uno.</div></section>';
+  }
   if(S.modo==='oficina'){
     return '<section class="paso"><div class="kick">Paso 4</div><h2>El lugar</h2>'+
       '<div class="mini">Vamos a tu oficina, así que dinos dónde.</div>'+
@@ -542,7 +566,11 @@ function paso5(){
           var tot=it.modo==='grupo'?it.cant:it.cant*S.personas;
           h+='<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;'+
             'padding:8px 0;border-bottom:1px dashed var(--linea)">'+
-            '<div style="flex:1 1 180px;min-width:0"><b>'+esc(p.nombre)+'</b>'+
+            '<span style="flex:0 0 54px;height:54px;border-radius:9px;display:block;background:'+
+              (p.foto_url?('url('+encodeURI(p.foto_url)+') center/cover no-repeat'):'var(--hueso)')+
+              '"></span>'+
+            '<div style="flex:1 1 150px;min-width:0"><b>'+esc(p.nombre)+'</b>'+
+            (p.gramaje?'<div class="mini">'+esc(p.gramaje)+'</div>':'')+
               '<div class="mini">'+$$(neto)+' sin IVA'+
               (it.cant?(' · '+(it.modo==='grupo'
                  ? (it.cant+' en total, al centro de la mesa')
@@ -803,7 +831,7 @@ async function envia(b){
   if(!S.empresa.trim() || !S.contacto.trim() || !S.email.trim()){
     S.paso=1; pinta(); avisa('Nos faltan la <b>empresa</b>, tu <b>nombre</b> y tu <b>correo</b> para poder cotizarte.'); return;
   }
-  if(S.espacio){
+  if(S.espacio && eligeLugar()){
     var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
     if(es && Number(es.capacidad||0) < S.personas){
       S.paso=4; pinta(); avisa('En ese espacio no caben '+S.personas+' personas. Elige otro.'); return;
@@ -820,7 +848,7 @@ async function envia(b){
     recorrido_turistico:!!S.recorrido,
     transportes:Object.keys(S.veh).map(function(k){ return {id:k, unidades:S.veh[k]}; }),
     experiencia:S.exp||null,
-    espacio_id:S.espacio||null,
+    espacio_id:(eligeLugar()? (S.espacio||null) : null),
     oficina:{dir:S.oficina},
     ab:Object.keys(S.ab).map(function(k){ return {carta_id:k, cant:S.ab[k].cant, modo:S.ab[k].modo}; }),
     ab_texto:S.abTexto,
@@ -837,6 +865,14 @@ async function envia(b){
       return;
     }
     S.enviado=j; pinta();
+    /* El correo va aparte, despues de guardar: si Resend falla, la cotizacion
+       ya esta dentro y no se pierde la venta. La funcion marca correo_at y no
+       se repite. */
+    try{
+      await fetch(SB+'/functions/v1/corp-correo',{method:'POST',
+        headers:{apikey:KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({cotizacion_id:j.id})});
+    }catch(_e){}
   }catch(x){
     b.disabled=false; b.textContent='Recibir mi cotización →';
     avisa('No pudimos mandar tu solicitud: '+esc(x.message));
@@ -849,7 +885,7 @@ async function cargaCarta(){
   if(!S.espacio) return;
   var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
   if(!es || !es.hotel_id) return;
-  CAT.carta = await api('cosmica_carta?select=id,seccion,grupo,nombre,precio_mxn,precio_incluye_iva'+
+  CAT.carta = await api('cosmica_carta?select=id,seccion,grupo,nombre,foto_url,gramaje,precio_mxn,precio_incluye_iva'+
     '&activo=eq.true&hotel_id=eq.'+es.hotel_id+'&order=seccion,orden&limit=400');
 }
 (async function(){
