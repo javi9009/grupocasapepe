@@ -88,6 +88,25 @@ textarea{resize:vertical;line-height:1.5}
 
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 13px}
 
+/* EL CRONOGRAMA DEL DÍA. Una fila por momento, la hora a la izquierda y el
+   lápiz a la derecha: el resumen no es sólo para mirar, es desde donde se
+   corrige, como el check-in de un avión. */
+.crono{margin-top:14px;border:1.5px solid var(--linea);border-radius:12px;overflow:hidden}
+.tramo{display:flex;gap:11px;align-items:center;padding:11px 12px;background:var(--blanco);
+  border-bottom:1px solid var(--linea)}
+.tramo:last-child{border-bottom:none}
+.tramo .hh{flex:0 0 52px;font-family:'Oswald';font-weight:600;font-size:14px;color:var(--naranja-oscuro)}
+.tramo .qq{flex:1;min-width:0}
+.tramo .qq b{font-size:14px}
+.lap{flex:0 0 auto;border:1.5px solid var(--linea);background:var(--blanco);border-radius:8px;
+  width:32px;height:32px;cursor:pointer;color:var(--gris);font-size:14px;line-height:1}
+.lap:hover{border-color:var(--naranja);color:var(--naranja-oscuro)}
+.sumas{border-top:2px solid var(--tinta);padding-top:9px}
+.sumas .fila{display:flex;justify-content:space-between;padding:3px 0;font-size:14px}
+.sumas .fila.tot{border-top:1px solid var(--linea);margin-top:5px;padding-top:8px}
+.sumas .fila.tot b{font-family:'Oswald';font-size:20px}
+.nota.roja{background:#F6E1DD;color:#9E3B2E}
+
 /* EL ESTANTE: se recorre de lado. Cada grupo de la carta es una fila que se
    arrastra, no doscientas filas apiladas. El scroll se engancha a cada
    tarjeta para que nunca se quede una cortada a la mitad. */
@@ -253,6 +272,10 @@ var S={
   empresa:'', contacto:'', email:'', idea:'', personas:20,
   fecha1:'', hora1:'', fecha2:'', hora2:'',
   modo:'', recogida:'', recogidaHora:'', regreso:'', regresoHora:'', recorrido:false,
+  transpSi:null,                /* ¿hace falta transporte? */
+  lugarModo:'preasignado',      /* preasignado | otro_espacio | cliente | propuesta */
+  lugarOtro:'',                 /* la dirección que pone el cliente */
+  horaIni:'', horaFin:'', comentarios:'',
   veh:{},                       /* id -> unidades */
   expFiltro:'todas', exp:null,  /* {origen,id} */
   espacio:null, oficina:'',
@@ -266,7 +289,12 @@ var CAT={transportes:[],exps:[],espacios:[],extras:[],reglas:{},carta:[]};
    antes de saber a dónde van es pedirle al cliente que decida el camino sin
    saber el destino -y el recargo por ir a su oficina sólo tiene sentido
    cuando ya se sabe si lo elegido es un taller-. */
-var PASOS=[[1,'Tu evento'],[2,'Experiencia'],[3,'Transporte'],[4,'Lugar'],[5,'Alimentos'],[6,'Extras']];
+/* EL ORDEN DE LAS PREGUNTAS ES EL ORDEN EN QUE SE DECIDEN. Javi, 21-nov-2026:
+   primero qué quieren, luego dónde se hace -que la propia experiencia ya
+   trae-, luego a qué hora, y sólo entonces si hace falta transporte. Antes se
+   preguntaba el camino antes que el destino. */
+var PASOS=[[1,'Tu evento'],[2,'Experiencia'],[3,'Dónde'],[4,'Horario'],
+           [5,'Transporte'],[6,'Alimentos'],[7,'Extras'],[8,'Resumen']];
 var TIPOS={gastro:'Talleres gastronómicos',artesanos:'Talleres con artesanos',
            shows:'Shows y bailongos',tour:'Tours',otro:'Otros'};
 
@@ -303,6 +331,7 @@ function lineas(){
   var L=[], h=horasViaje();
 
   CAT.transportes.forEach(function(v){
+    if(!S.transpSi) return;
     var u=Number(S.veh[v.id]||0); if(!u) return;
     var hh=Math.max(h||Number(v.horas_incluidas), Number(v.horas_incluidas));
     var pu=precioVeh(v,h);
@@ -311,7 +340,7 @@ function lineas(){
   /* El recorrido con guía no cuesta: Javi, 21-nov-2026, «es sólo considerar
      una nueva ruta». Una línea en cero, no un «por cotizar» -eso diría que
      hay un precio por saber y mandaría al cliente a esperar un número-. */
-  if(S.recorrido) L.push({g:'Transporte',n:'Recorrido turístico con guía',
+  if(S.transpSi && S.recorrido) L.push({g:'Transporte',n:'Recorrido turístico con guía',
                           q:'Sin costo · es otra ruta',imp:0});
 
   var e=expElegida();
@@ -319,18 +348,25 @@ function lineas(){
     var neto = e.pvp_con_iva==null ? null : Number(e.pvp_con_iva)/1.16;
     L.push({g:'Experiencia',n:e.nombre,q:S.personas+' × '+(neto==null?'—':$$(neto)),
             imp: neto==null?null:Math.round(neto*S.personas*100)/100});
-    if(S.modo==='oficina' && neto!=null && esTaller(e)){
+    /* El recargo por desplazarnos sólo cuando de verdad nos desplazamos, y
+       sólo en talleres: un show no se mueve de su sitio. */
+    if(S.lugarModo==='cliente' && neto!=null && esTaller(e)){
       var p=pct('recargo_oficina_pct',30);
-      L.push({g:'Experiencia',n:'Llevarlo a tu oficina (+'+p+'%)',q:'',
+      L.push({g:'Experiencia',n:'Llevarlo a donde ustedes digan (+'+p+'%)',q:'',
               imp:Math.round(neto*S.personas*p)/100});
     }
   }
-  if(S.espacio && eligeLugar()){
-    var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
-    if(es) L.push({g:'Lugar',n:es.nombre+' · '+(es.sede||''),q:'Incluido',imp:0});
-  }
-  if(e && !esTaller(e) && e.lugar_nombre){
-    L.push({g:'Lugar',n:e.lugar_nombre,q:'Donde se da siempre',imp:0});
+  /* EL LUGAR, SIEMPRE UNA LÍNEA, AUNQUE NO CUESTE. Que esté en la cesta es lo
+     que deja editarlo desde el resumen y lo que lo mete en la proforma. */
+  if(e){
+    if(S.lugarModo==='preasignado' && (e.lugar_dir||e.lugar_nombre))
+      L.push({g:'Lugar',n:e.lugar_dir||e.lugar_nombre,q:'Donde se da siempre',imp:0});
+    else if(S.lugarModo==='cliente')
+      L.push({g:'Lugar',n:S.lugarOtro||'La dirección que nos den',q:'Lo montamos ahí · por recotizar',imp:null});
+    else if(S.lugarModo==='otro_espacio')
+      L.push({g:'Lugar',n:S.lugarOtro||'Otro lugar, por buscar',q:'No caben en el de siempre · por recotizar',imp:null});
+    else if(S.lugarModo==='propuesta')
+      L.push({g:'Lugar',n:'El lugar lo proponemos nosotros',q:'Por recotizar',imp:null});
   }
   Object.keys(S.ab).forEach(function(k){
     var it=S.ab[k]; if(!it||!it.cant) return;
@@ -425,6 +461,9 @@ function pintaPasos(){
 }
 
 function campo(id,et,val,tipo,ph){
+  if(tipo==='area')
+    return '<label class="campo" style="margin-top:14px"><span>'+esc(et)+'</span>'+
+      '<textarea id="'+id+'" rows="3"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'+esc(val||'')+'</textarea></label>';
   return '<label class="campo"><span>'+esc(et)+'</span>'+
     '<input id="'+id+'" type="'+(tipo||'text')+'" value="'+esc(val||'')+'"'+
     (ph?' placeholder="'+esc(ph)+'"':'')+'></label>';
@@ -450,23 +489,22 @@ function paso1(){
     '</div></section>';
 }
 
-function paso2(){  /* el tercero desde el 21-nov: ver PASOS */
-  var h='<section class="paso"><div class="kick">Paso 3</div><h2>Transporte</h2>'+
-    '<div class="mini">¿Pasamos por ustedes, llegan directo, o vamos a su oficina?</div>'+
+function paso2(){  /* «¿Necesitan transporte?» — el quinto desde el 21-nov */
+  var e=expElegida();
+  var donde=(S.lugarModo==='preasignado') ? ((e&&(e.lugar_dir||e.lugar_nombre))||'el lugar')
+                                          : (S.lugarOtro||'el lugar');
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>Transporte</h2>'+
+    '<div class="mini">¿Necesitan que los llevemos desde algún lugar, o llegan directo al inicio '+
+      'de la actividad?</div>'+
     '<div class="ops">'+
-      [['recoger','Pasen por nosotros','Los recogemos y los regresamos.'],
-       ['directo','Llegamos directo','Cada quien llega por su cuenta.'],
-       ['oficina','Vengan a mi oficina','Montamos la experiencia donde ustedes digan.']]
-      .map(function(o){ return '<button type="button" class="op'+(S.modo===o[0]?' on':'')+
-        '" data-modo="'+o[0]+'"><b>'+o[1]+'</b><span class="mini">'+o[2]+'</span></button>'; }).join('')+
+      '<button type="button" class="op'+(S.transpSi===false?' on':'')+'" data-ts="0">'+
+        '<b>No, gracias: llegamos directo</b><span class="mini">Nos vemos en '+esc(donde)+'.</span></button>'+
+      '<button type="button" class="op'+(S.transpSi===true?' on':'')+'" data-ts="1">'+
+        '<b>Sí, cotícennos un transporte temático</b>'+
+        '<span class="mini">Los recogemos y los regresamos.</span></button>'+
     '</div>';
-
-  if(S.modo==='oficina'){
-    h+='<div class="nota amb">Los <b>talleres</b> sí se los llevamos a donde digan: '+
-      'desplazarnos puede subir el costo hasta un '+pct('recargo_oficina_pct',30)+'%, '+
-      'y se aplica solo en tu cotización. Los <b>shows y las experiencias</b> se dan '+
-      'en su propio lugar y no se mueven.</div>';
-  }
+  if(S.transpSi!==true) return h+'</section>';
+  S.modo='recoger';
 
   if(S.modo==='recoger'){
     h+='<div class="rejilla" style="margin-top:14px">'+
@@ -513,7 +551,7 @@ function paso3(){  /* el segundo desde el 21-nov: ver PASOS */
   var cuenta={todas:ls.length};
   Object.keys(TIPOS).forEach(function(k){
     cuenta[k]=ls.filter(function(x){return x.corp_tipo===k;}).length; });
-  var h='<section class="paso"><div class="kick">Paso 2</div><h2>La experiencia</h2>'+
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>La experiencia</h2>'+
     '<div class="mini">Lo que van a vivir. Cada una con la gente que la hace.</div>'+
     '<div class="chips">'+
       ['todas'].concat(Object.keys(TIPOS)).filter(function(k){ return k==='todas'||cuenta[k]; })
@@ -542,52 +580,213 @@ function paso3(){  /* el segundo desde el 21-nov: ver PASOS */
   return h;
 }
 
-function paso4(){
-  var exp=expElegida();
-  if(exp && !esTaller(exp)){
-    return '<section class="paso"><div class="kick">Paso 4</div><h2>El lugar</h2>'+
-      '<div class="mini">'+esc(exp.nombre)+' se da siempre en el mismo sitio, '+
-        'así que este paso ya está resuelto.</div>'+
-      '<div class="nota verde" style="margin-top:14px">'+
-        (exp.lugar_nombre?('<b>'+esc(exp.lugar_nombre)+'</b>'):'<b>Lo confirmamos contigo</b>')+
-        (exp.lugar_dir?('<div class="mini" style="margin-top:4px">'+esc(exp.lugar_dir)+'</div>'):'')+
-        (exp.lugar_nota?('<div class="mini" style="margin-top:4px">'+esc(exp.lugar_nota)+'</div>'):'')+
-      '</div>'+
-      '<div class="mini" style="margin-top:12px">¿Lo quieren en su oficina? '+
-        'Eso sí se puede con los talleres: regresen al paso 2 y elijan uno.</div></section>';
+/* ====================== 3 · DÓNDE SE REALIZA ======================
+   Javi, 21-nov-2026: «vamos a unir transporte y espacios; se va a llamar
+   ¿dónde se realiza el evento? Todas las experiencias tienen un lugar
+   preestablecido. Ojo: ya no pongas el espacio, ahora pones la ubicación —
+   Casa Pepe Uruguay 86, Virreyes Izazaga 8».
+
+   El cambio de fondo no es juntar dos pasos: es que el lugar deja de ser una
+   pregunta y pasa a ser un dato que la experiencia ya trae. Lo que se
+   pregunta es sólo qué hacer cuando ese lugar no sirve, y los tres casos
+   acaban igual — hay que recotizar, así que no se cobra el 30%.  */
+var LUGARES=[
+  ['otro_espacio','No caben, busquen otro lugar','Lo buscamos y les recotizamos.'],
+  ['cliente','En nuestras oficinas, hotel u otro sitio','Nos dicen dónde y lo montamos ahí.'],
+  ['propuesta','Que lo elijan ustedes','Nos gustaría explorar un sitio que propongan.']
+];
+function aforoExp(e){ return e && e.cupo_max!=null ? Number(e.cupo_max) : null; }
+function caben(e){ var a=aforoExp(e); return a==null || S.personas<=a; }
+function apartable(){ return S.lugarModo==='preasignado' && caben(expElegida()); }
+
+function pDonde(){
+  var e=expElegida();
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div>'+
+    '<h2>¿Dónde se realiza el evento?</h2>';
+  if(!e) return h+'<div class="nota amb">Primero elige la experiencia: cada una tiene su sitio.</div></section>';
+
+  var sitio = e.lugar_dir || e.lugar_nombre || '';
+  var a=aforoExp(e), ok=caben(e);
+
+  h+='<div class="mini">'+esc(e.nombre)+' se realiza siempre en el mismo sitio.</div>'+
+    '<div class="nota '+(ok?'verde':'roja')+'" style="margin-top:12px">'+
+      (sitio?('<b>'+esc(sitio)+'</b>'):'<b>Lo confirmamos contigo</b>')+
+      (e.lugar_nota?('<div class="mini" style="margin-top:4px">'+esc(e.lugar_nota)+'</div>'):'')+
+      (a!=null?('<div class="mini" style="margin-top:6px">Aforo '+a+' personas · ustedes son '+S.personas+'</div>'):'')+
+    '</div>';
+
+  if(!ok){
+    /* NO CABEN. Se dice en la pantalla y se apunta en la cotización, y desde
+       ese momento no se puede apartar la fecha: lo que valga el evento en
+       otro sitio todavía no lo sabemos. */
+    h+='<div class="nota roja" style="margin-top:10px"><b>Tus invitados no entran en este espacio.</b> '+
+      'Tendríamos que buscar otro lugar, y eso cambia el precio: por eso esta cotización se manda '+
+      'para recotizar y no se puede apartar con el anticipo.</div>';
+    var otros=(CAT.espacios||[]).filter(function(x){ return Number(x.capacidad||0)>=S.personas; });
+    h+= otros.length
+      ? '<div class="mini" style="margin:14px 0 8px">Estos sí les quedan:</div><div class="tarjetas">'+
+        otros.map(function(x){
+          var f=(x.fotos&&x.fotos.length)?(typeof x.fotos[0]==='string'?x.fotos[0]:(x.fotos[0].url||'')):'';
+          return '<div class="tj'+(S.lugarOtro===x.nombre?' on':'')+'">'+
+            '<div class="foto"'+(f?' style="background-image:url('+encodeURI(f)+')"':'')+'>'+
+              '<em>Caben '+S.personas+' de '+x.capacidad+'</em></div>'+
+            '<div class="cu"><div class="nom">'+esc(x.nombre)+'</div>'+
+              '<div class="mini">'+esc(x.direccion||x.sede||'')+'</div></div>'+
+            '<div class="pie"><button type="button" class="btn sm" data-lot="'+esc(x.nombre)+'">'+
+              (S.lugarOtro===x.nombre?'Elegido ✓':'Este nos sirve')+'</button></div></div>';
+        }).join('')+'</div>'
+      : '<div class="nota amb" style="margin-top:10px">Ahora mismo no tenemos ningún espacio propio '+
+        'de ese tamaño dado de alta. Lo buscamos fuera y se lo pasamos con el precio.</div>';
   }
-  if(S.modo==='oficina'){
-    return '<section class="paso"><div class="kick">Paso 4</div><h2>El lugar</h2>'+
-      '<div class="mini">Vamos a tu oficina, así que dinos dónde.</div>'+
-      campo('f_oficina','Dirección',S.oficina,'text','Calle, número, colonia')+
-      '<div class="nota amb">Recuerda: desplazarnos puede subir hasta un '+
-        pct('recargo_oficina_pct',30)+'%, y ya está aplicado en tu cotización.</div></section>';
+
+  h+='<div class="mini" style="margin:18px 0 8px">¿Prefieren otra cosa?</div><div class="ops">'+
+    '<button type="button" class="op'+(S.lugarModo==='preasignado'?' on':'')+'" data-lm="preasignado"'+
+      (ok?'':' disabled')+'><b>Ahí está bien</b><span class="mini">'+
+      (ok?'Donde se da siempre.':'No caben: hay que buscar otro.')+'</span></button>'+
+    LUGARES.map(function(o){
+      return '<button type="button" class="op'+(S.lugarModo===o[0]?' on':'')+'" data-lm="'+o[0]+'">'+
+        '<b>'+o[1]+'</b><span class="mini">'+o[2]+'</span></button>'; }).join('')+
+    '</div>';
+
+  if(S.lugarModo==='cliente')
+    h+=campo('f_lugar','La dirección donde lo montamos',S.lugarOtro,'text','Calle, número, colonia')+
+       '<div class="nota amb">Desplazarnos puede subir el costo hasta un '+pct('recargo_oficina_pct',30)+
+       '% en los talleres. Lo cerramos al recotizar.</div>';
+  if(S.lugarModo==='propuesta')
+    h+='<div class="nota amb" style="margin-top:12px">Lo anotamos y les proponemos sitio con su precio. '+
+       'Esta cotización va para recotizar, así que no se puede apartar todavía.</div>';
+  if(S.lugarModo==='otro_espacio' && S.lugarOtro)
+    h+='<div class="nota verde" style="margin-top:12px">Anotado: <b>'+esc(S.lugarOtro)+'</b>.</div>';
+
+  return h+'</section>';
+}
+
+/* ====================== 4 · EL HORARIO ======================
+   Javi: «si el evento tiene un show prefijado, como la lucha libre, se
+   comenta aquí que arranca a la hora X y termina a la Y, como en la
+   experiencia a la venta. Si el evento es libre, como los talleres,
+   mantenemos su hora de inicio y le decimos que termina Y horas después».
+   La hora no se inventa nunca: o es la de la ficha, o es la que ellos ponen. */
+function masMin(hhmm,min){
+  if(!hhmm) return '';
+  var p=String(hhmm).split(':'), t=Number(p[0])*60+Number(p[1]||0)+Number(min||0);
+  t=((t%1440)+1440)%1440;
+  return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0');
+}
+function esShow(e){ return !!e && e.corp_tipo==='shows'; }
+function horasFicha(e){
+  var hs=(e&&e.horas)||[]; return Array.isArray(hs)?hs.filter(Boolean):[];
+}
+function pHorario(){
+  var e=expElegida();
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>El horario</h2>';
+  if(!e) return h+'<div class="nota amb">Primero elige la experiencia.</div></section>';
+  var dur=Number(e.duracion_min||0);
+  var hs=horasFicha(e), hf=(e.horas_fin||[]);
+
+  if(esShow(e) && hs.length){
+    /* Un show no se mueve: su hora es la de la función. */
+    h+='<div class="mini">'+esc(e.nombre)+' tiene horario fijo: es un show con función a su hora.</div>'+
+      '<div class="ops" style="margin-top:12px">'+hs.map(function(x,i){
+        var fin=hf[i]||masMin(x,dur);
+        return '<button type="button" class="op'+(S.horaIni===x?' on':'')+'" data-hi="'+esc(x)+'" '+
+          'data-hf="'+esc(fin)+'"><b>'+esc(String(x).slice(0,5))+' a '+esc(String(fin).slice(0,5))+'</b>'+
+          '<span class="mini">La experiencia arranca y termina a esta hora.</span></button>'; }).join('')+
+      '</div>';
+  }else{
+    h+='<div class="mini">Ustedes ponen la hora de inicio'+
+      (dur?(' y nosotros cerramos '+(dur>=60?(Math.round(dur/60*10)/10)+' h':dur+' min')+' después'):'')+'.</div>'+
+      campo('f_hini','¿A qué hora empiezan?',S.horaIni,'time');
+    if(hs.length)
+      h+='<div class="mini" style="margin:8px 0">Las horas en las que solemos darla: '+
+         hs.map(function(x){return '<b>'+esc(String(x).slice(0,5))+'</b>';}).join(' · ')+'</div>';
   }
-  var caben=CAT.espacios.filter(function(x){return Number(x.capacidad||0)>=S.personas;});
-  var no=CAT.espacios.filter(function(x){return Number(x.capacidad||0)<S.personas;});
-  var uno=function(x,ok){
-    var f=(x.fotos&&x.fotos.length)?(typeof x.fotos[0]==='string'?x.fotos[0]:(x.fotos[0].url||'')):'';
-    return '<div class="tj'+(S.espacio===x.id?' on':'')+(ok?'':' no')+'">'+
-      '<div class="foto"'+(f?' style="background-image:url('+encodeURI(f)+')"':'')+'>'+
-        '<em>'+(ok?('Caben '+S.personas+' de '+x.capacidad):('Aforo '+x.capacidad+' · no caben '+S.personas))+'</em></div>'+
-      '<div class="cu"><div class="nom">'+esc(x.nombre)+'</div>'+
-        '<div class="mini">'+esc(x.sede||'')+'</div>'+
-        '<div class="pre">Incluido <span>no se suma</span></div></div>'+
-      '<div class="pie">'+
-        '<button type="button" class="btn fan sm" data-ficha="esp:'+x.id+'">Ver ficha</button>'+
-        (ok?'<button type="button" class="btn sm" data-esp="'+x.id+'">'+
-            (S.espacio===x.id?'Elegido ✓':'Elegir')+'</button>':'')+
-      '</div></div>';
-  };
-  return '<section class="paso"><div class="kick">Paso 4</div><h2>El lugar</h2>'+
-    '<div class="mini">Nuestros espacios. El que no les quede grande sale primero.</div>'+
-    '<div class="tarjetas">'+caben.map(function(x){return uno(x,true);}).join('')+
-      no.map(function(x){return uno(x,false);}).join('')+'</div></section>';
+
+  if(S.horaIni){
+    var fin=S.horaFin||masMin(S.horaIni,dur);
+    h+='<div class="nota verde" style="margin-top:14px">Empieza a las <b>'+esc(String(S.horaIni).slice(0,5))+
+      '</b> en '+esc(e.lugar_dir||e.lugar_nombre||'el lugar acordado')+
+      (fin?(' y termina a las <b>'+esc(String(fin).slice(0,5))+'</b>'):'')+'.</div>';
+  }
+  return h+'</section>';
+}
+
+/* ====================== 8 · EL RESUMEN ======================
+   Javi: «finalmente se hace un resumen de la experiencia tipo calendario»,
+   con las cinco filas del día, el listado de lo comprado y un hueco para
+   comentarios. Y «permitir en cada elemento la opción de editar y regresar»,
+   como el check-in de un avión: por eso cada renglón lleva su lápiz. */
+function tramos(){
+  var e=expElegida(), T=[], dur=Number((e&&e.duracion_min)||0);
+  var ini=S.horaIni, fin=S.horaFin||masMin(ini,dur);
+  var sitio=(S.lugarModo==='preasignado')
+      ? ((e&&(e.lugar_dir||e.lugar_nombre))||'')
+      : (S.lugarOtro||'Por definir');
+  if(S.transpSi){
+    T.push({h:S.recogidaHora,t:'Los recogemos',d:S.recogida||'Punto por definir',p:5});
+    var veh=CAT.transportes.filter(function(v){return Number(S.veh[v.id]||0)>0;})
+            .map(function(v){ return S.veh[v.id]+' × '+v.nombre; }).join(', ');
+    T.push({h:'',t:'Traslado'+(S.recorrido?' con recorrido turístico':''),
+            d:veh||'Transporte por definir',p:5});
+  }else{
+    T.push({h:ini,t:'Llegan por su cuenta',d:sitio,p:5});
+  }
+  var cosas=[];
+  Object.keys(S.ab).forEach(function(k){ var it=S.ab[k]; if(!it||!it.cant) return;
+    var pr=CAT.carta.filter(function(x){return String(x.id)===String(k);})[0];
+    if(pr) cosas.push(it.cant+' × '+pr.nombre); });
+  CAT.extras.forEach(function(x){ var hh=Number(S.extras[x.id]||0);
+    if(hh) cosas.push(x.nombre+' ('+hh+' h)'); });
+  T.push({h:ini,t:(e?e.nombre:'La experiencia'),d:sitio+
+          (dur?(' · '+(dur>=60?(Math.round(dur/60*10)/10)+' h':dur+' min')):'')+
+          (cosas.length?(' · con '+cosas.join(', ')):''),p:2});
+  T.push({h:fin,t:'Termina la actividad',d:sitio,p:4});
+  if(S.transpSi) T.push({h:S.regresoHora,t:'Los regresamos',d:S.regreso||'Punto por definir',p:5});
+  return T;
+}
+function pResumen(){
+  var t=totales(), e=expElegida();
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>Así quedaría el día</h2>'+
+    '<div class="mini">'+S.personas+' personas · '+esc(S.fecha1||'fecha por definir')+
+    '. Toca el lápiz de cualquier renglón para cambiarlo.</div>';
+
+  h+='<div class="crono">'+tramos().map(function(x){
+      return '<div class="tramo"><div class="hh">'+esc(x.h?String(x.h).slice(0,5):'—')+'</div>'+
+        '<div class="qq"><b>'+esc(x.t)+'</b><div class="mini">'+esc(x.d)+'</div></div>'+
+        '<button type="button" class="lap" data-ir2="'+x.p+'" aria-label="Cambiar">✎</button></div>';
+    }).join('')+'</div>';
+
+  var PASODE={'Transporte':5,'Experiencia':2,'Lugar':3,'Alimentos y bebidas':6,'Extras':7};
+  h+='<div class="gr" style="font-family:Oswald;font-weight:600;font-size:11px;letter-spacing:.09em;'+
+     'text-transform:uppercase;color:var(--tenue);padding:18px 0 6px">Lo que llevan</div>';
+  t.lineas.forEach(function(l){
+    h+='<div class="tramo"><div class="qq"><b>'+esc(l.n)+'</b>'+
+      (l.q?'<div class="mini">'+esc(l.q)+'</div>':'')+'</div>'+
+      '<div style="font-variant-numeric:tabular-nums;white-space:nowrap">'+
+        (l.imp==null?'<span class="mini">Por cotizar</span>':$$(l.imp))+'</div>'+
+      '<button type="button" class="lap" data-ir2="'+(PASODE[l.g]||2)+'" aria-label="Cambiar">✎</button></div>';
+  });
+  h+='<div class="sumas" style="margin-top:12px">'+
+      '<div class="fila"><span>Subtotal sin IVA</span><b>'+$$(t.sub)+'</b></div>'+
+      '<div class="fila"><span>IVA '+t.ivaPct+'%</span><b>'+$$(t.iva)+'</b></div>'+
+      '<div class="fila tot"><span>Total estimado</span><b>'+$$(t.total)+'</b></div></div>';
+
+  h+=campo('f_coment','¿Algo que debamos saber?',S.comentarios,'area',
+           'Alergias, un cumpleaños, el nombre de la empresa en el pastel…');
+
+  h+= apartable()
+    ? '<div class="nota verde" style="margin-top:12px">Pueden apartar la fecha con el <b>'+
+      pct('anticipo_pct',30)+'%</b> ('+$$(t.total*pct('anticipo_pct',30)/100)+'). '+
+      'El resto, '+regla('saldo_dias_antes','15')+' días antes del evento, ajustando el número final de personas.</div>'
+    : '<div class="nota amb" style="margin-top:12px">Esta cotización va <b>para recotizar</b>: '+
+      (caben(expElegida())?'el lugar todavía no está cerrado':'no caben en el sitio de siempre')+
+      ', así que todavía no se puede apartar la fecha.</div>';
+  return h+'</section>';
 }
 
 function paso5(){
   var e=expElegida();
-  var h='<section class="paso"><div class="kick">Paso 5</div><h2>Alimentos y bebidas</h2>';
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>Alimentos y bebidas</h2>';
   var yaCome=comidaIncluida(e);
   if(yaCome)
     h+='<div class="nota verde">Recuerda que <b>'+esc(e.nombre)+'</b> ya incluye: '+esc(yaCome)+'. '+
@@ -668,7 +867,7 @@ function paso5(){
 
 function paso6(){
   var e6=expElegida();
-  return '<section class="paso"><div class="kick">Paso 6</div><h2>Extras</h2>'+
+  return '<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>Extras</h2>'+
     '<div class="mini">Lo que le pone fiesta. Se cobran por horas.</div>'+
     (e6 && e6.corp_protagonista
       ? '<div class="nota verde" style="margin-top:10px">Tu experiencia ya tiene protagonista: '+
@@ -759,8 +958,8 @@ function fichaHtml(){
 function pinta(){
   if(S.enviado){ pintaGracias(); return; }
   pintaPasos();
-  var cuerpo=[paso1,paso3,paso2,paso4,paso5,paso6][S.paso-1]();
-  var ultimo=S.paso===6;
+  var cuerpo=[paso1,paso3,pDonde,pHorario,paso2,paso5,paso6,pResumen][S.paso-1]();
+  var ultimo=S.paso===8;
   $('main').innerHTML='<div class="card">'+fichaHtml()+cuerpo+
     '<div class="navpaso">'+
       '<button type="button" class="btn gris" id="bAnt"'+(S.paso===1?' disabled':'')+'>← Anterior</button>'+
@@ -785,11 +984,17 @@ function pintaGracias(){
     '<div class="folio">'+esc(r.folio)+'</div>'+
     '<p class="mini">'+S.personas+' personas · '+esc(S.fecha1||'fecha por definir')+'</p>'+
     '<div class="salidas">'+
-      '<div><div class="kick">Aparta tu fecha</div>'+
-        '<div style="font-family:Oswald;font-weight:700;font-size:23px;margin:4px 0">'+
-          $$(r.anticipo)+'</div>'+
-        '<div class="mini">Depósito del '+r.anticipo_pct+'% del total. Te mandamos el link de pago '+
-        'en el correo de tu cotización.</div></div>'+
+      (r.apartable===false
+        ? '<div><div class="kick">Lo recotizamos</div>'+
+          '<div style="font-family:Oswald;font-weight:700;font-size:19px;margin:4px 0">Te escribimos</div>'+
+          '<div class="mini">Falta cerrar el lugar, así que todavía no se puede apartar la fecha. '+
+          'Te mandamos el precio en firme en cuanto lo tengamos.</div></div>'
+        : '<div><div class="kick">Aparta tu fecha</div>'+
+          '<div style="font-family:Oswald;font-weight:700;font-size:23px;margin:4px 0">'+
+            $$(r.anticipo)+'</div>'+
+          '<div class="mini">Depósito del '+r.anticipo_pct+'% del total, no reembolsable. '+
+          'El resto '+regla('saldo_dias_antes','15')+' días antes del evento, ajustando el número '+
+          'final de personas. Te mandamos el link de pago en el correo.</div></div>')+
       '<div><div class="kick">¿Dudas?</div>'+
         '<div style="margin:6px 0"><a class="btn sm" href="https://wa.me/'+wa+'?text='+msg+
           '" target="_blank" rel="noopener">Escribir por WhatsApp</a></div>'+
@@ -842,6 +1047,27 @@ function cablea(){
     b.onclick=function(){ var k=b.getAttribute('data-vm');
       var n=Number(S.veh[k]||0)-1; if(n>0) S.veh[k]=n; else delete S.veh[k]; pinta(); };
   });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-lm]'),function(b){
+    b.onclick=function(){ if(b.disabled) return;
+      S.lugarModo=b.getAttribute('data-lm');
+      if(S.lugarModo!=='otro_espacio' && S.lugarModo!=='cliente') S.lugarOtro='';
+      pinta(); };});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-lot]'),function(b){
+    b.onclick=function(){ S.lugarOtro=b.getAttribute('data-lot'); S.lugarModo='otro_espacio'; pinta(); };});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ts]'),function(b){
+    b.onclick=function(){ S.transpSi=b.getAttribute('data-ts')==='1';
+      if(!S.transpSi){ S.veh={}; S.recorrido=false; S.modo='directo'; } pinta(); };});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-hi]'),function(b){
+    b.onclick=function(){ S.horaIni=b.getAttribute('data-hi');
+      S.horaFin=b.getAttribute('data-hf')||''; pinta(); };});
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ir2]'),function(b){
+    b.onclick=function(){ S.paso=Number(b.getAttribute('data-ir2'))||2; S.ficha=null; pinta();
+      try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(_){ } };});
+  var fl=$('f_lugar'); if(fl) fl.oninput=function(){ S.lugarOtro=fl.value; };
+  var fc=$('f_coment'); if(fc) fc.oninput=function(){ S.comentarios=fc.value; };
+  var fh=$('f_hini'); if(fh) fh.onchange=function(){
+    var e=expElegida(); S.horaIni=fh.value;
+    S.horaFin=masMin(fh.value, Number((e&&e.duracion_min)||0)); pinta(); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-abp]'),function(b){
     b.onclick=function(){ S.abPasillo=b.getAttribute('data-abp'); pinta(); };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-ef]'),function(b){
@@ -912,25 +1138,31 @@ async function envia(b){
   if(!S.empresa.trim() || !S.contacto.trim() || !S.email.trim()){
     S.paso=1; pinta(); avisa('Nos faltan la <b>empresa</b>, tu <b>nombre</b> y tu <b>correo</b> para poder cotizarte.'); return;
   }
-  if(S.espacio && eligeLugar()){
-    var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
-    if(es && Number(es.capacidad||0) < S.personas){
-      S.paso=4; pinta(); avisa('En ese espacio no caben '+S.personas+' personas. Elige otro.'); return;
-    }
-  }
+  if(!S.exp){ S.paso=2; pinta(); avisa('Falta elegir la <b>experiencia</b>.'); return; }
+  if(!S.horaIni){ S.paso=4; pinta(); avisa('Falta la <b>hora de inicio</b>. La hora no la inventamos: dinos a qué hora empiezan.'); return; }
+  if(S.lugarModo==='cliente' && !String(S.lugarOtro||'').trim()){
+    S.paso=3; pinta(); avisa('Si lo montamos donde ustedes digan, hace falta la <b>dirección</b>.'); return; }
+  if(S.transpSi===null){ S.paso=5; pinta(); avisa('Dinos si necesitan <b>transporte</b> o llegan directo.'); return; }
   b.disabled=true; b.textContent='Mandando…';
   var payload={
     empresa:S.empresa, contacto:S.contacto, email:S.email,
     telefono: S.tel? S.tel.valor() : '', idea:S.idea, personas:S.personas,
-    fecha1:S.fecha1||null, hora1:S.hora1||null, fecha2:S.fecha2||null, hora2:S.hora2||null,
-    modo_transporte:S.modo||'directo',
-    recogida:{dir:S.recogida, hora:S.recogidaHora||null},
-    regreso:{dir:S.regreso, hora:S.regresoHora||null},
-    recorrido_turistico:!!S.recorrido,
-    transportes:Object.keys(S.veh).map(function(k){ return {id:k, unidades:S.veh[k]}; }),
+    fecha1:S.fecha1||null, hora1:(S.horaIni||S.hora1||null), fecha2:S.fecha2||null, hora2:S.hora2||null,
+    modo_transporte:(S.transpSi?'recoger':(S.lugarModo==='cliente'?'oficina':'directo')),
+    lugar_modo:S.lugarModo||'preasignado',
+    lugar_nombre:(function(){ var e=expElegida();
+      return S.lugarModo==='preasignado' ? ((e&&e.lugar_nombre)||null) : (S.lugarOtro||null); })(),
+    lugar_dir:(function(){ var e=expElegida();
+      return S.lugarModo==='preasignado' ? ((e&&e.lugar_dir)||null) : (S.lugarOtro||null); })(),
+    hora_fin:S.horaFin||null,
+    comentarios:S.comentarios||null,
+    recogida:{dir:(S.transpSi?S.recogida:''), hora:(S.transpSi?(S.recogidaHora||null):null)},
+    regreso:{dir:(S.transpSi?S.regreso:''), hora:(S.transpSi?(S.regresoHora||null):null)},
+    recorrido_turistico:!!(S.transpSi && S.recorrido),
+    transportes:(S.transpSi?Object.keys(S.veh).map(function(k){ return {id:k, unidades:S.veh[k]}; }):[]),
     experiencia:S.exp||null,
-    espacio_id:(eligeLugar()? (S.espacio||null) : null),
-    oficina:{dir:S.oficina},
+    espacio_id:null,
+    oficina:{dir:(S.lugarModo==='cliente'?S.lugarOtro:'')},
     ab:Object.keys(S.ab).map(function(k){ return {carta_id:k, cant:S.ab[k].cant, modo:S.ab[k].modo}; }),
     ab_texto:S.abTexto,
     extras:Object.keys(S.extras).map(function(k){ return {id:k, horas:S.extras[k]}; })
