@@ -109,6 +109,11 @@ h2 em{font:600 11px Inter;font-style:normal;color:var(--gris);background:var(--h
 .estn button{border:0;background:none;font:inherit;font-size:13.5px;padding:10px 13px;color:var(--gris);
   cursor:pointer;white-space:nowrap;border-bottom:2.5px solid transparent}
 .estn button[aria-selected="true"]{color:var(--tinta);font-weight:600;border-bottom-color:var(--naranja,#F2682A)}
+.colar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+.colar select{border:1.5px solid var(--linea);border-radius:9px;padding:9px 12px;background:#fff;
+  font:inherit;max-width:260px}
+.colar[hidden]{display:none}
+.colar-n{font-size:12.5px;color:var(--gris)}
 </style>
   <link rel="stylesheet" href="/cp-movil.css"><script src="/uso.js" defer></script>
 </head><body>
@@ -142,6 +147,16 @@ h2 em{font:600 11px Inter;font-style:normal;color:var(--gris);background:var(--h
     <button data-e="cal" aria-selected="false">📅 Calendario de salas</button>
   </nav>
 
+  <!-- FILTRAR LA COLA. Javi, 21-nov-2026: «en Aprobación permite que filtremos
+       por ubicación y por touroperador». Con trescientas fichas y catorce
+       operadores, buscar «la de Toño» era leerlas todas. -->
+  <div class="colar" id="colar" hidden>
+    <select id="fCiudad" aria-label="Ubicación"><option value="">Todas las ubicaciones</option></select>
+    <select id="fOper" aria-label="Touroperador"><option value="">Todos los operadores</option></select>
+    <button class="btn sm gris" id="fQuita" hidden>Quitar filtros</button>
+    <span class="colar-n" id="colarN"></span>
+  </div>
+
   <div id="cuerpo"></div>
 </div>
 
@@ -165,6 +180,19 @@ var FOTOOK={}; /* qué fichas tienen al menos una foto en estado listo */
    Ahora las cuatro cosas que autoriza la casa viven aquí. */
 var SALAS=[], HOT=[];
 var FSALA='', FQ='';   /* filtros de la cola de salas */
+/* FILTRAR LA COLA POR UBICACION Y POR OPERADOR. Javi, 21-nov-2026. Se guardan
+   en la pantalla, no en la liga: quien filtra está decidiendo, y al aprobar una
+   ficha la lista se vuelve a pintar; perder el filtro en cada aprobación sería
+   volver a buscar catorce veces. */
+var FCIUDAD='', FOPER='';
+function pasaFiltro(x){
+  if(FCIUDAD && String(x.ciudad||'')!==FCIUDAD) return false;
+  if(FOPER){
+    if(FOPER==='_casa'){ if(x.operador_id) return false; }
+    else if(String(x.operador_id||'')!==FOPER) return false;
+  }
+  return true;
+}
 var FOTO={}, PRODN={};   /* portada por ficha y nombre de cada productora */
 /* Si la productora de cada evento puede cobrar en linea. Javi, 5-nov-2026. */
 var PRODSTRIPE={};
@@ -610,6 +638,47 @@ function tarjetaBorrador(x, sub){
   '</div>';
 }
 
+/* LA BARRA DE FILTROS. Las opciones salen de lo que hay en la cola: si no hay
+   nada de Puebla esperando, Puebla no se ofrece. Ofrecer un filtro que deja la
+   pantalla vacía es hacer perder un clic. */
+function pintaBarra(){
+  var barra=$('colar'); if(!barra) return;
+  var todo=(window.EXPS||[]).concat(window.BORR||[], window.EXPOK||[]);
+  if(EST==='cal' || !todo.length){ barra.hidden=true; return; }
+  barra.hidden=false;
+
+  var ciudades={}, opers={}, hayCasa=false;
+  todo.forEach(function(x){
+    if(x.ciudad) ciudades[x.ciudad]=(ciudades[x.ciudad]||0)+1;
+    if(x.operador_id) opers[x.operador_id]=(opers[x.operador_id]||0)+1;
+    else hayCasa=true;
+  });
+
+  var sc=$('fCiudad');
+  if(sc.getAttribute('data-k')!==Object.keys(ciudades).join('|')){
+    sc.setAttribute('data-k',Object.keys(ciudades).join('|'));
+    sc.innerHTML='<option value="">Todas las ubicaciones</option>'+
+      Object.keys(ciudades).sort(function(a,b){return a.localeCompare(b,'es');})
+        .map(function(c){ return '<option value="'+esc(c)+'">'+esc(c)+' · '+ciudades[c]+'</option>'; }).join('');
+    sc.value=FCIUDAD;
+  }
+  var so=$('fOper');
+  var clave=Object.keys(opers).sort().join('|')+(hayCasa?'|casa':'');
+  if(so.getAttribute('data-k')!==clave){
+    so.setAttribute('data-k',clave);
+    so.innerHTML='<option value="">Todos los operadores</option>'+
+      (hayCasa?'<option value="_casa">Casa Pepe (sin operador)</option>':'')+
+      Object.keys(opers).map(function(id){ return [OPS[id]||'(sin nombre)', id]; })
+        .sort(function(a,b){ return a[0].localeCompare(b[0],'es'); })
+        .map(function(p){ return '<option value="'+esc(p[1])+'">'+esc(p[0])+' · '+opers[p[1]]+'</option>'; }).join('');
+    so.value=FOPER;
+  }
+  $('fQuita').hidden = !(FCIUDAD||FOPER);
+  var n=(window.EXPS||[]).concat(window.BORR||[], window.EXPOK||[]).filter(pasaFiltro).length;
+  $('colarN').textContent = (FCIUDAD||FOPER)
+    ? ('Se ven '+n+' de '+todo.length+' fichas') : '';
+}
+
 function pinta(){
   var caja=$('cuerpo');
   if(EST==='cal'){
@@ -627,6 +696,13 @@ function pinta(){
     $('cuenta').textContent='—'; return;
   }
   if(CARGANDO){ caja.innerHTML='<div class="vacio">Cargando…</div>'; return; }
+
+  /* Las listas que llevan dueño y ciudad se filtran; las de salas, hoteles y
+     ateneístas no, porque no son fichas de experiencia. */
+  var EXPS=window.EXPS.filter(pasaFiltro),
+      BORR=window.BORR.filter(pasaFiltro),
+      EXPOK=window.EXPOK.filter(pasaFiltro);
+  pintaBarra();
 
   var total=EXPS.length+EVTS.length+ATES.length+SALAS.length+HOT.length+EXPOK.length+EVTOK.length+EVTNO.length;
   var viejos=0;
@@ -820,7 +896,7 @@ async function carga(){
   if(EST==='cal'){ CARGANDO=false; pinta(); return; }
   FALLO=''; CARGANDO=true; pinta();
   try{
-    var campos='id,nombre,estado,tipo,formato,operador_id,precio_adulto,neto_adulto,updated_at,created_at,'+
+    var campos='id,nombre,estado,tipo,formato,operador_id,ciudad,precio_adulto,neto_adulto,updated_at,created_at,'+
       'fotos,duracion_min,ciudad,categoria,resumen,descripcion,cupo_max,cupo_min,cer_inicio_lugar,punto_encuentro';
     var res=await Promise.all([
       vePend()? trae('op_experiencias?select='+campos+'&estado=eq.en_revision&order=updated_at') : [],
@@ -888,6 +964,14 @@ async function carga(){
 }
 
 $('recargar').addEventListener('click',carga);
+
+/* Los filtros repintan la lista sin volver a pedir nada a la base: la cola ya
+   está en memoria y volver a bajarla sería hacer esperar por nada. */
+$('fCiudad').onchange=function(){ FCIUDAD=this.value; pinta(); };
+$('fOper').onchange=function(){ FOPER=this.value; pinta(); };
+$('fQuita').onclick=function(){ FCIUDAD=''; FOPER='';
+  $('fCiudad').value=''; $('fOper').value=''; pinta(); };
+
 Array.prototype.forEach.call($('estn').children,function(b){
   b.onclick=function(){
     EST=b.getAttribute('data-e');
