@@ -270,10 +270,10 @@ async function api(path){
 var S={
   paso:1, enviado:null, tel:null,
   empresa:'', contacto:'', email:'', idea:'', personas:20,
-  fecha1:'', hora1:'', fecha2:'', hora2:'',
+  fecha1:'', hora1:'', hora1fin:'', fecha2:'', hora2:'',
   modo:'', recogida:'', recogidaHora:'', regreso:'', regresoHora:'', recorrido:false,
   transpSi:null,                /* ¿hace falta transporte? */
-  lugarModo:'preasignado',      /* preasignado | otro_espacio | cliente | propuesta */
+  lugarModo:'preasignado',      /* preasignado | otro_espacio | cliente */
   lugarOtro:'',                 /* la dirección que pone el cliente */
   horaIni:'', horaFin:'', comentarios:'',
   veh:{},                       /* id -> unidades */
@@ -283,7 +283,7 @@ var S={
   extras:{},                    /* id -> horas */
   ficha:null                    /* {que, id} */
 };
-var CAT={transportes:[],exps:[],espacios:[],extras:[],reglas:{},carta:[]};
+var CAT={transportes:[],exps:[],espacios:[],extras:[],reglas:{},carta:[],horas:[]};
 var TOKEN=(function(){ try{ return new URLSearchParams(location.search).get('t')||''; }catch(_){ return ''; } })();
 var VOLVIO=false, YACERRADA=false;
 /* PRIMERO QUÉ QUIEREN, LUEGO CÓMO LLEGAN. Javi, 21-nov-2026: «pon primero
@@ -295,8 +295,8 @@ var VOLVIO=false, YACERRADA=false;
    primero qué quieren, luego dónde se hace -que la propia experiencia ya
    trae-, luego a qué hora, y sólo entonces si hace falta transporte. Antes se
    preguntaba el camino antes que el destino. */
-var PASOS=[[1,'Tu evento'],[2,'Experiencia'],[3,'Dónde'],[4,'Horario'],
-           [5,'Transporte'],[6,'Alimentos'],[7,'Extras'],[8,'Resumen']];
+var PASOS=[[1,'Tu evento'],[2,'Experiencia'],[3,'Dónde'],[4,'Horario y transporte'],
+           [5,'Alimentos'],[6,'Extras'],[7,'Resumen']];
 var TIPOS={gastro:'Talleres gastronómicos',artesanos:'Talleres con artesanos',
            shows:'Shows y bailongos',tour:'Tours',otro:'Otros'};
 
@@ -367,8 +367,6 @@ function lineas(){
       L.push({g:'Lugar',n:S.lugarOtro||'La dirección que nos den',q:'Lo montamos ahí · por recotizar',imp:null});
     else if(S.lugarModo==='otro_espacio')
       L.push({g:'Lugar',n:S.lugarOtro||'Otro lugar, por buscar',q:'No caben en el de siempre · por recotizar',imp:null});
-    else if(S.lugarModo==='propuesta')
-      L.push({g:'Lugar',n:'El lugar lo proponemos nosotros',q:'Por recotizar',imp:null});
   }
   Object.keys(S.ab).forEach(function(k){
     var it=S.ab[k]; if(!it||!it.cant) return;
@@ -482,70 +480,22 @@ function paso1(){
       campo('f_email','Correo',S.email,'email','tu@empresa.com')+
       '<label class="campo" style="grid-column:1/-1"><span>Teléfono</span><div id="f_tel"></div></label>'+
       campo('f_fecha1','Fecha principal',S.fecha1,'date')+
-      campo('f_hora1','Hora',S.hora1,'time')+
+      campo('f_hora1','Hora tentativa de inicio',S.hora1,'time')+
+      campo('f_hora1fin','Hora estimada de fin',S.hora1fin,'time')+
       campo('f_fecha2','Segunda opción (si la hay)',S.fecha2,'date')+
-      campo('f_hora2','Hora',S.hora2,'time')+
+      campo('f_hora2','Hora tentativa de inicio',S.hora2,'time')+
       '<label class="campo" style="grid-column:1/-1"><span>Cuéntanos qué tienes en mente</span>'+
         '<textarea id="f_idea" rows="3" placeholder="Integración del equipo, cena de clientes, posada…">'+
         esc(S.idea)+'</textarea></label>'+
-    '</div></section>';
-}
-
-function paso2(){  /* «¿Necesitan transporte?» — el quinto desde el 21-nov */
-  var e=expElegida();
-  var donde=(S.lugarModo==='preasignado') ? ((e&&(e.lugar_dir||e.lugar_nombre))||'el lugar')
-                                          : (S.lugarOtro||'el lugar');
-  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>Transporte</h2>'+
-    '<div class="mini">¿Necesitan que los llevemos desde algún lugar, o llegan directo al inicio '+
-      'de la actividad?</div>'+
-    '<div class="ops">'+
-      '<button type="button" class="op'+(S.transpSi===false?' on':'')+'" data-ts="0">'+
-        '<b>No, gracias: llegamos directo</b><span class="mini">Nos vemos en '+esc(donde)+'.</span></button>'+
-      '<button type="button" class="op'+(S.transpSi===true?' on':'')+'" data-ts="1">'+
-        '<b>Sí, cotícennos un transporte temático</b>'+
-        '<span class="mini">Los recogemos y los regresamos.</span></button>'+
-    '</div>';
-  if(S.transpSi!==true) return h+'</section>';
-  S.modo='recoger';
-
-  if(S.modo==='recoger'){
-    h+='<div class="rejilla" style="margin-top:14px">'+
-      campo('f_rec','Dónde los recogemos',S.recogida,'text','Calle y número')+
-      campo('f_recH','A qué hora',S.recogidaHora,'time')+
-      campo('f_reg','Dónde los regresamos',S.regreso,'text','Calle y número')+
-      campo('f_regH','A qué hora',S.regresoHora,'time')+
     '</div>'+
-    '<div class="nota amb">'+esc(regla('aviso_edomex',''))+'</div>';
-
-    var hv=horasViaje(), lug=0;
-    CAT.transportes.forEach(function(v){ lug += Number(S.veh[v.id]||0)*Number(v.capacidad); });
-    h+='<div class="mini" style="margin:14px 0 8px">'+
-      (hv? ('De '+esc(S.recogidaHora)+' a '+esc(S.regresoHora)+' son <b>'+hv+' h</b>.')
-         : 'Pon las dos horas y calculamos la duración.')+'</div>'+
-      '<div class="tarjetas">'+CAT.transportes.map(function(v){
-        var u=Number(S.veh[v.id]||0);
-        return '<div class="tj'+(u?' on':'')+'">'+
-          '<div class="foto"'+(v.fotos&&v.fotos[0]?' style="background-image:url('+encodeURI(v.fotos[0])+')"':'')+
-            '><em>'+v.capacidad+' lugares</em></div>'+
-          '<div class="cu"><div class="nom">'+esc(v.nombre)+'</div>'+
-            '<div class="mini">'+esc(v.frase||'')+'</div>'+
-            '<div class="pre">'+$$(precioVeh(v,hv))+' <span>sin IVA'+
-              (hv?'':' · '+v.horas_incluidas+' h')+'</span></div></div>'+
-          '<div class="pie">'+
-            '<div class="cont"><button type="button" data-vm="'+v.id+'">−</button>'+
-            '<span>'+u+'</span><button type="button" class="mas" data-vp="'+v.id+'">+</button></div>'+
-            '<button type="button" class="btn fan sm" data-ficha="veh:'+v.id+'">Ver ficha</button>'+
-          '</div></div>';
-      }).join('')+'</div>';
-
-    if(lug>0 && lug<S.personas) h+='<div class="nota roja">Con lo elegido caben <b>'+lug+
-      '</b> y son <b>'+S.personas+'</b>. Falta transporte.</div>';
-
-    h+='<label class="mini" style="display:block;margin-top:13px">'+
-      '<input type="checkbox" id="f_recorr" style="width:auto"'+(S.recorrido?' checked':'')+'> '+
-      'Quiero recorrido turístico con guía <b>(sin costo)</b></label>';
-  }
-  return h+'</section>';
+    /* Javi, 21-nov-2026: estas horas son tentativas. La de verdad la pone la
+       experiencia -un show tiene función a su hora y un taller dura lo que
+       dura-, y se ajusta sola en el paso del horario. Decirlo aquí evita que
+       el cliente crea que ya apartó una hora. */
+    '<div class="nota amb" style="margin-top:14px">Los horarios son <b>estimados</b>. '+
+    'El definitivo depende de la experiencia que elijan: un show tiene función a su hora '+
+    'y un taller dura lo que dura. Más adelante se ajusta.</div>'+
+    '</section>';
 }
 
 function paso3(){  /* el segundo desde el 21-nov: ver PASOS */
@@ -593,9 +543,8 @@ function paso3(){  /* el segundo desde el 21-nov: ver PASOS */
    pregunta es sólo qué hacer cuando ese lugar no sirve, y los tres casos
    acaban igual — hay que recotizar, así que no se cobra el 30%.  */
 var LUGARES=[
-  ['otro_espacio','No caben, busquen otro lugar','Lo buscamos y les recotizamos.'],
-  ['cliente','En nuestras oficinas, hotel u otro sitio','Nos dicen dónde y lo montamos ahí.'],
-  ['propuesta','Que lo elijan ustedes','Nos gustaría explorar un sitio que propongan.']
+  ['otro_espacio','Creo que no caben, busquemos otro lugar','Lo buscamos y les recotizamos.'],
+  ['cliente','En nuestras oficinas, hotel u otro sitio','Nos dicen dónde y lo montamos ahí.']
 ];
 function aforoExp(e){ return e && e.cupo_max!=null ? Number(e.cupo_max) : null; }
 function caben(e){ var a=aforoExp(e); return a==null || S.personas<=a; }
@@ -654,9 +603,6 @@ function pDonde(){
     h+=campo('f_lugar','La dirección donde lo montamos',S.lugarOtro,'text','Calle, número, colonia')+
        '<div class="nota amb">Desplazarnos puede subir el costo hasta un '+pct('recargo_oficina_pct',30)+
        '% en los talleres. Lo cerramos al recotizar.</div>';
-  if(S.lugarModo==='propuesta')
-    h+='<div class="nota amb" style="margin-top:12px">Lo anotamos y les proponemos sitio con su precio. '+
-       'Esta cotización va para recotizar, así que no se puede apartar todavía.</div>';
   if(S.lugarModo==='otro_espacio' && S.lugarOtro)
     h+='<div class="nota verde" style="margin-top:12px">Anotado: <b>'+esc(S.lugarOtro)+'</b>.</div>';
 
@@ -676,41 +622,157 @@ function masMin(hhmm,min){
   return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0');
 }
 function esShow(e){ return !!e && e.corp_tipo==='shows'; }
+
+/* LAS HORAS SALEN DE LA PROGRAMACION, NO DE LA CABEZA. Javi, 21-nov-2026:
+   «necesitas leer la hora de salida de las luchas para explicarles la hora de
+   salida propuesta. En caso de que no sea Lucha Libre, se toma la hora que
+   ellos pusieron de inicio y se suma el tiempo de la experiencia».
+   CAT.horas trae lo que de verdad se programa (v_corp_exp_horas): hora y dia
+   de la semana. Si la fecha que pidieron cae en un dia con funcion, se le
+   ofrece esa; si no, las que haya. Nada de horas inventadas. */
 function horasFicha(e){
-  var hs=(e&&e.horas)||[]; return Array.isArray(hs)?hs.filter(Boolean):[];
+  if(!e) return [];
+  var todas=(CAT.horas||[]).filter(function(x){ return String(x.exp_id)===String(e.id); });
+  if(!todas.length) return [];
+  var dow=null;
+  if(S.fecha1){ var d=new Date(S.fecha1+'T12:00:00'); if(!isNaN(d)) dow=d.getDay(); }
+  var mismo = dow==null? [] : todas.filter(function(x){ return Number(x.dow)===dow; });
+  var ls = mismo.length? mismo : todas;
+  ls.sort(function(a,b){ return (b.veces||0)-(a.veces||0); });
+  var vistas={}, out=[];
+  ls.forEach(function(x){ var hh=String(x.hora).slice(0,5);
+    if(!vistas[hh]){ vistas[hh]=1; out.push(hh); } });
+  return out.slice(0,4);
 }
+function diaNombre(){
+  if(!S.fecha1) return '';
+  var d=new Date(S.fecha1+'T12:00:00'); if(isNaN(d)) return '';
+  return ['domingos','lunes','martes','miércoles','jueves','viernes','sábados'][d.getDay()];
+}
+function finCalculado(){
+  var e=expElegida(); if(!e) return '';
+  return S.horaFin || masMin(S.horaIni, Number(e.duracion_min||0));
+}
+
+/* EL HORARIO Y EL TRANSPORTE, EN LA MISMA PANTALLA. Javi, 21-nov-2026:
+   «la página de horario y transporte ponlas juntas». Van juntas porque la
+   segunda depende de la primera: la recogida se propone una hora antes del
+   inicio, y eso solo se puede hacer si el inicio ya esta decidido ahi mismo. */
 function pHorario(){
   var e=expElegida();
-  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div><h2>El horario</h2>';
+  var h='<section class="paso"><div class="kick">Paso '+S.paso+'</div>'+
+        '<h2>El horario y el transporte</h2>';
   if(!e) return h+'<div class="nota amb">Primero elige la experiencia.</div></section>';
   var dur=Number(e.duracion_min||0);
-  var hs=horasFicha(e), hf=(e.horas_fin||[]);
+  var hs=horasFicha(e), dia=diaNombre();
 
-  if(esShow(e) && hs.length){
-    /* Un show no se mueve: su hora es la de la función. */
-    h+='<div class="mini">'+esc(e.nombre)+' tiene horario fijo: es un show con función a su hora.</div>'+
-      '<div class="ops" style="margin-top:12px">'+hs.map(function(x,i){
-        var fin=hf[i]||masMin(x,dur);
+  if(hs.length){
+    /* Lo que la programacion dice que se da ese dia. Un show no se mueve. */
+    h+='<div class="mini">'+(esShow(e)
+        ? esc(e.nombre)+' tiene función a su hora: así sale en nuestra programación'
+        : 'Así la programamos nosotros')+
+      (dia?(' los <b>'+dia+'</b>'):'')+'.</div>'+
+      '<div class="ops" style="margin-top:12px">'+hs.map(function(x){
+        var fin=masMin(x,dur);
         return '<button type="button" class="op'+(S.horaIni===x?' on':'')+'" data-hi="'+esc(x)+'" '+
-          'data-hf="'+esc(fin)+'"><b>'+esc(String(x).slice(0,5))+' a '+esc(String(fin).slice(0,5))+'</b>'+
-          '<span class="mini">La experiencia arranca y termina a esta hora.</span></button>'; }).join('')+
+          'data-hf="'+esc(fin)+'"><b>Sale a las '+esc(x)+'</b>'+
+          '<span class="mini">Termina cerca de las '+esc(fin)+'.</span></button>'; }).join('')+
       '</div>';
+    if(!esShow(e))
+      h+='<div class="mini" style="margin-top:10px">¿Necesitan otra hora? '+
+         campoLinea('f_hini','Pongan la suya',S.horaIni)+'</div>';
   }else{
     h+='<div class="mini">Ustedes ponen la hora de inicio'+
       (dur?(' y nosotros cerramos '+(dur>=60?(Math.round(dur/60*10)/10)+' h':dur+' min')+' después'):'')+'.</div>'+
       campo('f_hini','¿A qué hora empiezan?',S.horaIni,'time');
-    if(hs.length)
-      h+='<div class="mini" style="margin:8px 0">Las horas en las que solemos darla: '+
-         hs.map(function(x){return '<b>'+esc(String(x).slice(0,5))+'</b>';}).join(' · ')+'</div>';
   }
 
   if(S.horaIni){
-    var fin=S.horaFin||masMin(S.horaIni,dur);
+    var fin=finCalculado();
     h+='<div class="nota verde" style="margin-top:14px">Empieza a las <b>'+esc(String(S.horaIni).slice(0,5))+
-      '</b> en '+esc(e.lugar_dir||e.lugar_nombre||'el lugar acordado')+
-      (fin?(' y termina a las <b>'+esc(String(fin).slice(0,5))+'</b>'):'')+'.</div>';
+      '</b> en '+esc(dondeTexto())+
+      (fin?(' y termina cerca de las <b>'+esc(String(fin).slice(0,5))+'</b>'):'')+'.</div>';
   }
-  return h+'</section>';
+
+  /* ---- y aqui mismo, el transporte ---- */
+  h+='<div style="border-top:1px solid var(--linea);margin:18px 0 0;padding-top:16px">'+
+    '<h3 style="margin:0 0 4px">El transporte</h3>'+
+    '<div class="mini">¿Necesitan que los llevemos desde algún lugar, o llegan directo '+
+      'al inicio de la actividad?</div>'+
+    '<div class="ops" style="margin-top:12px">'+
+      '<button type="button" class="op'+(S.transpSi===false?' on':'')+'" data-ts="0">'+
+        '<b>No, gracias: llegamos directo</b><span class="mini">Nos vemos en '+
+        esc(dondeTexto())+'.</span></button>'+
+      '<button type="button" class="op'+(S.transpSi===true?' on':'')+'" data-ts="1">'+
+        '<b>Sí, cotícennos un transporte temático</b>'+
+        '<span class="mini">Los recogemos y los regresamos.</span></button>'+
+    '</div>';
+  if(S.transpSi!==true) return h+'</div></section>';
+  S.modo='recoger';
+
+  h+='<div class="rejilla" style="margin-top:14px">'+
+    campo('f_rec','Dónde los recogemos',S.recogida,'text','Calle y número')+
+    campo('f_recH','A qué hora pasamos',S.recogidaHora,'time')+
+    campo('f_reg','Dónde los regresamos',S.regreso,'text','Calle y número')+
+    campo('f_regH','A qué hora los dejamos',S.regresoHora,'time')+
+  '</div>';
+  if(S.horaIni && S.recogidaHora===masMin(S.horaIni,-60))
+    h+='<div class="nota azul">Proponemos pasar por ustedes a las <b>'+esc(S.recogidaHora)+
+       '</b>, una hora antes de que empiece. Si les acomoda otra, cámbienla.</div>';
+  h+='<div class="nota amb">'+esc(regla('aviso_edomex',''))+'</div>';
+
+  var hv=horasViaje(), lug=0;
+  CAT.transportes.forEach(function(v){ lug += Number(S.veh[v.id]||0)*Number(v.capacidad); });
+  h+='<div class="mini" style="margin:14px 0 8px">'+
+    (hv? ('De '+esc(S.recogidaHora)+' a '+esc(S.regresoHora)+' son <b>'+hv+' h</b>.')
+       : 'Pon las dos horas y calculamos la duración.')+'</div>'+
+    '<div class="tarjetas">'+CAT.transportes.map(function(v){
+      var u=Number(S.veh[v.id]||0);
+      return '<div class="tj'+(u?' on':'')+'">'+
+        '<div class="foto"'+(v.fotos&&v.fotos[0]?' style="background-image:url('+encodeURI(v.fotos[0])+')"':'')+
+          '><em>'+v.capacidad+' lugares</em></div>'+
+        '<div class="cu"><div class="nom">'+esc(v.nombre)+'</div>'+
+          '<div class="mini">'+esc(v.frase||'')+'</div>'+
+          '<div class="pre">'+$$(precioVeh(v,hv))+' <span>sin IVA'+
+            (hv?'':' · '+v.horas_incluidas+' h')+'</span></div></div>'+
+        '<div class="pie">'+
+          '<div class="cont"><button type="button" data-vm="'+v.id+'">−</button>'+
+          '<span>'+u+'</span><button type="button" class="mas" data-vp="'+v.id+'">+</button></div>'+
+          '<button type="button" class="btn fan sm" data-ficha="veh:'+v.id+'">Ver ficha</button>'+
+        '</div></div>';
+    }).join('')+'</div>';
+  if(lug>0 && lug<S.personas) h+='<div class="nota roja">Con lo elegido caben <b>'+lug+
+    '</b> y son <b>'+S.personas+'</b>. Falta transporte.</div>';
+  h+='<label class="mini" style="display:block;margin-top:13px">'+
+    '<input type="checkbox" id="f_recorr" style="width:auto"'+(S.recorrido?' checked':'')+'> '+
+    'Quiero recorrido turístico con guía <b>(sin costo)</b></label>';
+  return h+'</div></section>';
+}
+/* LA RECOGIDA SE PROPONE SOLA. Javi, 21-nov-2026: «la hora de recogida del
+   transporte la puedes tú proponer y que sea 1h antes del inicio de la
+   actividad. Ya tienes el horario de inicio bien porque ellos lo pusieron o
+   porque nosotros lo fijamos por las luchas».
+   Se propone, no se impone: si ya pusieron una hora a mano, no se toca. */
+function proponHoras(){
+  if(!S.horaIni) return;
+  if(!S.recogidaHora) S.recogidaHora = masMin(S.horaIni,-60);
+  var fin=finCalculado();
+  if(!S.regresoHora && fin) S.regresoHora = fin;
+}
+function espacioElegido(){
+  if(!S.espacio) return null;
+  return CAT.espacios.filter(function(x){return x.id===S.espacio;})[0]||null;
+}
+function dondeTexto(){
+  var e=expElegida();
+  if(S.lugarModo==='preasignado') return (e&&(e.lugar_dir||e.lugar_nombre))||'el lugar';
+  if(S.lugarModo==='cliente') return S.lugarOtro||'el lugar que nos digan';
+  var es=espacioElegido(); return (es&&es.nombre)||S.lugarOtro||'el lugar por definir';
+}
+function campoLinea(id,et,val){
+  return '<input id="'+id+'" type="time" value="'+esc(val||'')+'" '+
+    'style="width:120px;padding:6px 8px;border:1px solid var(--linea);border-radius:8px" '+
+    'aria-label="'+esc(et)+'">';
 }
 
 /* ====================== 8 · EL RESUMEN ======================
@@ -725,13 +787,13 @@ function tramos(){
       ? ((e&&(e.lugar_dir||e.lugar_nombre))||'')
       : (S.lugarOtro||'Por definir');
   if(S.transpSi){
-    T.push({h:S.recogidaHora,t:'Los recogemos',d:S.recogida||'Punto por definir',p:5});
+    T.push({h:S.recogidaHora,t:'Los recogemos',d:S.recogida||'Punto por definir',p:4});
     var veh=CAT.transportes.filter(function(v){return Number(S.veh[v.id]||0)>0;})
             .map(function(v){ return S.veh[v.id]+' × '+v.nombre; }).join(', ');
     T.push({h:'',t:'Traslado'+(S.recorrido?' con recorrido turístico':''),
-            d:veh||'Transporte por definir',p:5});
+            d:veh||'Transporte por definir',p:4});
   }else{
-    T.push({h:ini,t:'Llegan por su cuenta',d:sitio,p:5});
+    T.push({h:ini,t:'Llegan por su cuenta',d:sitio,p:4});
   }
   var cosas=[];
   Object.keys(S.ab).forEach(function(k){ var it=S.ab[k]; if(!it||!it.cant) return;
@@ -743,7 +805,7 @@ function tramos(){
           (dur?(' · '+(dur>=60?(Math.round(dur/60*10)/10)+' h':dur+' min')):'')+
           (cosas.length?(' · con '+cosas.join(', ')):''),p:2});
   T.push({h:fin,t:'Termina la actividad',d:sitio,p:4});
-  if(S.transpSi) T.push({h:S.regresoHora,t:'Los regresamos',d:S.regreso||'Punto por definir',p:5});
+  if(S.transpSi) T.push({h:S.regresoHora,t:'Los regresamos',d:S.regreso||'Punto por definir',p:4});
   return T;
 }
 function pResumen(){
@@ -758,7 +820,7 @@ function pResumen(){
         '<button type="button" class="lap" data-ir2="'+x.p+'" aria-label="Cambiar">✎</button></div>';
     }).join('')+'</div>';
 
-  var PASODE={'Transporte':5,'Experiencia':2,'Lugar':3,'Alimentos y bebidas':6,'Extras':7};
+  var PASODE={'Transporte':4,'Experiencia':2,'Lugar':3,'Alimentos y bebidas':5,'Extras':6};
   h+='<div class="gr" style="font-family:Oswald;font-weight:600;font-size:11px;letter-spacing:.09em;'+
      'text-transform:uppercase;color:var(--tenue);padding:18px 0 6px">Lo que llevan</div>';
   t.lineas.forEach(function(l){
@@ -895,6 +957,12 @@ function paso6(){
 }
 
 /* ====================== LA FICHA ====================== */
+function lista(v){
+  var ls=[].concat(v||[]).filter(Boolean);
+  if(!ls.length) return '';
+  return '<ul style="margin:4px 0 0;padding-left:18px">'+
+    ls.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul>';
+}
 function fichaHtml(){
   if(!S.ficha) return '';
   var q=S.ficha.split(':'), que=q[0], id=q.slice(1).join(':'), o=null, h='';
@@ -919,8 +987,12 @@ function fichaHtml(){
       '<div style="margin-top:4px;font-style:italic">'+esc(o.storytelling)+'</div></div>';
     if(o.gastro_desc) h+='<div><div class="kick">Qué se come y se bebe</div><div>'+esc(o.gastro_desc)+'</div></div>';
     if(o.tangible_souvenir) h+='<div><div class="kick">Se llevan a casa</div><div>'+esc(o.tangible_souvenir)+'</div></div>';
-    if(o.que_llevar) h+='<div><div class="kick">Qué traer</div><div>'+esc(o.que_llevar)+'</div></div>';
-    if(o.incluye_desc||o.incluye) h+='<div><div class="kick">Incluye</div><div>'+esc(o.incluye_desc||o.incluye)+'</div></div>';
+    if(o.que_llevar&&[].concat(o.que_llevar).length)
+      h+='<div><div class="kick">Qué traer</div>'+lista(o.que_llevar)+'</div>';
+    if(o.incluye_desc||(o.incluye&&[].concat(o.incluye).length))
+      h+='<div><div class="kick">Incluye</div>'+
+         (o.incluye&&[].concat(o.incluye).length? lista(o.incluye)
+          : '<div>'+esc(o.incluye_desc)+'</div>')+'</div>';
     h+='<div class="datos">'+
       (o.operador?'<div><em>Con</em><strong>'+esc(o.operador)+'</strong></div>':'')+
       (o.protagonista?'<div><em>Protagonista</em><strong>'+esc(o.protagonista)+'</strong></div>':'')+
@@ -931,6 +1003,11 @@ function fichaHtml(){
     '</div>';
     if(o.pvp_con_iva!=null) h+='<div class="mini">Para '+S.personas+' personas: <b>'+
       $$(Number(o.pvp_con_iva)*S.personas)+'</b> con IVA.</div>';
+    /* LA FICHA DE VERDAD NO SE COPIA, SE ABRE. El relato, el recorrido, los
+       guías y el impacto viven en la ficha pública de Sincrético. Copiarlos
+       aquí sería tener dos versiones, y la segunda siempre se queda vieja. */
+    if(o.origen==='exp') h+='<a class="btn fan sm" style="align-self:start" target="_blank" '+
+      'rel="noopener" href="/sinc/exp.html?id='+encodeURIComponent(o.id)+'">Ver la ficha completa ↗</a>';
   }
   if(que==='veh'){
     if(o.descripcion) h+='<p style="margin:0">'+esc(o.descripcion)+'</p>';
@@ -960,8 +1037,8 @@ function fichaHtml(){
 function pinta(){
   if(S.enviado){ pintaGracias(); return; }
   pintaPasos();
-  var cuerpo=[paso1,paso3,pDonde,pHorario,paso2,paso5,paso6,pResumen][S.paso-1]();
-  var ultimo=S.paso===8;
+  var cuerpo=[paso1,paso3,pDonde,pHorario,paso5,paso6,pResumen][S.paso-1]();
+  var ultimo=S.paso===7;
   $('main').innerHTML='<div class="card">'+
     (TOKEN && VOLVIO
       ? '<div class="nota '+(YACERRADA?'amb':'verde')+'" style="margin-bottom:14px">'+
@@ -1027,14 +1104,18 @@ function guardaPaso1(){
   ['empresa','contacto','email','idea'].forEach(function(k){
     var el=$('f_'+k); if(el) S[k]=el.value; });
   var p=$('f_personas'); if(p) S.personas=Math.max(1,Number(p.value||1));
-  ['fecha1','hora1','fecha2','hora2'].forEach(function(k){
+  ['fecha1','hora1','hora1fin','fecha2','hora2'].forEach(function(k){
     var el=$('f_'+k); if(el) S[k]=el.value; });
+  /* La hora tentativa de la primera pantalla es la que se propone luego en el
+     horario, para no volver a preguntar lo mismo. Si allá la cambian, manda
+     la de allá: la experiencia ya está elegida y esa es la buena. */
+  if(S.hora1 && !S.horaIni) S.horaIni=S.hora1;
 }
 function cablea(){
   if(S.paso===1 && window.telPais && $('f_tel')){
     S.tel = telPais.monta('f_tel',{});
   }
-  ['f_empresa','f_contacto','f_email','f_idea','f_personas','f_fecha1','f_hora1','f_fecha2','f_hora2']
+  ['f_empresa','f_contacto','f_email','f_idea','f_personas','f_fecha1','f_hora1','f_hora1fin','f_fecha2','f_hora2']
     .forEach(function(id){ var el=$(id); if(el) el.oninput=function(){ guardaPaso1(); pintaCesta(); }; });
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-modo]'),function(b){
@@ -1073,10 +1154,12 @@ function cablea(){
     b.onclick=function(){ S.lugarOtro=b.getAttribute('data-lot'); S.lugarModo='otro_espacio'; pinta(); };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-ts]'),function(b){
     b.onclick=function(){ S.transpSi=b.getAttribute('data-ts')==='1';
-      if(!S.transpSi){ S.veh={}; S.recorrido=false; S.modo='directo'; } pinta(); };});
+      if(!S.transpSi){ S.veh={}; S.recorrido=false; S.modo='directo'; }
+      else proponHoras();
+      pinta(); };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-hi]'),function(b){
     b.onclick=function(){ S.horaIni=b.getAttribute('data-hi');
-      S.horaFin=b.getAttribute('data-hf')||''; pinta(); };});
+      S.horaFin=b.getAttribute('data-hf')||''; proponHoras(); pinta(); };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-ir2]'),function(b){
     b.onclick=function(){ S.paso=Number(b.getAttribute('data-ir2'))||2; S.ficha=null; pinta();
       try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(_){ } };});
@@ -1084,7 +1167,7 @@ function cablea(){
   var fc=$('f_coment'); if(fc) fc.oninput=function(){ S.comentarios=fc.value; };
   var fh=$('f_hini'); if(fh) fh.onchange=function(){
     var e=expElegida(); S.horaIni=fh.value;
-    S.horaFin=masMin(fh.value, Number((e&&e.duracion_min)||0)); pinta(); };
+    S.horaFin=masMin(fh.value, Number((e&&e.duracion_min)||0)); proponHoras(); pinta(); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-abp]'),function(b){
     b.onclick=function(){ S.abPasillo=b.getAttribute('data-abp'); pinta(); };});
   Array.prototype.forEach.call(document.querySelectorAll('[data-ef]'),function(b){
@@ -1170,7 +1253,7 @@ async function rehidrata(){
     S.abTexto=p.ab_texto||''; S.abSi=(Object.keys(S.ab).length>0 || !!S.abTexto);
     S.extras={}; (p.extras||[]).forEach(function(x){ S.extras[x.id]=Number(x.horas)||0; });
     await cargaCarta();
-    S.paso=8;   /* vuelve al resumen, que es desde donde se corrige */
+    S.paso=7;   /* vuelve al resumen, que es desde donde se corrige */
     VOLVIO=true;
   }catch(_){ }
 }
@@ -1256,11 +1339,18 @@ async function cargaCarta(){
      la medida» por cotizar. */
   CAT.carta=[];
   var hid=null;
+  /* 1. El espacio que eligieron a mano, cuando no caben en el de siempre. */
   if(S.espacio){
     var es=CAT.espacios.filter(function(x){return x.id===S.espacio;})[0];
     if(es && es.corp_carta!==false) hid=es.hotel_id||null;
   }
-  if(!hid){ var ex=expElegida(); if(ex) hid=ex.hotel_id||null; }
+  /* 2. Si se hace donde siempre, el espacio enganchado a la ficha: la Noche
+        Mexicana se da en La Cósmica, y la carta que sale es la de La Cósmica.
+        Javi, 21-nov-2026. */
+  if(!hid && S.lugarModo!=='cliente'){
+    var ex=expElegida();
+    if(ex && ex.espacio_carta!==false) hid=ex.hotel_id||null;
+  }
   if(!hid) return;
   CAT.carta = await api('cosmica_carta?select=id,seccion,grupo,nombre,foto_url,gramaje,precio_mxn,precio_incluye_iva'+
     '&activo=eq.true&hotel_id=eq.'+hid+'&order=seccion,orden&limit=400');
@@ -1271,10 +1361,13 @@ async function cargaCarta(){
     api('v_corp_experiencias?select=*'),
     api('v_corp_espacios?select=*'),
     api('op_extras_catalogo?select=*&activo=eq.true&corporativo=eq.true&order=orden'),
-    api('corp_reglas?select=clave,valor')
+    api('corp_reglas?select=clave,valor'),
+    /* Las horas con las que de verdad se programa cada experiencia. */
+    api('v_corp_exp_horas?select=*')
   ]);
   CAT.transportes=res[0]||[]; CAT.exps=res[1]||[]; CAT.espacios=res[2]||[]; CAT.extras=res[3]||[];
   (res[4]||[]).forEach(function(r){ CAT.reglas[r.clave]=r.valor; });
+  CAT.horas=res[5]||[];
   var wa=String(regla('whatsapp_seguimiento','+525549305703')).replace(/[^0-9]/g,'');
   var nv=$('navWa'); if(nv){ nv.href='https://wa.me/'+wa; nv.target='_blank'; nv.rel='noopener'; }
   if(TOKEN) await rehidrata();

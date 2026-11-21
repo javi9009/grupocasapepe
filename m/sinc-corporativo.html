@@ -236,6 +236,24 @@ function diaCorto(f){ if(!f) return '—';
 function hhmm(h){ return h?String(h).slice(0,5):''; }
 async function avisa(t){ if(window.cpAviso) return cpAviso(t); }
 
+/* EL AVISO QUE NO INTERRUMPE. Aquí nada tiene botón de guardar: se guarda al
+   tocarlo. Pero guardar sin decirlo se siente igual que no guardar, y la
+   persona se queda buscando un botón que no existe. Así que cada guardado deja
+   constancia abajo un segundo y medio, sin tapar nada ni pedir un clic. */
+var TOSTA=null;
+function tosta(txt,mal){
+  if(!TOSTA){ TOSTA=document.createElement('div'); document.body.appendChild(TOSTA);
+    TOSTA.style.cssText='position:fixed;left:50%;bottom:18px;transform:translateX(-50%);'+
+      'z-index:9999;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:600;'+
+      'box-shadow:0 6px 20px rgba(0,0,0,.18);transition:opacity .18s;pointer-events:none'; }
+  TOSTA.textContent=txt;
+  TOSTA.style.background = mal? '#F7E0DE' : 'var(--ok-bg)';
+  TOSTA.style.color      = mal? '#8C2F27' : 'var(--ok)';
+  TOSTA.style.opacity='1';
+  clearTimeout(TOSTA._t);
+  TOSTA._t=setTimeout(function(){ TOSTA.style.opacity='0'; }, mal?3000:1500);
+}
+
 /* El token de Supabase dura una hora. Se relee en cada llamada y, si aun así
    contesta 401, se renueva con el refresh_token y se reintenta una vez. */
 function clave(){try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);
@@ -491,10 +509,17 @@ function pintaCatalogo(){
     '</div>';
 
   /* ---------- 3. Servicios conectados ---------- */
-  h+='<div class="tabla"><h3>3 · Servicios conectados</h3>'+
+  h+='<div class="tabla"><h3>3 · Servicios conectados '+
+      '<button class="btn fan sm" id="bRefresca" style="float:right;margin-top:-2px">'+
+      'Traer lo nuevo</button></h3>'+
     '<div style="padding:4px 14px 10px;color:var(--gris);font-size:12.5px">'+
       'Esto vive en otro sitio y aquí sólo se decide si sale al cotizador. '+
-      'Su contenido se edita donde nace, para que no haya dos versiones.</div>';
+      'Su contenido se edita donde nace, para que no haya dos versiones.<br>'+
+      '<b>Aquí no hay botón de guardar:</b> cada casilla se guarda en cuanto la tocas y '+
+      'cada campo en cuanto sales de él. Abajo te avisa que quedó guardado.<br>'+
+      'La lista no es una copia: se lee de <b>Productos</b> y de <b>Espacios</b> cada vez '+
+      'que abres esta pantalla. Si acabas de publicar una experiencia allá, dale a '+
+      '<b>Traer lo nuevo</b> y aparece.</div>';
 
   h+='<table class="tb"><thead><tr><th>Espacio</th><th>Sede</th><th style="text-align:right">Aforo</th>'+
     '<th>Sale al cotizador</th><th>Ofrece su carta</th></tr></thead><tbody>'+
@@ -508,8 +533,8 @@ function pintaCatalogo(){
     '</tbody></table>';
 
   h+='<table class="tb" style="border-top:8px solid var(--papel)"><thead><tr>'+
-    '<th>Experiencia</th><th>Tipo</th><th>Estado</th><th>Protagonista incluido</th>'+
-    '<th>Sale al cotizador</th></tr></thead><tbody>'+
+    '<th>Experiencia</th><th>Tipo</th><th>Dónde se da</th><th>Estado</th>'+
+    '<th>Protagonista incluido</th><th>Sale al cotizador</th></tr></thead><tbody>'+
     (EXPS.length? EXPS.map(function(x){
       var vende = x.estado==='publicada';
       return '<tr><td><b>'+esc(x.nombre)+'</b>'+
@@ -519,13 +544,22 @@ function pintaCatalogo(){
             return '<option value="'+t+'"'+((x.corp_tipo||'')===t?' selected':'')+'>'+
               (t===''?'—':t==='gastro'?'Taller gastro':t==='artesanos'?'Taller artesano':
                t==='shows'?'Show':'Experiencia')+'</option>'; }).join('')+'</select></td>'+
+        /* DONDE SE DA. De aqui sale la carta del cotizador: si la experiencia
+           esta enganchada a La Cosmica, al llegar a Alimentos se ofrece la
+           carta de La Cosmica. Sin espacio no hay menu, solo «a la medida». */
+        '<td><select class="celda" style="width:150px" data-ex="'+esc(x.id)+'" data-c="espacio_id">'+
+          '<option value="">— sin espacio —</option>'+
+          ESPACIOS.map(function(e){
+            return '<option value="'+esc(e.id)+'"'+(String(x.espacio_id||'')===String(e.id)?' selected':'')+
+              '>'+esc(e.nombre)+'</option>'; }).join('')+'</select>'+
+          (x.espacio_id?'':'<div style="color:var(--tenue);font-size:11.5px">sin carta propia</div>')+'</td>'+
         '<td>'+(vende?'<span class="etq pub">Publicada</span>'
                      :'<span class="etq mano">'+esc(x.estado||'—')+'</span>')+
           (vende?'':'<div style="color:var(--tenue);font-size:11.5px">no se vende hasta publicarla</div>')+'</td>'+
         '<td><input class="celda" style="width:160px" data-ex="'+esc(x.id)+'" data-c="corp_protagonista" '+
           'placeholder="el luchador, la drag…" value="'+esc(x.corp_protagonista||'')+'"></td>'+
         '<td>'+check('exp',x.id,'corp_activo',x.corp_activo)+'</td></tr>';
-    }).join('') : '<tr><td colspan="5"><div class="vacio">Sin experiencias.</div></td></tr>')+
+    }).join('') : '<tr><td colspan="6"><div class="vacio">Sin experiencias.</div></td></tr>')+
     '</tbody></table></div>';
 
   h+='<div class="nota amb">El contenido de estas fichas —fotos, descripción, precio, duración— se '+
@@ -933,9 +967,15 @@ function cablea(){
       try{ await patch(tabla,'id=eq.'+encodeURIComponent(p[1]),cuerpo);
         (p[0]==='esp'?ESPACIOS:EXPS).forEach(function(x){
           if(String(x.id)===String(p[1])) x[p[2]]=!!c.checked; });
-        pinta();
+        /* No se repinta la pantalla entera: tocar una casilla de la fila 30 y
+           que la lista salte al principio hace perder el sitio. Sólo cambia
+           el Sí/No de al lado. */
+        var et=c.parentNode.querySelector('span');
+        if(et) et.textContent = c.checked?'Sí':'No';
+        c.disabled=false;
+        tosta('Guardado');
       }catch(e){ c.checked=!c.checked; c.disabled=false;
-        await avisa('No se pudo cambiar: '+e.message); }
+        tosta('No se pudo guardar',true); }
     };});
 
   /* El tipo y el protagonista se guardan al salir del campo. */
@@ -948,8 +988,14 @@ function cablea(){
         EXPS.forEach(function(x){ if(String(x.id)===String(id)) x[campo]=cuerpo[campo]; });
         antes=el.value; el.style.borderColor='var(--ok)';
         setTimeout(function(){ el.style.borderColor=''; },1200);
-      }catch(e){ el.value=antes; await avisa('No se pudo guardar: '+e.message); }
+        tosta('Guardado');
+      }catch(e){ el.value=antes; tosta('No se pudo guardar',true); }
     };});
+
+  if($('bRefresca')) $('bRefresca').onclick=async function(){
+    $('bRefresca').disabled=true; $('bRefresca').textContent='Trayendo…';
+    await carga(); tosta('Lista al día');
+  };
 }
 
 async function carga(){
@@ -966,7 +1012,7 @@ async function carga(){
          borrador no se enseña aquí porque encenderlo no serviría de nada
          -el cotizador sólo vende lo publicado-, salvo que ya esté encendido,
          y entonces hay que poder verlo y apagarlo. */
-      get('op_experiencias?select=id,nombre,corp_tipo,corp_activo,corp_protagonista,estado,privado,operador_id'+
+      get('op_experiencias?select=id,nombre,corp_tipo,corp_activo,corp_protagonista,espacio_id,estado,privado,operador_id'+
           '&or=(corp_activo.eq.true,estado.eq.publicada)&order=nombre&limit=200'),
       get('tour_operadores?select=id,nombre_comercial&limit=400')
     ]);
