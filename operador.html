@@ -2733,7 +2733,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 
       PG.salidas=[];
       if(ids.length){
-        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,chofer_ids,notas,aviso_enviado_at,venta_cerrada_at,vuelta_aviso_at,vuelta_aviso_n'+
+        var rs=await fetch(SB+'/rest/v1/sinc_salidas?select=id,experiencia_id,fecha,hora,estado,cupo_max,cupo_min,cupo_tomado,punto_encuentro,idioma,guia_id,guia_ids,chofer_ids,notas,aviso_enviado_at,venta_cerrada_at,vuelta_aviso_at,vuelta_aviso_n,es_especial'+
           '&experiencia_id=in.('+ids.join(',')+')&fecha=gte.'+desde+'&fecha=lte.'+hasta+'&order=fecha,hora',{headers:hdr()});
         PG.salidas = rs.ok ? await rs.json() : [];
       }
@@ -3279,7 +3279,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
            que diga cerrar venta, para que ya no haya mas venta programada».
            No cancela nada y no manda nada: la salida sale igual, con su gente
            y su guia, y lo unico que para es que entre alguien mas. */
-        tarjetas.push(
+        /* UN SERVICIO ESPECIAL NO SE VENDE. Javi, 21-nov-2026: «los servicios
+           especiales no están a la venta al público así que no necesitas
+           poner este aviso». Cerrar la venta y contar lugares vendidos no
+           significan nada en una salida que existe sólo para un grupo
+           pactado: enseñarlos invita a cerrar algo que nunca estuvo abierto. */
+        if(!s.es_especial) tarjetas.push(
           '<div class="pgaccion interna">'+
             '<div class="tt"><h4>'+(s.venta_cerrada_at?'Venta cerrada':'Cerrar la venta')+'</h4>'+
               '<span class="sello nada">No manda nada</span></div>'+
@@ -3658,6 +3663,60 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       var n=Number(CESTA.sel[p.key]||0); if(n>0) t+=n*p.neto; });
     return t;
   }
+  /* Lo mismo pero a precio de carta, sin descuento. Javi, 21-nov-2026: «en la
+     cesta pones el total y aplicas el descuento para montar el subtotal y el
+     iva». Así la cuenta se puede seguir con el dedo: de lo que cuesta en la
+     carta, menos lo suyo, sale el subtotal; y sobre ese subtotal, el IVA. */
+  function cestaLista(){
+    var t=0; cestaItems().forEach(function(p){
+      var n=Number(CESTA.sel[p.key]||0); if(n>0) t+=n*p.sinDesc; });
+    return t;
+  }
+
+  /* ARMAR LA CESTA LEYENDO LO QUE YA ESTABA PEDIDO.
+     Javi, 21-nov-2026: «no cuadra la cesta con el servicio precargado; haz
+     que cuadre lo que está solicitado con lo que está arriba descrito».
+     Los servicios de antes de la cesta sólo tienen la frase -«Por persona: 1
+     Taco Pastor, 1 Taco arrachera... + En general: 5 Guacamoles»-, así que
+     la frase se lee y se convierte en líneas. Lo que no reconoce NO lo
+     inventa: lo dice, para que alguien lo elija a mano. */
+  function cestaNorm(t){
+    return String(t||'').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9 ]/g,' ')
+      .split(/\s+/)
+      .filter(function(w){ return w && !/^(de|del|la|el|los|las|al|a|con|y|en|un|una)$/.test(w); })
+      .map(function(w){ return w.replace(/s$/,''); });
+  }
+  function cestaBusca(frag){
+    var f=cestaNorm(frag); if(!f.length) return {uno:null,varios:0};
+    var cand=cestaItems().filter(function(p){
+      var w=cestaNorm(p.nombre);
+      return f.every(function(x){ return w.indexOf(x)>=0; });
+    });
+    if(cand.length>1){
+      var exacto=cand.filter(function(p){ return cestaNorm(p.nombre).length===f.length; });
+      if(exacto.length===1) cand=exacto;
+    }
+    return {uno: cand.length===1?cand[0]:null, varios: cand.length};
+  }
+  function cestaDesdeTexto(txt, pax){
+    var sel={}, sueltos=[];
+    String(txt||'').split(/\s*[+;·]\s*/).forEach(function(tro){
+      if(!tro.trim()) return;
+      var porPersona=/por\s*persona/i.test(tro);
+      var cuerpo=tro.indexOf(':')>=0 ? tro.slice(tro.indexOf(':')+1) : tro;
+      cuerpo.split(/\s*,\s*|\s+y\s+/).forEach(function(fr){
+        fr=fr.trim(); if(!fr) return;
+        var m=fr.match(/^(\d+)\s*(?:x|×)?\s*(.+)$/);
+        if(!m){ sueltos.push(fr); return; }
+        var n=Number(m[1]), r=cestaBusca(m[2]);
+        if(!r.uno){ sueltos.push(fr+(r.varios>1?' (hay varios que encajan)':'')); return; }
+        sel[r.uno.key]=(sel[r.uno.key]||0) + n*(porPersona?(Number(pax)||1):1);
+      });
+    });
+    return {sel:sel, sueltos:sueltos};
+  }
   /* «Requiere luchador» ya no es una casilla que alguien marca: es lo que
      dice la cesta. Si el luchador está dentro, el servicio lo requiere y su
      importe está contado una sola vez. Una casilla aparte, con su propio
@@ -3674,17 +3733,29 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
      IVA, IVA y total. Si algo no cuadra, se ve aquí y no en la factura. */
   function cestaAsideHtml(){
     var l=cestaItems().filter(function(p){ return Number(CESTA.sel[p.key]||0)>0; });
-    var sub=cestaSuma(), iva=sub*0.16, tot=sub+iva;
+    var lista=cestaLista(), sub=cestaSuma(), dto=lista-sub, iva=sub*0.16, tot=sub+iva;
     var pax=Number(($('xeP')||{}).value||0);
+    var pact=Number(CESTA.pactado||0);
+    var diferente = l.length>0 && pact>0 && Math.abs(pact-sub)>1;
 
     var h='<div class="cab"><h4>Tu cesta</h4><span class="mini">'+
       (l.length? (l.length+(l.length===1?' producto':' productos')) : 'vacía')+'</span></div>';
 
+    h+='<div class="cuerpo">';
+    /* LA CESTA QUE SE ARMO LEYENDO LO PEDIDO no se guarda sola: se propone y
+       alguien la mira. Lo que no reconocio se dice con nombre y apellido. */
+    if(CESTA.propuesta){
+      h+='<div class="ojo" style="margin:12px 0 0">Esta cesta la armé leyendo lo que ya estaba '+
+        'pedido en el servicio. <b>Revísala y guarda</b> para que quede escrita.'+
+        ((CESTA.sueltos&&CESTA.sueltos.length)
+          ? ' No supe de qué producto hablaba: '+CESTA.sueltos.map(function(t){
+              return '«'+esc(t)+'»'; }).join(', ')+'. Búscalo en la carta y añádelo.'
+          : '')+'</div>';
+    }
     if(!l.length){
-      h+='<div class="cuerpo"><p class="mini" style="margin:16px 0">Tu cesta está vacía. '+
-        'Suma cosas desde la carta y aquí verás el detalle.</p></div>';
+      h+='<p class="mini" style="margin:16px 0">Tu cesta está vacía. '+
+        'Suma cosas desde la carta y aquí verás el detalle.</p>';
     }else{
-      h+='<div class="cuerpo">';
       PASILLOS.forEach(function(s2){
         var del=l.filter(function(p){ return p.pasillo===s2.k; });
         if(!del.length) return;
@@ -3697,34 +3768,52 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
             '<button type="button" data-quita="'+p.key+'">Quitar</button></div></div>';
         }).join('');
       });
-      /* Lo que lleva cerdo se dice aquí, donde se está decidiendo, y no en el
-         correo a cocina cuando ya no se puede cambiar. */
       var cerdo=l.filter(function(p){
         return p.etiquetas && p.etiquetas.join(' ').toLowerCase().indexOf('cerdo')>=0; });
       if(cerdo.length) h+='<div class="ojo"><b>Lleva cerdo:</b> '+
         cerdo.map(function(p){ return esc(p.nombre); }).join(', ')+
         '. Si alguien no come cerdo, anótalo arriba.</div>';
-      h+='</div>';
     }
+    h+='</div>';
 
+    /* EL DESGLOSE, COMO LO PIDIO JAVI: el total de la carta, el descuento
+       aplicado, y sobre ese subtotal el IVA. */
     h+='<div class="tot">'+
+      (dto>0.01
+        ? '<div class="fila"><span>Total de la carta</span><span>'+money2(lista)+'</span></div>'+
+          '<div class="fila" style="color:var(--ok)"><span>Descuento '+CESTA.desc+'%</span>'+
+            '<span>−'+money2(dto)+'</span></div>'
+        : '')+
       '<div class="fila"><span>Subtotal sin IVA</span><span>'+money2(sub)+'</span></div>'+
       '<div class="fila"><span>IVA 16%</span><span>'+money2(iva)+'</span></div>'+
       '<div class="gran"><b>Total con IVA</b><i>'+money2(tot)+'</i></div>'+
       '<div class="pie">'+(pax>0?money2(tot/pax)+' por persona · ':'')+
-        'entra en tu conciliación cuando pase el día</div>'+
-      (l.length
-        ? '<button class="btn pri" id="xeGo" type="button">Guardar el servicio</button>'
-        : '<button class="btn pri" id="xeGo" type="button">Guardar</button>')+
-      '<button class="btn todo" id="xeNo2" type="button">Dejarlo</button>'+
-    '</div>';
+        'entra en tu conciliación cuando pase el día</div>';
+
+    /* EL PRECIO PACTADO NO SE PISA SIN QUE ALGUIEN LO DIGA. Un servicio
+       negociado puede no dar lo mismo que la suma de la carta; cambiarlo en
+       silencio al guardar seria mover el cobro sin avisar. */
+    if(diferente){
+      h+='<div class="ojo" style="margin-top:12px">Lo pactado en este servicio son '+
+        '<b>'+money2(pact)+'</b> sin IVA y la cesta suma <b>'+money2(sub)+'</b>. '+
+        'Elige con cuál se queda.</div>'+
+        '<button class="btn pri" id="xeGo" type="button">Guardar con el total de la cesta</button>'+
+        '<button class="btn todo" id="xeGoPact" type="button">Guardar y dejar '+money2(pact)+'</button>'+
+        '<button class="btn todo" id="xeNo2" type="button">Dejarlo</button>';
+    }else{
+      h+='<button class="btn pri" id="xeGo" type="button">'+
+        (l.length?'Guardar el servicio':'Guardar')+'</button>'+
+        '<button class="btn todo" id="xeNo2" type="button">Dejarlo</button>';
+    }
+    h+='</div>';
     return h;
   }
   function espPinta(){
     var c=$('xeCesta'); if(!c) return;
     c.innerHTML=cestaAsideHtml();
     cableaCesta();
-    var g=$('xeGo'); if(g) g.onclick=function(){ espGuarda(PG.espEdit, g); };
+    var g=$('xeGo'); if(g) g.onclick=function(){ espGuarda(PG.espEdit, g, true); };
+    var gp=$('xeGoPact'); if(gp) gp.onclick=function(){ espGuarda(PG.espEdit, gp, false); };
     var n2=$('xeNo2'); if(n2) n2.onclick=function(){ PG.espEdit=null; pintaProg(); };
   }
   async function cestaCarga(){
@@ -3942,6 +4031,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(!x) return;
     await cestaCarga();
     CESTA.sel={}; CESTA.q=''; CESTA.grupo=null; CESTA.pasillo='alimento';
+    CESTA.propuesta=false; CESTA.sueltos=[];
+    /* EL PRECIO PACTADO, para no pisarlo sin que alguien lo diga. */
+    var sv0=x.servicio||{};
+    CESTA.pactado = String(sv0.unidad||'').indexOf('grupo')===0
+      ? Number(x.precio_neto||0)
+      : Number(x.precio_neto||0)*Number(x.personas||0);
     /* Las cestas guardadas antes del catálogo de experiencias no traen
        `key`: eran todas de la carta, así que se leen como tales. */
     (x.cesta||[]).forEach(function(p){
@@ -3949,6 +4044,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       var k=p.key || (p.tipo==='extra'?'x':'c')+p.id;
       if(p.id!=null||p.key) CESTA.sel[k]=Number(p.cant)||0;
     });
+    /* SI NO HAY CESTA, SE ARMA LEYENDO LO PEDIDO. Los servicios de antes de
+       la cesta sólo tienen la frase; abrir el editor con la cesta vacía
+       sugería que no se había pedido nada. */
+    if(!Object.keys(CESTA.sel).length && sv0.incluye){
+      var r=cestaDesdeTexto(sv0.incluye, x.personas);
+      if(Object.keys(r.sel).length || r.sueltos.length){
+        CESTA.sel=r.sel; CESTA.sueltos=r.sueltos; CESTA.propuesta=true;
+      }
+    }
     PG.espEdit=id; pintaProg();
   }
   function cestaRepinta(){
@@ -4012,7 +4116,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     if(bu) bu.oninput=function(){ CESTA.q=bu.value; cestaRepinta(); };
     espPinta();   /* pinta la cesta y cablea sus botones */
   }
-  async function espGuarda(id,b){
+  async function espGuarda(id,b,usarCesta){
     var pax=Number(($('xeP')||{}).value||0);
     if(!(pax>0)){ await cpAviso('¿Para cuántas personas? Sin eso no sale el importe.'); return; }
     var cesta=[], tc=0;
@@ -4030,7 +4134,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
        importe lo arma la cesta y nada más. Si la cesta está vacía se guardan
        el día, las personas y la nota, y el precio se queda como estaba —en
        null el servidor no lo cambia. */
-    var precio = conCesta ? (tc) : null;
+    var precio = (conCesta && usarCesta!==false) ? tc : null;
 
     /* LO QUE INCLUYE SE ESCRIBE SOLO: es lo que va a leer cocina, y ya no hay
        campo donde teclearlo. Va por pasillos porque no es lo mismo lo que
@@ -4050,7 +4154,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       var r=await fetch(SB+'/rest/v1/rpc/op_especial_guardar',{method:'POST',headers:hdr(),
         body:JSON.stringify({p_dado:id, p_personas:pax,
           p_precio: precio==null?null:Number(precio.toFixed(2)),
-          p_unidad: conCesta?'grupo':null, p_incluye:inc||null,
+          p_unidad: (conCesta && usarCesta!==false)?'grupo':null, p_incluye:inc||null,
           p_nota:($('xeNo')||{}).value||null, p_fecha:($('xeF')||{}).value||null,
           p_luchador:luch, p_luchador_neto:null,
           p_cesta: cesta.length?JSON.stringify(cesta):null})});
@@ -4060,10 +4164,12 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         b.disabled=false; b.textContent='Guardar'; return;
       }
       PG.espEdit=null;
-      await cpAviso(conCesta
+      await cpAviso(precio!=null
         ? ('Guardado. '+money2(precio)+' sin IVA · '+money2(precio*1.16)+
            ' con IVA por el grupo. Si cocina tiene que saberlo, dale a «Enviar a cocina».')
-        : 'Guardado. La cesta estaba vacía, así que el precio se quedó como estaba.');
+        : (conCesta
+            ? 'Guardado. El detalle y lo que lee cocina quedaron al día; el precio se dejó como estaba.'
+            : 'Guardado. La cesta estaba vacía, así que el precio se quedó como estaba.'));
       if(typeof cargaProg==='function') cargaProg();
     }catch(e){
       await cpAviso('No se pudo guardar: '+e.message);
