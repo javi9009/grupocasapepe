@@ -61,6 +61,9 @@ header.top nav a:hover{color:#fff}
 .pasos li.on{background:var(--tinta);border-color:var(--tinta);color:#fff}
 .pasos li.on u{background:var(--naranja);color:#fff}
 .pasos li.listo u{background:var(--ok);color:#fff}
+/* Naranja = pasaron por ahí pero queda algo que ver. Javi, 21-nov-2026. */
+.pasos li.ojo u{background:var(--naranja);color:#fff}
+.pasos li.ojo{border-color:var(--naranja)}
 
 .cols{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;padding-bottom:60px}
 main{flex:999 1 580px;min-width:0;display:flex;flex-direction:column;gap:16px}
@@ -424,8 +427,13 @@ function pintaCesta(){
     '<div class="mini" style="text-align:right">'+
       (S.personas>0?$$(t.total/S.personas)+' por persona · ':'')+
       'precio estimado, lo confirmamos en tu cotización</div>'+
-    (t.total>0?'<div class="nota azul">Apartas tu fecha con un depósito del '+ant+'%: <b>'+
-      $$(t.total*ant/100)+'</b></div>':'')+
+    (t.total>0 && apartable()
+      ? '<div class="nota azul">Apartas tu fecha con un depósito del '+ant+'%: <b>'+
+        $$(t.total*ant/100)+'</b></div>'
+      : (t.total>0
+        ? '<div class="nota amb">Esta cotización va <b>para recotizar</b>, así que todavía '+
+          'no se puede apartar con el anticipo. Te la cerramos a mano y entonces sí.</div>'
+        : ''))+
   '</div>';
   $('cesta').innerHTML=h;
 }
@@ -449,10 +457,39 @@ function comidaIncluida(e){
   return out.join('. ');
 }
 
-/* ====================== LOS PASOS ====================== */
+/* ====================== LOS PASOS ======================
+   Javi, 21-nov-2026: «los botones se ponen en verde al avanzar pero no tienen
+   la info suficiente; déjalos en naranja si no han detallado info o hay algo
+   que revisar para avanzar». Un palomita verde sobre un paso al que le falta
+   la mitad es una mentira pequeña que se descubre al final, cuando ya no se
+   puede apartar la fecha y nadie entiende por qué. */
+function pasoCompleto(n){
+  var e=expElegida();
+  if(n===1) return !!(S.empresa && S.contacto && /.+@.+\..+/.test(S.email||'') &&
+                      S.personas>0 && S.fecha1);
+  if(n===2) return !!e && diaSirve(e)!==false;
+  if(n===3) return S.lugarModo==='preasignado' ? caben(e)
+            : (S.lugarModo==='cliente' ? !!S.lugarOtro : !!S.lugarOtro);
+  if(n===4){
+    if(!S.horaIni || S.transpSi===null) return false;
+    if(S.transpSi!==true) return true;
+    if(!S.recogida || !S.recogidaHora) return false;
+    var lug=0; CAT.transportes.forEach(function(v){ lug+=Number(S.veh[v.id]||0)*Number(v.capacidad); });
+    return lug>=S.personas;
+  }
+  if(n===5){
+    if(S.abSi===null) return false;
+    if(S.abSi!==true) return true;
+    return Object.keys(S.ab).some(function(k){ return S.ab[k] && S.ab[k].cant; }) || !!S.abTexto;
+  }
+  return true;   /* extras y resumen no obligan a nada */
+}
 function pintaPasos(){
   $('pasos').innerHTML=PASOS.map(function(p){
-    return '<li class="'+(S.paso===p[0]?'on':(S.paso>p[0]?'listo':''))+'" data-ir="'+p[0]+'">'+
+    var cls = S.paso===p[0] ? 'on'
+            : (S.paso>p[0] ? (pasoCompleto(p[0])?'listo':'ojo') : '');
+    return '<li class="'+cls+'" data-ir="'+p[0]+'"'+
+      (cls==='ojo'?' title="Falta algo por detallar aquí"':'')+'>'+
       '<u>'+p[0]+'</u>'+esc(p[1])+'</li>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('[data-ir]'),function(b){
@@ -552,7 +589,17 @@ var LUGARES=[
 ];
 function aforoExp(e){ return e && e.cupo_max!=null ? Number(e.cupo_max) : null; }
 function caben(e){ var a=aforoExp(e); return a==null || S.personas<=a; }
-function apartable(){ return S.lugarModo==='preasignado' && caben(expElegida()); }
+/* NO SE APARTA LO QUE NO SE SABE CUANTO VALE. Javi, 21-nov-2026: «cuando haya
+   una alerta de hay cosas que hay que recotizar no permitas que entren a la
+   página de Stripe para pagar el anticipo». Un 30% sobre un total al que le
+   falta un concepto es un 30% de una cifra que va a cambiar: se cobra de
+   menos o de mas, y en los dos casos hay que devolver o volver a pedir. */
+function apartable(){
+  if(S.lugarModo!=='preasignado') return false;
+  if(!caben(expElegida())) return false;
+  try{ if(totales().porCotizar.length) return false; }catch(_){ }
+  return true;
+}
 
 function pDonde(){
   var e=expElegida();
@@ -566,6 +613,7 @@ function pDonde(){
      otra». Varios espacios comparten calle: enseñar la calle sola no dice a
      dónde van a llegar. Arriba el nombre del sitio, debajo cómo llegar. */
   var sitio = e.espacio_nombre || e.lugar_nombre || '';
+  if(e.espacio_alias && e.espacio_alias!==sitio) sitio += ' · '+e.espacio_alias;
   var calle = e.lugar_dir || '';
   var a=aforoExp(e), ok=caben(e);
 
@@ -593,19 +641,27 @@ function pDonde(){
             '<div class="foto"'+(f?' style="background-image:url('+encodeURI(f)+')"':'')+'>'+
               '<em>Caben '+S.personas+' de '+x.capacidad+'</em></div>'+
             '<div class="cu"><div class="nom">'+esc(x.nombre)+'</div>'+
-              '<div class="mini">'+esc(x.direccion||x.sede||'')+'</div></div>'+
-            '<div class="pie"><button type="button" class="btn sm" data-lot="'+esc(x.nombre)+'">'+
-              (S.lugarOtro===x.nombre?'Elegido ✓':'Este nos sirve')+'</button></div></div>';
+              (x.alias&&x.alias!==x.nombre?'<div class="mini">'+esc(x.alias)+'</div>':'')+
+              '<div class="mini">'+esc(sedeNombre(x.sede))+'</div></div>'+
+            '<div class="pie">'+
+              '<button type="button" class="btn sm" data-lot="'+esc(x.nombre)+'">'+
+              (S.lugarOtro===x.nombre?'Elegido ✓':'Este nos sirve')+'</button>'+
+              '<button type="button" class="btn fan sm" data-ficha="esp:'+esc(x.id)+'">Ver ficha</button>'+
+            '</div></div>';
         }).join('')+'</div>'
       : '<div class="nota amb" style="margin-top:10px">Ahora mismo no tenemos ningún espacio propio '+
         'de ese tamaño dado de alta. Lo buscamos fuera y se lo pasamos con el precio.</div>';
   }
 
+  /* Si caben, no se ofrece buscar otro sitio: Javi, 21-nov-2026, «cuando SÍ
+     hay capacidad no pongas lo de este no nos sirve, ayúdanos a buscar otro».
+     Ofrecer una salida que nadie necesita es sembrar la duda. */
+  var opciones = LUGARES.filter(function(o){ return ok ? o[0]!=='otro_espacio' : true; });
   h+='<div class="mini" style="margin:18px 0 8px">¿Prefieren otra cosa?</div><div class="ops">'+
     '<button type="button" class="op'+(S.lugarModo==='preasignado'?' on':'')+'" data-lm="preasignado"'+
       (ok?'':' disabled')+'><b>Ahí está bien</b><span class="mini">'+
       (ok?'Donde se da siempre.':'No caben: hay que buscar otro.')+'</span></button>'+
-    LUGARES.map(function(o){
+    opciones.map(function(o){
       return '<button type="button" class="op'+(S.lugarModo===o[0]?' on':'')+'" data-lm="'+o[0]+'">'+
         '<b>'+o[1]+'</b><span class="mini">'+o[2]+'</span></button>'; }).join('')+
     '</div>';
@@ -804,6 +860,16 @@ function proponHoras(){
   var fin=finCalculado();
   if(!S.regresoHora && fin) S.regresoHora = fin;
 }
+/* LA SEDE TIENE NOMBRE DE CASA, NO DE CARPETA. Javi, 21-nov-2026: «en cada
+   tarjeta no pongas virreyes, pon Hotel Virreyes». */
+var SEDES={virreyes:'Hotel Virreyes', casapepe_cdmx:'Casa Pepe CDMX',
+  'casa-pepe-cdmx':'Casa Pepe CDMX', casapepe_puebla:'Casa Pepe Puebla',
+  sincretico:'Sincrético', corp:'Corporativo'};
+function sedeNombre(x){
+  if(!x) return '';
+  var k=String(x).trim();
+  return SEDES[k] || SEDES[k.toLowerCase()] || k;
+}
 function espacioElegido(){
   if(!S.espacio) return null;
   return CAT.espacios.filter(function(x){return x.id===S.espacio;})[0]||null;
@@ -890,8 +956,11 @@ function pResumen(){
       pct('anticipo_pct',30)+'%</b> ('+$$(t.total*pct('anticipo_pct',30)/100)+'). '+
       'El resto, '+regla('saldo_dias_antes','15')+' días antes del evento, ajustando el número final de personas.</div>'
     : '<div class="nota amb" style="margin-top:12px">Esta cotización va <b>para recotizar</b>: '+
-      (caben(expElegida())?'el lugar todavía no está cerrado':'no caben en el sitio de siempre')+
-      ', así que todavía no se puede apartar la fecha.</div>';
+      (!caben(expElegida()) ? 'no caben en el sitio de siempre'
+        : (t.porCotizar && t.porCotizar.length)
+          ? 'hay cosas que te cotizamos a mano ('+t.porCotizar.map(esc).join(', ')+')'
+          : 'el lugar todavía no está cerrado')+
+      ', así que todavía no se puede apartar la fecha ni pagar el anticipo.</div>';
   return h+'</section>';
 }
 
@@ -1066,9 +1135,14 @@ function fichaHtml(){
       '<div class="mini">Precios sin IVA, pensados para la Ciudad de México.</div>';
   }
   if(que==='esp'){
+    if(o.alias && o.alias!==o.nombre)
+      h+='<div class="mini" style="margin-top:-6px">También le decimos <b>'+esc(o.alias)+'</b></div>';
     if(o.descripcion) h+='<p style="margin:0">'+esc(o.descripcion)+'</p>';
     if(o.ideal_para) h+='<div><div class="kick">Ideal para</div><div>'+esc(o.ideal_para)+'</div></div>';
+    if(o.horario_servicio) h+='<div><div class="kick">Horario</div><div>'+esc(o.horario_servicio)+'</div></div>';
+    if(o.reglas) h+='<div><div class="kick">Reglas de la casa</div><div>'+esc(o.reglas)+'</div></div>';
     h+='<div class="datos">'+
+      '<div><em>Dónde</em><strong>'+esc(sedeNombre(o.sede))+'</strong></div>'+
       '<div><em>De pie</em><strong>'+(o.capacidad||'—')+'</strong></div>'+
       '<div><em>Sentados</em><strong>'+(o.capacidad_sentado||'—')+'</strong></div>'+
       (o.metros2?'<div><em>Metros</em><strong>'+o.metros2+' m²</strong></div>':'')+
