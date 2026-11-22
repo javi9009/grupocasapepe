@@ -255,11 +255,22 @@ function ciclo(){
   if(D.emp.ciclo_desde){const d=new Date(String(D.emp.ciclo_desde).slice(0,10)+'T12:00:00'); if(!isNaN(d)){total=Math.max(1,(hY-d.getFullYear())*12+(hM-d.getMonth())+1); const s=new Date(d.getFullYear(),d.getMonth()+Math.floor((total-1)/12)*12,1); sY=s.getFullYear(); sM=s.getMonth();}}
   const H={}; (D.meses||[]).forEach(m=>H[m.mes]=Number(m.pct));
   const slots=[]; for(let i=0;i<12;i++){const d=new Date(sY,sM+i,1), key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); slots.push({lbl:MES[d.getMonth()],v:H[key]??null,fut:(d.getFullYear()>hY||(d.getFullYear()===hY&&d.getMonth()>hM))});}
-  const med=slots.filter(s=>s.v!=null), fut=slots.filter(s=>s.fut).length, sum=med.reduce((a,s)=>a+s.v,0);
+  /* LOS MESES QUE FALTAN INCLUYEN EL DE HOY. Javi, 22-nov-2026: «no le faltan
+     dos meses, le faltan 3 o 4 porque entró en febrero». El mes en curso no
+     está cerrado ni medido, así que contarlo como pasado hacía la cuenta más
+     corta de lo que es y adelantaba el «ya no alcanzas».
+     Y se cuentan aparte los meses del ciclo que ya pasaron y nadie midió: no
+     se suman como cero -eso condenaría a cualquiera-, pero se dicen, porque
+     un promedio de un mes no es el promedio del año. */
+  const med=slots.filter(s=>s.v!=null), sum=med.reduce((a,s)=>a+s.v,0);
+  const enCurso=slots.filter((s,i)=>{const d=new Date(sY,sM+i,1); return !s.fut && s.v==null &&
+      d.getFullYear()===hY && d.getMonth()===hM;}).length;
+  const fut=slots.filter(s=>s.fut).length + enCurso;
+  const sinDato=slots.filter(s=>s.v==null && !s.fut).length - enCurso;
   const prom=med.length?Math.round(sum/med.length*10)/10:null;
   const nec=(med.length&&fut)?Math.ceil((90*(med.length+fut)-sum)/fut):null;
   const dia=D.emp.ciclo_desde?new Date(String(D.emp.ciclo_desde).slice(0,10)+'T12:00:00').getDate():1; const ini=new Date(sY,sM,dia,12), fin=new Date(sY+1,sM,dia-1,12);
-  return {slots,prom,fut,nec,enCiclo:((total-1)%12)+1,ini,fin};
+  return {slots,prom,fut,nec,sinDato,enCiclo:((total-1)%12)+1,ini,fin};
 }
 function niveles(){const g=D.niveles||{}, sal=Number(D.emp.salario)||0, ks=['junior','junior2','senior'].filter(k=>g[k]!=null); let i=-1;
   /* tolerancia de $25: una diferencia de redondeo (9,451 contra 9,456) no baja a nadie de nivel */
@@ -626,7 +637,37 @@ function det(foco){
   const cards=CRIT.map(([k,n,v])=>{const x=cr(k); return `<div class="crit${open[k]?' open':''}" id="c-${k}"><button data-tog="${k}"><span class="num" style="background:var(${v});width:42px;font-size:.82rem">${x.v}</span><h4>${esc(n)}</h4><span class="v">${x.v}<small>/${x.max}</small></span><span class="tg">${open[k]?'−':'+'}</span></button><div class="mini"><div class="pb"><i style="width:${Math.min(100,x.r*100)}%;background:var(${v})"></i></div></div><div class="sub">${resumen(k)}</div><div class="body">${body[k]()}</div></div>`;}).join('');
   const g=nv.g, nivH=nv.ks.length?`<div class="niv">${nv.ks.map((k,i)=>`<div class="${i===nv.i?'cur':(i===nv.i+1?'sig':'')}"><small>${NIV[k]}${i===nv.i?' · hoy':(i===nv.i+1?' · sigue':'')}</small><b>${mxn(i===nv.i&&Number(D.emp.salario)>0?D.emp.salario:g[k])}</b></div>`).join('')}</div>`:'<div class="faint" style="font-size:.8rem">Tu puesto aún no tiene niveles cargados en el tabulador.</div>';
   const bars=`<div class="bars"><u></u>${c.slots.map(x=>x.v==null?'<i class="vac"></i>':`<i style="height:${Math.max(4,Math.min(100,x.v))}%;background:${col(x.v)}"></i>`).join('')}</div><div class="blbl">${c.slots.map(x=>`<div>${x.lbl}<br>${x.v==null?'—':Math.round(x.v)}</div>`).join('')}</div>`;
-  const msg=c.prom==null?'Todavía no hay ningún mes medido en tu ciclo.':(c.nec==null?('Cerraste el ciclo con '+c.prom+'% de promedio.'):(c.nec<=100?`Te faltan ${c.fut} ${c.fut===1?'mes':'meses'}. Para cerrar con 90% de promedio necesitas ≥ ${Math.max(0,c.nec)}% de media${nv.sig?' → '+NIV[nv.sig]+' con '+mxn(g[nv.sig])+' brutos al mes':''}.`:`Con lo medido (${c.prom}%) ya no alcanzas el 90% en este ciclo aunque saques 100% en los ${c.fut} meses que faltan.`));
+  /* TRES MANERAS DE DECIRLO. Javi, 22-nov-2026. El mismo dato con tres caras:
+     a quien va bien se le empuja a pedir más; a quien puede recuperar se le
+     dice que puede; y a quien ya no llega no se le deja solo con el número,
+     se le ofrece la puerta. El dato no cambia, cambia a quién se lo cuentas. */
+  const mm=n=>n+' '+(n===1?'mes':'meses');
+  const _lo=`Con lo medido (${c.prom}%)`;
+  const _sin=c.sinDato>0?` Ojo: ${mm(c.sinDato)} de tu ciclo todavía no están medidos y no cuentan en el promedio.`:'';
+  let msg, tono='media';
+  if(c.prom==null){ msg='Todavía no hay ningún mes medido en tu ciclo.'+_sin; }
+  else if(c.nec==null){ msg=`Cerraste el ciclo con ${c.prom}% de promedio.`; tono=c.prom>=90?'bien':'media'; }
+  else if(c.nec<=0){ tono='bien';
+    msg=`<b>¡Felicidades! Vas muy bien para lograrlo.</b> ${_lo} ya estás en camino del 90% con `
+       +`${mm(c.fut)} por delante. Parece que tienes tiempo y resultados para un desempeño excepcional: `
+       +`¿por qué no hablas con tu jefe de área y buscan nuevos bonos u objetivos?`+_sin; }
+  else if(c.nec<=100){ tono='media';
+    msg=`<b>¡Lo puedes lograr!</b> ${_lo} y ${mm(c.fut)} por delante, necesitas <b>≥ ${Math.max(0,c.nec)}%</b> `
+       +`de media para cerrar en 90%${nv.sig?' y pasar a '+NIV[nv.sig]+' ('+mxn(g[nv.sig])+' brutos al mes)':''}.`+_sin; }
+  else if(c.sinDato > (c.slots.filter(x=>x.v!=null).length)){ tono='media';
+    /* NO SE CONDENA UN AÑO QUE NADIE MIDIÓ. Si hay más meses sin medir que
+       medidos, «ya no alcanzas» sería un veredicto sacado de un mes suelto:
+       el promedio no es del año, es de lo poco que se registró. */
+    msg=`<b>Todavía no se puede saber.</b> De tu ciclo sólo hay `
+       +`${mm(c.slots.filter(x=>x.v!=null).length)} medido${c.slots.filter(x=>x.v!=null).length===1?'':'s'} `
+       +`(${c.prom}%) y ${mm(c.sinDato)} sin medir, así que el promedio no es el de tu año. `
+       +`Habla con tu jefe de área para que se registren.`; }
+  else { tono='mal';
+    msg=`<b>¡Ups! Este año algo se nos complicó.</b> ${_lo} ya no alcanzas el 90% en este ciclo aunque `
+       +`saques 100% en los ${mm(c.fut)} que faltan.`+_sin; }
+  const fondo={bien:'#DCEFE6',media:'#FBF4DC',mal:'#F7E4E0'}[tono];
+  const pie=(tono==='bien')?'' : (c.nec==null?'' :
+    '<button class="btn ghost" id="opc2" style="margin-top:8px">¿Quieres ver cómo podemos ayudarte a lograr tu objetivo?</button>');
   $('app').innerHTML=`${betaBar()}${hdr(`<div style="display:flex;gap:14px;align-items:center;margin-top:4px">${ringSeg(118)}<div><h2 style="margin:0;font-size:1.3rem">Mi desempeño</h2><p style="margin:4px 0 0;font-size:.84rem;line-height:1.4;opacity:.92">Es tu acumulado del año. <b style="color:#E9C46A">¡Logra un +90% para saltar de nivel salarial!</b></p></div></div>${pilaBar()}<p style="margin:10px 0 0;font-size:.74rem;opacity:.75;line-height:1.35">Hoy lo que más te sube: <b>${esc(tip(lo.k))}</b>.</p>`)}
    <main>
     <div class="card" style="margin-top:12px"><div class="lbl" style="margin-top:0">Tus 5 áreas de desempeño · toca para ver</div><div class="five2">${five}</div></div>
@@ -636,12 +677,10 @@ function det(foco){
       <div class="li" style="font-size:.84rem;line-height:1.45;margin-top:10px">${rutaTxt(nv)}</div>
       <div style="margin-top:8px">${nivH}</div>${bars}
       <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-top:8px"><span>Tu promedio <b style="color:${col(pm)}">${pm}%</b></span><span>meta <b>90%</b></span></div>
-      <div class="note" style="background:${pm>=90?'#DCEFE6':'#FBF4DC'};border-color:transparent">${msg}</div>
-      <div class="faint" style="font-size:.7rem;margin-top:6px">Las barras son cada mes por separado; el número de arriba es tu acumulado del año. El historial mensual se guarda desde noviembre de 2026.</div>
-      <button class="btn ghost" id="opc">¿No llegas al 90%? Ver opciones</button>
+      <div class="note" style="background:${fondo};border-color:transparent">${msg}</div>${pie}
     </div>
    </main>${ftr()}`;
-  cableaShell(); $('opc').onclick=opciones;
+  cableaShell(); if($('opc2')) $('opc2').onclick=opciones;
   document.querySelectorAll('[data-tog]').forEach(b=>b.onclick=()=>{const k=b.dataset.tog; open[k]=!open[k]; $('c-'+k).classList.toggle('open',open[k]); const t=b.querySelector('.tg'); if(t)t.textContent=open[k]?'−':'+';});
   document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{const k=b.dataset.open; open[k]=true; $('c-'+k).classList.add('open'); $('c-'+k).scrollIntoView({behavior:'smooth',block:'start'});});
   document.querySelectorAll('[data-url]').forEach(b=>b.onclick=()=>frame(b.dataset.t||'Test',b.dataset.url));
