@@ -376,7 +376,7 @@ function mesRange(m){const [y,mo]=m.split('-').map(Number);const p=n=>String(n).
 async function medir(mes,sel){const [d0,d1]=periodDates();const v={};const t=async fn=>{try{return await fn();}catch(e){return null;}};
  await Promise.all([
   t(async()=>{const r=await sb('/pos_turno_sesiones?select=total_ventas,total_propinas,diferencia_efectivo&fecha_operativa=gte.'+d0+'&fecha_operativa=lte.'+d1)||[];v.ventas_poster=Math.round(r.reduce((s,x)=>s+(+x.total_ventas||0),0));v.propinas=Math.round(r.reduce((s,x)=>s+(+x.total_propinas||0),0));v.dif_efectivo=Math.round(r.reduce((s,x)=>s+Math.abs(+x.diferencia_efectivo||0),0));}),
-  t(async()=>{const r=await sb('/reporte_dia_cache?select=payload,fecha&fecha=gte.'+d0+'&fecha=lte.'+d1)||[];const g=r.map(x=>{const o=x.payload&&x.payload.occ;return (o&&typeof o==='object')?(+o.general||null):null;}).filter(x=>x!=null&&x>0);if(g.length)v.ocupacion_pct=Math.round(g.reduce((s,x)=>s+x,0)/g.length*10)/10;}),
+  t(async()=>{const r=await sb('/rpc/obj_ocupacion',{method:'POST',body:JSON.stringify({p_d0:d0,p_d1:d1})});if(r!=null)v.ocupacion_pct=+r;}),
   t(async()=>{const r=await sb('/v_sinc_ventas?select=nuestra_comision,total_venta,pax,estado,reservada_at,pagado_at')||[];const f=(r||[]).filter(x=>{const d=(x.pagado_at||x.reservada_at||'').slice(0,10);return d>=d0&&d<=d1&&!/cancel/i.test(x.estado||'');});const ours=f.filter(x=>x.nuestra_comision!=null);if(ours.length){v.comision_tours=Math.round(ours.reduce((s,x)=>s+(+x.nuestra_comision||0),0));v._tventa=Math.round(ours.reduce((s,x)=>s+(+x.total_venta||0),0));v._tpax=ours.reduce((s,x)=>s+(+x.pax||0),0);}}),
   t(async()=>{const set=CURP.mos.map(m=>CURP.y+'-'+String(m).padStart(2,'0')+'-01');const r=await sb('/v_scout_huesped_mes?select=propiedad,mes,huesped_noches')||[];const f=r.filter(x=>set.indexOf((x.mes||'').slice(0,10))>=0&&locMatch(x.propiedad,sel));if(f.length)v._huesped=f.reduce((s,x)=>s+(+x.huesped_noches||0),0);}),
   t(async()=>{const r=await sb('/asistencias?select=estatus&fecha=gte.'+d0+'&fecha=lte.'+d1)||[];const at=r.filter(x=>x.estatus==='a_tiempo').length,re=r.filter(x=>x.estatus==='retardo').length,fa=r.filter(x=>x.estatus==='falta').length;if(at+re>0)v.puntualidad_pct=Math.round(at/(at+re)*1000)/10;v.faltas_mes=fa;}),
@@ -390,8 +390,8 @@ async function medir(mes,sel){const [d0,d1]=periodDates();const v={};const t=asy
 function fmtInput(k,val){if(val==null||val==='')return null;const K=INPUTS[k]||{};if(K.u==='$')return money(val);if(K.u==='%')return pct1(val)+'%';return String(val)+(K.u||'');}
 function renderOper(){
   $('operBody').innerHTML=OGRUPOS.map(g=>{const ks=Object.keys(INPUTS).filter(k=>INPUTS[k].g===g);if(!ks.length)return '';
-   return '<div class="gcard"><h3>'+g+'</h3>'+ks.map(k=>{const K=INPUTS[k];const val=VALS[k];const vv=fmtInput(k,val);
-    return '<div class="irow"><span class="idot '+(vv!=null?'ok':'')+'"></span><div><div class="iname">'+esc(K.n)+'</div><div class="isrc">'+esc(K.f)+'</div><div class="itags">'+(K.plaza?'<span class="tg plaza">por plaza</span>':'')+(K.menor?'<span class="tg menor">menor mejor</span>':'')+'</div></div><div class="ival '+(vv==null?'soft':'')+'">'+(vv==null?'por conectar':vv)+'</div></div>';}).join('')+'</div>';}).join('');
+   return '<div class="gcard"><h3>'+g+'</h3>'+ks.map(k=>{const K=INPUTS[k];const con=K.con!==false;
+    return '<div class="irow"><span class="idot '+(con?'ok':'')+'"></span><div><div class="iname">'+esc(K.n)+'</div><div class="isrc">'+esc(K.f)+'</div></div><div class="ival'+(con?'':' soft')+'" style="'+(con?'color:#157a56;font-weight:700;font-size:13px':'')+'">'+(con?'Conectado':'Por conectar')+'</div></div>';}).join('')+'</div>';}).join('');
 }
 
 /* ===================== Scouting ===================== */
@@ -399,22 +399,21 @@ let REP={};
 async function cargaRep(){ try{const r=await sb('/reputacion?select=fuente,propiedad,calificacion,es_nuestro&order=fecha_captura.desc');(r||[]).forEach(x=>{});}catch(e){} }
 function renderScout(){
   const huesp=[
-    {n:'Huéspedes · noche',v:VALS._huesped,src:'v_scout_huesped_mes · noches de huésped del periodo',tags:['personas/noche','por hostel']},
-    {n:'Extensiones del mes',v:null,src:'lo consolida Revenue (% de extensiones logradas)',tags:['por hostel']}
+    {n:'Huéspedes · noche',src:'v_scout_huesped_mes · noches de huésped',tags:['por hostel'],con:true},
+    {n:'Extensiones del mes',src:'v_scout_extensiones_mes · % de reservas extendidas',tags:['por hostel'],con:true}
   ];
   const tours=[
-    {n:'Venta de tours',v:VALS._tventa,u:'$',src:'Sincrético · v_sinc_ventas (plataforma Casa Pepe)',tags:['por hostel']},
-    {n:'Personas operadas',v:VALS._tpax,src:'Sincrético · v_sinc_ventas (pax de nuestras ventas)',tags:['por hostel']},
-    {n:'Personas operadas que son huéspedes',v:null,src:'reserva de tour marcada huésped = sí',tags:['por hostel','new']}
+    {n:'Venta de tours',src:'Sincrético · v_sinc_ventas (plataforma Casa Pepe)',tags:['por hostel'],con:true},
+    {n:'Personas operadas',src:'Sincrético · v_sinc_ventas (pax)',tags:['por hostel'],con:true},
+    {n:'Personas operadas que son huéspedes',src:'reserva de tour marcada huésped = sí',tags:['por hostel','new'],con:false}
   ];
   const rep=[
-    {n:'Rating Google · hostal',v:REP.hostal,u:'★',src:'revenue.reputacion (google, es_nuestro)',tags:['por hostel']},
-    {n:'Rating Google · Terraza Cósmica',v:REP.terraza,u:'★',src:'revenue.reputacion · Terraza Cósmica (captura semanal)',tags:['nuevo']}
+    {n:'Rating Google · hostal',src:'revenue.reputacion (google, es_nuestro)',tags:['por hostel'],con:REP.hostal!=null},
+    {n:'Rating Google · Terraza Cósmica',src:'revenue.reputacion · Terraza Cósmica',tags:['nuevo'],con:REP.terraza!=null}
   ];
-  const card=(title,arr)=>'<div class="gcard"><h3>'+title+'</h3>'+arr.map(it=>{
-     const vv=(it.v==null||it.v==='')?null:(it.u==='★'?(pct1(it.v)+'★'):(it.u==='$'?money(it.v):String(it.v)));
-     const tg=(it.tags||[]).map(t=>{const cls=t==='new'||t==='nuevo'?'new':(t==='plan'?'plan':'plaza');const lab=t==='new'?'nuevo':t;return '<span class="tg '+cls+'">'+esc(lab)+'</span>';}).join('');
-     return '<div class="irow"><span class="idot '+(vv!=null?'ok':'')+'"></span><div><div class="iname">'+esc(it.n)+'</div><div class="isrc">'+esc(it.src)+'</div><div class="itags">'+tg+'</div></div><div class="ival '+(vv==null?'soft':'')+'">'+(vv==null?'por conectar':vv)+'</div></div>';
+  const card=(title,arr)=>'<div class="gcard"><h3>'+title+'</h3>'+arr.map(it=>{const con=it.con;
+     const tg=(it.tags||[]).map(t=>{const cls=(t==='new'||t==='nuevo')?'new':'plaza';const lab=t==='new'?'nuevo':t;return '<span class="tg '+cls+'">'+esc(lab)+'</span>';}).join('');
+     return '<div class="irow"><span class="idot '+(con?'ok':'')+'"></span><div><div class="iname">'+esc(it.n)+'</div><div class="isrc">'+esc(it.src)+'</div><div class="itags">'+tg+'</div></div><div class="ival'+(con?'':' soft')+'" style="'+(con?'color:#157a56;font-weight:700;font-size:13px':'')+'">'+(con?'Conectado':'Por conectar')+'</div></div>';
    }).join('')+'</div>';
   $('scoutBody').innerHTML=card('Huéspedes',huesp)+card('Tours y experiencias',tours)+card('Reputación',rep);
 }
@@ -422,10 +421,11 @@ function renderScout(){
 /* ===================== KPIs ===================== */
 function valKPI(k,a,EX){ if(EX&&EX[k.id]!==undefined)return EX[k.id]; const A=k.input_a||'',B=k.input_b||'';
  if(k.tipo==='real_vs_plan'&&isCode(A)){const p=csum(a,A,'plan');return p?{v:(csum(a,A,'real')+csum(a,A,'fc'))/p*100,u:'%'}:{nota:'sin plan'};}
- if(k.tipo==='real_vs_forecast'&&isCode(A)){const f=csum(a,A,'fc');return f?{v:csum(a,A,'real')/f*100,u:'%'}:{nota:'sin forecast'};}
+ if(k.tipo==='real_vs_forecast'&&isCode(A)){let f=csum(a,A,'fc');if(!f)f=csum(a,A,'plan');return f?{v:csum(a,A,'real')/f*100,u:'%'}:{nota:'sin plan'};}
  if(k.tipo==='gasto_sobre_ingreso'&&isCode(A)&&isCode(B)){const b=csum(a,B,'real');return b?{v:csum(a,A,'real')/b*100,u:'%'}:{nota:'sin base'};}
  if(k.tipo==='resultado_vs_plan'){const w=/UBO/i.test(A)?'ubo':/EBITDA/i.test(A)?'ebitda':/A&B/i.test(A)?'ab':/Cuartos/i.test(A)?'cuartos':null;if(w){const pl=usali(a,w,'plan');return pl?{v:usali(a,w,'real')/pl*100,u:'%'}:{nota:'sin plan'};}}
- if(/revenue|extensi/i.test(A)||/revenue/i.test(k.nota||''))return {nota:'lee de Revenue'};
+ if(/concierge/i.test(A))return {nota:'por persona (Ficha 360)'};
+ if(/revenue/i.test(A)||/revenue/i.test(k.nota||''))return {nota:'lee de Revenue'};
  return {nota:'por conectar'};}
 function sem(v,meta,regla){if(v==null||meta==null)return 'gris';const m=+meta;const rg=String(regla||'').replace('&lt;','<').replace('&gt;','>');let ok;if(rg==='<=')ok=v<=m;else if(rg==='<')ok=v<m;else if(rg==='=')ok=Math.abs(v-m)<0.01;else ok=v>=m;if(ok)return 'ok';return (m&&Math.abs(v-m)/Math.abs(m)<=0.10)?'warn':'bad';}
 function fmtKPI(r){if(!r||r.v==null)return null;if(r.u==='$'||r.raw)return money(r.v);return pct1(r.v)+(r.u||'');}
@@ -442,6 +442,8 @@ async function computeKPIs(){ await cargaCat();
  const rows=await fetchPL(); const a=finAgg(rows,LOC); const EX={};
  try{const d=await sb('/fin_deuda_saldo?select=anio,mes,saldo&order=anio.desc,mes.desc&limit=80');if(d&&d.length){const t=d[0];const tot=d.filter(x=>x.anio===t.anio&&x.mes===t.mes).reduce((s,x)=>s+(+x.saldo||0),0);const kd=KPIS.find(k=>/deuda/i.test(k.nombre));if(kd)EX[kd.id]={v:tot,u:'$',raw:true};}}catch(e){}
  try{const op=await sb('/rpc/kpi_operativos',{method:'POST',body:JSON.stringify({p_mes:MES+'-01'})});if(op&&typeof op==='object'){KPIS.forEach(k=>{if(op[k.nombre]!==undefined)EX[k.id]=op[k.nombre];});}}catch(e){}
+ try{const kp=KPIS.find(k=>/productividad entradas/i.test(k.nombre)); if(kp&&VALS&&VALS.hk_eficiencia!=null)EX[kp.id]={v:VALS.hk_eficiencia,u:'%'};}catch(e){}
+ try{const ke=KPIS.find(k=>/extensiones/i.test(k.nombre)); if(ke){const set=CURP.mos.map(m=>CURP.y+'-'+String(m).padStart(2,'0')+'-01');const ex=await sb('/v_scout_extensiones_mes?select=propiedad,mes,extensiones,total_reservas')||[];const f=ex.filter(x=>set.indexOf((x.mes||'').slice(0,10))>=0&&locMatch(x.propiedad,LOC));const te=f.reduce((s,x)=>s+(+x.extensiones||0),0),tr=f.reduce((s,x)=>s+(+x.total_reservas||0),0);if(tr>0)EX[ke.id]={v:Math.round(te/tr*1000)/10,u:'%'};}}catch(e){}
  const R={}; KPIS.forEach(k=>{const r=valKPI(k,a,EX);R[k.id]={r:r,s:(r&&r.v!=null)?sem(r.v,k.meta,k.regla):'gris'};});
  const evalK=KPIS.filter(k=>!/logro del equipo/i.test(k.nombre)&&R[k.id].r&&R[k.id].r.v!=null);
  const kL=KPIS.find(k=>/logro del equipo/i.test(k.nombre));
@@ -457,7 +459,7 @@ async function renderKres(){ try{ const R=await computeKPIs();
     '<td class="tl">'+tipoChip(k.tipo)+'</td>'+
     '<td class="tl"><div class="formula">'+formulaTxt(k)+'</div></td>'+
     '<td class="tl"><b>'+esc(rglTxt(k.regla))+' '+esc(k.meta==null?'—':k.meta)+esc(k.unidad||'')+'</b></td>'+
-    '<td><span class="vbig">'+(vv==null?'<span class="muted" style="font-weight:600;font-size:13px">por conectar</span>':esc(vv))+'</span> <span class="dot '+o.s+'" style="margin-left:6px"></span></td>'+
+    '<td><span class="vbig">'+(vv==null?'<span class="muted" style="font-weight:600;font-size:12px">'+esc((o.r&&o.r.nota)||'por conectar')+'</span>':esc(vv))+'</span> <span class="dot '+o.s+'" style="margin-left:6px"></span></td>'+
     '<td class="tl puestos">'+(puestosDe(k.id).map(p=>'<div class="plink">'+esc(p)+'</div>').join('')||'<span class="muted">sin puesto</span>')+'</td></tr>';
  });
  $('kresTable').innerHTML=h+'</tbody>';
@@ -577,7 +579,7 @@ async function reloadMes(){ MES=lastMonthStr();
  renderCCRR();
  VALS=await medir(MES,LOC);
  // scouting live: google ratings + extensiones/ppc si existen
- try{const rp=await sb('/reputacion?select=fuente,propiedad,calificacion,es_nuestro,fecha_captura&order=fecha_captura.desc&limit=200');if(rp){const g=rp.filter(x=>/google/i.test(x.fuente||''));const host=g.filter(x=>x.es_nuestro&&!/cósmica|cosmica|terraza/i.test(x.propiedad||''));const terr=g.find(x=>/cósmica|cosmica|terraza/i.test(x.propiedad||''));if(host.length)REP.hostal=Math.round(host.reduce((s,x)=>s+(+x.calificacion||0),0)/host.length*10)/10;if(terr)REP.terraza=+terr.calificacion;}}catch(e){}
+ try{const rp=await sb('/rpc/obj_reputacion',{method:'POST',body:JSON.stringify({})});if(rp&&typeof rp==='object'){if(rp.hostal!=null)REP.hostal=+rp.hostal;if(rp.terraza!=null)REP.terraza=+rp.terraza;}}catch(e){}
  if(SUBI==='oper')renderOper(); if(SUBI==='scout')renderScout();
  const cur=document.querySelector('.step.on'); if(cur&&cur.dataset.tab==='kpi'&&SUBK==='kres')renderKres(); if(cur&&cur.dataset.tab==='matriz')renderMatriz();
 }
