@@ -392,9 +392,15 @@ const INPUTS={
  eval_promedio:{n:'Evaluación de desempeño',u:'/20',f:'Desempeño · eval_mediciones',g:'Personas'},
  hk_eficiencia:{n:'Eficiencia de limpieza',u:'%',f:'Limpieza · productividad diaria',g:'Limpieza'},
  hk_extras:{n:'Tareas extraordinarias',u:'',f:'Limpieza · tareas extra',g:'Limpieza'},
- mtto_efic:{n:'Nivel de eficiencia de mantenimiento',u:'%',f:'Mantenimiento · mtto_v_productividad (eficiencia por técnico)',g:'Mantenimiento'}
+ mtto_efic:{n:'Nivel de eficiencia de mantenimiento',u:'%',f:'Mantenimiento · mtto_v_productividad (eficiencia por técnico)',g:'Mantenimiento'},
+ /* REPUTACIÓN, EN LA LISTA DEL EDITOR. Javi, 22-nov-2026: «no se ha
+    actualizado el input a la hora de editar KPI». Un input que no se puede
+    elegir al crear el KPI es un input que no existe para quien lo arma. */
+ pf_indice:{n:'PepeFeliz · índice de la casa',u:'/100',f:'pepe_feliz(plaza).indice · reseñas del periodo, sin Google',g:'Reputación'},
+ pf_staff:{n:'PepeFeliz · nota de personal',u:'/100',f:'pepe_feliz(plaza).staff · subvaloración «staff» vs su objetivo',g:'Reputación'},
+ pf_limpieza:{n:'PepeFeliz · nota de limpieza',u:'/100',f:'pepe_feliz(plaza).limpieza · subvaloración «limpieza» vs su objetivo',g:'Reputación'}
 };
-const OGRUPOS=['Ventas','Finanzas','Personas','Limpieza','Mantenimiento'];
+const OGRUPOS=['Ventas','Finanzas','Personas','Limpieza','Mantenimiento','Reputación'];
 function mesRange(m){const [y,mo]=m.split('-').map(Number);const p=n=>String(n).padStart(2,'0');return [m+'-01', y+'-'+p(mo)+'-'+p(new Date(y,mo,0).getDate())];}
 async function medir(mes,sel){const [d0,d1]=periodDates();const v={};const t=async fn=>{try{return await fn();}catch(e){return null;}};
  await Promise.all([
@@ -412,9 +418,13 @@ async function medir(mes,sel){const [d0,d1]=periodDates();const v={};const t=asy
 }
 function fmtInput(k,val){if(val==null||val==='')return null;const K=INPUTS[k]||{};if(K.u==='$')return money(val);if(K.u==='%')return pct1(val)+'%';return String(val)+(K.u||'');}
 function renderOper(){
+  /* Los de Reputación se ven con su valor en la pestaña Scouting; aquí sólo
+     se listan para que quien arma un KPI sepa que existen. */
+  if(PF){ ['pf_indice','pf_staff','pf_limpieza'].forEach(k=>{ if(INPUTS[k]) INPUTS[k].con=true; }); }
   $('operBody').innerHTML=OGRUPOS.map(g=>{const ks=Object.keys(INPUTS).filter(k=>INPUTS[k].g===g);if(!ks.length)return '';
    return '<div class="gcard"><h3>'+g+'</h3>'+ks.map(k=>{const K=INPUTS[k];const con=K.con!==false;
     return '<div class="irow"><span class="idot '+(con?'ok':'')+'"></span><div><div class="iname">'+esc(K.n)+'</div><div class="isrc">'+esc(K.f)+'</div></div><div class="ival'+(con?'':' soft')+'" style="'+(con?'color:#157a56;font-weight:700;font-size:13px':'')+'">'+(con?'Conectado':'Por conectar')+'</div></div>';}).join('')+'</div>';}).join('');
+  /* Reputación vive en su pestaña, con su valor: aquí sólo estorbaría. */
 }
 
 /* ===================== Scouting ===================== */
@@ -427,15 +437,23 @@ async function cargaRep(){ try{const r=await sb('/reputacion?select=fuente,propi
    Se calculaba en el navegador, dentro de la pantalla de Reputación, así que
    no había de dónde leerlo y el KPI llevaba semanas en «por conectar». Ahora
    lo da la base, con la misma regla y para el periodo que manda arriba. */
-let PF=null;
+let PF=null, PFT={};
+/* POR PROPIEDAD, LAS DOS A LA VEZ. Javi, 22-nov-2026: «añade también
+   PepeFeliz de Puebla, recuerda que es por propiedad». Un input que cambia
+   con el selector de arriba esconde la mitad del grupo: aquí se ven las dos
+   casas, y el KPI sigue usando la de la plaza elegida. */
+const PLAZAS_PF=['cdmx','puebla'];
 async function cargaPF(){
-  PF=null; if(!CURP) return;
+  PF=null; PFT={}; if(!CURP) return;
   const [d,h]=periodDates();
-  try{ const r=await sb('/rpc/pepe_feliz',{method:'POST',
-        headers:{...H,'Content-Type':'application/json'},
-        body:JSON.stringify({p_plaza:LOC,p_desde:d,p_hasta:h})});
-    PF=(r&&r[0])||null;
-  }catch(e){ PF=null; }
+  await Promise.all(PLAZAS_PF.map(async pl=>{
+    try{ const r=await sb('/rpc/pepe_feliz',{method:'POST',
+          headers:{...H,'Content-Type':'application/json'},
+          body:JSON.stringify({p_plaza:pl,p_desde:d,p_hasta:h})});
+      PFT[pl]=(r&&r[0])||null;
+    }catch(e){ PFT[pl]=null; }
+  }));
+  PF=PFT[LOC]||null;
 }
 function renderScout(){
   const huesp=[
@@ -447,23 +465,29 @@ function renderScout(){
     {n:'Personas operadas',src:'Sincrético · v_sinc_ventas (pax)',tags:['por hostel'],con:true},
     {n:'Personas operadas que son huéspedes',src:'reserva de tour marcada huésped = sí',tags:['por hostel','new'],con:false}
   ];
-  /* El PepeFeliz va el primero: es el que alimenta el KPI de reputación del
-     staff, y el que la casa mira cada semana. */
-  const pfTxt = PF&&PF.indice!=null
-    ? ('pepe_feliz('+esc(LOC)+') · '+PF.resenas+' reseñas · '+
-       (PF.detalle||[]).map(x=>esc(x.fuente)+' '+x.nota100+' ('+x.n+')').join(' · '))
-    : 'pepe_feliz() · sin reseñas en el periodo';
-  const rep=[
-    {n:'PepeFeliz · índice de la casa',src:pfTxt,tags:['por hostel'],con:!!(PF&&PF.indice!=null),
-     val:(PF&&PF.indice!=null)?PF.indice:null},
-    {n:'PepeFeliz · nota de personal',
-     src:'pepe_feliz().staff · la subvaloración «staff», sin Google'+
-         (PF&&PF.staff_objetivo!=null?(' · objetivo '+PF.staff_objetivo):''),
-     tags:['por hostel'],
-     con:!!(PF&&PF.staff!=null), val:(PF&&PF.staff!=null)?PF.staff:null},
-    {n:'Rating Google · hostal',src:'revenue.reputacion (google, es_nuestro)',tags:['por hostel'],con:REP.hostal!=null},
-    {n:'Rating Google · Terraza Cósmica',src:'revenue.reputacion · Terraza Cósmica',tags:['nuevo'],con:REP.terraza!=null}
-  ];
+  /* Tres medidas por casa, las dos casas: el índice, cómo ven al personal y
+     cómo ven la limpieza, cada una con su objetivo. */
+  const CASA={cdmx:'Casa Pepe CDMX', puebla:'Casa Pepe Puebla'};
+  const rep=[];
+  PLAZAS_PF.forEach(pl=>{
+    const x=PFT[pl];
+    const fuentes=(x&&x.detalle&&x.detalle.length)
+      ? x.detalle.map(d=>esc(d.fuente)+' '+d.nota100+' ('+d.n+')').join(' · ')
+      : 'sin reseñas en el periodo';
+    rep.push({n:'PepeFeliz · '+CASA[pl],
+      src:'pepe_feliz('+pl+') · '+((x&&x.resenas)||0)+' reseñas · '+fuentes,
+      tags:[pl], con:!!(x&&x.indice!=null), val:(x&&x.indice!=null)?x.indice:null});
+    rep.push({n:'Nota de personal · '+CASA[pl],
+      src:'pepe_feliz('+pl+').staff · subvaloración «staff»'+
+          (x&&x.staff_objetivo!=null?(' · objetivo '+x.staff_objetivo):''),
+      tags:[pl], con:!!(x&&x.staff!=null), val:(x&&x.staff!=null)?x.staff:null});
+    rep.push({n:'Nota de limpieza · '+CASA[pl],
+      src:'pepe_feliz('+pl+').limpieza · subvaloración «limpieza»'+
+          (x&&x.limpieza_objetivo!=null?(' · objetivo '+x.limpieza_objetivo):''),
+      tags:[pl], con:!!(x&&x.limpieza!=null), val:(x&&x.limpieza!=null)?x.limpieza:null});
+  });
+  rep.push({n:'Rating Google · hostal',src:'revenue.reputacion (google, es_nuestro)',tags:['por hostel'],con:REP.hostal!=null});
+  rep.push({n:'Rating Google · Terraza Cósmica',src:'revenue.reputacion · Terraza Cósmica',tags:['nuevo'],con:REP.terraza!=null});
   const card=(title,arr)=>'<div class="gcard"><h3>'+title+'</h3>'+arr.map(it=>{const con=it.con;
      const tg=(it.tags||[]).map(t=>{const cls=(t==='new'||t==='nuevo')?'new':'plaza';const lab=t==='new'?'nuevo':t;return '<span class="tg '+cls+'">'+esc(lab)+'</span>';}).join('');
      const der = it.val!=null
@@ -490,15 +514,17 @@ function valKPI(k,a,EX){ if(EX&&EX[k.id]!==undefined)return EX[k.id]; const A=k.
     disponible para un KPI que lo pida por su nombre. */
  if(/pepe.?feliz/i.test(A)||/pepe.?feliz/i.test(k.nombre||'')){
    if(!PF) return {nota:'sin reseñas en el periodo'};
-   const esIndice=/indice|índice|casa/i.test(A)&&!/staff|personal/i.test(A);
-   const base=esIndice?PF.indice:(PF.staff!=null?PF.staff:PF.indice);
+   const esLimpieza=/limpieza/i.test(A)||/limpieza/i.test(k.nombre||'');
+   const esIndice=!esLimpieza&&/indice|índice|casa/i.test(A)&&!/staff|personal/i.test(A);
+   const base=esLimpieza?PF.limpieza:(esIndice?PF.indice:(PF.staff!=null?PF.staff:PF.indice));
    if(base==null) return {nota:'sin reseñas en el periodo'};
    /* El objetivo lo guarda cp_objetivos por fuente, en la escala de cada una;
       pepe_feliz lo trae ya llevado a base 100 y ponderado con las reseñas del
       periodo. Sin objetivo cargado no se inventa uno: se dice. */
-   const obj=esIndice?null:PF.staff_objetivo;
-   if(obj==null) return {v:base,u:'',extra:(esIndice?'índice de la casa':'nota de personal')+' · falta cargar su objetivo'};
-   return {v:base/obj*100,u:'%',extra:'personal '+base+' sobre objetivo '+obj};
+   const obj=esIndice?null:(esLimpieza?PF.limpieza_objetivo:PF.staff_objetivo);
+   const qué=esIndice?'índice de la casa':(esLimpieza?'nota de limpieza':'nota de personal');
+   if(obj==null) return {v:base,u:'',extra:qué+' · falta cargar su objetivo'};
+   return {v:base/obj*100,u:'%',extra:qué+' '+base+' sobre objetivo '+obj};
  }
  if(/concierge/i.test(A))return {nota:'por persona (Ficha 360)'};
  if(/revenue/i.test(A)||/revenue/i.test(k.nota||''))return {nota:'lee de Revenue'};
