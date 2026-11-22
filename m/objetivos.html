@@ -287,7 +287,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const money=n=>'$'+Math.round(Number(n||0)).toLocaleString('es-MX');
 const pct1=n=>(Math.round(Number(n||0)*10)/10);
 const MESNOM=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-let MES='', LOC='cdmx', GRP=99, SHOWEMPTY=false, SUBI='ccrr', SUBK='kres', MTAB='', MODO=true, TEMP='mes', CURP=null;
+let MES='', LOC='cdmx', GRP=99, SHOWEMPTY=false, SUBI='ccrr', SUBK='kres', MTAB='', MODO=true, TEMP='mes', CURP=null, MSUB='matriz';
 const locMatch=(rowLoc,sel)=>{if(!sel)return true;return String(rowLoc||'').toLowerCase().indexOf(sel)>=0;};
 
 /* ---- periodo selector (temporalidad) ---- */
@@ -520,7 +520,7 @@ const ATABS=[
 ];
 const TOPR=['direccion','gerencia_regional','gerente_general']; // gerencia transversal
 function renderAreaTabs(){ $('areatabs').innerHTML=ATABS.map((t,i)=>'<div class="atab'+((MTAB||ATABS[0].k)===t.k?' on':'')+'" data-at="'+t.k+'">'+esc(t.lab)+'</div>').join('')+'<span class="atab-note">Qué KPIs lleva cada rango, de arriba abajo</span>';
- $('areatabs').querySelectorAll('[data-at]').forEach(b=>b.onclick=()=>{MTAB=b.dataset.at;renderAreaTabs();renderMatriz();});}
+ $('areatabs').querySelectorAll('[data-at]').forEach(b=>b.onclick=()=>{MTAB=b.dataset.at;renderAreaTabs();if(MSUB==='preview')renderPreviewDesempeno();else renderMatriz();});}
 async function renderMatriz(){ try{ await cargaCat(); if(!MTAB)MTAB=ATABS[0].k; const tab=ATABS.find(t=>t.k===MTAB);
  const R=await computeKPIs();
  // puestos de este tab: por área (operacionales) + gerencia transversal
@@ -595,6 +595,7 @@ async function renderBonos(){ try{
 }catch(e){$('bonosBody').innerHTML='<div class="card" style="padding:20px"><span class="muted">No se pudieron cargar los bonos: '+esc(e.message||e)+'</span></div>';}}
 
 /* ===================== Vista previa: Productividad -> desempeño ===================== */
+function achiev(r,k){ if(!r||r.v==null||k.meta==null)return null; const v=+r.v, m=+k.meta; const rg=rglTxt(k.regla); const menor=(k.menor_es_mejor||rg==='<='||rg==='<'); if(m===0){ return (v<=0)?100:0; } let a= menor ? (m/(v||m)) : (v/m); a=Math.min(Math.max(a,0),1); return Math.round(a*100); }
 async function renderPreviewDesempeno(){ try{ await cargaCat(); const R=await computeKPIs();
  let cache={}; try{const cc=await sb('/eval_calc_cache?select=employee_id,valor20&criterio=eq.desempeno')||[];cc.forEach(x=>cache[x.employee_id]=x.valor20);}catch(e){}
  const tab=ATABS.find(t=>t.k===MTAB)||ATABS[0];
@@ -604,17 +605,17 @@ async function renderPreviewDesempeno(){ try{ await cargaCat(); const R=await co
  let h='<div class="legend"><b>Vista previa · no modifica ninguna nota.</b> Si la Productividad del desempeño se alimentara de la matriz: por cada puesto, el % de objetivos logrados ('+esc(ln)+' · '+esc(mesLbl())+') → su valor /20 en la pila. A la derecha, lo que cada persona tiene hoy, para comparar.</div>';
  puestos.forEach(p=>{
    const kids=KPUE.filter(x=>x.puesto===p).map(x=>x.kpi_id);
-   const evals=kids.map(id=>R[id]).filter(o=>o&&o.r&&o.r.v!=null);
+   const ach=kids.map(id=>{const o=R[id];const k=KPIS.find(kk=>kk.id===id);return (o&&k)?achiev(o.r,k):null;}).filter(a=>a!=null);
    const gente=EMP.filter(e=>String(e.estatus||'').toLowerCase()==='activo'&&String(e.puesto||'').toLowerCase().trim()===p.toLowerCase());
-   const pct= evals.length? Math.round(100*evals.filter(o=>o.s==='ok').length/evals.length) : null;
+   const pct= ach.length? Math.round(ach.reduce((s,a)=>s+a,0)/ach.length) : null;
    const v20= pct==null? null : Math.min(Math.round(pct*0.2*10)/10,20);
    h+='<div class="sec" style="padding:10px 14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><b>'+esc(p)+'</b>'+
-      '<span>'+(pct==null?'<span class="muted">sin objetivos medibles este periodo</span>':('matriz <b>'+pct+'%</b> → <b style="color:var(--accentd)">'+v20+'/20</b> <span class="muted">('+evals.filter(o=>o.s==='ok').length+'/'+evals.length+' objetivos)</span>'))+'</span></div>'+
+      '<span>'+(pct==null?'<span class="muted">sin objetivos medibles este periodo</span>':('matriz <b>'+pct+'%</b> → <b style="color:var(--accentd)">'+v20+'/20</b> <span class="muted">(media de '+ach.length+' objetivo'+(ach.length===1?'':'s')+')</span>'))+'</span></div>'+
       (gente.length?('<div class="muted" style="margin-top:6px;font-size:12.5px">'+gente.map(e=>esc(e.nombre||'')+' <b style="color:var(--txt)">hoy '+(cache[e.id]!=null?cache[e.id]+'/20':'s/d')+'</b>').join(' · ')+'</div>'):'<div class="muted" style="margin-top:4px;font-size:12px">sin personas activas en el puesto</div>')+'</div>';
  });
  $('previewBody').innerHTML=h || '<div class="muted" style="padding:20px">Sin puestos en esta área.</div>';
  }catch(e){$('previewBody').innerHTML='<div class="muted" style="padding:20px">No se pudo calcular la vista previa: '+esc(e.message||e)+'</div>';}}
-document.querySelectorAll('#tab-matriz .subtab').forEach(t=>t.onclick=()=>{const s=t.dataset.msub;document.querySelectorAll('#tab-matriz .subtab').forEach(x=>x.classList.toggle('on',x===t));$('matrizBody').classList.toggle('hide',s!=='matriz');$('previewBody').classList.toggle('hide',s!=='preview');if(s==='preview')renderPreviewDesempeno();else renderMatriz();});
+document.querySelectorAll('#tab-matriz .subtab').forEach(t=>t.onclick=()=>{MSUB=t.dataset.msub;const s=MSUB;document.querySelectorAll('#tab-matriz .subtab').forEach(x=>x.classList.toggle('on',x===t));$('matrizBody').classList.toggle('hide',s!=='matriz');$('previewBody').classList.toggle('hide',s!=='preview');if(s==='preview')renderPreviewDesempeno();else renderMatriz();});
 
 /* ===================== navegación ===================== */
 function showMain(tab){['input','kpi','matriz','bonos'].forEach(k=>$('tab-'+k).classList.toggle('hide',k!==tab));
