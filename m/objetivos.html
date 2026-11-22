@@ -149,6 +149,7 @@ tr.fam td .cod{color:#8fa699;margin-right:12px;font-variant-numeric:tabular-nums
 @media(max-width:720px){.mrow{grid-template-columns:1fr}.rango-lab{border-left:0;border-top:3px solid var(--dark);padding-top:8px;padding-left:0}}
 </style>
 <link rel="stylesheet" href="/cp-movil.css"><link rel="icon" type="image/png" href="/dash-192.png">
+<script src="/cp-dialogo.js"></script>
 <script src="/uso.js" defer></script>
 </head><body>
 <script>if(window.self!==window.top){document.addEventListener("DOMContentLoaded",function(){var h=document.querySelector("header");if(h)h.style.display="none";});}</script>
@@ -352,7 +353,7 @@ const RPESO={direccion:'Lograr el plan',gerencia_regional:'50% equipo + 50% UBO'
 const RTEMP={direccion:'anual',gerencia_regional:'semestral',gerente_general:'semestral',subgerencia:'trimestral',jefe_area:'mensual',subjefe:'mensual',tecnico:'mensual',auxiliar:'mensual',becario:'mensual'};
 async function cargaCat(){ if(ready)return;
   KPIS=await sb('/kpi_def?select=*&order=area,nombre')||[];
-  KPUE=await sb('/kpi_puesto?select=kpi_id,puesto,elegible_bono,meta')||[];
+  KPUE=await sb('/kpi_puesto?select=kpi_id,puesto,elegible_bono,meta,peso')||[];
   PRANGO=await sb('/obj_puesto_rango?select=puesto,rango,area')||[];
   try{ORGCAT=await sb('/org_categorias?select=codigo,nombre,orden')||[];}catch(e){ORGCAT=[];}
   try{const a=await sb('/pyg_accounts?select=codigo,cuenta')||[];a.forEach(x=>PLNOM[x.codigo]=x.cuenta);}catch(e){}
@@ -746,6 +747,25 @@ async function renderMatriz(){ cargaPers(); try{ await cargaCat(); if(!MTAB)MTAB
 /* side panel */
 var PERSL=null,PERSL_T=0;
 function cargaPers(){if(PERSL||PERSL_T)return;PERSL_T=1;sb('/rpc/obj_logro_personas',{method:'POST',body:'{}'}).then(d=>{PERSL=d||[];PERSL_T=0;if(PERSL.length)renderMatriz();}).catch(()=>{PERSL=[];PERSL_T=0;});}
+/* EL REPARTO DE LOS 100 PUNTOS. Javi, 22-nov-2026. Un puesto sin pesos
+   cargados reparte a partes iguales, que es como venía funcionando; en
+   cuanto se mueve una barra, las demás se ajustan en proporción a lo que
+   ten��an, para que la suma siga siendo 100 y nadie tenga que hacer la
+   cuenta a mano. */
+function pesoPct(asg,x){ const tot=asg.reduce((s,a)=>s+(Number(a.peso)||1),0);
+  return Math.round(100*(Number(x.peso)||1)/(tot||1)); }
+function repartePesos(asg,kpiId,nuevo){
+  nuevo=Math.max(0,Math.min(100,Math.round(nuevo)));
+  const otros=asg.filter(a=>a.kpi_id!==kpiId);
+  if(!otros.length) return [{kpi_id:kpiId,peso:100}];
+  const base=otros.map(a=>({a,p:pesoPct(asg,a)}));
+  const suma=base.reduce((s,o)=>s+o.p,0), resto=100-nuevo;
+  let out=[{kpi_id:kpiId,peso:nuevo}], acum=0;
+  base.forEach((o,i)=>{ let v = suma>0 ? Math.round(resto*o.p/suma) : Math.round(resto/base.length);
+    if(i===base.length-1) v=Math.max(0,resto-acum); acum+=v;
+    out.push({kpi_id:o.a.kpi_id,peso:v}); });
+  return out;
+}
 function openPuesto(p,R){ const asg=KPUE.filter(x=>x.puesto===p); const pr=PRANGO.find(x=>x.puesto===p);
  const sems=asg.map(x=>(R[x.kpi_id]||{}).s).filter(s=>s&&s!=='gris'); const okN=sems.filter(s=>s==='ok').length;
  const logro=sems.length?Math.round(100*okN/sems.length):null; const np=personasDe(p);
@@ -756,8 +776,17 @@ function openPuesto(p,R){ const asg=KPUE.filter(x=>x.puesto===p); const pr=PRANG
    const metaEf=(x.meta!=null?x.meta:k.meta); const s2=(o.r&&o.r.v!=null)?sem(o.r.v,metaEf,k.regla):o.s; const esEq=/logro del equipo/i.test(k.nombre);
    h+='<div class="obj" style="justify-content:space-between;flex-wrap:wrap;gap:6px"><span><span class="od '+s2+'"></span>'+esc(k.nombre)+'</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b data-vv="'+x.kpi_id+'">'+(vv==null?'—':esc(vv))+'</b>'
      +(MODO&&!esEq?' <label style="font-size:11px;color:var(--soft);display:flex;gap:4px;align-items:center" title="Meta de este indicador para este puesto. Vacío = meta general del KPI.">meta '+esc(rglTxt(k.regla))+' <input type="number" step="any" data-meta="'+x.kpi_id+'" value="'+(x.meta!=null?x.meta:'')+'" placeholder="'+(k.meta!=null?k.meta:'')+'" style="width:62px;font:inherit;font-size:12px;padding:3px 5px;border:1px solid var(--bd);border-radius:6px;text-align:right">'+esc(k.unidad||'')+'</label>':' <span class="muted" style="font-size:11px">meta '+esc(rglTxt(k.regla))+' '+esc(metaEf==null?'—':metaEf)+esc(k.unidad||'')+'</span>')
-     +(MODO?' <label style="font-size:11px;color:var(--soft);display:flex;gap:4px;align-items:center"><input type="checkbox" data-bono="'+x.kpi_id+'" '+(x.elegible_bono?'checked':'')+'>bono</label> <button class="btn red sm" data-rm="'+x.kpi_id+'">quitar</button>':'')+'</span></div>';});
- if(MODO)h+='<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn sm" id="btnRecalc">↻ Aplicar metas a las notas</button><span class="muted" style="font-size:11.5px">Las metas que pongas aquí son contra las que se mide la Productividad de cada persona del puesto.</span></div>';
+     +(MODO?' <label style="font-size:11px;color:var(--soft);display:flex;gap:4px;align-items:center"><input type="checkbox" data-bono="'+x.kpi_id+'" '+(x.elegible_bono?'checked':'')+'>bono</label> <button class="btn red sm" data-rm="'+x.kpi_id+'">quitar</button>':'')+'</span>'
+     /* CUÁNTO MUEVE CADA OBJETIVO. Javi, 22-nov-2026: «una barra de mover
+        cuántos puntos mueve cada KPI; siempre que aumente una por encima de
+        100 se descienden las otras proporcionalmente». Sin esto los tres
+        objetivos de un técnico pesaban igual, y no es cierto: que llene su
+        jornada mueve más que la nota de la casa, donde él influye poco. */
+     +(MODO&&asg.length>1?'<div style="flex:1 1 100%;display:flex;gap:10px;align-items:center;margin-top:2px">'
+        +'<input type="range" min="0" max="100" step="1" data-peso="'+x.kpi_id+'" value="'+pesoPct(asg,x)+'" style="flex:1;accent-color:var(--accentd)">'
+        +'<b style="font-size:12px;width:44px;text-align:right" data-pesov="'+x.kpi_id+'">'+pesoPct(asg,x)+' pts</b></div>':'')
+     +'</div>';});
+ if(MODO)h+='<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn sm" id="btnRecalc">↻ Aplicar metas a las notas</button><span class="muted" style="font-size:11.5px">Las metas que pongas aquí son contra las que se mide la Productividad de cada persona del puesto. Las barras reparten los 100 puntos: al subir una, las demás bajan solas.</span></div>';
  h+='<div style="font-weight:700;margin:16px 0 8px">Personas en este puesto ('+np+')</div><div id="ppers" class="muted" style="font-size:12.5px">Calculando el logro de cada persona…</div>';
  $('panel').innerHTML=h; $('ov').classList.add('on');
  /* logro por persona (mismo cálculo que alimenta la Productividad de la pila) */
@@ -774,6 +803,22 @@ function openPuesto(p,R){ const asg=KPUE.filter(x=>x.puesto===p); const pr=PRANG
    }catch(e){box.innerHTML='No se pudo calcular por persona: '+esc(e.message||e);} };
  pintaPers();
  $('panel').querySelectorAll('[data-meta]').forEach(inp=>inp.onchange=async()=>{const v=inp.value===''?null:Number(inp.value); try{await sb('/kpi_puesto?kpi_id=eq.'+inp.dataset.meta+'&puesto=eq.'+encodeURIComponent(p),{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({meta:v})});const it=KPUE.find(x=>x.kpi_id===inp.dataset.meta&&x.puesto===p);if(it)it.meta=v;PERSL=null;openPuesto(p,R);renderMatriz();}catch(e){alert('No se pudo guardar la meta: '+(e.message||e));}});
+ /* Las barras: mientras se arrastra sólo se mueven los números; al soltar
+    se guarda el reparto completo del puesto de una vez. */
+ $('panel').querySelectorAll('[data-peso]').forEach(sl=>{
+   sl.oninput=()=>{ const rep=repartePesos(asg,sl.dataset.peso,Number(sl.value));
+     rep.forEach(r=>{ const b=$('panel').querySelector('[data-pesov="'+r.kpi_id+'"]');
+       if(b)b.textContent=r.peso+' pts';
+       const s=$('panel').querySelector('[data-peso="'+r.kpi_id+'"]');
+       if(s&&s!==sl)s.value=r.peso; }); };
+   sl.onchange=async()=>{ const rep=repartePesos(asg,sl.dataset.peso,Number(sl.value));
+     try{ for(const r of rep){
+            await sb('/kpi_puesto?kpi_id=eq.'+r.kpi_id+'&puesto=eq.'+encodeURIComponent(p),
+              {method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({peso:r.peso})});
+            const it=KPUE.find(z=>z.kpi_id===r.kpi_id&&z.puesto===p); if(it)it.peso=r.peso; }
+          PERSL=null; openPuesto(p,R); renderMatriz();
+     }catch(e){ cpAviso('No se pudo guardar el reparto: '+(e.message||e)); } };
+ });
  const brc=$('btnRecalc'); if(brc)brc.onclick=async()=>{brc.disabled=true;brc.textContent='Recalculando…';try{await sb('/rpc/obj_recalcular_desempeno',{method:'POST',body:'{}'});PERSL=null;brc.textContent='✓ En cola · notas listas en ~1 min';pintaPers();setTimeout(()=>{if(brc.isConnected){brc.disabled=false;brc.textContent='↻ Aplicar metas a las notas';}},75000);}catch(e){brc.disabled=false;brc.textContent='↻ Aplicar metas a las notas';alert('No se pudo recalcular: '+(e.message||e));}};
  $('panel').querySelectorAll('[data-bono]').forEach(cb=>cb.onchange=async()=>{try{await sb('/kpi_puesto?kpi_id=eq.'+cb.dataset.bono+'&puesto=eq.'+encodeURIComponent(p),{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({elegible_bono:cb.checked})});const it=KPUE.find(x=>x.kpi_id===cb.dataset.bono&&x.puesto===p);if(it)it.elegible_bono=cb.checked;renderMatriz();}catch(e){alert('No se pudo guardar: '+(e.message||e));}});
  $('panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Quitar este objetivo del puesto?'))return;try{await sb('/kpi_puesto?kpi_id=eq.'+b.dataset.rm+'&puesto=eq.'+encodeURIComponent(p),{method:'DELETE',headers:{...H,Prefer:'return=minimal'}});KPUE=KPUE.filter(x=>!(x.kpi_id===b.dataset.rm&&x.puesto===p));closeOv();renderMatriz();}catch(e){alert('No se pudo quitar: '+(e.message||e));}});
