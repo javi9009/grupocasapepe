@@ -420,6 +420,23 @@ function renderOper(){
 /* ===================== Scouting ===================== */
 let REP={};
 async function cargaRep(){ try{const r=await sb('/reputacion?select=fuente,propiedad,calificacion,es_nuestro&order=fecha_captura.desc');(r||[]).forEach(x=>{});}catch(e){} }
+
+/* EL PEPEFELIZ COMO INPUT. Javi, 22-nov-2026: «aquí debería de estar el
+   PepeFeliz pero no lo encuentro; está en KPI pero no lo tienes en input. Lo
+   necesitamos generar en input para conectarlo aquí».
+   Se calculaba en el navegador, dentro de la pantalla de Reputación, así que
+   no había de dónde leerlo y el KPI llevaba semanas en «por conectar». Ahora
+   lo da la base, con la misma regla y para el periodo que manda arriba. */
+let PF=null;
+async function cargaPF(){
+  PF=null; if(!CURP) return;
+  const [d,h]=periodDates();
+  try{ const r=await sb('/rpc/pepe_feliz',{method:'POST',
+        headers:{...H,'Content-Type':'application/json'},
+        body:JSON.stringify({p_plaza:LOC,p_desde:d,p_hasta:h})});
+    PF=(r&&r[0])||null;
+  }catch(e){ PF=null; }
+}
 function renderScout(){
   const huesp=[
     {n:'Personas hospedadas',src:'v_scout_huesped_mes · huéspedes del periodo (por propiedad)',tags:['por hostel'],con:true},
@@ -430,13 +447,29 @@ function renderScout(){
     {n:'Personas operadas',src:'Sincrético · v_sinc_ventas (pax)',tags:['por hostel'],con:true},
     {n:'Personas operadas que son huéspedes',src:'reserva de tour marcada huésped = sí',tags:['por hostel','new'],con:false}
   ];
+  /* El PepeFeliz va el primero: es el que alimenta el KPI de reputación del
+     staff, y el que la casa mira cada semana. */
+  const pfTxt = PF&&PF.indice!=null
+    ? ('pepe_feliz('+esc(LOC)+') · '+PF.resenas+' reseñas · '+
+       (PF.detalle||[]).map(x=>esc(x.fuente)+' '+x.nota100+' ('+x.n+')').join(' · '))
+    : 'pepe_feliz() · sin reseñas en el periodo';
   const rep=[
+    {n:'PepeFeliz · índice de la casa',src:pfTxt,tags:['por hostel'],con:!!(PF&&PF.indice!=null),
+     val:(PF&&PF.indice!=null)?PF.indice:null},
+    {n:'PepeFeliz · nota de personal',
+     src:'pepe_feliz().staff · la subvaloración «staff», sin Google'+
+         (PF&&PF.staff_objetivo!=null?(' · objetivo '+PF.staff_objetivo):''),
+     tags:['por hostel'],
+     con:!!(PF&&PF.staff!=null), val:(PF&&PF.staff!=null)?PF.staff:null},
     {n:'Rating Google · hostal',src:'revenue.reputacion (google, es_nuestro)',tags:['por hostel'],con:REP.hostal!=null},
     {n:'Rating Google · Terraza Cósmica',src:'revenue.reputacion · Terraza Cósmica',tags:['nuevo'],con:REP.terraza!=null}
   ];
   const card=(title,arr)=>'<div class="gcard"><h3>'+title+'</h3>'+arr.map(it=>{const con=it.con;
      const tg=(it.tags||[]).map(t=>{const cls=(t==='new'||t==='nuevo')?'new':'plaza';const lab=t==='new'?'nuevo':t;return '<span class="tg '+cls+'">'+esc(lab)+'</span>';}).join('');
-     return '<div class="irow"><span class="idot '+(con?'ok':'')+'"></span><div><div class="iname">'+esc(it.n)+'</div><div class="isrc">'+esc(it.src)+'</div><div class="itags">'+tg+'</div></div><div class="ival'+(con?'':' soft')+'" style="'+(con?'color:#157a56;font-weight:700;font-size:13px':'')+'">'+(con?'Conectado':'Por conectar')+'</div></div>';
+     const der = it.val!=null
+        ? '<b style="font-size:15px">'+esc(it.val)+'</b><div style="font-size:11px;color:#157a56;font-weight:700">Conectado</div>'
+        : (con?'Conectado':'Por conectar');
+     return '<div class="irow"><span class="idot '+(con?'ok':'')+'"></span><div><div class="iname">'+esc(it.n)+'</div><div class="isrc">'+esc(it.src)+'</div><div class="itags">'+tg+'</div></div><div class="ival'+(con?'':' soft')+'" style="text-align:right;'+(con?'color:#157a56;font-weight:700;font-size:13px':'')+'">'+der+'</div></div>';
    }).join('')+'</div>';
   $('scoutBody').innerHTML=card('Huéspedes',huesp)+card('Tours y experiencias',tours)+card('Reputación',rep);
 }
@@ -451,6 +484,22 @@ function valKPI(k,a,EX){ if(EX&&EX[k.id]!==undefined)return EX[k.id]; const A=k.
    const ing=ic.reduce((t,c)=>t+pre(a,c,'real'),0), ingP=ic.reduce((t,c)=>t+pre(a,c,'plan'),0);
    const mg=ing?re/ing*100:null, mgP=ingP?pl/ingP*100:null;
    return {v:Math.max(0,Math.min(bruto,100)),u:'%',extra:(mg==null?'':'margen '+pct1(mg)+'% s/ingreso'+(mgP==null?'':' (plan '+pct1(mgP)+'%)'))+(bruto>100?' · plan superado':'')};}}
+ /* PEPEFELIZ, YA CONECTADO. Javi, 22-nov-2026. El KPI compara la nota de
+    personal contra su objetivo, así que lo que se enseña es el cumplimiento:
+    98.1 sobre un objetivo de 90 son 109%. El índice de la casa queda
+    disponible para un KPI que lo pida por su nombre. */
+ if(/pepe.?feliz/i.test(A)||/pepe.?feliz/i.test(k.nombre||'')){
+   if(!PF) return {nota:'sin reseñas en el periodo'};
+   const esIndice=/indice|índice|casa/i.test(A)&&!/staff|personal/i.test(A);
+   const base=esIndice?PF.indice:(PF.staff!=null?PF.staff:PF.indice);
+   if(base==null) return {nota:'sin reseñas en el periodo'};
+   /* El objetivo lo guarda cp_objetivos por fuente, en la escala de cada una;
+      pepe_feliz lo trae ya llevado a base 100 y ponderado con las reseñas del
+      periodo. Sin objetivo cargado no se inventa uno: se dice. */
+   const obj=esIndice?null:PF.staff_objetivo;
+   if(obj==null) return {v:base,u:'',extra:(esIndice?'índice de la casa':'nota de personal')+' · falta cargar su objetivo'};
+   return {v:base/obj*100,u:'%',extra:'personal '+base+' sobre objetivo '+obj};
+ }
  if(/concierge/i.test(A))return {nota:'por persona (Ficha 360)'};
  if(/revenue/i.test(A)||/revenue/i.test(k.nota||''))return {nota:'lee de Revenue'};
  return {nota:'por conectar'};}
@@ -714,6 +763,7 @@ async function reloadMes(){ MES=lastMonthStr();
  VALS=await medir(MES,LOC);
  // scouting live: google ratings + extensiones/ppc si existen
  try{const rp=await sb('/rpc/obj_reputacion',{method:'POST',body:JSON.stringify({})});if(rp&&typeof rp==='object'){if(rp.hostal!=null)REP.hostal=+rp.hostal;if(rp.terraza!=null)REP.terraza=+rp.terraza;}}catch(e){}
+ await cargaPF();
  if(SUBI==='oper')renderOper(); if(SUBI==='scout')renderScout();
  const cur=document.querySelector('.step.on'); if(cur&&cur.dataset.tab==='kpi'&&SUBK==='kres')renderKres(); if(cur&&cur.dataset.tab==='matriz')renderMatriz(); if(cur&&cur.dataset.tab==='bonos')renderBonos();
 }
