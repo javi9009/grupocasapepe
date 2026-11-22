@@ -118,39 +118,90 @@ function paso2(){
  return true;
 }
 /* ---- paso 3: parseo del archivo de la maquila ---- */
-function parseMatrix(mx){
- // busca la fila de encabezados
- let hi=-1,map={};
- for(let i=0;i<Math.min(mx.length,15);i++){
-  const row=(mx[i]||[]).map(c=>String(c||'').toLowerCase());
-  const ni=row.findIndex(c=>/nombre|colaborador|empleado|trabajador/.test(c));
-  if(ni>=0){hi=i;map.nom=ni;
-   row.forEach((c,j)=>{if(j===ni)return;
-    if(/total\s*percep|percep/.test(c)&&map.perc==null)map.perc=j;
-    else if(/isr|i\.s\.r/.test(c)&&map.isr==null)map.isr=j;
-    else if(/imss|seguro/.test(c)&&map.imss==null)map.imss=j;
-    else if(/total\s*deduc|deduc|descuento/.test(c)&&map.ded==null)map.ded=j;
-    else if(/neto|a\s*pagar|a\s*depositar|importe|total/.test(c)&&map.neto==null)map.neto=j;});
-   break;}
+/* Roberto no podía cargar la planilla (oct–nov 2026). Dos fallos del lector viejo:
+   · tomaba «ESTATUS EMPLEADO» como si fuera el nombre (venía antes que «NOMBRE») y descartaba todas las filas;
+   · al pegar, partía los montos con coma de miles (12,345.67 → 12 y 345.67) y recorría las columnas.
+   Ahora: se detecta la fila de encabezados, se mapea por CÓDIGO de concepto de la maquila
+   (599 percepciones · 600 ISR · 602 IMSS · 799 deducciones · 800 neto) y, si no, por palabra;
+   y si aun así no atina, Roberto elige las columnas a mano en pantalla. */
+let MX=null, FORZ=null, INFO=null;
+function splitRow(l){
+ if(l.indexOf('\t')>=0)return l.split('\t');                         // pegado desde Excel
+ if(l.indexOf('"')>=0){                                              // CSV con comillas: "12,345.67" es un solo dato
+  const sep=(l.indexOf(';')>=0&&l.split(';').length>l.split(',').length)?';':',', out=[]; let cur='', q=false;
+  for(let i=0;i<l.length;i++){const ch=l[i]; if(ch==='"'){ if(q&&l[i+1]==='"'){cur+='"';i++;} else q=!q; } else if(ch===sep&&!q){out.push(cur);cur='';} else cur+=ch;}
+  out.push(cur); return out; }
+ if(l.indexOf(';')>=0)return l.split(';');
+ if(/,(?!\d{3}(?:\D|$))/.test(l))return l.split(/,(?!\d{3}(?:\D|$))/);   // coma que NO es de miles
+ return l.split(/\s{2,}/);
+}
+function numMaq(v){ if(typeof v==='number')return isFinite(v)?v:null; let t=String(v==null?'':v).trim(); if(!t)return null;
+ const neg=/^\(.*\)$/.test(t)||/^-/.test(t)||/-$/.test(t); t=t.replace(/[()$\s,]/g,'').replace(/^-|-$/g,'');
+ if(!/^\d+(\.\d+)?$/.test(t))return null; const n=parseFloat(t); return neg?-n:n; }
+const CAMPOS=[['nom','Nombre'],['perc','Percepciones'],['isr','ISR'],['imss','IMSS'],['ded','Deducciones'],['neto','Neto a pagar']];
+function detectaCols(mx){
+ let best=null;
+ for(let i=0;i<Math.min(mx.length,25);i++){
+  const low=r=>Array.from(r||[],c=>String(c==null?'':c).toLowerCase().replace(/\s+/g,' ').trim());
+  const row=low(mx[i]), up=low(mx[i-1]);
+  const esNom=c=>/nombre|colaborador|trabajador|empleado/.test(c)&&!/estatus|status|n[uú]m|no\.|clave|c[oó]d|\bid\b|rfc|curp|nss|puesto|depart|tipo|fecha|banco|cuenta/.test(c);
+  let ni=row.findIndex(c=>/^nombre(s)?( completo)?( del? (empleado|trabajador|colaborador))?$/.test(c));
+  if(ni<0)ni=row.findIndex(c=>/nombre/.test(c)&&esNom(c));
+  if(ni<0)ni=row.findIndex(esNom);
+  if(ni<0)continue;
+  const h=row.map((c,j)=>((up[j]||'')+' '+c).trim());      // el código del concepto puede venir en la fila de arriba
+  const map={nom:ni};
+  const pick=(k,re,no)=>{ if(map[k]!=null)return; const j=h.findIndex((c,jj)=>jj!==ni&&re.test(c)&&!(no&&no.test(c))&&Object.values(map).indexOf(jj)<0); if(j>=0)map[k]=j; };
+  pick('perc',/(^|\D)599(\D|$)/); pick('isr',/(^|\D)600(\D|$)/); pick('imss',/(^|\D)602(\D|$)/); pick('ded',/(^|\D)799(\D|$)/); pick('neto',/(^|\D)800(\D|$)/);
+  const NO=/devol|subsid|prov|patron|ajuste|anual|a favor|infonavit|rcv|base|gravad|exent|d[ií]as/;
+  pick('perc',/total\s*(de\s*)?percep/,NO); pick('ded',/total\s*(de\s*)?deduc/,NO);
+  pick('neto',/neto|l[ií]quido|total\s*a\s*pagar|a\s*pagar|a\s*depositar|dep[oó]sito/,NO);
+  pick('isr',/\bisr\b|i\.s\.r|impuesto sobre/,NO); pick('imss',/imss|seguro social|cuota obrer/,NO);
+  pick('perc',/percep/,NO); pick('ded',/deduc|descuento/,NO);
+  const apes=row.map((c,j)=>/apellido|paterno|materno/.test(c)?j:-1).filter(j=>j>=0&&j!==ni);
+  const sc=Object.keys(map).length;
+  if(!best||sc>best.sc)best={hi:i,map,apes,sc,headers:Array.from(mx[i]||[],(c,j)=>(String(c==null?'':c).trim()||('Columna '+(j+1))))};
+  if(sc>=4)break;
  }
- const num=v=>{const n=parseFloat(String(v==null?'':v).replace(/[$,\s]/g,''));return isNaN(n)?null:n;};
- const out=[];
- const start=hi>=0?hi+1:0;
- for(let i=start;i<mx.length;i++){const row=mx[i]||[];
+ return best;
+}
+function parseMatrix(mx,forz){
+ const det=detectaCols(mx); INFO=det;
+ const map=Object.assign({},det?det.map:{},forz||{}); Object.keys(map).forEach(k=>{if(map[k]==null||map[k]==='')delete map[k];});
+ const hi=det?det.hi:-1, out=[];
+ for(let i=(hi>=0?hi+1:0);i<mx.length;i++){const row=mx[i]||[];
   let nom,neto=null,perc=null,isr=null,imss=null,ded=null;
-  if(hi>=0){nom=String(row[map.nom]||'').trim();
-   if(map.neto!=null)neto=num(row[map.neto]);if(map.perc!=null)perc=num(row[map.perc]);
-   if(map.isr!=null)isr=num(row[map.isr]);if(map.imss!=null)imss=num(row[map.imss]);if(map.ded!=null)ded=num(row[map.ded]);}
-  else{ // sin encabezado: primer texto = nombre, último número = neto
-   const txts=row.filter(c=>String(c||'').trim()&&num(c)==null),nums=row.map(num).filter(n=>n!=null);
+  if(map.nom!=null){
+   const cols=[...((det&&det.apes&&!(forz&&forz.nom!=null))?det.apes:[]),map.nom];
+   nom=cols.map(j=>String(row[j]==null?'':row[j]).trim()).filter(Boolean).join(' ');
+   if(map.neto!=null)neto=numMaq(row[map.neto]); if(map.perc!=null)perc=numMaq(row[map.perc]);
+   if(map.isr!=null)isr=numMaq(row[map.isr]); if(map.imss!=null)imss=numMaq(row[map.imss]); if(map.ded!=null)ded=numMaq(row[map.ded]);
+   if(neto==null&&perc!=null&&ded!=null)neto=r2(perc-ded);
+  }else{ // sin encabezado: primer texto = nombre, último número = neto
+   const txts=Array.from(row).filter(c=>String(c==null?'':c).trim()&&numMaq(c)==null),nums=Array.from(row,numMaq).filter(n=>n!=null);
    nom=String(txts[0]||'').trim();neto=nums.length?nums[nums.length-1]:null;}
   if(!nom||norm(nom).length<2)continue;
-  if(/total|suma/.test(nom.toLowerCase())&&neto!=null&&out.length>3)continue;
+  if(/^(gran\s+)?(total|totales|suma|sumas|subtotal)\b/i.test(nom))continue;
   if(neto==null&&perc==null)continue;
-  out.push({nombre_raw:nom,neto,percepciones:perc,isr,imss,deducciones:ded,raw:row});
+  out.push({nombre_raw:nom,neto,percepciones:perc,isr,imss,deducciones:ded,
+            raw:Array.from(row,c=>c instanceof Date?c.toISOString().slice(0,10):(c==null?null:(typeof c==='number'?c:String(c).slice(0,80))))});
  }
  return out;
 }
+function procesa(){
+ parsed=parseMatrix(MX,FORZ);parsed.forEach(p=>{const m=matchName(p.nombre_raw);p.employee_id=m?m.id:null;});
+ showMatches();
+ if(parsed.length)status('✓ '+parsed.length+' filas','ok'); else status('⚠ no reconocí filas: elige las columnas abajo','err');
+}
+function mapaHTML(){
+ if(!MX)return '';
+ const ncol=MX.reduce((m,r)=>Math.max(m,(r||[]).length),0), hd=(INFO&&INFO.headers)||[];
+ const act=Object.assign({},INFO?INFO.map:{},FORZ||{});
+ const opts=sel=>'<option value="">— no viene —</option>'+Array.from({length:ncol},(_,j)=>'<option value="'+j+'"'+(String(sel)===String(j)?' selected':'')+'>'+String.fromCharCode(65+(j%26))+(j>=26?Math.floor(j/26):'')+' · '+String(hd[j]||('Columna '+(j+1))).slice(0,34).replace(/</g,'&lt;')+'</option>').join('');
+ return '<div class="note" style="margin:10px 0 4px"><b>Columnas que estoy leyendo</b>'+(INFO?' (encabezados en la fila '+(INFO.hi+1)+')':' — no encontré fila de encabezados')+'. Si alguna está mal, cámbiala aquí y se vuelve a leer:</div>'+
+  '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">'+CAMPOS.map(c=>'<label style="font-size:11px;color:var(--soft)">'+c[1]+'<br><select class="colmap" data-k="'+c[0]+'" style="font-size:12px;max-width:190px">'+opts(act[c[0]])+'</select></label>').join('')+'</div>';
+}
+function cableaMapa(){document.querySelectorAll('select.colmap').forEach(s=>s.onchange=()=>{FORZ=Object.assign({},INFO?INFO.map:{},FORZ||{});FORZ[s.dataset.k]=(s.value===''?null:+s.value);procesa();});}
 function matchName(nom){
  const t=new Set(norm(nom));let best=null,bs=0,second=0;
  emps.forEach(e=>{const et=norm((e.nombre||'')+' '+(e.apellido||''));let s=0;et.forEach(x=>{if(t.has(x))s++;});
@@ -160,38 +211,51 @@ function matchName(nom){
  return null;
 }
 function showMatches(){
- if(!parsed.length){$('mtc').innerHTML='';return;}
+ if(!parsed.length){
+  if(!MX){$('mtc').innerHTML='';return;}
+  const prev=MX.slice(0,8).map(r=>'<tr>'+Array.from(r||[]).slice(0,12).map(c=>'<td style="text-align:left">'+String(c==null?'':c).slice(0,22).replace(/</g,'&lt;')+'</td>').join('')+'</tr>').join('');
+  $('mtc').innerHTML=mapaHTML()+'<div class="note" style="margin:6px 0;color:var(--bad)"><b>No pude leer ninguna fila con esas columnas.</b> Elige arriba cuál es la columna del <b>Nombre</b> y cuál la del <b>Neto</b> (o Percepciones) y se vuelve a intentar. Así empieza tu archivo:</div><div class="twrap"><table><tbody>'+prev+'</tbody></table></div>';
+  cableaMapa();return;}
  const ok=parsed.filter(p=>p.employee_id).length;
- $('mtc').innerHTML='<div class="note" style="margin:10px 0 4px"><b>'+parsed.length+'</b> filas leídas · <b>'+ok+'</b> empatadas con Pepes'+(ok<parsed.length?' · asigna las restantes:':'')+'</div>'+
+ $('mtc').innerHTML=mapaHTML()+'<div class="note" style="margin:10px 0 4px"><b>'+parsed.length+'</b> filas leídas · <b>'+ok+'</b> empatadas con Pepes'+(ok<parsed.length?' · asigna las restantes:':'')+'</div>'+
  '<div class="twrap"><table><thead><tr><th>Nombre en la planilla</th><th>Neto</th><th>ISR</th><th>IMSS</th><th style="text-align:left">Pepe</th></tr></thead><tbody>'+
  parsed.map((p,i)=>'<tr><td>'+p.nombre_raw+'</td><td>'+(p.neto!=null?money(p.neto):'—')+'</td><td>'+(p.isr!=null?money(p.isr):'—')+'</td><td>'+(p.imss!=null?money(p.imss):'—')+'</td><td style="text-align:left">'+
-  '<select class="asig" data-i="'+i+'"><option value="">— sin asignar —</option>'+emps.map(e=>'<option value="'+e.id+'"'+(p.employee_id===e.id?' selected':'')+'>'+[e.nombre,e.apellido].filter(Boolean).join(' ')+'</option>').join('')+'</select></td></tr>').join('')+
+  '<select class="asig" data-i="'+i+'"><option value="">— sin asignar —</option>'+emps.map(e=>'<option value="'+e.id+'"'+(p.employee_id===e.id?' selected':'')+'>'+[e.nombre,e.apellido].filter(Boolean).join(' ')+(e.estatus&&e.estatus!=='activo'?' ('+e.estatus+')':'')+'</option>').join('')+'</select></td></tr>').join('')+
  '</tbody></table></div>'+
  '<button class="btn green" id="guardarMaq" style="margin-top:10px">💾 Guardar planilla de la maquila</button>';
  document.querySelectorAll('select.asig').forEach(s=>s.onchange=()=>{parsed[+s.dataset.i].employee_id=s.value||null;});
  $('guardarMaq').onclick=guardarMaquila;
+ cableaMapa();
 }
 async function guardarMaquila(){
+ if(!parsed.length){alert('No hay filas que guardar.');return;}
  if(!confirm('¿Guardar esta planilla de la maquila para '+quincena+'? Sustituye la que hubiera.'))return;
  status('guardando…');
  try{
-  await sb('/nomina_maquila?quincena=eq.'+encodeURIComponent(quincena),{method:'DELETE',headers:{...H,Prefer:'return=minimal'}});
-  const body=parsed.map(p=>({quincena,employee_id:p.employee_id||null,nombre_raw:p.nombre_raw,percepciones:p.percepciones,isr:p.isr,imss:p.imss,deducciones:p.deducciones,neto:p.neto,raw:{cells:p.raw},uploaded_by:ME||null}));
-  await sb('/nomina_maquila',{method:'POST',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify(body)});
-  status('✓ planilla guardada','ok');await cargar();
- }catch(e){status('⚠ no se guardó','err');}
+  const marca=new Date().toISOString();
+  const body=parsed.map(p=>({quincena,employee_id:p.employee_id||null,nombre_raw:String(p.nombre_raw||'').slice(0,160),percepciones:p.percepciones,isr:p.isr,imss:p.imss,deducciones:p.deducciones,neto:p.neto,raw:{cells:(p.raw||[]).slice(0,60)},uploaded_by:ME||null,created_at:marca}));
+  /* primero entra lo nuevo y solo entonces se quita lo anterior: si algo falla, no se pierde lo que ya estaba */
+  for(let i=0;i<body.length;i+=200) await sb('/nomina_maquila',{method:'POST',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify(body.slice(i,i+200))});
+  await sb('/nomina_maquila?quincena=eq.'+encodeURIComponent(quincena)+'&created_at=lt.'+encodeURIComponent(marca),{method:'DELETE',headers:{...H,Prefer:'return=minimal'}});
+  parsed=[];MX=null;FORZ=null;
+  status('✓ planilla guardada ('+body.length+' filas)','ok');await cargar();
+ }catch(e){let m=String(e&&e.message||e);try{m=JSON.parse(m).message||m;}catch(_){}
+  status('⚠ no se guardó','err');alert('No se pudo guardar la planilla.\n\nMotivo: '+m.slice(0,300)+'\n\nSi dice que no tienes permiso, cierra sesión y vuelve a entrar al panel; si sigue, avisa a Javi con este mensaje.');}
 }
 $('file').onchange=async()=>{const f=$('file').files[0];if(!f)return;status('leyendo…');
  try{const buf=await f.arrayBuffer();let mx;
-  if(/\.csv$|\.txt$/i.test(f.name)){const txt=new TextDecoder('utf-8').decode(buf);mx=txt.split(/\r?\n/).map(l=>l.split(/\t|;|,/));}
-  else{const wb=XLSX.read(buf,{type:'array'});mx=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true});}
-  parsed=parseMatrix(mx);parsed.forEach(p=>{const m=matchName(p.nombre_raw);p.employee_id=m?m.id:null;});
-  showMatches();status('✓ '+parsed.length+' filas','ok');
- }catch(e){status('⚠ no pude leer el archivo','err');}};
+  if(/\.csv$|\.txt$/i.test(f.name)){let txt=new TextDecoder('utf-8').decode(buf);if(txt.indexOf('�')>=0)txt=new TextDecoder('windows-1252').decode(buf);
+   mx=txt.split(/\r?\n/).filter(l=>l.trim()).map(splitRow);}
+  else{const wb=XLSX.read(buf,{type:'array',cellDates:true});
+   /* la hoja buena es la que trae encabezados reconocibles; si ninguna, la más larga */
+   let pick=null;wb.SheetNames.forEach(n=>{const m=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,blankrows:false});const d=detectaCols(m);const sc=(d?d.sc*1000:0)+m.length;if(!pick||sc>pick.sc)pick={sc,m};});
+   mx=pick?pick.m:[];}
+  MX=mx;FORZ=null;procesa();
+ }catch(e){status('⚠ no pude leer el archivo','err');alert('No pude leer el archivo: '+String(e&&e.message||e).slice(0,200)+'\n\nPrueba guardarlo como .xlsx o pega el texto con «…o pegar texto».');}
+ $('file').value='';};
 $('pegarBtn').onclick=()=>{$('pegarBox').style.display=$('pegarBox').style.display==='none'?'block':'none';};
-$('procPega').onclick=()=>{const mx=$('pegar').value.split(/\r?\n/).map(l=>l.split(/\t|;|,(?=\s*\d)|\s{2,}/));
- parsed=parseMatrix(mx);parsed.forEach(p=>{const m=matchName(p.nombre_raw);p.employee_id=m?m.id:null;});
- showMatches();status('✓ '+parsed.length+' filas','ok');};
+$('procPega').onclick=()=>{const t=$('pegar').value;if(!t.trim()){alert('Pega primero las filas de la planilla.');return;}
+ MX=t.split(/\r?\n/).filter(l=>l.trim()).map(splitRow);FORZ=null;procesa();};
 
 /* ---- paso 4: propuesta de cuadre ---- */
 function empName(id){const e=emps.find(x=>x.id===id)||{};return [e.nombre,e.apellido].filter(Boolean).join(' ')||'?';}
@@ -258,13 +322,14 @@ async function cargar(){
   paso4();status('✓','ok');
  }catch(e){status('⚠ error al cargar','err');}
 }
-$('prev').onclick=()=>{quincena=shiftQ(quincena,-1);parsed=[];$('mtc').innerHTML='';cargar();};
-$('next').onclick=()=>{quincena=shiftQ(quincena,1);parsed=[];$('mtc').innerHTML='';cargar();};
+$('prev').onclick=()=>{quincena=shiftQ(quincena,-1);parsed=[];MX=null;FORZ=null;$('mtc').innerHTML='';cargar();};
+$('next').onclick=()=>{quincena=shiftQ(quincena,1);parsed=[];MX=null;FORZ=null;$('mtc').innerHTML='';cargar();};
 (async()=>{
  if(!PERMITIDOS.includes(ME)){$('gate').style.display='block';return;}
  $('app').style.display='block';
  quincena=qnaFromDate(new Date());
- try{emps=await sb('/employees?select=id,nombre,apellido,area,sede,property_id&estatus=eq.activo&order=nombre')||[];}catch(e){}
+ /* también las bajas: Roberto sube quincenas de meses atrás y hay gente que ya no está */
+ try{emps=await sb('/employees?select=id,nombre,apellido,area,sede,property_id,estatus&order=nombre')||[];emps.sort((x,y)=>((x.estatus==='activo'?0:1)-(y.estatus==='activo'?0:1))||String(x.nombre||'').localeCompare(String(y.nombre||'')));}catch(e){}
  await cargar();await histCarga();
 })();
 </script>
