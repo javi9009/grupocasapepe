@@ -150,7 +150,8 @@ tr.fam td .cod{color:#8fa699;margin-right:12px;font-variant-numeric:tabular-nums
 <div class="cadena">
   <div class="step on" data-tab="input"><span class="n">1</span>Inputs</div><span class="fl">→</span>
   <div class="step" data-tab="kpi"><span class="n">2</span>KPIs</div><span class="fl">→</span>
-  <div class="step" data-tab="matriz"><span class="n">3</span>Matriz</div>
+  <div class="step" data-tab="matriz"><span class="n">3</span>Matriz</div><span class="fl">→</span>
+  <div class="step" data-tab="bonos"><span class="n">4</span>Bonos</div>
 </div>
 
 <!-- ===================== INPUTS ===================== -->
@@ -262,6 +263,14 @@ tr.fam td .cod{color:#8fa699;margin-right:12px;font-variant-numeric:tabular-nums
   <div class="wrap"><div id="matrizBody"><span class="muted">cargando…</span></div></div>
 </div>
 
+<div id="tab-bonos" class="hide">
+  <div class="subtabs"><div class="subtab on">Cumplimiento de bonos</div></div>
+  <div class="wrap">
+    <div class="ctrls"><div><span class="lab">Periodo</span><select id="mes3"></select></div><div class="live"><span class="dot"></span>Bonos del periodo · para considerar su pago e incorporarlos a nómina</div></div>
+    <div id="bonosBody"><span class="muted">cargando…</span></div>
+  </div>
+</div>
+
 <!-- side panel (puesto) -->
 <div class="ov" id="ov"><div class="panel" id="panel"></div></div>
 <!-- modal (+KPI / derivado) -->
@@ -294,7 +303,7 @@ function periodList(temp){
   return out;
 }
 function fillPeriodos(){ PERIODS=periodList(TEMP); const html=PERIODS.map((p,i)=>'<option value="'+i+'">'+esc(p.lab)+'</option>').join('');
-  [$('mes'),$('mes2')].forEach(s=>{if(s){s.innerHTML=html;s.value='0';}}); CURP=PERIODS[0]; MES=lastMonthStr(); }
+  [$('mes'),$('mes2'),$('mes3')].forEach(s=>{if(s){s.innerHTML=html;s.value='0';}}); CURP=PERIODS[0]; MES=lastMonthStr(); }
 function periodDates(){const y=CURP.y,mos=CURP.mos,m0=mos[0],m1=mos[mos.length-1],p=n=>String(n).padStart(2,'0');return [y+'-'+p(m0)+'-01', y+'-'+p(m1)+'-'+p(new Date(y,m1,0).getDate())];}
 function lastMonthStr(){if(!CURP)return '';const m=CURP.mos[CURP.mos.length-1];return CURP.y+'-'+String(m).padStart(2,'0');}
 async function fetchPL(){ if(!CURP)return []; try{return await sb('/fin_pl?select=loc,cuenta,real,plan,forecast&anio=eq.'+CURP.y+'&mes=in.('+CURP.mos.join(',')+')')||[]; }catch(e){return [];} }
@@ -563,11 +572,33 @@ function openDeriv(){let h='<button class="xclose" onclick="closeModal()">×</bu
 function closeModal(){$('modalOv').classList.remove('on');}
 $('modalOv').onclick=e=>{if(e.target.id==='modalOv')closeModal();};
 
+/* ===================== Bonos (cumplimiento) ===================== */
+function tile(lab,val,color){return '<div class="card" style="flex:1;min-width:150px;padding:12px 14px"><div class="muted" style="font-size:12px">'+esc(lab)+'</div><div style="font-size:22px;font-weight:800;'+(color?'color:'+color:'')+'">'+esc(val)+'</div></div>';}
+async function renderBonos(){ try{
+ const rows=await sb('/bonos_quincena?select=id,quincena,employee_id,nombre,monto,estatus&quincena=like.'+MES+'*&order=quincena.desc')||[];
+ let EN={}; const ids=[...new Set(rows.map(r=>r.employee_id).filter(Boolean))];
+ if(ids.length){try{const em=await sb('/employees?select=id,nombre,puesto,sede&id=in.('+ids.join(',')+')')||[];em.forEach(e=>EN[e.id]=e);}catch(e){}}
+ const sum=f=>rows.filter(f).reduce((s,r)=>s+(+r.monto||0),0);
+ let h='<div class="legend">Cómo van los bonos del periodo, para que el contador los considere pagar. <b>Por validar</b> = los propone Dirección. <b>Validado</b> = aprobado, puede entrar a nómina. <b>Pagado</b> = ya se incluyó.</div>';
+ h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+tile("Total del periodo",money(sum(function(){return true;})))+tile("Por validar",money(sum(function(r){return r.estatus==="propuesto";})),"#C58A1A")+tile("Validado · listo para nómina",money(sum(function(r){return r.estatus==="validado";})),"#157a56")+tile("Pagado",money(sum(function(r){return r.estatus==="pagado";})),"#6b5d49")+'</div>';
+ if(!rows.length){$('bonosBody').innerHTML=h+'<div class="card" style="padding:20px"><span class="muted">Sin bonos en '+esc(mesLbl())+'.</span></div>';return;}
+ h+='<div class="card" style="padding:0"><div class="twrap"><table class="kpitable"><thead><tr><th class="tl">Persona</th><th class="tl">Quincena</th><th class="tl">Bono</th><th class="tl">Monto</th><th class="tl">Estatus</th>'+(MODO?'<th></th>':'')+'</tr></thead><tbody>';
+ rows.forEach(r=>{const e=EN[r.employee_id]||{};const est=r.estatus||'propuesto';
+   const chip=est==='validado'?'<span class="pill ok">validado</span>':(est==='pagado'?'<span class="pill" style="background:#efe6d4;color:#6b5d49">pagado</span>':'<span class="pill warn">por validar</span>');
+   h+='<tr><td class="tl"><b>'+esc(e.nombre||'—')+'</b><div class="karea">'+esc([e.puesto,e.sede].filter(Boolean).join(' · '))+'</div></td><td class="tl muted">'+esc(r.quincena||'')+'</td><td class="tl">'+esc(r.nombre||'')+'</td><td class="tl"><b>'+money(r.monto)+'</b></td><td class="tl">'+chip+'</td>'+(MODO?('<td class="tl">'+(est==='propuesto'?'<button class="btn sm" data-val="'+r.id+'">Validar</button>':est==='validado'?'<button class="btn gho sm" data-pag="'+r.id+'">Marcar pagado</button>':'')+'</td>'):'')+'</tr>';
+ });
+ h+='</tbody></table></div></div>'; $('bonosBody').innerHTML=h;
+ let usr=''; try{const _r=localStorage.getItem('sb-rehophywchakfapivsbh-auth-token');const _j=_r?JSON.parse(_r):null;usr=(_j&&((_j.user&&_j.user.email)||(_j.currentSession&&_j.currentSession.user&&_j.currentSession.user.email)))||'';}catch(e){}
+ $('bonosBody').querySelectorAll('[data-val]').forEach(b=>b.onclick=async()=>{try{await sb('/bonos_quincena?id=eq.'+b.dataset.val,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({estatus:'validado',validado_por:usr||null,validado_at:new Date().toISOString()})});renderBonos();}catch(e){alert('No se pudo validar: '+(e.message||e));}});
+ $('bonosBody').querySelectorAll('[data-pag]').forEach(b=>b.onclick=async()=>{try{await sb('/bonos_quincena?id=eq.'+b.dataset.pag,{method:'PATCH',headers:{...H,Prefer:'return=minimal'},body:JSON.stringify({estatus:'pagado'})});renderBonos();}catch(e){alert('No se pudo marcar pagado: '+(e.message||e));}});
+}catch(e){$('bonosBody').innerHTML='<div class="card" style="padding:20px"><span class="muted">No se pudieron cargar los bonos: '+esc(e.message||e)+'</span></div>';}}
+
 /* ===================== navegación ===================== */
-function showMain(tab){['input','kpi','matriz'].forEach(k=>$('tab-'+k).classList.toggle('hide',k!==tab));
+function showMain(tab){['input','kpi','matriz','bonos'].forEach(k=>$('tab-'+k).classList.toggle('hide',k!==tab));
  document.querySelectorAll('.step').forEach(s=>s.classList.toggle('on',s.dataset.tab===tab));
  if(tab==='kpi'){ if(SUBK==='kres')renderKres(); else{fillEditor();renderEdList();} }
  if(tab==='matriz'){renderAreaTabs();renderMatriz();}
+ if(tab==='bonos'){renderBonos();}
 }
 document.querySelectorAll('.step').forEach(s=>s.onclick=()=>showMain(s.dataset.tab));
 document.querySelectorAll('#tab-input .subtab').forEach(t=>t.onclick=()=>{SUBI=t.dataset.sub;document.querySelectorAll('#tab-input .subtab').forEach(x=>x.classList.toggle('on',x===t));['ccrr','oper','scout'].forEach(k=>$('sub-'+k).classList.toggle('hide',k!==SUBI));if(SUBI==='oper')renderOper();if(SUBI==='scout')renderScout();});
@@ -584,12 +615,13 @@ async function reloadMes(){ MES=lastMonthStr();
  // scouting live: google ratings + extensiones/ppc si existen
  try{const rp=await sb('/rpc/obj_reputacion',{method:'POST',body:JSON.stringify({})});if(rp&&typeof rp==='object'){if(rp.hostal!=null)REP.hostal=+rp.hostal;if(rp.terraza!=null)REP.terraza=+rp.terraza;}}catch(e){}
  if(SUBI==='oper')renderOper(); if(SUBI==='scout')renderScout();
- const cur=document.querySelector('.step.on'); if(cur&&cur.dataset.tab==='kpi'&&SUBK==='kres')renderKres(); if(cur&&cur.dataset.tab==='matriz')renderMatriz();
+ const cur=document.querySelector('.step.on'); if(cur&&cur.dataset.tab==='kpi'&&SUBK==='kres')renderKres(); if(cur&&cur.dataset.tab==='matriz')renderMatriz(); if(cur&&cur.dataset.tab==='bonos')renderBonos();
 }
 $('loc').onchange=()=>{LOC=$('loc').value;reloadMes();};
-function setPeriod(i){CURP=PERIODS[i]||PERIODS[0];$('mes').value=i;if($('mes2'))$('mes2').value=i;reloadMes();}
+function setPeriod(i){CURP=PERIODS[i]||PERIODS[0];$('mes').value=i;if($('mes2'))$('mes2').value=i;if($('mes3'))$('mes3').value=i;reloadMes();}
 $('mes').onchange=()=>setPeriod(+$('mes').value);
 $('mes2').onchange=()=>setPeriod(+$('mes2').value);
+$('mes3').onchange=()=>setPeriod(+$('mes3').value);
 function setTemp(t){TEMP=t;document.querySelectorAll('.tempseg button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));fillPeriodos();reloadMes();}
 document.querySelectorAll('.tempseg button').forEach(b=>{if(b.dataset.t)b.onclick=()=>setTemp(b.dataset.t);});
 
