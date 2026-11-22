@@ -47,6 +47,7 @@ header{background:var(--dark);color:#ede4d2;padding:12px 18px;display:flex;align
 .gbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--bd);border-radius:14px;padding:12px 16px;margin-bottom:12px}
 .gbar .lab{font-size:12px;color:var(--soft);font-weight:700}
 .btn-o{margin-left:auto;border:1px solid var(--bd2);background:#fff;border-radius:9px;padding:8px 13px;font:inherit;font-size:13px;color:var(--soft);cursor:pointer;font-weight:600}
+.bfsel{padding:8px 10px;border:1px solid var(--bd);border-radius:9px;font:inherit;font-size:13px;background:#fff}
 .infostrip{background:#fff;border:1px solid var(--bd);border-top:0;border-radius:0 0 12px 12px;padding:9px 16px;font-size:12px;color:var(--soft);display:flex;gap:18px;flex-wrap:wrap;margin-top:-13px;margin-bottom:12px}
 .infostrip b{color:var(--txt)}
 /* tabla CCRR */
@@ -266,7 +267,17 @@ tr.fam td .cod{color:#8fa699;margin-right:12px;font-variant-numeric:tabular-nums
 <div id="tab-bonos" class="hide">
   <div class="subtabs"><div class="subtab on">Cumplimiento de bonos</div></div>
   <div class="wrap">
-    <div class="ctrls"><div><span class="lab">Periodo</span><select id="mes3"></select></div><div class="live"><span class="dot"></span>Bonos del periodo · para considerar su pago e incorporarlos a nómina</div></div>
+    <div class="ctrls">
+      <div><span class="lab">Temporalidad</span><div class="seg tempseg"><button class="on" data-t="mes">Mes</button><button data-t="tri">Trimestre</button><button data-t="cua">Cuatrimestre</button><button data-t="sem">Semestre</button><button data-t="ano">Año</button></div></div>
+      <div><span class="lab">Periodo</span><select id="mes3"></select></div>
+      <div class="live"><span class="dot"></span>Para su pago e incorporación a nómina</div>
+    </div>
+    <div class="gbar"><span class="lab">Filtros</span>
+      <select id="bf_tipo" class="bfsel"><option value="">Todos los bonos</option><option value="objetivo">Por objetivo</option><option value="recurrente">Puntualidad / recurrentes</option></select>
+      <select id="bf_sede" class="bfsel"><option value="">Toda ciudad</option></select>
+      <select id="bf_perfil" class="bfsel"><option value="">Todo perfil</option></select>
+      <select id="bf_persona" class="bfsel"><option value="">Toda persona</option></select>
+    </div>
     <div id="bonosBody"><span class="muted">cargando…</span></div>
   </div>
 </div>
@@ -575,18 +586,35 @@ $('modalOv').onclick=e=>{if(e.target.id==='modalOv')closeModal();};
 
 /* ===================== Bonos (cumplimiento) ===================== */
 function tile(lab,val,color){return '<div class="card" style="flex:1;min-width:150px;padding:12px 14px"><div class="muted" style="font-size:12px">'+esc(lab)+'</div><div style="font-size:22px;font-weight:800;'+(color?'color:'+color:'')+'">'+esc(val)+'</div></div>';}
+async function loadBonos(){
+ const yr=CURP.y; const mset=new Set(CURP.mos.map(m=>String(m).padStart(2,'0')));
+ let q=[]; try{q=(await sb('/bonos_quincena?select=id,quincena,employee_id,nombre,monto,estatus&quincena=like.'+yr+'*')||[]).filter(r=>mset.has((r.quincena||'').slice(5,7)));}catch(e){}
+ let c=[]; try{c=await sb('/bonos_colaborador?select=id,employee_id,nombre,monto,periodicidad,estatus')||[];}catch(e){}
+ const ids=[...new Set(q.map(x=>x.employee_id).concat(c.map(x=>x.employee_id)).filter(Boolean))];
+ let EN={}; if(ids.length){try{const em=await sb('/employees?select=id,nombre,sede,puesto&id=in.('+ids.join(',')+')')||[];em.forEach(e=>EN[e.id]=e);}catch(e){}}
+ const list=[];
+ q.forEach(r=>{const e=EN[r.employee_id]||{};list.push({src:'q',id:r.id,persona:e.nombre||'—',sede:e.sede||'',puesto:e.puesto||'',bono:r.nombre||'',tipo:'objetivo',monto:+r.monto||0,periodo:r.quincena||'',estatus:r.estatus||'propuesto'});});
+ c.forEach(r=>{const e=EN[r.employee_id]||{};list.push({src:'c',id:r.id,persona:e.nombre||'—',sede:e.sede||'',puesto:e.puesto||'',bono:r.nombre||'',tipo:'recurrente',monto:+r.monto||0,periodo:r.periodicidad||'recurrente',estatus:r.estatus||''});});
+ return list;
+}
+function fillBonoFilters(list){
+ const uniq=k=>[...new Set(list.map(x=>x[k]).filter(Boolean))].sort();
+ const set=(id,arr,lab)=>{const s=$(id);if(!s)return;const cur=s.value;s.innerHTML='<option value="">'+lab+'</option>'+arr.map(v=>'<option>'+esc(v)+'</option>').join('');s.value=cur;};
+ set('bf_sede',uniq('sede'),'Toda ciudad'); set('bf_perfil',uniq('puesto'),'Todo perfil'); set('bf_persona',uniq('persona'),'Toda persona');
+}
 async function renderBonos(){ try{
- const rows=await sb('/bonos_quincena?select=id,quincena,employee_id,nombre,monto,estatus&quincena=like.'+MES+'*&order=quincena.desc')||[];
- let EN={}; const ids=[...new Set(rows.map(r=>r.employee_id).filter(Boolean))];
- if(ids.length){try{const em=await sb('/employees?select=id,nombre,puesto,sede&id=in.('+ids.join(',')+')')||[];em.forEach(e=>EN[e.id]=e);}catch(e){}}
+ const list=await loadBonos(); fillBonoFilters(list);
+ const ft=$('bf_tipo').value, fs=$('bf_sede').value, fp=$('bf_perfil').value, fpe=$('bf_persona').value;
+ const rows=list.filter(x=>(!ft||x.tipo===ft)&&(!fs||x.sede===fs)&&(!fp||x.puesto===fp)&&(!fpe||x.persona===fpe));
  const sum=f=>rows.filter(f).reduce((s,r)=>s+(+r.monto||0),0);
- let h='<div class="legend">Cómo van los bonos del periodo, para que el contador los considere pagar. <b>Por validar</b> = los propone Dirección. <b>Validado</b> = aprobado, puede entrar a nómina. <b>Pagado</b> = ya se incluyó.</div>';
- h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+tile("Total del periodo",money(sum(function(){return true;})))+tile("Por validar",money(sum(function(r){return r.estatus==="propuesto";})),"#C58A1A")+tile("Validado · listo para nómina",money(sum(function(r){return r.estatus==="validado";})),"#157a56")+tile("Pagado",money(sum(function(r){return r.estatus==="pagado";})),"#6b5d49")+'</div>';
- if(!rows.length){$('bonosBody').innerHTML=h+'<div class="card" style="padding:20px"><span class="muted">Sin bonos en '+esc(mesLbl())+'.</span></div>';return;}
- h+='<div class="card" style="padding:0"><div class="twrap"><table class="kpitable"><thead><tr><th class="tl">Persona</th><th class="tl">Quincena</th><th class="tl">Bono</th><th class="tl">Monto</th><th class="tl">Estatus</th>'+(MODO?'<th></th>':'')+'</tr></thead><tbody>';
- rows.forEach(r=>{const e=EN[r.employee_id]||{};const est=r.estatus||'propuesto';
-   const chip=est==='validado'?'<span class="pill ok">validado</span>':(est==='pagado'?'<span class="pill" style="background:#efe6d4;color:#6b5d49">pagado</span>':'<span class="pill warn">por validar</span>');
-   h+='<tr><td class="tl"><b>'+esc(e.nombre||'—')+'</b><div class="karea">'+esc([e.puesto,e.sede].filter(Boolean).join(' · '))+'</div></td><td class="tl muted">'+esc(r.quincena||'')+'</td><td class="tl">'+esc(r.nombre||'')+'</td><td class="tl"><b>'+money(r.monto)+'</b></td><td class="tl">'+chip+'</td>'+(MODO?('<td class="tl">'+(est==='propuesto'?'<button class="btn sm" data-val="'+r.id+'">Validar</button>':est==='validado'?'<button class="btn gho sm" data-pag="'+r.id+'">Marcar pagado</button>':'')+'</td>'):'')+'</tr>';
+ let h='<div class="legend">Bonos del periodo ('+esc(mesLbl())+') + bonos recurrentes (puntualidad asignada en ficha). <b>Por validar</b> = los propone Dirección. <b>Validado</b> = puede entrar a nómina. <b>Pagado</b> = ya se incluyó.</div>';
+ h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+tile("Total",money(sum(function(){return true;})))+tile("Por validar",money(sum(function(r){return r.estatus==="propuesto";})),"#C58A1A")+tile("Validado · listo para nómina",money(sum(function(r){return r.estatus==="validado";})),"#157a56")+tile("Pagado",money(sum(function(r){return r.estatus==="pagado";})),"#6b5d49")+'</div>';
+ ['bf_tipo','bf_sede','bf_perfil','bf_persona'].forEach(id=>{const s=$(id);if(s)s.onchange=renderBonos;});
+ if(!rows.length){$('bonosBody').innerHTML=h+'<div class="card" style="padding:20px"><span class="muted">Sin bonos con esos filtros.</span></div>';return;}
+ h+='<div class="card" style="padding:0"><div class="twrap"><table class="kpitable"><thead><tr><th class="tl">Persona</th><th class="tl">Ciudad · Perfil</th><th class="tl">Bono</th><th class="tl">Tipo</th><th class="tl">Monto</th><th class="tl">Periodo</th><th class="tl">Estatus</th>'+(MODO?'<th></th>':'')+'</tr></thead><tbody>';
+ rows.forEach(r=>{const est=r.estatus||'';
+   const chip=est==='validado'?'<span class="pill ok">validado</span>':(est==='pagado'?'<span class="pill" style="background:#efe6d4;color:#6b5d49">pagado</span>':(est?'<span class="pill warn">'+esc(est)+'</span>':'—'));
+   h+='<tr><td class="tl"><b>'+esc(r.persona)+'</b></td><td class="tl muted">'+esc([r.sede,r.puesto].filter(Boolean).join(' · '))+'</td><td class="tl">'+esc(r.bono)+'</td><td class="tl"><span class="chip '+(r.tipo==='recurrente'?'op':'rp')+'">'+(r.tipo==='recurrente'?'puntualidad':'objetivo')+'</span></td><td class="tl"><b>'+money(r.monto)+'</b></td><td class="tl muted">'+esc(r.periodo)+'</td><td class="tl">'+chip+'</td>'+(MODO?('<td class="tl">'+(r.src==='q'&&est==='propuesto'?'<button class="btn sm" data-val="'+r.id+'">Validar</button>':r.src==='q'&&est==='validado'?'<button class="btn gho sm" data-pag="'+r.id+'">Marcar pagado</button>':'')+'</td>'):'')+'</tr>';
  });
  h+='</tbody></table></div></div>'; $('bonosBody').innerHTML=h;
  let usr=''; try{const _r=localStorage.getItem('sb-rehophywchakfapivsbh-auth-token');const _j=_r?JSON.parse(_r):null;usr=(_j&&((_j.user&&_j.user.email)||(_j.currentSession&&_j.currentSession.user&&_j.currentSession.user.email)))||'';}catch(e){}
