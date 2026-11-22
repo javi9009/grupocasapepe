@@ -334,13 +334,13 @@ async function cargaCat(){ if(ready)return;
   try{EMP=await sb('/employees?select=id,nombre,puesto,estatus,sede')||[];}catch(e){EMP=[];}
   ready=true;
 }
-function personasDe(puesto){const n=(puesto||'').toLowerCase();return EMP.filter(e=>String(e.estatus||'').toLowerCase()==='activo'&&String(e.puesto||'').toLowerCase().trim()===n).length;}
+function personasDe(puesto){if(Array.isArray(PERSL)&&PERSL.length){const c=new Set(PERSL.filter(r=>r.puesto===puesto).map(r=>r.employee_id)).size;if(c)return c;}const n=(puesto||'').toLowerCase();return EMP.filter(e=>String(e.estatus||'').toLowerCase()==='activo'&&String(e.puesto||'').toLowerCase().trim()===n).length;}
 
 /* ===================== fin_pl helpers ===================== */
 function finAgg(rows,sel){const a={};(rows||[]).filter(x=>locMatch(x.loc,sel)).forEach(x=>{const c=x.cuenta;(a[c]=a[c]||{real:0,plan:0,fc:0});a[c].real+=(+x.real||0);a[c].plan+=(+x.plan||0);a[c].fc+=(+x.forecast||0);});return a;}
 function pre(a,code,f){let s=0;for(const c in a){if(c===code||c.indexOf(code+'-')===0)s+=(a[c][f]||0);}return s;}
 function csum(a,expr,f){return String(expr).split('+').reduce((s,c)=>s+pre(a,c.trim(),f),0);}
-function usali(a,w,f){const C=c=>pre(a,c,f); if(w==='cuartos')return C('400-01')+C('400-05')-C('500-01')-C('600-01-01')-C('600-02-01'); if(w==='ab')return C('400-02')-C('500-02')-C('600-01-02')-C('600-02-02'); const ubo=C('400')-C('500')-C('600-01')-C('600-02')-C('600-03')-C('600-04')-C('600-05')-C('600-06'); if(w==='ubo')return ubo; if(w==='ebitda')return ubo-C('600-07'); return 0;}
+function usali(a,w,f){const C=c=>pre(a,c,f); if(w==='cuartos')return C('400-01')+C('400-05')-C('500-01')-C('600-01-01')-C('600-02-01'); if(w==='ab')return C('400-02')-C('500-02')-C('600-01-02')-C('600-02-02'); const ubo=C('400')-C('500')-C('600-01')-C('600-02')-C('600-03')-C('600-04')-C('600-05')-C('600-06'); if(w==='ubo')return ubo; if(w==='ebitda')return ubo-C('600-07')-C('600-08')+C('950'); return 0;}
 const isCode=s=>/^[0-9][0-9\-+ ]*$/.test(String(s||'').trim());
 function semFin(real,plan,fc,esIngreso){const base=real+fc; if(!plan)return {p:null,s:'gris'}; const p=base/plan*100; let ok=esIngreso?p>=100:p<=100; let s=ok?'ok':(Math.abs(p-100)<=10?'warn':'bad'); return {p:p,s:s};}
 
@@ -446,12 +446,16 @@ function valKPI(k,a,EX){ if(EX&&EX[k.id]!==undefined)return EX[k.id]; const A=k.
  if(k.tipo==='real_vs_plan'&&isCode(A)){const p=csum(a,A,'plan');return p?{v:(csum(a,A,'real')+csum(a,A,'fc'))/p*100,u:'%'}:{nota:'sin plan'};}
  if(k.tipo==='real_vs_forecast'&&isCode(A)){let f=csum(a,A,'fc');if(!f)f=csum(a,A,'plan');return f?{v:csum(a,A,'real')/f*100,u:'%'}:{nota:'sin plan'};}
  if(k.tipo==='gasto_sobre_ingreso'&&isCode(A)&&isCode(B)){const b=csum(a,B,'real');return b?{v:csum(a,A,'real')/b*100,u:'%'}:{nota:'sin base'};}
- if(k.tipo==='resultado_vs_plan'){const w=/UBO/i.test(A)?'ubo':/EBITDA/i.test(A)?'ebitda':/A&B/i.test(A)?'ab':/Cuartos/i.test(A)?'cuartos':null;if(w){const pl=usali(a,w,'plan');return pl?{v:usali(a,w,'real')/pl*100,u:'%'}:{nota:'sin plan'};}}
+ if(k.tipo==='resultado_vs_plan'){const w=/UBO/i.test(A)?'ubo':/EBITDA/i.test(A)?'ebitda':/A&B/i.test(A)?'ab':/Cuartos/i.test(A)?'cuartos':null;if(w){const pl=usali(a,w,'plan'),re=usali(a,w,'real');if(!pl)return {nota:'sin plan'};
+   const bruto=pl>0?re/pl*100:(re>=pl?100:0); const ic=w==='cuartos'?['400-01','400-05']:w==='ab'?['400-02']:['400'];
+   const ing=ic.reduce((t,c)=>t+pre(a,c,'real'),0), ingP=ic.reduce((t,c)=>t+pre(a,c,'plan'),0);
+   const mg=ing?re/ing*100:null, mgP=ingP?pl/ingP*100:null;
+   return {v:Math.max(0,Math.min(bruto,100)),u:'%',extra:(mg==null?'':'margen '+pct1(mg)+'% s/ingreso'+(mgP==null?'':' (plan '+pct1(mgP)+'%)'))+(bruto>100?' · plan superado':'')};}}
  if(/concierge/i.test(A))return {nota:'por persona (Ficha 360)'};
  if(/revenue/i.test(A)||/revenue/i.test(k.nota||''))return {nota:'lee de Revenue'};
  return {nota:'por conectar'};}
 function sem(v,meta,regla){if(v==null||meta==null)return 'gris';const m=+meta;const rg=String(regla||'').replace('&lt;','<').replace('&gt;','>');let ok;if(rg==='<=')ok=v<=m;else if(rg==='<')ok=v<m;else if(rg==='=')ok=Math.abs(v-m)<0.01;else ok=v>=m;if(ok)return 'ok';return (m&&Math.abs(v-m)/Math.abs(m)<=0.10)?'warn':'bad';}
-function fmtKPI(r){if(!r||r.v==null)return null;if(r.u==='$'||r.raw)return money(r.v);return pct1(r.v)+(r.u||'');}
+function fmtKPI(r){if(!r||r.v==null)return null;if(r.u==='$'||r.raw)return money(r.v);return pct1(r.v)+(r.u||'')+(r.extra?' · '+r.extra:'');}
 function rglTxt(r){return String(r||'').replace('&lt;','<').replace('&gt;','>');}
 function tipoChip(t){const m={real_vs_plan:['real vs plan','rp'],real_vs_forecast:['real vs forecast','rf'],gasto_sobre_ingreso:['gasto ÷ ingreso','gi'],resultado_vs_plan:['resultado vs plan','res'],operativo_scouting:['operativo / scouting','op']};const x=m[t]||[t,'op'];return '<span class="chip '+x[1]+'">'+esc(x[0])+'</span>';}
 function nombreCuenta(code){const c=String(code||'').trim();return isCode(c)?(c+(PLNOM[c]?' '+PLNOM[c]:'')):c;}
@@ -459,7 +463,7 @@ function formulaTxt(k){const A=k.input_a||'',B=k.input_b||'';
  if(k.tipo==='real_vs_plan')return '(Real + forecast) de '+nombreCuenta(A)+'\n÷ su plan × 100';
  if(k.tipo==='real_vs_forecast')return 'Real de '+nombreCuenta(A)+'\n÷ su forecast × 100';
  if(k.tipo==='gasto_sobre_ingreso')return nombreCuenta(A)+'\n÷ '+nombreCuenta(B)+' × 100';
- if(k.tipo==='resultado_vs_plan')return nombreCuenta(A)+' real ÷ plan × 100';
+ if(k.tipo==='resultado_vs_plan')return nombreCuenta(A)+': cumplimiento del plan (real ÷ plan, de 0 a 100%)';
  return 'Fuente: '+esc(A||'por conectar');}
 async function computeKPIs(){ await cargaCat();
  const rows=await fetchPL(); const a=finAgg(rows,LOC); const EX={};
@@ -532,7 +536,7 @@ const ATABS=[
 const TOPR=['direccion','gerencia_regional','gerente_general']; // gerencia transversal
 function renderAreaTabs(){ $('areatabs').innerHTML=ATABS.map((t,i)=>'<div class="atab'+((MTAB||ATABS[0].k)===t.k?' on':'')+'" data-at="'+t.k+'">'+esc(t.lab)+'</div>').join('')+'<span class="atab-note">Qué KPIs lleva cada rango, de arriba abajo</span>';
  $('areatabs').querySelectorAll('[data-at]').forEach(b=>b.onclick=()=>{MTAB=b.dataset.at;renderAreaTabs();if(MSUB==='preview')renderPreviewDesempeno();else renderMatriz();});}
-async function renderMatriz(){ try{ await cargaCat(); if(!MTAB)MTAB=ATABS[0].k; const tab=ATABS.find(t=>t.k===MTAB);
+async function renderMatriz(){ cargaPers(); try{ await cargaCat(); if(!MTAB)MTAB=ATABS[0].k; const tab=ATABS.find(t=>t.k===MTAB);
  const R=await computeKPIs();
  // puestos de este tab: por área (operacionales) + gerencia transversal
  const inTab=p=>{const pr=PRANGO.find(x=>x.puesto===p);if(!pr)return false;return tab.areas.indexOf(pr.area)>=0;};
@@ -556,7 +560,8 @@ async function renderMatriz(){ try{ await cargaCat(); if(!MTAB)MTAB=ATABS[0].k; 
  }catch(e){$('matrizBody').innerHTML='<div class="muted" style="padding:20px">No se pudo cargar la matriz: '+esc(e.message||e)+'</div>';}}
 
 /* side panel */
-let PERSL=null;
+var PERSL=null,PERSL_T=0;
+function cargaPers(){if(PERSL||PERSL_T)return;PERSL_T=1;sb('/rpc/obj_logro_personas',{method:'POST',body:'{}'}).then(d=>{PERSL=d||[];PERSL_T=0;if(PERSL.length)renderMatriz();}).catch(()=>{PERSL=[];PERSL_T=0;});}
 function openPuesto(p,R){ const asg=KPUE.filter(x=>x.puesto===p); const pr=PRANGO.find(x=>x.puesto===p);
  const sems=asg.map(x=>(R[x.kpi_id]||{}).s).filter(s=>s&&s!=='gris'); const okN=sems.filter(s=>s==='ok').length;
  const logro=sems.length?Math.round(100*okN/sems.length):null; const np=personasDe(p);
