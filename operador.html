@@ -3883,7 +3883,15 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       '<div class="fila"><span>IVA 16%</span><span>'+money2(iva)+'</span></div>'+
       '<div class="gran"><b>Total con IVA</b><i>'+money2(tot)+'</i></div>'+
       '<div class="pie">'+(pax>0?money2(tot/pax)+' por persona · ':'')+
-        'entra en tu conciliación cuando pase el día</div>';
+        'entra en tu conciliación cuando pase el día</div>'+
+      /* Si no se pudo leer el descuento del operador, se dice aquí y el botón
+         de guardar se apaga. Un total a precio de lista que debería llevar
+         descuento no se distingue a simple vista de uno correcto. */
+      (CESTA.descOk===false
+        ? '<div class="fila" style="color:var(--error,#9E3B2E);font-weight:700">'+
+            '<span>No se pudo leer el descuento de este operador.</span>'+
+            '<span>Recarga antes de guardar</span></div>'
+        : '');
 
     /* EL PRECIO PACTADO NO SE PISA SIN QUE ALGUIEN LO DIGA. Un servicio
        negociado puede no dar lo mismo que la suma de la carta; cambiarlo en
@@ -3891,7 +3899,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     /* Sin preguntar por «lo pactado»: Javi, 21-nov-2026, «quita esto de lo
        pactado, esa info no aplica». El precio del servicio es el de la
        cesta, y punto; no hay un segundo precio con el que comparar. */
-    h+='<button class="btn pri" id="xeGo" type="button">'+
+    h+='<button class="btn pri" id="xeGo" type="button"'+
+        (CESTA.descOk===false?' disabled':'')+'>'+
         (CESTA.modo==='nuevo' ? 'Programarlo' : (l.length?'Guardar el servicio':'Guardar'))+
        '</button>'+
        '<button class="btn todo" id="xeNo2" type="button">Dejarlo</button>';
@@ -3929,13 +3938,33 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
         '&activo=eq.true&order=orden&limit=200',{headers:hdr()});
       CESTA.extras = re.ok ? await re.json() : [];
     }catch(_){ CESTA.extras=[]; }
+    /* EL DESCUENTO QUE SE CAÍA EN SILENCIO. Javi, 24-nov-2026, sobre la cesta
+       del Twylio: «revísalo, a ver si está bien». No lo estaba: se había
+       guardado a precio de lista, $9,485, cuando Capital Bus tiene un 25%
+       pactado y la misma cesta del día anterior sí lo llevaba.
+       Había tres formas de perderlo y las tres callaban:
+         · `if(OPID)` — desde el flujo de admin OPID viene vacío, así que ni
+           se preguntaba y el descuento se quedaba en 0;
+         · la respuesta sin `ok` devolvía [] y 0;
+         · el catch ponía 0.
+       Un descuento que desaparece sin decir nada se cobra de más, y nadie se
+       entera hasta que el touroperador reclama. Ahora, si no se pudo saber,
+       se dice y no se deja guardar: mejor parar que facturar de más. */
+    CESTA.descOk = false;
     try{
-      if(OPID){
-        var ro=await fetch(SB+'/rest/v1/tour_operadores?select=menu_descuento_pct&id=eq.'+OPID,{headers:hdr()});
-        var jo=ro.ok?await ro.json():[];
-        CESTA.desc = Number((jo[0]||{}).menu_descuento_pct||0);
+      var oid = OPID || (typeof cur!=='undefined' && cur && cur.id) || null;
+      if(oid){
+        var ro=await fetch(SB+'/rest/v1/tour_operadores?select=menu_descuento_pct&id=eq.'+oid,{headers:hdr()});
+        if(ro.ok){
+          var jo=await ro.json();
+          if(jo && jo.length){
+            CESTA.desc  = Number(jo[0].menu_descuento_pct||0);
+            CESTA.descOk = true;
+          }
+        }
       }
-    }catch(_){ CESTA.desc=0; }
+    }catch(_){ }
+    if(!CESTA.descOk) CESTA.desc = 0;
     CESTA.items=null;
   }
 

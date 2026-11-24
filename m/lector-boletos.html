@@ -32,6 +32,7 @@ h1{font-size:1.3rem;margin:0 0 2px}
 .res.bad{background:var(--bad-bg);border-color:var(--bad)} .res.bad .big{color:var(--bad)}
 .res .tipo.tour{background:#DCEFE6;color:var(--accent)} .res .tipo.cine{background:#EDE4F3;color:#6B3FA0}
 .res .tipo.vnum{background:#FBE4D8;color:#C9501A}
+.res .tipo.entrada{background:#FBDCEE;color:#B3106F}
 .res .btn{margin-top:12px}
 .res .btn.p{background:#C9501A;color:#fff}
 .mini{color:var(--muted)}
@@ -145,6 +146,17 @@ async function verifica(texto){
   var hit=null, tipo=null;
   for(var i=0;i<cands.length && !hit;i++){
     var c=cands[i];
+    /* LA MISMA LECTURA QUE LA PANTALLA DE LA PUERTA. Javi, 24-nov-2026: «que
+       Deisy, cuando lo escanee desde su SoyPepe, si es un QR de los de Noche
+       Mexicana, le aparezca la lectura que aparece en el lector de Noche
+       Mexicana». Va PRIMERO porque es la respuesta más completa -dice cuántos
+       entran ahora, cuántos iban ya y cuántos compraron-; si el código no es
+       de una experiencia de doble escaneo contesta que no es suya y se sigue
+       con la cadena de siempre. El sello queda a nombre de quien escanea. */
+    var e=await tryRpc('sinc_entrada_casa', c);
+    if(e && (e.ok===true || e.motivo==='cancelada' || e.motivo==='devuelta'
+             || e.motivo==='devolucion_parcial' || e.motivo==='otro_dia')){
+      hit=e; tipo='entrada'; break; }
     var t=await tryRpc('sinc_verificar_boleto', c);      // tours (Margarita, etc.)
     if(reconocido(t)){ hit=t; tipo='tour'; break; }
     var k=await tryRpc('cine_verificar_boleto', c);      // eventos (cine/teatro)
@@ -155,8 +167,42 @@ async function verifica(texto){
   pinta(hit, tipo, cands[0]);
 }
 
+/* La lectura del doble escaneo se pinta aparte: no es «válido / no válido»,
+   es una cuenta -cuántos entran ahora de los que compraron-, y esa cuenta es
+   lo único que le importa a quien está en la puerta. */
+function pintaEntrada(r, codigo){
+  var el=$('res'); el.style.display='block';
+  var tag='<span class="tipo entrada">Noche Mexicana</span>';
+  var quien=esc(r.titular||'—'), exp=esc(r.experiencia||'');
+  if(r.ok===true && r.repetido){
+    el.className='res warn';
+    el.innerHTML=tag+'<div class="big">⚠️ Ya habían entrado</div>'+
+      '<div class="det"><b>'+quien+'</b><br>'+r.pax+' persona'+(r.pax===1?'':'s')+' · '+exp+'</div>'+
+      '<div class="pie">'+(r.entro_a?'Entraron a las '+esc(r.entro_a):'Ya estaban dentro')+'</div>';
+    HIST.unshift({q:(r.titular||codigo), cls:'rep', txt:'ya habían entrado'});
+    return;
+  }
+  if(r.ok===true){
+    el.className='res ok';
+    var linea = r.ya_iban>0
+      ? '<b>Bienvenido el que faltaba</b><br>'+r.pax+' persona'+(r.pax===1?'':'s')+' más · ya van '+r.total+' de '+r.de
+      : '<b>'+quien+'</b><br>'+r.pax+' persona'+(r.pax===1?'':'s')+(r.de&&r.de!==r.pax?' · de '+r.de+' que reservaron':'');
+    el.innerHTML=tag+'<div class="big">✅ Bienvenido</div><div class="det">'+linea+'</div>'+
+      '<div class="pie">'+exp+(r.sin_previo?' · el operador no ha pasado a nadie: entra igual':'')+'</div>';
+    HIST.unshift({q:(r.titular||codigo), cls:'ok', txt:r.pax+' pers.'});
+    return;
+  }
+  el.className='res bad';
+  var M={otro_dia:'Esta reserva no es de hoy', cancelada:'Esta reserva está cancelada',
+         devuelta:'Esta reserva se devolvió', devolucion_parcial:'Esta reserva tuvo una devolución'};
+  el.innerHTML=tag+'<div class="big">⛔ '+esc(M[r.motivo]||'No se puede pasar')+'</div>'+
+    '<div class="det"><b>'+quien+'</b><br>'+exp+'</div>'+
+    '<div class="pie">'+(r.fecha?'Su fecha es el '+esc(String(r.fecha))+' '+esc(String(r.hora||'').slice(0,5)):'Habla con el personal')+'</div>';
+  HIST.unshift({q:(r.titular||codigo), cls:'rep', txt:(M[r.motivo]||'no pasa')});
+}
 function pinta(r, tipo, codigo){
   var el=$('res'); el.style.display='block';
+  if(tipo==='entrada'){ pintaEntrada(r, codigo); return; }
   var tag = tipo==='tour' ? '<span class="tipo tour">Tour</span>' : (tipo==='cine' ? '<span class="tipo cine">Cine / Evento</span>' : (tipo==='vnum' ? '<span class="tipo vnum">Carta de premio</span>' : ''));
   if(tipo==='vnum'){ pintaVnum(r); return; }
   if(r && r.ok){
