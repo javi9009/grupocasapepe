@@ -554,7 +554,7 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
 .cclinea{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--linea)}
 .cclinea:first-child{border-top:0}
 .cclinea .qc{flex:1 1 220px;min-width:0}
-.cclinea .pers{flex:0 0 auto;font-size:13px;color:var(--gris)}
+.cclinea .pers{flex:0 0 auto;font-size:13px;color:var(--gris);display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .cclinea .imp{flex:0 0 auto;text-align:right;font-family:'Oswald';font-size:17px}
 .ccrel{font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px;font-family:'Oswald';letter-spacing:.06em;background:#F1ECE4;color:#6B6459}
 .ccrel.ok{background:var(--ok-bg,#E1F0E7);color:var(--ok)}
@@ -6047,16 +6047,65 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
   var EST={borrador:'Sin mandar', enviado:'Mandado', en_incidencia:'Con incidencia',
            por_facturar:'Toca facturar', facturado:'Facturado', cobrado:'Cobrado', cancelado:'Cancelado'};
 
-  function ccReloj(t){
-    if(t.cobrado_at) return '<span class="ccrel ok">Cobrado</span>';
-    if(!t.vence_at) return '';
+  /* ============ EN QUÉ ETAPA ESTÁ ATORADA ESTA ORDEN ============
+     Javi, 24-nov-2026: «solo debes de poner el icono de la etapa en la que
+     estamos atorados + días para cobro o días vencidos».
+     Antes esta fila sólo sabía contar los días que faltaban para el
+     vencimiento, y el vencimiento es la ÚLTIMA etapa: una orden parada
+     porque nadie validó el servicio se veía igual de tranquila que una a
+     punto de cobrarse. La cadena es validar → su OC → nuestra factura →
+     cobrar, y lo único que hay que mirar es dónde se paró.
+     Una sola etiqueta, la del escalón donde está parada. Dos etiquetas son
+     dos cosas que hacer, y sólo hay una. */
+  function ccDias(iso){
+    if(!iso) return null;
     var hoy=new Date(); hoy.setHours(0,0,0,0);
-    var v=String(t.vence_at).slice(0,10).split('-');
+    var v=String(iso).slice(0,10).split('-');
     var d=new Date(+v[0],+v[1]-1,+v[2]); d.setHours(0,0,0,0);
-    var dias=Math.round((d-hoy)/86400000);
-    return dias<0  ? '<span class="ccrel mal">Vencida hace '+(-dias)+' día'+(dias===-1?'':'s')+'</span>'
-         : dias===0? '<span class="ccrel hoy">Vence hoy</span>'
-         : '<span class="ccrel">Vence en '+dias+' día'+(dias===1?'':'s')+'</span>';
+    return Math.round((d-hoy)/86400000);
+  }
+  function ccChip(cls, txt){ return '<span class="ccrel'+(cls?' '+cls:'')+'">'+txt+'</span>'; }
+  function ccPlural(n, una, varias){ return n+' '+(Math.abs(n)===1?una:varias); }
+
+  function ccReloj(t){
+    /* 5 · Cobrado. Se acabó la cadena. */
+    if(t.cobrado_at) return ccChip('ok','Pagado');
+
+    /* La validación es de cada servicio, no de la orden: la orden está
+       validada cuando lo están TODOS, y el plazo que corre es el del primero
+       que vence. Si una semana trae cinco noches, basta una sin validar. */
+    var ls=(CC.lineas||[]).filter(function(x){ return x.ticket_id===t.id; });
+    var pend=ls.filter(function(x){ return !x.validado_at; });
+    var todoValidado = ls.length>0 && pend.length===0;
+    var plazo=null;
+    pend.forEach(function(x){
+      var d=ccDias(x.valida_vence_at);
+      if(d!=null && (plazo===null || d<plazo)) plazo=d;
+    });
+    var plazoVencido = (ls.length===0) || (!todoValidado && (plazo===null || plazo<0));
+
+    /* 4 · Hay factura: lo único que queda es cobrar, y ahí sí manda el reloj. */
+    if(t.factura_folio){
+      var dv=ccDias(t.vence_at);
+      if(dv===null)  return ccChip('ok','Fra');
+      if(dv<0)       return ccChip('ok','Fra')+ccChip('mal','Vencida hace '+ccPlural(-dv,'día','días'));
+      if(dv===0)     return ccChip('ok','Fra')+ccChip('hoy','Vence hoy');
+      return ccChip('ok','Fra')+ccChip('','Cobro en '+ccPlural(dv,'día','días'));
+    }
+
+    /* 3 · Tiene su OC y nos falta facturar. */
+    if(t.odc_externa) return ccChip('mal','Fra');
+
+    /* 2 · Validado (o se acabó el plazo) y seguimos sin su orden de compra.
+       Mientras el plazo corre no se pide la OC: todavía no toca, y pintarlo
+       de rojo sería acusar a alguien de no hacer algo que aún no le toca. */
+    if(plazoVencido && todoValidado) return ccChip('mal','Sin ODC');
+
+    /* 1 · La validación. */
+    if(todoValidado) return ccChip('ok','Validado');
+    if(plazoVencido) return ccChip('mal','Validación pendiente');
+    return ccChip('hoy', plazo===0 ? 'Último día para validar'
+                                   : ccPlural(plazo,'día','días')+' para validar');
   }
 
   function ccTicket(t){
