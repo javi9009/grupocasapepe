@@ -2428,6 +2428,8 @@
       'Japonés':'Japanese',
       'La base no dejó apuntarla.':'The database would not let it be logged.',
       'La base no dejó cargarlas.':'The database would not let them be loaded.',
+      'Tu sesión caducó y no se cargó ninguna. Entra otra vez con tu correo y vuelve a subir la hoja: está intacta.':'Your session expired and none were loaded. Sign in again with your email and upload the sheet once more: it is untouched.',
+      'No se cargó ninguna: la base contestó algo que no supimos leer. Vuelve a intentarlo y, si sigue, avísanos.':'None were loaded: the database answered something we could not read. Try again and, if it keeps happening, let us know.',
       'La base no dejó guardar eso.':'The database would not let that be saved.',
       'La comunidad':'The community',
       'La estamos revisando.':'We are reviewing it.',
