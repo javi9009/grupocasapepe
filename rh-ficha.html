@@ -266,12 +266,16 @@ function puestoInfo(e){
  const oc=OCAT.find(c=>c.codigo===row.rango)||{};
  return {puesto:row.puesto,rango:row.rango,area:row.area,orden:oc.orden,rangoNom:oc.nombre};
 }
-function objetivosDe(puesto){return MATRIZ.filter(m=>m.puesto===puesto);}
-function celdaSuperior(orden,area){
+/* La matriz es por ubicación (24-nov-2026): si el puesto tiene lista propia en
+   la ubicación de la persona se usa ésa; si no, la común. Misma regla que la base. */
+function locSede(s){s=String(s||'');return /puebla/i.test(s)?'pue':(/cdmx|xico/i.test(s)?'cdmx':'corp');}
+function matrizDe(loc){const prop=new Set(MATRIZ.filter(m=>m.loc===loc).map(m=>m.puesto));return MATRIZ.filter(m=>prop.has(m.puesto)?m.loc===loc:!m.loc);}
+function objetivosDe(puesto,loc){return matrizDe(loc).filter(m=>m.puesto===puesto);}
+function celdaSuperior(orden,area,loc){
  if(orden==null)return null;
  const arriba=OCAT.filter(c=>c.orden<orden).sort((a,b)=>b.orden-a.orden);
  for(const c of arriba){
-  let rows=MATRIZ.filter(m=>m.rango===c.codigo);
+  let rows=matrizDe(loc).filter(m=>m.rango===c.codigo);
   /* Solo lo que le toca a su perfil: objetivos de su MISMA área (su línea). */
   if(area) rows=rows.filter(m=>m.area===area);
   if(rows.length){return {rango:c.codigo,rangoNom:c.nombre,orden:c.orden,rows};}
@@ -723,8 +727,8 @@ function sBonosCard(p){
  /* su celda es la que usa el motor (rol → matriz); si aún no la tiene, se deduce del puesto de nómina */
  const info=(det.puesto&&puestoInfo({puesto:det.puesto}))||puestoInfo(e);
  const pz=info?info.puesto:(e.puesto||'');
- const objMios=objetivosDe(pz);
- const sup=info?celdaSuperior(info.orden,info.area):null;
+ const objMios=objetivosDe(pz,locSede(e.sede));
+ const sup=info?celdaSuperior(info.orden,info.area,locSede(e.sede)):null;
  const medidos=Array.isArray(det.objetivos)?det.objetivos:[];
  const t=(e&&e.tramo)||p.tramo||null;
 
@@ -799,9 +803,9 @@ function sBonosCard(p){
   ? puntAsig+propios+bq.map(function(x){
      const prp=(!x.estatus||x.estatus==='propuesto');
      const est=x.sin_pago?'<span class="pill ok">suma a desempeño</span>':((x.estatus==='pagado')?'<span class="pill ok">pagado</span>':((x.estatus==='validado')?'<span class="pill ok">activo</span>':'<span class="pill warn">por validar</span>'));
-     const btn=x.id?((!x.sin_pago&&prp?'<button class="bt" data-bqok="'+x.id+'" title="Validar: objetivo cumplido; genera el addendum y entra al pago" style="color:#1F5E3F">✔ Validar</button> ':'')+(!x.sin_pago?'<button class="bt" data-bqed="'+x.id+'" title="Editar monto/nota">✎</button> ':'<button class="bt" data-bqpct="'+x.id+'" title="Cambiar cuánto suma a su desempeño (hasta 10 %)">✎</button> ')+'<button class="bt" data-bqdel="'+x.id+'" style="color:#9E3B2E">Quitar</button>'):'';
+     const btn=x.id?((!x.sin_pago&&prp?'<button class="bt" data-bqok="'+x.id+'" title="Validar: objetivo cumplido; genera el addendum y entra al pago" style="color:#1F5E3F">✔ Validar</button> ':'')+(!x.sin_pago?'<button class="bt" data-bqed="'+x.id+'" title="Editar monto/nota">✎</button> ':'<button class="bt" data-bqpct="'+x.id+'" title="Cambiar cuánto suma a su desempeño (de 5 a 10 %)">✎</button> ')+'<button class="bt" data-bqdel="'+x.id+'" style="color:#9E3B2E">Quitar</button>'):'';
      return '<div class="cr-bono"'+(x.sin_pago?' style="background:#EAF4EE"':'')+'><div style="flex:1;min-width:150px"><b style="font-size:.84rem">'+esc(x.nombre)+'</b><div class="faint" style="font-size:.7rem">'+esc([x.periodicidad,x.nota].filter(Boolean).join(" · "))+'</div></div>'
-      +'<b style="color:#8A6A0A">'+(x.sin_pago?('sin pago · suma hasta '+(Math.min(Number(x.pct)||10,10))+' %'):mxn(x.monto))+'</b> '+est+' <span>'+btn+'</span></div>';
+      +'<b style="color:#8A6A0A">'+(x.sin_pago?('sin pago · suma hasta '+(Math.max(5,Math.min(Number(x.pct)||10,10)))+' %'):mxn(x.monto))+'</b> '+est+' <span>'+btn+'</span></div>';
     }).join('')
   : '<p class="vacia" style="font-size:.82rem">Sin bonos asignados.</p>';
 
@@ -812,7 +816,7 @@ function sBonosCard(p){
     +(nomina>0?'<span style="font-size:.82rem"><b>'+mxn(tope)+'</b> disponibles (30% de nómina) · <b style="color:#137A56">'+mxn(asignado)+'</b> asignados · <b>'+mxn(libre)+'</b> libres</span>':'<span class="faint" style="font-size:.78rem">Nómina no disponible: el tope del 30% no se puede calcular.</span>')+'</div>'
     +'<div style="height:10px;border-radius:6px;background:#E8E2D5;overflow:hidden"><div style="height:100%;width:'+pctUso+'%;background:'+(asignado>tope&&tope>0?'#C0452F':'#137A56')+'"></div></div>'
     +(asignado>tope&&tope>0?'<div style="color:#C0452F;font-size:.74rem;margin-top:4px">⚠ Pasa del tope del 30%.</div>':'')
-    +'<div class="faint" style="font-size:.74rem;margin-top:7px">Dos tipos de bono: <b>con dinero</b> (cuenta para el tope del 30%) o <b>sin pago</b> (bono de desempeño: cada uno suma hasta 10 % a su Productividad si cumple el objetivo; al asignarlo decides cuánto. No cuenta para el tope).</div>'
+    +'<div class="faint" style="font-size:.74rem;margin-top:7px">Dos tipos de bono: <b>con dinero</b> (cuenta para el tope del 30%) o <b>sin pago</b> (bono de desempeño: cada uno suma entre 5 % y 10 % a su Productividad si cumple el objetivo; al asignarlo decides cuánto. No cuenta para el tope).</div>'
   +'</div>'
   +'<div class="cr-two">'
    +'<div class="cr-card"><div class="cr-h"><b>Objetivos de su puesto</b><span class="faint" style="font-size:.72rem">lectura · avance → desempeño</span></div>'
@@ -1130,8 +1134,8 @@ function pinta(){
   const per0=TEMPW[temp]||temp||null;
   if(b.dataset.sp){
    if((BQ[cur]||[]).some(x=>x.sin_pago&&x.kpi_id===kpiId&&x.estatus!=='rechazado')){alert("Ese objetivo ya lo tiene asignado sin pago.");return;}
-   const _r=prompt('¿Cuánto suma a su desempeño si cumple "'+nombre+'"?\n\nEscribe de 1 a 10 (por ciento de su Productividad). Cada bono sin pago aporta 10 % como máximo.','10'); if(_r===null) return;
-   let pctSP=Math.round(Number(String(_r).replace(/[^0-9.]/g,''))*10)/10; if(!(pctSP>0)){alert("Pon un número entre 1 y 10.");return;} if(pctSP>10)pctSP=10;
+   const _r=prompt('¿Cuánto suma a su desempeño si cumple "'+nombre+'"?\n\nEscribe de 5 a 10 (por ciento de su Productividad). Un objetivo de desempeño suma entre 5 % y 10 %.','10'); if(_r===null) return;
+   let pctSP=Math.round(Number(String(_r).replace(/[^0-9.]/g,''))*10)/10; if(!(pctSP>0)){alert("Pon un número entre 5 y 10.");return;} if(pctSP>10)pctSP=10; if(pctSP<5)pctSP=5;
    if(!confirm('¿Asignar "'+nombre+'" SIN PAGO a '+((E[cur]||{}).nombre||"esta persona")+'?\n\nEs un bono de desempeño: no lleva dinero y no cuenta al tope del 30%. Si cumple el objetivo suma hasta '+pctSP+' % a su Productividad.')) return;
    try{
     const _i=await sb("/bonos_quincena",{method:"POST",headers:{...H,Prefer:"return=representation"},body:JSON.stringify({quincena:QNOW,employee_id:cur,nombre,monto:0,sin_pago:true,pct:pctSP,kpi_id:kpiId,periodicidad:per0,nota:"Sin pago · objetivo de celda superior: "+puesto,otorgado_por:ME||null,estatus:"validado",validado_por:ME||null,validado_at:new Date().toISOString()})});
@@ -1174,8 +1178,8 @@ function pinta(){
  });
  $("#pane").querySelectorAll("[data-bqpct]").forEach(b=>b.onclick=async()=>{
   const x=(BQ[cur]||[]).find(v=>v.id===b.dataset.bqpct); if(!x)return;
-  const r=prompt('¿Cuánto suma "'+x.nombre+'" a su desempeño si lo cumple?\n\nDe 1 a 10 (por ciento de su Productividad).', Math.min(Number(x.pct)||10,10)); if(r===null)return;
-  let v=Math.round(Number(String(r).replace(/[^0-9.]/g,''))*10)/10; if(!(v>0)){alert("Pon un número entre 1 y 10.");return;} if(v>10)v=10;
+  const r=prompt('¿Cuánto suma "'+x.nombre+'" a su desempeño si lo cumple?\n\nDe 5 a 10 (por ciento de su Productividad).', Math.max(5,Math.min(Number(x.pct)||10,10))); if(r===null)return;
+  let v=Math.round(Number(String(r).replace(/[^0-9.]/g,''))*10)/10; if(!(v>0)){alert("Pon un número entre 5 y 10.");return;} if(v>10)v=10; if(v<5)v=5;
   try{await sb("/bonos_quincena?id=eq."+x.id,{method:"PATCH",headers:{...H,Prefer:"return=minimal"},body:JSON.stringify({pct:v})});
    x.pct=v; sb("/rpc/obj_recalcular_desempeno",{method:"POST",body:"{}"}).catch(()=>{}); pinta();}catch(e){alert("No se pudo cambiar.");}
  });
@@ -1226,11 +1230,11 @@ function llenaSel(){
  try{OCAT=await sb("/org_categorias?select=codigo,nombre,orden&order=orden")||[];}catch(e){}
  try{OPR=await sb("/obj_puesto_rango?select=puesto,rango,area")||[];}catch(e){}
  try{
-  const _kp=await sb("/kpi_puesto?select=puesto,meta,kpi_id")||[];
+  const _kp=await sb("/kpi_puesto?select=puesto,meta,kpi_id,loc")||[];
   const _kd=await sb("/kpi_def?select=id,nombre,temporalidad,nivel")||[];
   const KDM={}; _kd.forEach(k=>KDM[k.id]=k);
   MATRIZ=_kp.map(m=>{const r=OPR.find(x=>x.puesto===m.puesto)||{};const kd=KDM[m.kpi_id]||{};
-   return {puesto:m.puesto,meta:m.meta,kpi_id:m.kpi_id,kpi:kd.nombre||'',temporalidad:kd.temporalidad||'',nivel:kd.nivel||'',rango:r.rango||null,area:r.area||null};});
+   return {puesto:m.puesto,loc:m.loc||null,meta:m.meta,kpi_id:m.kpi_id,kpi:kd.nombre||'',temporalidad:kd.temporalidad||'',nivel:kd.nivel||'',rango:r.rango||null,area:r.area||null};});
  }catch(e){}
  /* Desempeño canónico (eval_pila): la Ficha lee lo mismo que la pila / SoyPepe. */
  try{ const pref={anio:0,semestre:1,trimestre:2,cuatrimestre:2,mes:3}; /* la nota que se enseña es el acumulado del año */
