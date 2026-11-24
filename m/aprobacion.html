@@ -139,6 +139,14 @@ h2 em{font:600 11px Inter;font-style:normal;color:var(--gris);background:var(--h
     <button data-e="ok" aria-selected="false">Confirmadas</button>
     <button data-e="no" aria-selected="false">Rechazadas</button>
     <button data-e="borr" aria-selected="false">En borrador</button>
+    <!-- LAS PAUSADAS NO SALÍAN POR NINGÚN LADO. Javi, 24-nov-2026: a Keren le
+         aparecía su walking tour de Iztapalapa «inactivo» y aquí no había
+         dónde verlo. Ni en «Por decidir», ni en «En borrador», ni siquiera en
+         «Todas»: cada consulta pide un estado concreto y «pausada» no era
+         ninguno, así que su operadora ni aparecía en el desplegable. Una ficha
+         que existe, está completa y no se vende es justo la que hay que poder
+         mirar. -->
+    <button data-e="off" aria-selected="false">Inactivas</button>
     <button data-e="" aria-selected="false">Todas</button>
     <!-- EL CALENDARIO, AQUÍ DENTRO. Javi, 30-oct-2026: «replica la pestaña de
          calendario de salas aquí también». Cuando dos piden la misma noche, la
@@ -169,6 +177,7 @@ var KEY='sb_publishable_BUSblqsDsVEokJr6yK8GIg_N34bGVWO';
 var ses=null, YO='', FALLO='', CARGANDO=true;
 var EXPS=[], EVTS=[], ATES=[], CAND={}, OPS={};
 var BORR=[];   /* las que el operador dejó en borrador y nunca mandó */
+var OFFS=[];   /* las pausadas: publicadas en su día y hoy apagadas */
 var FOTOOK={}; /* qué fichas tienen al menos una foto en estado listo */
 /* LAS OTRAS DOS COSAS QUE LA CASA AUTORIZA. Javi, 30-oct-2026: «en el
    dashboard no tenemos ningún lugar donde autorizar salas, ¿dónde está?».
@@ -209,6 +218,9 @@ function vePend(){ return (EST==='pend' || EST==='') && !veBorr(); }
 function veBorr(){ return EST==='borr'; }
 function veOk(){   return EST==='ok'   || EST===''; }
 function veNo(){   return EST==='no'   || EST===''; }
+/* Pausadas: existen, están completas y no se venden. Entran en «Todas»
+   también, porque «todas» no puede querer decir «todas menos éstas». */
+function veOff(){  return EST==='off'  || EST===''; }
 /* Las dos salas que además pasan por su sede: lo que la casa valida aquí,
    Ana lo acepta después en su portal de Cumbre. */
 var SEDE_ANA=['Café Cumbre','Galería'];
@@ -304,6 +316,55 @@ async function aRevision(id){
     avisa('«'+(it.nombre||'La ficha')+'» pasa a revisión · ya la puedes aprobar o devolver');
     carga();
   }catch(e){ avisa('No se pudo: '+((e&&e.message)||e)); }
+}
+
+/* VOLVER A ENCENDER UNA PAUSADA. Pausar es una decisión de la casa, así que
+   deshacerla también se hace aquí y en un clic. Si le falta algo para estar
+   publicada no se fuerza: la base la devolvería sola y el botón parecería
+   roto. Javi, 24-nov-2026. */
+async function reactivar(id){
+  var it=null;
+  for(var i=0;i<OFFS.length;i++) if(OFFS[i].id===id) it=OFFS[i];
+  if(!it) return;
+  var f=leFaltaDeVerdad(it);
+  if(f.length){
+    avisa('No se puede todavía: a «'+(it.nombre||'esta ficha')+'» le falta '+f.join(', ')+'.');
+    return;
+  }
+  try{
+    await patch('op_experiencias',id,{estado:'publicada'});
+    await historia('experiencia',id,'vuelta a publicar',{desde:'pausada', por:'el equipo'});
+    avisa('«'+(it.nombre||'La ficha')+'» vuelve a estar publicada · ya se puede vender');
+    carga();
+  }catch(e){ avisa('No se pudo: '+((e&&e.message)||e)); }
+}
+
+/* Una pausada no se aprueba ni se devuelve: se vuelve a encender o se deja
+   apagada. Y se dice desde cuándo lo está, que es el dato que falta cuando
+   alguien pregunta «¿y esto por qué no se vende?». */
+function tarjetaInactiva(x, sub){
+  var foto=portadaDe(x);
+  var dias=horas(x.updated_at||x.created_at);
+  dias = dias==null ? '' : (dias<24 ? 'apagada hoy' : 'apagada desde hace '+Math.floor(dias/24)+' día'+(Math.floor(dias/24)===1?'':'s'));
+  var texto=String(x.resumen||x.descripcion||'').replace(/\s+/g,' ').trim();
+  var falta=leFaltaDeVerdad(x);
+  return '<div class="fila">'+
+    '<div class="shot"'+(foto?' style="background-image:url(\''+esc(foto)+'\')"':'')+'>'+(foto?'':'⏸')+'</div>'+
+    '<div class="mid">'+
+      '<div class="nom"><b>'+esc(x.nombre||'(sin nombre)')+'</b></div>'+
+      '<div class="donde">'+esc(sub)+'</div>'+
+      (dias?'<div class="espera">'+esc(dias)+'</div>':'')+
+      (texto?'<div class="texto">'+esc(texto)+'</div>':'')+
+      (falta.length
+        ? '<div class="candado on">Para volver a publicarla le falta '+esc(falta.join(' · '))+'.</div>'
+        : '<div class="candado">Está completa: se puede volver a publicar.</div>')+
+    '</div>'+
+    '<div class="acc">'+
+      (falta.length ? '' :
+        '<button class="btn sm verde" onclick="reactivar(\''+esc(x.id)+'\')">Volver a publicar</button>')+
+      '<a class="btn sm gris" target="_top" href="/ficha.html?id='+encodeURIComponent(x.id)+'">Ver ↗</a>'+
+    '</div>'+
+  '</div>';
 }
 
 /* ---------- aprobar y rechazar ---------- */
@@ -644,7 +705,7 @@ function tarjetaBorrador(x, sub){
    pantalla vacía es hacer perder un clic. */
 function pintaBarra(){
   var barra=$('colar'); if(!barra) return;
-  var todo=(window.EXPS||[]).concat(window.BORR||[], window.EXPOK||[]);
+  var todo=(window.EXPS||[]).concat(window.BORR||[], window.OFFS||[], window.EXPOK||[]);
   if(EST==='cal' || !todo.length){ barra.hidden=true; return; }
   barra.hidden=false;
 
@@ -675,7 +736,7 @@ function pintaBarra(){
     so.value=FOPER;
   }
   $('fQuita').hidden = !(FCIUDAD||FOPER);
-  var n=(window.EXPS||[]).concat(window.BORR||[], window.EXPOK||[]).filter(pasaFiltro).length;
+  var n=(window.EXPS||[]).concat(window.BORR||[], window.OFFS||[], window.EXPOK||[]).filter(pasaFiltro).length;
   $('colarN').textContent = (FCIUDAD||FOPER)
     ? ('Se ven '+n+' de '+todo.length+' fichas') : '';
 }
@@ -702,6 +763,7 @@ function pinta(){
      ateneístas no, porque no son fichas de experiencia. */
   var EXPS=window.EXPS.filter(pasaFiltro),
       BORR=window.BORR.filter(pasaFiltro),
+      OFFS=(window.OFFS||[]).filter(pasaFiltro),
       EXPOK=window.EXPOK.filter(pasaFiltro);
   pintaBarra();
 
@@ -709,12 +771,13 @@ function pinta(){
   var viejos=0;
   EXPS.concat(EVTS).forEach(function(x){ var h=horas(x.updated_at||x.created_at); if(h!=null&&h>=48) viejos++; });
   var borrTxt = BORR.length ? ' · <b>'+BORR.length+'</b> en borrador sin mandar' : '';
+  var offTxt  = OFFS.length ? ' · <b>'+OFFS.length+'</b> inactiva'+(OFFS.length===1?'':'s') : '';
   $('cuenta').innerHTML= (total
     ? '<b>'+total+'</b> esperando'+(viejos?' · <b style="color:#9E3B2E">'+viejos+'</b> con más de 48 h':'')
-    : 'Nada esperando') + borrTxt;
+    : 'Nada esperando') + borrTxt + offTxt;
 
   var h='';
-  if(!total && !BORR.length){
+  if(!total && !BORR.length && !OFFS.length){
     /* «La cola está limpia» hablaba de la cola, no del trabajo. Javi,
        30-oct-2026: lo que importa saber es que no queda nada por aprobar. */
     h+='<div class="vacio"><b>'+(EST==='pend'?'No queda nada por aprobar':'Nada que enseñar aquí')+'</b>'+
@@ -745,6 +808,19 @@ function pinta(){
        'por eso hay tantas de atrás. Si ves alguna lista, pásala tú.</div>'+
        BORR.map(function(x){
       return tarjetaBorrador(x, (OPS[x.operador_id]||(x.tipo==='propio'?'Casa Pepe':'sin dueño'))+
+        (Number(x.precio_adulto)>0 ? ' · $'+Number(x.precio_adulto).toLocaleString('es-MX')
+          : Number(x.neto_adulto)>0 ? ' · $'+Number(x.neto_adulto).toLocaleString('es-MX')+' neto'
+          : ' · sin precio'));
+    }).join('');
+  }
+  if(OFFS.length){
+    h+='<h2>Inactivas <em>'+OFFS.length+'</em></h2>'+
+       '<div style="font-size:12.5px;color:var(--gris);margin:-4px 0 10px">'+
+       'Fichas pausadas: existen y la mayoría están completas, pero no se venden ni se ven en el '+
+       'escaparate. No se apagan solas, alguien las pausó. Si alguna debería estar vendiendo, '+
+       'enciéndela aquí.</div>'+
+       OFFS.map(function(x){
+      return tarjetaInactiva(x, (OPS[x.operador_id]||(x.tipo==='propio'?'Casa Pepe':'sin dueño'))+
         (Number(x.precio_adulto)>0 ? ' · $'+Number(x.precio_adulto).toLocaleString('es-MX')
           : Number(x.neto_adulto)>0 ? ' · $'+Number(x.neto_adulto).toLocaleString('es-MX')+' neto'
           : ' · sin precio'));
@@ -938,7 +1014,10 @@ async function carga(){
       veOk()? trae('eventos?select='+'id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
         'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&validado_at=gte.'+DESDE+'&order=validado_at.desc&limit=60') : [],
       veNo()? trae('eventos?select='+'id,nombre,estado,espacio,fecha_inicio,fecha_fin,productora_id,created_at,updated_at,'+
-        'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&devuelto_at=gte.'+DESDE+'&order=devuelto_at.desc&limit=60') : []
+        'fotos,descripcion,cupo,aforo,es_gratis,precio,precio_por_hora,duracion_min,clase,devuelto_at,devuelto_por,validado_at,validado_por'+'&devuelto_at=gte.'+DESDE+'&order=devuelto_at.desc&limit=60') : [],
+      /* Las pausadas, sin recortar por fecha: una ficha apagada hace cuatro
+         meses sigue apagada hoy, y es justo la que nadie recuerda. */
+      veOff()? trae('op_experiencias?select='+campos+'&estado=eq.pausada&order=updated_at.desc&limit=200') : []
     ]);
     EXPS=res[0]; BORR=res[1]||[]; EVTS=res[2]; ATES=res[3];
     CAND={}; OPS={};
@@ -959,7 +1038,7 @@ async function carga(){
          alta: `liga_enviada` y `pendiente` son los dos a medias. */
       PRODSTRIPE[x.id] = (x.stripe_charges_enabled===true) || x.stripe_estado==='vinculado';
     });
-    EXPOK=res[9]||[]; EVTOK=res[10]||[]; EVTNO=res[11]||[];
+    EXPOK=res[9]||[]; EVTOK=res[10]||[]; EVTNO=res[11]||[]; OFFS=res[12]||[];
   }catch(e){ FALLO=(e&&e.message)||String(e); }
   CARGANDO=false; pinta();
 }
