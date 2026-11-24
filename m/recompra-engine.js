@@ -39,7 +39,7 @@ var ACC={jj:74346, pitao:43854, ae:22729, lj:22529, pontigu:19411, aldo:14416,
    paga con acciones de HBR en la asamblea, no con flujo. El Pontigu baja de
    $7,518,290 a $7,018,290 y Struchture de $4,245,000 a $3,745,000 —su posición
    en Struchture era de $500,000 en efectivo, no los $450,000 que tenía la base. */
-var PON_TODO=7018290, STR_TODO=3745000;
+var PON_TODO=7018290, STR_TODO=4145000;
 
 /* Quién sale. El capital es el EXHIBIDO por cada persona; las acciones solo
    determinan el % de dividendo mientras cobra. Daniel Guiot está en los dos
@@ -60,15 +60,15 @@ var SALEN=[
  {k:'PON-CALVE', n:'Esther Calvé Mortes', v:'El Pontigu', cap:200000,  acc:19411, tot:PON_TODO},
  {k:'PON-SANDRA', n:'Sandra Luz Sierra Arellano', v:'El Pontigu', cap:200000,  acc:19411, tot:PON_TODO},
  {k:'PON-MONICA', n:'Mónica Franco Mendoza', v:'El Pontigu', cap:100000,  acc:19411, tot:PON_TODO},
- {k:'STR-PPGA', n:'Pedro Pablo González Aguirregomezcorta', v:'Struchture',cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-CLAUSELL', n:'Alejandra Clausell Narro', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-GUIOT', n:'Daniel Guiot Vial', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-JFV', n:'Jaime Fernández-Villaverde Narvaiza', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-VERGARA', n:'Carlos Ramón Vergara', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-TONI', n:'Antonio Aguirregomezcorta', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-BOSCH', n:'María del Mar Bosch Vega', v:'Struchture', cap:450000,  acc:3386,  tot:STR_TODO},
- {k:'STR-JPSANTO', n:'Juan Pablo Santoveña Domenech', v:'Struchture', cap:225000,  acc:3386,  tot:STR_TODO},
- {k:'STR-FSANTO', n:'Francisco Santoveña Domenech', v:'Struchture', cap:225000,  acc:3386,  tot:STR_TODO}
+ {k:'STR-PPGA', n:'Pedro Pablo González Aguirregomezcorta', v:'Struchture',cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-CLAUSELL', n:'Alejandra Clausell Narro', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-GUIOT', n:'Daniel Guiot Vial', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-JFV', n:'Jaime Fernández-Villaverde Narvaiza', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-VERGARA', n:'Carlos Ramón Vergara', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-TONI', n:'Antonio Aguirregomezcorta', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-BOSCH', n:'María del Mar Bosch Vega', v:'Struchture', cap:500000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-JPSANTO', n:'Juan Pablo Santoveña Domenech', v:'Struchture', cap:250000,  acc:3386,  tot:STR_TODO},
+ {k:'STR-FSANTO', n:'Francisco Santoveña Domenech', v:'Struchture', cap:250000,  acc:3386,  tot:STR_TODO}
 ];
 /* Quién se queda y cobra dividendo. Los refundadores pagan la recompra. */
 var QUEDAN=[
@@ -132,8 +132,8 @@ function corridaCon(SALEN, QUEDAN, cfg){
     var grupos={}, orden=[];
     act.forEach(function(i){ var nm=SALEN[i].n;
       if(!grupos[nm]){ grupos[nm]=[]; orden.push(nm); } grupos[nm].push(i); });
-    var boteP=orden.length?BOTE/orden.length:0;
-    var f={anio:a, flc:flc, n:orden.length, pos:act.length, bote:boteP,
+    var sumAll=act.reduce(function(t,i){return t+saldo0[i];},0);
+    var f={anio:a, flc:flc, n:orden.length, pos:act.length, bote:BOTE,
            boteFila:{}, pago:{}, tasa:{}, saldo:{}, div:{}};
     var usado=0;
     function aplica(i,p){
@@ -146,7 +146,7 @@ function corridaCon(SALEN, QUEDAN, cfg){
       var hs=grupos[nm], sum0=hs.reduce(function(t,j){ return t+saldo0[j]; },0), sobra=0;
       hs.forEach(function(i){
         var parte=hs.length>1 ? (sum0>0?saldo0[i]/sum0:1/hs.length) : 1;
-        var bi=boteP*parte;
+        var bi=(sumAll>0?BOTE*(saldo0[i]/sumAll):0);
         f.boteFila[i]=bi; f.tasa[i]=bi+est[i].pct;
         var quiere=Math.max(0, f.tasa[i]*flc);
         var p=Math.min(quiere, est[i].saldo);
