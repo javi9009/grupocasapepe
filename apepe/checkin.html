@@ -1434,25 +1434,70 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
   }
   function avisoDoc(cls,txt){ var a=$('docAviso'); a.className='aviso '+cls; a.innerHTML=txt; }
   window._docOK=false;
-  function ocr(f){ return Tesseract.recognize(f,'eng',{}).then(function(r){ return (r&&r.data&&r.data.text)||''; }); }
-  // Preprocesa la foto para el OCR: escala, gris y contraste. La franja MRZ se lee mucho mejor.
-  function preprocesa(file){ return new Promise(function(resolve){
+  /* LA BANDA DE ABAJO MANDA. Javi, 24-nov-2026: el lector le puso «Fausto
+     García Gavarte» y un número de pasaporte que no era el suyo. No es que
+     leyera mal una letra: la visión mira la página e interpreta, y cuando no
+     ve claro, completa. Abajo del pasaporte están los dos renglones de la
+     banda —el MRZ— y ahí no hay interpretación posible: traen dígitos de
+     control, así que si la aritmética cuadra el dato es cierto.
+     Ahora se leen los dos caminos A LA VEZ: la visión pinta rápido para no
+     dejar la pantalla muda, y en cuanto la banda cuadra pisa lo que hubiera y
+     el paso se da por bueno solo, sin pedirle al huésped que revise nada.
+     La foto casi siempre viene girada -el pasaporte se fotografía de lado-,
+     así que la franja de abajo se prueba en varias orientaciones. */
+  function imagenDe(file){ return new Promise(function(res,rej){
+    var im=new Image(); im.onload=function(){ res(im); }; im.onerror=rej;
+    try{ im.src=URL.createObjectURL(file); }catch(e){ rej(e); } }); }
+  /* Gira, recorta la franja de abajo, la agranda y la pasa a blanco y negro.
+     En 2000 px de ancho los renglones tienen píxeles de sobra para leerse. */
+  function franja(im, rot, soloBanda){
+    var w=im.width, h=im.height, gira=(rot===90||rot===270);
+    var W=gira?h:w, H=gira?w:h;
+    var esc=Math.min(2000/W, 3); if(esc<1) esc=1;
+    var cw=Math.round(W*esc), ch=Math.round(H*esc);
+    var c=document.createElement('canvas'); c.width=cw; c.height=ch;
+    var x=c.getContext('2d');
+    x.save(); x.translate(cw/2,ch/2); x.rotate(rot*Math.PI/180);
+    x.drawImage(im, -w*esc/2, -h*esc/2, w*esc, h*esc); x.restore();
+    var y0=soloBanda?Math.round(ch*0.60):0, hh=ch-y0;
+    var c2=document.createElement('canvas'); c2.width=cw; c2.height=hh;
+    var x2=c2.getContext('2d'); x2.drawImage(c,0,y0,cw,hh,0,0,cw,hh);
+    try{ var d=x2.getImageData(0,0,cw,hh), a=d.data, i, g;
+      for(i=0;i<a.length;i+=4){ g=0.299*a[i]+0.587*a[i+1]+0.114*a[i+2]; g=g>145?255:(g<100?0:g); a[i]=a[i+1]=a[i+2]=g; }
+      x2.putImageData(d,0,0);
+    }catch(e){}
+    return c2;
+  }
+  /* El lector, con el alfabeto de la banda y nada más: A-Z, dígitos y «<».
+     Sin esa lista se inventa comas, puntos y acentos que rompen el cuadre. */
+  var TWK=null;
+  async function lector(){
+    if(TWK!==null) return TWK;
     try{
-      var img=new Image();
-      img.onload=function(){
-        var scale=img.width<1600?(1600/img.width):1, w=Math.round(img.width*scale), h=Math.round(img.height*scale);
-        var cvp=document.createElement('canvas'); cvp.width=w; cvp.height=h;
-        var c=cvp.getContext('2d'); c.drawImage(img,0,0,w,h);
-        try{ var d=c.getImageData(0,0,w,h), a=d.data, i, g;
-          for(i=0;i<a.length;i+=4){ g=0.299*a[i]+0.587*a[i+1]+0.114*a[i+2]; g=g>150?255:(g<95?0:g); a[i]=a[i+1]=a[i+2]=g; }
-          c.putImageData(d,0,0);
-        }catch(e){}
-        cvp.toBlob(function(b){ resolve(b||file); },'image/png');
-      };
-      img.onerror=function(){ resolve(file); };
-      img.src=URL.createObjectURL(file);
-    }catch(e){ resolve(file); }
-  });}
+      var w=await Tesseract.createWorker('eng');
+      try{ await w.setParameters({ tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<', tessedit_pageseg_mode:'6' }); }catch(e){}
+      TWK=w;
+    }catch(e){ TWK=false; }
+    return TWK;
+  }
+  async function leeTexto(lienzo){
+    var w=await lector();
+    if(w){ var r=await w.recognize(lienzo); return (r&&r.data&&r.data.text)||''; }
+    var r2=await Tesseract.recognize(lienzo,'eng',{}); return (r2&&r2.data&&r2.data.text)||'';
+  }
+  async function mrzDesdeFoto(file){
+    var im; try{ im=await imagenDe(file); }catch(e){ return null; }
+    /* Franja de abajo en las tres orientaciones que de verdad pasan, y de
+       último recurso la foto entera por si el recorte se comió la banda. */
+    var intentos=[[0,true],[90,true],[270,true],[0,false]], mejor=null, i, m;
+    for(i=0;i<intentos.length;i++){
+      m=null;
+      try{ m=parseMRZ(await leeTexto(franja(im,intentos[i][0],intentos[i][1]))); }catch(e){}
+      if(m && m.confia && m.nombre) return m;
+      if(m && !mejor) mejor=m;
+    }
+    return mejor;
+  }
   // Lector principal: visión de Claude (Edge Function apepe-ocr)
   function ocrVision(file){
     return new Promise(function(resolve){
@@ -1465,45 +1510,60 @@ input:focus,select:focus{outline:none;border-color:var(--naranja);box-shadow:0 0
       });
     });
   }
+  /* Pone en los campos lo que venga, sin pisar con vacíos. */
+  function ponCampos(d){
+    if(d.nombre) $('cNombre').value=d.nombre;
+    /* Lo que el lector devuelva se pone, este o no en nuestro catalogo. */
+    if(d.nacionalidad) CP.ponPais($('cNac'), d.nacionalidad);
+    if(d.numero) $('cNum').value=d.numero;
+    if(d.nacimiento && /^\d{4}-\d{2}-\d{2}$/.test(d.nacimiento)) $('cNacim').value=d.nacimiento;
+  }
+  var DOCGEN=0;
   async function leerDoc(file){
+    var gen=++DOCGEN, mando=false;
     avisoDoc('wait','⏳ Leyendo tu documento…'); window._docOK=false; window._docData=null;
     $('docCampos').style.display='block'; $('cTipo').value='Pasaporte';
-    // 1) VISIÓN (Claude) — el lector bueno
-    try{
-      var v=await ocrVision(file);
+
+    /* Los dos a la vez: la banda es la que vale, la visión es la que llega
+       pronto. Ninguno espera al otro. */
+    var mrzProm=mrzDesdeFoto(file).catch(function(){ return null; });
+    var visProm=ocrVision(file).catch(function(){ return null; });
+
+    visProm.then(function(v){
+      if(gen!==DOCGEN || mando) return;
       if(v && v.ok && v.legible && v.nombre){
-        $('cNombre').value=v.nombre;
-        /* Lo que el lector devuelva se pone, este o no en nuestro catalogo. */
-        CP.ponPais($('cNac'), v.nacionalidad);
-        if(v.numero) $('cNum').value=v.numero;
-        if(v.nacimiento && /^\d{4}-\d{2}-\d{2}$/.test(v.nacimiento)) $('cNacim').value=v.nacimiento;
+        ponCampos(v);
         if(v.tipo){ var tt=(v.tipo==='Cédula'?'Cédula profesional':v.tipo); if(['Pasaporte','INE','Identificación oficial','Cédula profesional'].indexOf(tt)>=0) $('cTipo').value=tt; else if(!/pasaporte/i.test(String(v.tipo))) $('cTipo').value='INE'; }
         window._docOK=true; window._docData={ vision:true, pais:v.pais||'' };
-        avisoDoc('ok','✓ Leímos tu documento. Revisa que tus datos estén bien, sobre todo tu fecha de nacimiento.');
-        return;
+        avisoDoc('wait','Leímos tus datos. Estamos comprobándolos con la banda de abajo de tu pasaporte…');
       }
-      if(v && v.ok && v.legible===false){
-        window._docOK=true; window._docData={ manual:true };
-        avisoDoc('wait','No pudimos leer bien el documento. Enfócalo completo y con buena luz, o escribe tus datos a mano aquí.');
-        return;
-      }
-    }catch(e){}
-    // 2) RESPALDO: Tesseract MRZ (si la visión no respondió o no hay red)
-    try{
-      var m=parseMRZ(await ocr(await preprocesa(file)));
-      if(!(m&&m.confia)){ var m2=parseMRZ(await ocr(file)); if(m2&&(m2.confia||!m)) m=m2; }
-      if(m && m.confia && m.nombre){
-        $('cNombre').value=m.nombre;
-        CP.ponPais($('cNac'), m.nacionalidad);
-        if(m.numero) $('cNum').value=m.numero;
-        if(m.nacimiento) $('cNacim').value=m.nacimiento;
-        window._docOK=true; window._docData=m;
-        avisoDoc('ok','✓ Leímos tu pasaporte. Revisa que tus datos estén bien.');
-        return;
-      }
-    }catch(e){}
+    });
+
+    var m=await mrzProm;
+    if(gen!==DOCGEN) return;
+    /* Cuadran los dígitos de control: esto no se revisa, se da por bueno. */
+    if(m && m.confia && m.nombre){
+      mando=true;
+      ponCampos(m); $('cTipo').value='Pasaporte';
+      window._docOK=true; window._docData=Object.assign({ mrz:true }, m);
+      avisoDoc('ok','✓ Listo. Leímos la banda de tu pasaporte y los números cuadran. Tu foto y tus datos ya quedaron guardados: puedes seguir.');
+      return;
+    }
+
+    var v=await visProm;
+    if(gen!==DOCGEN) return;
+    if(v && v.ok && v.legible && v.nombre){
+      /* La visión se queda, pero sin el sello de la banda: aquí sí hay que
+         mirar, porque es una lectura y no una comprobación. */
+      window._docOK=true; window._docData={ vision:true, pais:v.pais||'' };
+      avisoDoc('ok','✓ Leímos tu documento. Revisa que tus datos estén bien, sobre todo tu fecha de nacimiento.');
+      return;
+    }
+    /* Ni banda ni visión: lo poco que haya salido se deja puesto igual, que
+       es menos de lo que habría que escribir desde cero. */
+    if(m && (m.nombre||m.numero||m.nacimiento)) ponCampos(m);
     window._docOK=true; window._docData={ manual:true };
-    avisoDoc('wait','No pudimos leer los datos desde la foto. Escríbelos a mano aquí abajo; son solo 30s.');
+    avisoDoc('wait','No pudimos leer los datos desde la foto. Repítela enfocando los dos renglones de abajo del pasaporte, o escríbelos a mano aquí; son 30 segundos.');
   }
   // Dígito de control MRZ (pesos 7-3-1; A=10..Z=35, '<'=0)
   function mrzChk(s){ var w=[7,3,1],sum=0,c,v; for(var i=0;i<s.length;i++){ c=s.charAt(i);

@@ -2,7 +2,7 @@
    Estrategia: network-first para el HTML (la app vive en Supabase, siempre fresca),
    cache-first para iconos. Suficiente para que la PWA sea instalable y abra offline
    con el último shell conocido. */
-const CACHE = 'soypepe-v2';
+const CACHE = 'soypepe-v3';
 const ICONS = ['/soypepe/icon-192.png', '/soypepe/icon-512.png', '/soypepe/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
