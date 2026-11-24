@@ -225,6 +225,7 @@ function sedeCol(s){for(const [re,v] of SEDEC)if(re.test(s||""))return v;return 
 let F=[],E={},RANGOS=[],REC={},cur=null,tab="criterios",pendingKey=null;
 let DB_OT={},DB_US={};
 let HIST={};
+let CV={}; /* cómo vamos: objetivos semestrales, trimestrales o anuales, con el promedio a último mes cerrado */
 let BC=[],BQ={},QNOW=(function(){const d=new Date();return d.toISOString().slice(0,7)+(d.getDate()<=15?"-Q1":"-Q2");})();
 /* Etiqueta corta de cada KPI, para enseñar en "Otorgar bono" a qué indicador
    está atado el objetivo. El catálogo completo vive en Bonos → KPIs. */
@@ -316,7 +317,8 @@ function edad(f){if(!f)return null;const d=new Date(f),h=new Date();let a=h.getF
 function aniv(f){if(!f)return null;const d=new Date(f+"T00:00:00"),hoy=new Date();
  const ult=new Date(d);ult.setFullYear(hoy.getFullYear());if(ult>hoy)ult.setFullYear(ult.getFullYear()-1);
  const prox=new Date(ult);prox.setFullYear(prox.getFullYear()+1);
- return {prox,dias:Math.round((prox-hoy)/86400000)};}
+ const iso=prox.getFullYear()+"-"+String(prox.getMonth()+1).padStart(2,"0")+"-"+String(prox.getDate()).padStart(2,"0");
+ return {prox:iso,dias:Math.round((prox-hoy)/86400000)};}
 function docCount(e){return e?DOCS.filter(d=>e[d[0]]).length:0;}
 function rango(e){if(!e)return null;return RANGOS.find(x=>x.activo&&(x.rol===e.puesto||x.puesto===e.puesto)&&(!x.sede||x.sede===e.sede))||RANGOS.find(x=>x.activo&&(x.rol===e.puesto||x.puesto===e.puesto));}
 
@@ -497,7 +499,6 @@ function sDocs(p,e){
 function sLaboral(p,e){
  if(!e)return `<div class="aviso">Los datos laborales necesitan sesión para leerse y editarse.</div>`;
  const g=rango(e);const an=aniv(e.fecha_inicio_labores);
- const b=p.bonos||[];
  return `<div class="grid">
   <div class="card"><h2>Puesto y contrato</h2>
    ${dato("ID","<strong>"+esc(e.empleado_id||"—")+"</strong> <span class='faint' style='font-size:.72rem'>(se genera solo)</span>")}
@@ -517,10 +518,6 @@ function sLaboral(p,e){
    ${g?dato("Banda del tabulador",mxn(g[e.tramo||p.tramo||"junior"])+" en su tramo"):""}
    ${din(e,"salario_desde","Último aumento","date",' data-dual="1"')}
    ${dato("Horas extra validadas (4 m)",Math.round((p.min_extra_4m||0)/60)+" h")}
-   <h2 style="margin-top:16px">Bonos</h2>
-   ${dato("Bono de puntualidad", e.bono_puntualidad ? '<span class="pill ok">Activo</span> &nbsp;<button class="bt" id="bonoTgl" data-on="0">Quitar</button>' : '<span class="faint">No lo tiene</span> &nbsp;<button class="bt" id="bonoTgl" data-on="1">＋ Agregar bono</button>')}
-   ${e.bono_puntualidad ? din(e,"bono_puntualidad_monto","Monto del bono (ref. "+((Number(NOM.bono_pct)||10))+"% = "+mxn(Math.round((Number(e.salario_bruto)||0)*(Number(NOM.bono_pct)||10)/100))+")","number") : ""}
-   ${b.length?b.map(x=>dato(esc(x.nombre),mxn(x.monto)+" · "+esc(x.estatus||"—"))).join(""):'<p class="vacia">Sin bonos registrados.</p>'}
   </div>
   <div class="card"><h2>Recibos de nómina</h2>
    ${(REC[p.id]||[]).length?(REC[p.id]||[]).slice(0,8).map(r=>{
@@ -735,7 +732,18 @@ function sBonosCard(p){
  medidos.forEach(function(o){vistos[normP(o.kpi)]=1; objHtml+=filaObj(o.kpi,Number(o.logro),'Meta: '+esc(o.regla||'≥')+' '+esc(o.meta)+' · va en '+esc(o.valor)+(o.meses?' · '+esc(o.meses)+' '+(Number(o.meses)===1?'mes':'meses'):''));});
  objMios.forEach(function(m){ if(vistos[normP(m.kpi)])return;
   if(/logro del equipo/i.test(m.kpi)&&det.equipo_20!=null){objHtml+=filaObj(m.kpi,Number(det.equipo_20)/20*100,'Promedio de la Productividad de su equipo directo ('+esc(det.subordinados||"—")+' personas) · pesa 50% de la suya');}
-  else objHtml+=filaObj(m.kpi,null,'Sin medición todavía '+chipTemp(m.temporalidad));
+  else{
+   /* objetivo de periodo largo: aunque no haya cerrado, se enseña cómo va con el promedio de los meses ya cerrados */
+   const cv=(CV[p.id]||[]).find(function(x){return normP(x.kpi)===normP(m.kpi);});
+   if(cv){
+    const MC=['','ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    const porMes=(cv.detalle||[]).filter(function(d){return d.pct!=null;}).map(function(d){return MC[d.mes]+' '+d.pct+'%';}).join(' · ');
+    const MET={cuartos:'el margen de Cuartos',ab:'el margen de A&B',ubo:'el UBO',ebitda:'el EBITDA'};
+    const cuenta=(det.via==='gerencia_usali'&&det.metric===cv.metric&&det.loc===cv.loc);
+    objHtml+=filaObj(m.kpi,Number(cv.logro),'Cómo vamos '+chipTemp(m.temporalidad)+' · meta '+esc(cv.regla||'≥')+' '+esc(cv.meta)+'% del plan · acumulado '+MC[cv.desde]+(cv.hasta!==cv.desde?' a '+MC[cv.hasta]:'')+': <b>'+esc(cv.acumulado)+'%</b> · '+esc(porMes)+' · promedio de '+esc(cv.meses)+' '+(Number(cv.meses)===1?'mes cerrado':'meses cerrados')
+      +(cuenta?'':' · informativo: el periodo no ha cerrado'+(det.via==='gerencia_usali'&&MET[det.metric]?' y hoy su Productividad se calcula con '+MET[det.metric]:'')));
+   }else objHtml+=filaObj(m.kpi,null,'Sin medición todavía '+chipTemp(m.temporalidad));
+  }
  });
  if(!objHtml)objHtml='<p class="vacia" style="font-size:.82rem">Sin objetivos en la matriz para '+esc(pz||'su puesto')+'. Se configuran en RH → Desempeño → Productividad → Matriz.</p>';
 
@@ -777,7 +785,8 @@ function sBonosCard(p){
     +'<div style="height:10px;border-radius:6px;background:#E8E2D5;overflow:hidden"><div style="height:100%;width:'+pctUso+'%;background:'+(asignado>tope&&tope>0?'#C0452F':'#137A56')+'"></div></div>'
     +(asignado>tope&&tope>0?'<div style="color:#C0452F;font-size:.74rem;margin-top:4px">⚠ Pasa del tope del 30%.</div>':'')
     +'<div class="faint" style="font-size:.74rem;margin-top:7px">Dos tipos de bono: <b>con dinero</b> (cuenta para el tope del 30%) o <b>sin pago</b> (bono de desempeño: suma hasta +1 punto a su Productividad por objetivo cumplido, no cuenta para el tope).</div>'
-    +'<div style="font-size:.78rem;margin-top:8px;padding-top:8px;border-top:1px solid var(--rule)">Bono de puntualidad: '+(e.bono_puntualidad?('<span class="pill ok">Activo</span> '+mxn(Number(e.bono_puntualidad_monto)||Math.round(nomina*pct/100))+' al mes ('+pct+'%) — se pierde con 1 retardo o falta. No cuenta en el tope.'):'<span class="faint">no activado (Perfil → Datos laborales → Bonos)</span>')+'</div>'
+    +'<div style="font-size:.78rem;margin-top:8px;padding-top:8px;border-top:1px solid var(--rule)">Bono de puntualidad: '+(e.bono_puntualidad?('<span class="pill ok">Activo</span> '+mxn(Number(e.bono_puntualidad_monto)||Math.round(nomina*pct/100))+' al mes ('+pct+'%) — se pierde con 1 retardo o falta. No cuenta en el tope. &nbsp;<button class="bt" id="bonoTgl" data-on="0">Quitar</button>'):'<span class="faint">no lo tiene</span> &nbsp;<button class="bt" id="bonoTgl" data-on="1">＋ Activar</button>')+'</div>'
+    +(e.bono_puntualidad?din(e,"bono_puntualidad_monto","Monto del bono (ref. "+pct+"% = "+mxn(Math.round(nomina*pct/100))+")","number"):'')
   +'</div>'
   +'<div class="cr-two">'
    +'<div class="cr-card"><div class="cr-h"><b>Objetivos de su puesto</b><span class="faint" style="font-size:.72rem">lectura · avance → desempeño</span></div>'
@@ -1189,6 +1198,7 @@ function llenaSel(){
  try{GUIA={};const _g=await sb("/eval_quiz_guia?select=employee_id,criterio,tests")||[];_g.forEach(x=>{(GUIA[x.employee_id]=GUIA[x.employee_id]||{})[x.criterio]=x.tests;});}catch(e){}
  try{CPLAN={};const cp=await sb("/carrera_planes?select=*&order=created_at.desc")||[];cp.forEach(x=>{(CPLAN[x.employee_id]=CPLAN[x.employee_id]||[]).push(x);});
    try{const tr=await sb("/carrera_bono_tramos?select=plan_id,escalon,pct,monto_mensual,requisitos_min,estatus")||[];const byP={};tr.forEach(t=>{(byP[t.plan_id]=byP[t.plan_id]||[]).push(t);});Object.values(CPLAN).forEach(a=>a.forEach(p=>{p.tramos=byP[p.id]||[];}));}catch(_){}}catch(e){}
+ try{const _cv=await sb("/rpc/obj_como_vamos",{method:"POST",body:"{}"})||[];CV={};_cv.forEach(x=>{(CV[x.employee_id]=CV[x.employee_id]||[]).push(x);});}catch(e){}
  try{const _bq=await sb("/bonos_quincena?select=*&estatus=in.(propuesto,validado,pagado)&order=created_at.desc")||[];_bq.forEach(x=>{(BQ[x.employee_id]=BQ[x.employee_id]||[]).push(x);});}catch(e){}
  try{const _db=await sb("/dias_bonificados?select=employee_id")||[];_db.forEach(x=>{DB_OT[x.employee_id]=(DB_OT[x.employee_id]||0)+1;});}catch(e){}
  try{const _du=await sb("/vacaciones_solicitudes?select=employee_id,dias_solicitados&tipo=eq.bonificado&estado=in.(pendiente,pre_aprobada,aprobada,tomada,confirmada)")||[];_du.forEach(x=>{DB_US[x.employee_id]=(DB_US[x.employee_id]||0)+(Number(x.dias_solicitados)||1);});}catch(e){}
