@@ -6401,9 +6401,20 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       ? '<span class="etq ok">validado</span>'
       : (d.no_valido ? '<span class="etq mal">sin validar</span>'
                      : '<span class="etq">por validar</span>');
+    /* QUIÉN VALIDÓ, Y CUÁNDO. Javi, 25-nov-2026: «recuerda que debes marcar
+       quién validó en la pantalla». El correo ya salía, pero sin fecha: una
+       validación sin hora no se puede discutir con nadie. Y si antes se
+       revirtió, se dice también: es la mitad de la historia que faltaba. */
     var quien = d.validado_at
-      ? '<div class="mini">'+esc(d.validado_por||'')+(d.validado_nota?' · '+esc(d.validado_nota):'')+'</div>'
+      ? '<div class="mini">Validó <b>'+esc(ccQuien(d.validado_por))+'</b> el '+
+          esc(ccMomento(d.validado_at))+(d.validado_nota?' · '+esc(d.validado_nota):'')+'</div>'
       : (d.no_valido ? '<div class="mini" style="color:var(--error,#9E3B2E)">Pasaron 3 días hábiles sin validar</div>' : '');
+    if(d.revertido_at){
+      quien += '<div class="mini" style="color:var(--alerta,#8C6212)">'+
+        (d.validado_at?'Antes se revirtió':'Validación revertida')+' · '+
+        esc(ccQuien(d.revertido_por))+' el '+esc(ccMomento(d.revertido_at))+
+        (d.revertido_nota?' · '+esc(d.revertido_nota):'')+'</div>';
+    }
     var ajuste = (d.validado_at && d.asistentes_escaneo!=null &&
                   Number(d.validado_pax)!==Number(d.asistentes_escaneo))
       ? '<div class="mini">contamos '+Number(d.asistentes_escaneo)+', quedó en '+Number(d.validado_pax)+'</div>' : '';
@@ -6434,7 +6445,9 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       '<span>'+Number(d.personas)+' pers.</span>'+
       '<span>'+(d.bruto==null?'—':ccPesos(d.bruto))+'</span>'+
       '<span>'+val+'</span>'+
-      '<span>'+(d.validado_at?'':'<button class="btn fantasma sm" data-val="'+esc(d.id)+'">Validar</button>')+
+      '<span>'+(d.validado_at
+          ? '<button class="btn fantasma sm" data-desval="'+esc(d.id)+'">Revertir</button>'
+          : '<button class="btn fantasma sm" data-val="'+esc(d.id)+'">Validar</button>')+
         (ADMIN&&!CC.moviendo?' <button class="btn fantasma sm" data-mv="'+esc(d.id)+'">Mover</button>':'')+'</span>'+
       mover+
     '</div>';
@@ -6684,6 +6697,48 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
     await cargaConc();
   }
 
+  /* El correo entero no cabe en una fila y tampoco hace falta: lo que se
+     quiere saber es quién, no desde qué dominio. */
+  function ccQuien(x){
+    x=String(x||'').trim();
+    if(!x) return 'alguien';
+    if(x.indexOf('@')<0) return x;
+    return x.split('@')[0].replace(/[._]/g,' ');
+  }
+  function ccMomento(iso){
+    if(!iso) return '';
+    try{
+      var d=new Date(iso);
+      var M=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      return d.getDate()+' '+M[d.getMonth()]+' '+String(d.getHours()).padStart(2,'0')+
+             ':'+String(d.getMinutes()).padStart(2,'0');
+    }catch(_){ return String(iso).slice(0,16).replace('T',' '); }
+  }
+
+  /* REVERTIR. Javi, 25-nov-2026: «me dice Sarahí que validó mal las fechas».
+     Validar era una puerta de un solo sentido y una equivocación se quedaba
+     puesta. Se revierte, se vuelve a validar, y las dos cosas quedan escritas
+     con nombre y hora: deshacer no es borrar. */
+  async function desvalidaLinea(id){
+    var d=(CC.lineas||[]).filter(function(x){ return x.id===id; })[0]||{};
+    var r=await cpPideVarios(
+      'Revertir la validación de '+(d.servicio||'este servicio')+' del '+ccDia(d.fecha)+'.\n'+
+      'Vuelve a quedar por validar y se podrá validar otra vez. Queda escrito '+
+      'quién la revirtió y cuándo.',
+      [{k:'nota', et:'¿Por qué? (lo verá quien mire esta línea)', valor:''}],
+      {si:'Revertir'});
+    if(!r) return;
+    var q=await fetch(SB+'/rest/v1/rpc/conc_desvalida',{method:'POST',headers:hdr(),
+      body:JSON.stringify({p_linea:id, p_nota:String(r.nota||'').trim()||null})});
+    var j=null; try{ j=await q.json(); }catch(_){}
+    if(!q.ok || !j || j.ok!==true){
+      toast((j&&(j.message||j.error))||'No se pudo revertir.',true); return;
+    }
+    toast('Revertida. Vuelve a '+j.personas+' persona'+(j.personas===1?'':'s')+
+          ', lista para validar otra vez.');
+    await cargaConc();
+  }
+
   function enganchaConc(){
     var c=$('ccCuerpo');
     /* Si lo abriste, se queda abierto: cualquier acción de esta pantalla
@@ -6709,6 +6764,8 @@ th{font-family:'Oswald';font-size:10.5px;letter-spacing:.07em;text-transform:upp
       b.onclick=function(ev){ ev.stopPropagation(); guardaMontoOC(b.getAttribute('data-omon'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-val]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); validaLinea(b.getAttribute('data-val')); };});
+    Array.prototype.forEach.call(c.querySelectorAll('[data-desval]'),function(b){
+      b.onclick=function(ev){ ev.stopPropagation(); desvalidaLinea(b.getAttribute('data-desval')); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-cot]'),function(b){
       b.onclick=function(ev){ ev.stopPropagation(); ccCotiza(b.getAttribute('data-cot'), b); };});
     Array.prototype.forEach.call(c.querySelectorAll('[data-serv-odc]'),function(b){
