@@ -1,80 +1,35 @@
-/* Soy Pepe · Service Worker (scope /sp/)
-   Estrategia: network-first para el HTML (la app vive en Supabase, siempre fresca),
-   cache-first para iconos. Suficiente para que la PWA sea instalable y abra offline
-   con el último shell conocido. */
-const CACHE = 'soypepe-v3';
-const ICONS = ['/soypepe/icon-192.png', '/soypepe/icon-512.png', '/soypepe/apple-touch-icon.png'];
+/* Soy Pepe · /sp/ — SERVICE WORKER DE DESPEDIDA.
 
-self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ICONS)).catch(() => {}));
-  self.skipWaiting();
-});
+   Durante meses hubo DOS Soy Pepe instalables: ésta, en /sp/, y la de
+   /soypepe/. Para el teléfono eran dos apps distintas -su propio manifest, su
+   propio icono, su propio service worker-, así que quien se instaló ésta se
+   quedó congelado en la versión de aquel día: no veía un solo cambio nuestro
+   por muchas veces que publicáramos. Pasó con Bren y las comidas, y el 25 de
+   noviembre de 2026 con el Soy Pepe de Deisy y el de Azucena, que seguían con
+   los iconos de antes. Parchear las dos cada vez no se sostiene: la segunda
+   siempre envejece.
+
+   Así que este service worker ya no sirve la app: la entierra. Borra su caché,
+   se desregistra a sí mismo y manda las ventanas abiertas a /soypepe/, que es
+   la única que se mantiene. Javi, 25-nov-2026. */
+
+const CACHE_VIEJA = 'soypepe-v3';
+
+self.addEventListener('install', () => { self.skipWaiting(); });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return; // Supabase y externos: directo a red
-  if (e.request.mode === 'navigate' || url.pathname === '/sp/' || url.pathname === '/sp/index.html') {
-    e.respondWith(
-      fetch(e.request)
-        .then((r) => {
-          const copy = r.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
-          return r;
-        })
-        .catch(() => caches.match(e.request).then((m) => m || caches.match('/sp/')))
-    );
-    return;
-  }
-  e.respondWith(
-    caches.match(e.request).then((m) => m || fetch(e.request).then((r) => {
-      const copy = r.clone();
-      caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
-      return r;
-    }))
-  );
-});
-
-/* ── Avisos al teléfono (Web Push) — mismo comportamiento que /soypepe/ ── */
-self.addEventListener('push', (e) => {
-  let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (_e) { d = {}; }
   e.waitUntil((async () => {
-    if (typeof d.badge === 'number') {
-      try {
-        if (d.badge > 0) await navigator.setAppBadge(d.badge);
-        else await navigator.clearAppBadge();
-      } catch (_e) { /* navegador sin Badging API: el aviso igual se muestra */ }
-    }
-    await self.registration.showNotification(d.title || 'Casa Pepe', {
-      body: d.body || '',
-      icon: d.icon || '/soypepe/icon-192.png',
-      badge: '/soypepe/icon-192.png',
-      tag: d.tag || 'casapepe',
-      renotify: true,
-      vibrate: [200, 100, 200, 100, 300],
-      data: { url: d.url || '/sp/' }
-    });
+    /* Sólo la caché de esta app. Las cachés son del dominio entero, no de
+       /sp/, y barrerlas todas se llevaría por delante la de /soypepe/. */
+    try { await caches.delete(CACHE_VIEJA); } catch (_e) {}
+    try { await self.registration.unregister(); } catch (_e) {}
+    try {
+      const lista = await self.clients.matchAll({ type: 'window' });
+      for (const c of lista) { try { await c.navigate('/soypepe/'); } catch (_e) {} }
+    } catch (_e) {}
   })());
 });
 
-self.addEventListener('notificationclick', (e) => {
-  e.notification.close();
-  const destino = (e.notification.data && e.notification.data.url) || '/sp/';
-  e.waitUntil((async () => {
-    const lista = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const c of lista) {
-      if (c.url.indexOf(self.location.origin) === 0 && 'focus' in c) {
-        try { await c.navigate(destino); } catch (_e) {}
-        return c.focus();
-      }
-    }
-    return clients.openWindow(destino);
-  })());
-});
+/* Sin fetch: desde aquí ya no se contesta a nada, todo va directo a la red.
+   Y sin push: los avisos del teléfono viven ahora en el de /soypepe/, que es
+   donde se vuelven a dar de alta solos al entrar. */
