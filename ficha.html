@@ -1511,6 +1511,8 @@ gmp-place-autocomplete,.gmpac{
   var ses=null,E=null,step=0,interno=false,CFG={};
   var LUG=[],GAS=[],TAN=[],PRO=[],MED=[],PAR=[],BLQ=[],COS=[],INS=[],MAPS=null;
   var GUI=[],PROTAS=[],IDEAS=[],GVTOCADO=false;
+  /* La ciudad de quien es la ficha, para cuando la ficha aún no la dice. */
+  var CIU_OP='';
 
   function $(id){return document.getElementById(id);}
   function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -2744,6 +2746,20 @@ gmp-place-autocomplete,.gmpac{
     /* Lo que la vista no expone se pega aquí, antes de pintar nada. */
     if(E) E=await completaDeTabla(E);
 
+    /* DE QUÉ CIUDAD ES ESTA FICHA. Javi, 26-nov-2026, con la ficha de Hiking
+       Puebla delante: marcaron «pasamos por ellos al hotel» y las zonas que se
+       les ofrecían eran Roma, Condesa, Juárez, Centro y Polanco -CDMX entera,
+       a 130 km-, así que no había ninguna que marcar y el paso no se podía
+       dar por bueno. La ficha nace sin ciudad y todo este paso caía a CDMX por
+       defecto. Ahora, cuando la ficha no la dice, la ciudad es la de su
+       touroperadora: la sabemos desde que firmó. */
+    if(E && E.operador_id && !E.ciudad){
+      try{
+        var ro=await get('tour_operadores?select=ciudad&id=eq.'+encodeURIComponent(E.operador_id));
+        CIU_OP=(ro&&ro[0]&&ro[0].ciudad)||'';
+      }catch(_ciu){}
+    }
+
     if(!E){
       noSePuede(
         'Esta ficha no se puede abrir con la sesión actual',
@@ -3466,15 +3482,28 @@ gmp-place-autocomplete,.gmpac{
     'Puebla': ['Centro Histórico','Cholula','Angélopolis','Atlixco','Los Sapos'],
     'Guatemala': ['Centro Histórico','Antigua']
   };
+  /* «Ciudad de México», «CDMX» y «Puebla de Zaragoza» son la misma ciudad
+     escrita de tres maneras: el alta de la touroperadora la guarda con su
+     nombre largo y aquí los cajones se llaman corto. Sin esto, un operador de
+     Puebla seguía cayendo a CDMX por no coincidir la cadena. */
+  function normCiu(c){
+    var t=String(c||'').trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g,'');
+    if(!t) return '';
+    if(BARRIOS_CIU[c]) return c;
+    if(t.indexOf('puebla')>=0) return 'Puebla';
+    if(t.indexOf('guatemala')>=0) return 'Guatemala';
+    if(t.indexOf('mexico')>=0 || t==='cdmx' || t==='df') return 'CDMX';
+    return '';
+  }
   function ciudadFicha(){
-    var c=(E&&E.ciudad)||'';
-    return BARRIOS_CIU[c] ? c : 'CDMX';
+    return normCiu(E&&E.ciudad) || normCiu(CIU_OP) || 'CDMX';
   }
   function barriosDeAqui(){
     var ciu=ciudadFicha(), base=BARRIOS_CIU[ciu].slice();
     (LUG||[]).forEach(function(l){
       if(!l.barrio) return;
-      if(l.ciudad && l.ciudad!==ciu) return;
+      if(l.ciudad && normCiu(l.ciudad) && normCiu(l.ciudad)!==ciu) return;
       if(base.indexOf(l.barrio)<0) base.push(l.barrio);
     });
     base.push('Otro barrio');
@@ -3578,11 +3607,21 @@ gmp-place-autocomplete,.gmpac{
   }
   /* El pickup es una opción encima del punto de encuentro, no en su lugar:
      quien quiere lo pide, quien no, se presenta donde siempre. Javi, 21-oct. */
-  var ZONAS=['Roma','Condesa','Juárez','Centro','Polanco'];
+  /* LAS ZONAS DE RECOGIDA SON LAS DE SU CIUDAD. Javi, 26-nov-2026: aquí
+     estaban escritas a mano -Roma, Condesa, Juárez, Centro, Polanco-, las
+     cinco de CDMX, para todo el mundo. Hiking Puebla marcó que pasa por el
+     hotel y se encontró eligiendo barrios de otra ciudad, así que no podía
+     dejar el paso bien puesto ni mandar la ficha a revisión. Son los mismos
+     cajones de barrio que el resto del paso, los de su ciudad. */
+  function zonasDeAqui(){
+    var ciu=ciudadFicha();
+    return (BARRIOS_CIU[ciu]||BARRIOS_CIU['CDMX']).slice();
+  }
   function pintaZonas(){
     var caja=$('chZonas'); if(!caja) return;
+    var ZONAS=zonasDeAqui();
     var puestas=(E.pickup_zonas||[]).slice();
-    /* Las cinco de siempre, y detrás las que haya escrito alguien: una zona
+    /* Las de su ciudad, y detrás las que haya escrito alguien: una zona
        suya no puede desaparecer del chip sólo por no estar en nuestra lista. */
     var todas=ZONAS.concat(puestas.filter(function(z){return ZONAS.indexOf(z)<0;}));
     caja.innerHTML=todas.map(function(z){
@@ -7316,6 +7355,11 @@ gmp-place-autocomplete,.gmpac{
     if(!$('cerFin').value.trim()){b.cer_final_lat=null;b.cer_final_lng=null;b.cer_final_direccion=null;b.cer_final_place_id=null;}
     b.fechas=E.fechas||[];b.salida_modo=E.salida_modo||'fijo';b.calendario_modo=E.calendario_modo||'semanal';
     b.pickup_zonas=E.pickup_zonas||[];
+    /* La ciudad se queda escrita la primera vez que se guarda. Venía vacía en
+       las fichas de los ateneístas y entonces cada pantalla que la necesita
+       -zonas de recogida, buscador de lugares, alta de un lugar nuevo- tenía
+       que adivinarla, y adivinaba CDMX. */
+    if(!E.ciudad){ var _cf=ciudadFicha(); if(_cf) b.ciudad=_cf; }
     /* Si sale recogiendo, el pick up queda encendido en la base aunque nadie
        haya bajado a marcar la casilla. */
     b.pickup_hotel = (b.salida_modo==='pickup') ? true : !!E.pickup_hotel;
