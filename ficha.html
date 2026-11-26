@@ -1695,11 +1695,14 @@ gmp-place-autocomplete,.gmpac{
     el.addEventListener('focus',function(){el._antes=el.value;});
     el.addEventListener('change',function(){
       if(el.value!=='__otro')return;
-      var t=(prompt(sel==='cancelacion'
-        ? 'Escribe tu política de cancelación:'
-        : '¿Hasta cuándo se puede reservar?')||'').trim();
-      if(!t){el.value=el._antes||'';return;}
-      ponOpcion(el,t.slice(0,120));
+      /* Sin pop-up del navegador: el mismo cuadro de la casa que el resto. */
+      el.value=el._antes||'';
+      pideTexto(sel==='cancelacion'
+        ? 'Escribe tu política de cancelación'
+        : '¿Hasta cuándo se puede reservar?','',function(t){
+        t=(t||'').trim(); if(!t)return;
+        ponOpcion(el,t.slice(0,120));
+      });
     });
   }
   function ponOpcion(el,texto){
@@ -1748,7 +1751,8 @@ gmp-place-autocomplete,.gmpac{
     Array.prototype.forEach.call($(cont).querySelectorAll('.chip'),function(c){
       if(c.hasAttribute('data-add')){
         c.onclick=function(){
-          var t=(prompt('¿Qué más?')||'').trim();
+          pideTexto('¿Qué más?','',function(t){
+          t=(t||'').trim();
           if(!t)return;
           var ya=Array.prototype.some.call($(cont).querySelectorAll('.chip'),function(x){
             return (x.getAttribute('data-v')||'').toLowerCase()===t.toLowerCase();});
@@ -1757,6 +1761,7 @@ gmp-place-autocomplete,.gmpac{
           n.className='chip on';n.setAttribute('data-v',t);n.textContent=t;
           n.onclick=function(){n.classList.toggle('on');};
           $(cont).insertBefore(n,c);
+          });
         };
         return;
       }
@@ -1786,7 +1791,8 @@ gmp-place-autocomplete,.gmpac{
       c.onclick=function(){c.classList.toggle('on');};
     });
     $('addIdioma').onclick=function(){
-      var n=(prompt('¿En qué otro idioma se da?')||'').trim();
+      pideTexto('¿En qué otro idioma se da?','',function(n){
+      n=(n||'').trim();
       if(!n)return;
       var ya=Array.prototype.map.call($('chIdiomas').querySelectorAll('.chip'),function(x){return (x.getAttribute('data-v')||'').toLowerCase();});
       if(ya.indexOf(n.toLowerCase())>=0){toast('Ese idioma ya está en la lista');return;}
@@ -1796,6 +1802,7 @@ gmp-place-autocomplete,.gmpac{
       nuevo.innerHTML=bandera(n)+' '+esc(n);
       nuevo.onclick=function(){nuevo.classList.toggle('on');};
       $('chIdiomas').insertBefore(nuevo,$('addIdioma'));
+      });
     };
   }
   function ponChips(c,v){v=v||[];Array.prototype.forEach.call($(c).querySelectorAll('.chip'),function(x){x.classList.toggle('on',v.indexOf(x.getAttribute('data-v'))>=0);});}
@@ -3123,6 +3130,20 @@ gmp-place-autocomplete,.gmpac{
     $('txVal').value='';
     $('mTexto').classList.add('on');
     setTimeout(function(){try{$('txVal').focus();}catch(_){}},30);
+  }
+  /* El mismo cuadro, para quien lo quiera esperar en vez de pasarle un qué
+     hacer después. Cerrar o cancelar devuelve null, igual que el prompt() que
+     sustituye. */
+  function pideTextoP(titulo,ayuda){
+    return new Promise(function(listo){
+      var listo1=function(v){ if(listo){var f=listo; listo=null; f(v);} };
+      pideTexto(titulo,ayuda,function(v){ listo1(v); });
+      /* Cancelar, Escape y el clic fuera cierran el cuadro: todos pasan por
+         aquí, así que no hace falta engancharse a cada botón. */
+      var obs=setInterval(function(){
+        if(!$('mTexto').classList.contains('on')){ clearInterval(obs); listo1(null); }
+      },200);
+    });
   }
   function cierraTexto(){TX_FN=null;$('mTexto').classList.remove('on');}
   $('txCancel').onclick=cierraTexto;
@@ -4842,7 +4863,8 @@ gmp-place-autocomplete,.gmpac{
       if(!CSEL){error('Elige algo de la galería.');return;}
       var precio=CSEL.precio!=null?CSEL.precio:CSEL.precio_mxn;
       if(precio==null||precio===''){
-        var t=prompt('Este producto no tiene precio cargado. ¿Cuánto cuesta '+CSEL.nombre+'?','');
+        var t=await pideTextoP('¿Cuánto cuesta '+CSEL.nombre+'?',
+          'Este producto no tiene precio cargado.');
         if(t===null)return;
         precio=Number(t||0);
         if(!precio){error('Sin precio no se puede costear.');return;}
@@ -6388,7 +6410,10 @@ gmp-place-autocomplete,.gmpac{
   }
   async function resuelveTyC(aprueba){
     var motivo=null;
-    if(!aprueba){motivo=(prompt('¿Por qué no se publica? Lo va a leer el operador:')||'').trim();if(!motivo)return;}
+    if(!aprueba){
+      motivo=((await pideTextoP('¿Por qué no se publica?','Lo va a leer el operador.'))||'').trim();
+      if(!motivo)return;
+    }
     var texto=[($('tycBase').value.trim()||plantillaTyC()),$('tycExtra').value.trim()].filter(Boolean).join('\n\n');
     var b={terminos_estado:aprueba?'aprobado':'rechazado',
            terminos_publicados:aprueba?texto:null,
@@ -7608,15 +7633,44 @@ gmp-place-autocomplete,.gmpac{
 
   /* Dos salidas: pausarla -deja de venderse y vuelve cuando quiera- o
      mandárnosla para que la miremos. Las dos las permite la base: el candado
-     solo le impide PONERLA a la venta, no quitarla. */
+     solo le impide PONERLA a la venta, no quitarla.
+
+     EL ÚLTIMO POP-UP DE ESTA PANTALLA. Javi, 26-nov-2026. Era un confirm() del
+     navegador, y además de romper la casa preguntaba mal: dos salidas metidas
+     en «Aceptar / Cancelar», y cerrar la ventana -o darle a Escape- contaba
+     como «déjala en pausa», que es una decisión que nadie tomó. Ahora cada
+     salida es su propio botón y cerrar no hace nada. */
+  function preguntaRetirar(){
+    return new Promise(function(listo){
+      var v=cxAbre(
+        '<div class="cab"><h3>Dejar de vender «'+esc(E.nombre||'esta experiencia')+'»</h3></div>'+
+        '<div class="cue">'+
+          '<p style="font-size:14px;line-height:1.65;color:var(--gris);margin:0 0 16px">'+
+            'Sale del escaparate en cuanto confirmes. Las reservas que ya existan no se tocan.</p>'+
+          '<div class="ft" style="justify-content:flex-start;flex-wrap:wrap;gap:8px">'+
+            '<button type="button" class="btn" data-r="pausada">Dejarla en pausa</button>'+
+            '<button type="button" class="btn fantasma" data-r="en_revision">Mandárnosla para revisar</button>'+
+            '<button type="button" class="btn fantasma" data-r="">Mejor no</button>'+
+          '</div>'+
+          '<div class="ay" style="margin-top:10px">En pausa la vuelves a poner tú cuando quieras. '+
+            'Si nos la mandas, la miramos nosotros y te decimos algo.</div>'+
+        '</div>');
+      Array.prototype.forEach.call(v.querySelectorAll('[data-r]'),function(x){
+        x.onclick=function(){ cxCierra(); listo(x.getAttribute('data-r')||''); };
+      });
+      /* Cerrar por fuera o con Escape es no hacer nada. */
+      var obs=setInterval(function(){
+        if(!document.getElementById('cxVelo')){ clearInterval(obs); listo(''); }
+      },200);
+    });
+  }
   $('btnRetirar').onclick=async function(){
     var b=$('btnRetirar');
-    var aRev=confirm('«'+(E.nombre||'Esta experiencia')+'» va a dejar de venderse.\n\n'+
-      'Aceptar: nos la mandas para que la revisemos.\n'+
-      'Cancelar: la dejas en pausa y la vuelves a poner tú cuando quieras.');
+    var nuevo=await preguntaRetirar();
+    if(!nuevo) return;
+    var aRev=(nuevo==='en_revision');
     b.disabled=true; var antes=b.textContent; b.textContent='Retirando…';
     try{
-      var nuevo = aRev ? 'en_revision' : 'pausada';
       await patch('op_experiencias', ID, {estado:nuevo});
       E.estado=nuevo; pintaEstado();
       avisa(aRev ? 'Retirada de la venta y mandada a revisión. Te decimos algo pronto.'
