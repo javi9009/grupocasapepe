@@ -15,7 +15,7 @@
 // El ticket lo abre un segundo pase barato que corre EN PARALELO con la
 // respuesta: si falla, el huésped recibe su contestación igual. Nunca al revés.
 //
-// body: { token?: string, mensajes: [{role:'user'|'assistant', content:string}] }
+// body: { token?: string, email?: string, sede?: string, mensajes: [{role:'user'|'assistant', content:string}] }
 // -> { ok, respuesta, ticket?: {folio, tipo} }
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
 const SRV = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -136,9 +136,36 @@ Nota: para cancelar/mover/ampliar o confirmar si aplica cancelación sin costo, 
   }
 }
 
-async function eventosProx(): Promise<string> {
+/* LA CIUDAD DEL HUÉSPED, RESUELTA EN EL SERVIDOR. Javi, 26-nov-2026: «¿por qué
+   a Gabriel Marrero siendo huésped de CDMX le apareció el food tour de Puebla
+   y lo reservó?».
+   Porque esta función pedía el catálogo sin ciudad y le daba a Don José las 8
+   más próximas del país entero. Don José sabe en qué casa duerme -lo tiene en
+   el contexto de la reserva- pero la lista que le dábamos no, así que
+   recomendaba Puebla a quien estaba en CDMX con toda la razón del mundo.
+   La sede sale de la reserva y, si no hay, de la casa de su cuenta: Gabriel no
+   tenía token pero sí cuenta con Casa Pepe CDMX apuntada desde el 13-nov. No
+   se le pregunta al teléfono, que es donde se decidía antes. */
+async function sedeDelHuesped(token: string, email: string): Promise<string> {
   try {
-    const r = await rest("rpc/apepe_catalogo", { method: "POST", body: JSON.stringify({ p_dias: 7 }) });
+    const r = await rest("rpc/apepe_sede_de", {
+      method: "POST",
+      body: JSON.stringify({ p_token: /^[0-9a-f-]{36}$/i.test(token) ? token : null,
+                             p_email: email || null }),
+    });
+    if (!r.ok) return "";
+    const v = await r.json().catch(() => null);
+    return typeof v === "string" ? v : "";
+  } catch { return ""; }
+}
+
+async function eventosProx(sede: string): Promise<string> {
+  try {
+    /* Sin sede se pide el país entero, como antes: es mejor recomendar de más
+       que quedarse mudo si no supimos de dónde es. */
+    const r = sede
+      ? await rest("rpc/apepe_catalogo_sede", { method: "POST", body: JSON.stringify({ p_dias: 7, p_sede: sede }) })
+      : await rest("rpc/apepe_catalogo", { method: "POST", body: JSON.stringify({ p_dias: 7 }) });
     const j = await r.json().catch(() => []);
     if (!Array.isArray(j) || !j.length) return "";
     const hoy = new Date(Date.now() - 6 * 3600 * 1000).toISOString().slice(0, 10);
@@ -148,7 +175,7 @@ async function eventosProx(): Promise<string> {
       .slice(0, 8)
       .map((e: any) => `- ${e.nombre}${e.proxima_fecha ? " (próx. " + String(e.proxima_fecha).slice(5) + (e.proxima_hora ? " " + String(e.proxima_hora).slice(0, 5) : "") + ")" : ""}${e.apepe_gratuito ? " · gratis por propina" : ""}`)
       .join("\n");
-    return top ? `EXPERIENCIAS PRÓXIMAS (próximos días, por si recomienda algo real; dile que reserve en la sección Experiencias):\n${top}` : "";
+    return top ? `EXPERIENCIAS PRÓXIMAS${sede ? " EN " + sede.toUpperCase() : ""} (próximos días, por si recomienda algo real; dile que reserve en la sección Experiencias).${sede ? " Son las de su ciudad: no le ofrezcas tours de la otra sede, que están a 130 km." : ""}\n${top}` : "";
   } catch {
     return "";
   }
@@ -221,7 +248,16 @@ Deno.serve(async (req) => {
   if (!mensajes.length) return J({ ok: false, error: "sin mensaje" }, 400);
   if (mensajes[mensajes.length - 1].role !== "user") return J({ ok: false, error: "el último mensaje debe ser del huésped" }, 400);
 
-  const [ctxReserva, ctxEventos] = await Promise.all([reservaContexto(token), eventosProx()]);
+  /* La sede antes que las experiencias: sin saber dónde duerme no se puede
+     elegir qué ofrecerle. El correo llega del cuerpo cuando la app lo sabe
+     (cuenta iniciada) y es lo único que identifica a quien no trae token. */
+  const email = String(body.email || "").trim().slice(0, 160);
+  /* La pista del aparato va la ÚLTIMA: la manda el navegador y se puede
+     editar, así que no manda sobre la reserva ni sobre la cuenta. Para
+     recomendar una ciudad vale; nada más cuelga de ella. */
+  const pista = String(body.sede || "").trim().slice(0, 40);
+  const sede = (await sedeDelHuesped(token, email)) || (pista ? (/pue|chol|atlix|tlax/i.test(pista) ? "Puebla" : "CDMX") : "");
+  const [ctxReserva, ctxEventos] = await Promise.all([reservaContexto(token), eventosProx(sede)]);
   const system = [SISTEMA, HECHOS, ctxReserva.texto, ctxEventos].filter(Boolean).join("\n\n");
 
   let texto = "";
