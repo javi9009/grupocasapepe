@@ -34,6 +34,17 @@ const pqCargaAvance=async()=>{ if(!PQUID) return; try{
   const d=await fetch(SBU+'/rest/v1/rpc/pq_mi_avance',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},SBH),body:JSON.stringify({p_usuario:PQUID})}).then(r=>r.json());
   if(d&&d.cats){ const m={}; d.cats.forEach(c=>{m[c.id]=c;}); AVANCE={es_exp:!!d.es_exp,cats:m,tours:Array.isArray(d.tours)?d.tours:[]}; }
 }catch(e){} };
+/* EL MODELO DORADO. Javi, 26-nov-2026: «100 preguntas clave de discurso y 100 por cada puesto…
+   si se logran 1 vez ya no se repiten y se muestran con un color dorado… si logran 100 ya tienen
+   10 puntos siempre. Los otros 10 y 10 serán por un bloque… acertar otras 50 preguntas en un mes».
+   Discurso y Conocimiento valen 20 cada uno: 10 fijos por las doradas + 10 del mes. Lo cuenta el servidor. */
+let DORADO=null;
+const pqCargaDorado=async()=>{ if(!PQUID) return; try{
+  const d=await fetch(SBU+'/rest/v1/rpc/pq_dorado_estado',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},SBH),body:JSON.stringify({p_usuario:PQUID})}).then(r=>r.json());
+  if(d&&d.discurso) DORADO=d;
+}catch(e){} };
+const pqDorHecha=(id)=>!!(DORADO&&DORADO.doradas&&DORADO.doradas[id]===true);
+const pqDorPend=(id)=>!!(DORADO&&DORADO.doradas&&DORADO.doradas[id]===false);
 const pqTok=()=>{try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
   if(k&&/auth-token/.test(k)){const v=JSON.parse(localStorage.getItem(k)||'null');
     const ss=v&&(v.currentSession||v); if(ss&&ss.access_token) return ss.access_token;}}}catch(e){}return '';};
@@ -438,7 +449,8 @@ async function asegurarCat(catId) {
       const a = Number(q.correcta);
       if (!(a >= 0 && a < o.length)) return;
       if (!tocaAqui(q.proyectos)) return;
-      out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+      if (pqDorHecha(q.id)) return;   // dorada ya ganada: no se repite
+      out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "", dor: pqDorPend(q.id) });
     });
     return out;
   };
@@ -455,10 +467,10 @@ function pickQuestions(catId, n) {
   // acepta el id de la categoría o el objeto ya armado (así se juega un tour suelto)
   const cat = (catId && typeof catId === 'object') ? catId : CATEGORIES.find((c) => c.id === catId);
   if (!cat || cat.questions.length === 0) return [];
-  return shuffle(cat.questions).slice(0, n).map((q) => {
+  return shuffle(cat.questions.filter((q) => !pqDorHecha(q.qid))).slice(0, n).map((q) => {
     const correct = q.o[q.a];
     const opts = shuffle(q.o);
-    return { qid: q.qid, q: q.q, options: opts, a: opts.indexOf(correct), segundos: q.seg || q.segundos, ...explicar(q.q) };
+    return { qid: q.qid, q: q.q, options: opts, a: opts.indexOf(correct), segundos: q.seg || q.segundos, dor: !!q.dor, ...explicar(q.q) };
   });
 }
 
@@ -592,6 +604,7 @@ function App() {
         } catch (e) {}
         construirBanco();
         await pqCargaAvance();
+        await pqCargaDorado();
         await pqCargaPremio();
         setUsers(finalUsers);
         setMeId(meIdToSet);
@@ -711,8 +724,34 @@ function App() {
     setUsers((us) => us.map((x) => (x.id === eid ? { ...x, walletHist: nh, walletMes: nm } : x)));
   };
 
+  // Ronda de preguntas doradas pendientes: las trae el servidor, las ya acertadas no vuelven.
+  const jugarDoradas = async (tipo) => {
+    setMode("gym"); setScreen("cargandocat");
+    const qs = [];
+    try {
+      const p = await fetch(SBU + "/rest/v1/rpc/pq_doradas_pendientes", { method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, SBH),
+        body: JSON.stringify({ p_usuario: PQUID, p_tipo: tipo, p_n: 15, p_idioma: PQLANG }) }).then((r) => r.json());
+      (Array.isArray(p) ? p : []).forEach((q) => {
+        const o = Array.isArray(q.opciones) ? q.opciones : [];
+        const a = Number(q.correcta);
+        if (!q.enunciado || o.length < 2 || !(a >= 0 && a < o.length)) return;
+        qs.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "", dor: true });
+      });
+    } catch (e) {}
+    if (!qs.length) { setScreen("home"); return; }
+    setActiveCat({ id: tipo === "discurso" ? "dorada_pepe" : "dorada_puesto",
+      name: tipo === "discurso" ? (PQLANG === "en" ? "Golden questions · Casa Pepe" : "Preguntas doradas · Casa Pepe")
+                                : (PQLANG === "en" ? "Golden questions · your role" : "Preguntas doradas · tu puesto"),
+      emoji: "⭐", color: "#C9A227", questions: qs, idioma: "es", _dorada: tipo });
+    setScreen("gym");
+  };
+
   const finishGym = (earned, correctCount, qs, answers) => {
     setTimeout(pqCargaAvance, 1600);
+    // las doradas que acaba de acertar ya son suyas: se marcan aquí para que no vuelvan a salir
+    try { if (DORADO && DORADO.doradas) qs.forEach((q, i) => { const a = answers && answers[i]; if (q.dor && a && a.picked === q.a) DORADO.doradas[q.qid] = true; }); } catch (e) {}
+    setTimeout(pqCargaDorado, 1700);
     updateMe({ walletHist: me.walletHist + earned, walletMes: me.walletMes + earned });
     try { fetch(SBU + "/rest/v1/pq_puntos", { method: "POST", headers: { ...SBH, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ employee_id: meId, pts_hist: me.walletHist + earned, pts_mes: me.walletMes + earned, updated_at: new Date().toISOString() }) }); } catch (e) {}
     // registrar progreso si es categoría obligatoria
@@ -780,7 +819,7 @@ function App() {
           {(screen === "noauth") && <div style={{padding:"48px 20px",textAlign:"center",color:"#a99a82"}}>Inicia sesi\u00f3n en SoyPepe para jugar PepeQuiz.</div>}
           {screen === "home" && <Home me={me} pendientes={pendientes} obligatorios={obligatorios}
             retosN={retos.length} onRetos={() => { loadRetos(); setScreen("retospend"); }}
-            onGym={startGym} onDuel={startDuel} onRank={() => setScreen("rank")} onPrueba={() => setScreen("prueba")} onAdmin={() => setScreen("admin")} />}
+            onGym={startGym} onDuel={startDuel} onRank={() => setScreen("rank")} onPrueba={() => setScreen("prueba")} onAdmin={() => setScreen("admin")} onDoradas={jugarDoradas} />}
           {screen === "prueba" && <Prueba me={me} obligatorios={obligatorios} prog={myProg}
             onTrain={async (catId) => { setMode("gym"); setActiveCat(CATEGORIES.find((c) => c.id === catId)); setScreen("cargandocat"); try { await asegurarCat(catId); } catch (e) {} setScreen("gym"); }} />}
           {screen === "rank" && <Ranking users={users} meId={meId} />}
@@ -792,7 +831,7 @@ function App() {
           {screen === "duel" && <DuelGame cat={activeReto ? retoCat(activeReto) : activeCat} qs={activeReto ? activeReto.test : null} onFinish={finishDuelPlay} />}
           {screen === "retospend" && <RetosPend retos={retos} users={users} onPick={(r) => { setActiveReto(r); setScreen("duel"); }} onBack={() => setScreen("home")} />}
           {screen === "retoout" && <RetoResult data={retoOut} onHome={() => { loadRetos(); setScreen("home"); }} />}
-          {screen === "result" && <Result res={lastResult} onAgain={() => setScreen("home")} onReview={() => setScreen("review")} onSeguir={() => { setMode("gym"); if (lastResult && lastResult.cat) setActiveCat(lastResult.cat); setScreen("gym"); }} />}
+          {screen === "result" && <Result res={lastResult} onAgain={() => setScreen("home")} onReview={() => setScreen("review")} onSeguir={() => { if (lastResult && lastResult.cat && lastResult.cat._dorada) { jugarDoradas(lastResult.cat._dorada); return; } setMode("gym"); if (lastResult && lastResult.cat) setActiveCat(lastResult.cat); setScreen("gym"); }} />}
           {screen === "review" && <Review res={lastResult} onBack={() => setScreen("result")} onHome={() => setScreen("home")} />}
         </div>
       </div>
@@ -1187,12 +1226,13 @@ function Login({ users, onPick }) {
 }
 
 /* ===================== HOME ===================== */
-function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin, retosN, onRetos }) {
+function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, onAdmin, retosN, onRetos, onDoradas }) {
   return (
     <div style={S.screen}>
       {/* el "Hola, {nombre}" ya lo pone la cabecera de SoyPepe: aquí el menú sube */}
       <PremioSemana />
       <PlazaSwitch />
+      <DoradasCard onJugar={onDoradas} />
 
       {me.enPrueba && obligatorios.length > 0 && (
         <button style={S.pruebaBanner} onClick={onPrueba}>
@@ -1234,6 +1274,58 @@ function Home({ me, pendientes, obligatorios, onGym, onDuel, onRank, onPrueba, o
         <button style={S.smallBtn} onClick={onRank}>🏆 {L("Los Vasconcelistas")}</button>
         <IngresBanner />
       </div>
+    </div>
+  );
+}
+
+/* ===================== PREGUNTAS DORADAS =====================
+   Lo primero que se ve al entrar al quiz: de dónde salen los 20 puntos de Discurso y los 20 de
+   Conocimiento, cuánto lleva y qué le falta. La mitad se gana una vez y para siempre (doradas);
+   la otra mitad se gana cada mes (50 aciertos). */
+function DoradasCard({ onJugar }) {
+  const [abre, setAbre] = useState(false);
+  const d = DORADO;
+  if (!d || !d.discurso || !d.conocimiento) return null;
+  const en = PQLANG === "en";
+  const pct = (x, y) => Math.max(0, Math.min(100, y > 0 ? Math.round(100 * x / y) : 0)) + "%";
+  const barra = { height: 6, borderRadius: 4, background: "#ffffff1c", overflow: "hidden", marginTop: 3 };
+  const fila = (tipo, tit, x) => (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <b style={{ fontSize: 14 }}>{tit}</b>
+        <span style={{ fontSize: 12.5, color: "#F2D98B", fontWeight: 700, whiteSpace: "nowrap" }}>{(Number(x.pts) + Number(x.mes_pts)).toFixed(1)} / 20</span>
+      </div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11.5, color: "#F2D98B" }}>⭐ {en ? "Golden" : "Doradas"} {x.ok}/{x.total} · {en ? "yours for good" : "para siempre"} · {Number(x.pts).toFixed(1)}/10</div>
+          <div style={barra}><i style={{ display: "block", height: "100%", width: pct(x.ok, x.total), background: "#C9A227" }} /></div>
+          <div style={{ fontSize: 11.5, color: "#d7cdb6", marginTop: 6 }}>📅 {en ? "This month" : "Este mes"} {x.mes_ok}/{d.meta_mes} · {Number(x.mes_pts).toFixed(1)}/10</div>
+          <div style={barra}><i style={{ display: "block", height: "100%", width: pct(x.mes_ok, d.meta_mes), background: "#7BD389" }} /></div>
+        </div>
+        {x.total > 0 && x.ok < x.total
+          ? <button style={{ border: 0, borderRadius: 12, padding: "10px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer", color: "#2a2108", background: "linear-gradient(135deg,#F2D98B,#C9A227)" }} onClick={() => onJugar(tipo)}>{en ? "Play" : "Jugar"}</button>
+          : <span style={{ fontSize: 22 }} title={en ? "All golden questions won" : "Todas las doradas ganadas"}>{x.total > 0 ? "🏅" : ""}</span>}
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ borderRadius: 20, padding: "14px 16px", marginBottom: 12, color: "#fff", border: "1px solid #C9A22788", background: "linear-gradient(140deg,#3a2f12,#241c0c)", boxShadow: "0 0 22px #C9A22722" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <b style={{ fontSize: 15.5 }}>⭐ {en ? "Golden questions" : "Preguntas doradas"}</b>
+        <button style={{ background: "none", border: 0, color: "#F2D98B", fontSize: 12.5, textDecoration: "underline", cursor: "pointer", padding: 0 }} onClick={() => setAbre(!abre)}>{abre ? (en ? "Close" : "Cerrar") : (en ? "How does it work?" : "¿Cómo funciona?")}</button>
+      </div>
+      <div style={{ fontSize: 12.5, color: "#e9dfc6", marginTop: 4, lineHeight: 1.4 }}>
+        {en ? "Discurso and Knowledge are worth 20 points each in your performance: 10 for good with the golden questions, 10 every month with " + d.meta_mes + " right answers."
+            : "Discurso y Conocimiento valen 20 puntos cada uno en tu desempeño: 10 para siempre con las doradas y 10 cada mes con " + d.meta_mes + " aciertos."}
+      </div>
+      {abre && (
+        <div style={{ fontSize: 12.5, color: "#e9dfc6", marginTop: 8, lineHeight: 1.5, borderTop: "1px solid #ffffff1c", paddingTop: 8 }}>
+          {en ? (<span><b>Golden half (10 points, for good).</b> There are 100 golden questions about Casa Pepe and up to 100 about your role, taken from your procedures. Each one you get right adds to your score and never comes back. Get them all and those 10 points are yours forever.<br /><br /><b>Monthly half (10 points, every month).</b> Get {d.meta_mes} questions right in the Gym during the month. Casa Pepe, philosophy, culture and tours count for Discurso; the topics of your role count for Knowledge. It starts from zero on the 1st.</span>)
+              : (<span><b>La mitad dorada (10 puntos, para siempre).</b> Hay 100 preguntas doradas de Casa Pepe y hasta 100 de tu puesto, sacadas de tus procedimientos. Cada una que aciertas suma a tu nota y ya no vuelve a salir. Cuando las tengas todas, esos 10 puntos son tuyos para siempre.<br /><br /><b>La mitad del mes (10 puntos, cada mes).</b> Acierta {d.meta_mes} preguntas en el Gym durante el mes. Las de Casa Pepe, filosofía, cultura y tours cuentan para Discurso; las de los temas de tu puesto, para Conocimiento. El día 1 empieza de cero.</span>)}
+        </div>
+      )}
+      {fila("discurso", en ? "Casa Pepe discourse" : "Discurso de Casa Pepe", d.discurso)}
+      {fila("puesto", (en ? "Knowledge of your role" : "Conocimiento de tu puesto") + (d.puesto ? " · " + d.puesto : ""), d.conocimiento)}
     </div>
   );
 }
@@ -1316,7 +1408,8 @@ function TourPila({ cat, onBack, onTrain }) {
           const o = Array.isArray(q.opciones) ? q.opciones : [];
           const a = Number(q.correcta);
           if (!q.enunciado || o.length < 2 || !(a >= 0 && a < o.length)) return;
-          out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "" });
+          if (pqDorHecha(q.id)) return;
+          out.push({ qid: q.id, seg: q.segundos, q: q.enunciado, o: o, a: a, exp: q.explicacion || "", dor: pqDorPend(q.id) });
         });
         return out;
       };
@@ -1800,8 +1893,9 @@ function GameHeader({ cat, idx, total, right, compact }) {
 }
 function QuestionCard({ cur, picked, onPick, color }) {
   return (
-    <div style={S.qCard}>
+    <div style={cur.dor ? { ...S.qCard, border: "1px solid #C9A227", background: "linear-gradient(160deg,#3a2f12,#ffffff0a)", boxShadow: "0 0 0 1px #C9A22755, 0 0 20px #C9A22733" } : S.qCard}>
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}><RelojBarra /></div>
+      {cur.dor && <div style={{ display: "inline-block", marginBottom: 10, padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 800, color: "#2a2108", background: "linear-gradient(135deg,#F2D98B,#C9A227)" }}>⭐ {PQLANG === "en" ? "Golden question · get it right once and it is yours for good" : "Pregunta dorada · si la aciertas, es tuya para siempre"}</div>}
       <p style={S.qText}>{cur.q}</p>
       <div style={S.optGrid}>
         {cur.options.map((opt, i) => {
