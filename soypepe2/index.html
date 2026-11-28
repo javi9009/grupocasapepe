@@ -309,7 +309,19 @@ const sb = createClient('https://rehophywchakfapivsbh.supabase.co','sb_publishab
 const EMBED=(new URLSearchParams(location.search).get('embed')==='1'); if(EMBED)document.documentElement.classList.add('embed');
 let EN_HOME=true;
 const VIVA='/soypepe/';                                    // la app actual: ahí siguen checador, chat, concierge y juegos
-const CDMX_PROP='45e69775-d877-4507-a9e1-a45bd3400dc5', ATENEO_PROP='3e10a9ea-4913-4f7c-86ef-0c829caa851d';
+const CDMX_PROP='45e69775-d877-4507-a9e1-a45bd3400dc5', ATENEO_PROP='3e10a9ea-4913-4f7c-86ef-0c829caa851d', CORP_PROP='fde2f615-2c65-40fa-9df3-6336b5ab312c';
+/* DÓNDE COME CADA QUIEN. La misma regla que la hoja de comidas de siempre
+   (cpSedeComida): Puebla come en Puebla; Virreyes tiene cocina propia; el
+   corporativo no tiene cocina y come en CDMX. Quien puede elegir (CDMX,
+   Virreyes y corporativo) guarda su cocina en cp_comida_sede, que es la misma
+   llave que usa la hoja donde la cocina sube el menú: así lo que se sube y lo
+   que aquí se ve es siempre la misma cocina. */
+function comidaElige(){ const b=(D&&D.emp&&D.emp.property_id)||null; return (!b||b===ATENEO_PROP||b===CDMX_PROP||b===CORP_PROP); }
+function propComida(){ const b=(D&&D.emp&&D.emp.property_id)||null;
+  let p=(b===ATENEO_PROP||b===CDMX_PROP)?b:(comidaElige()?CDMX_PROP:b);
+  if(comidaElige()&&!RO){ let pref=null; try{pref=localStorage.getItem('cp_comida_sede');}catch(_){}
+    if(pref==='virreyes')p=ATENEO_PROP; else if(pref==='cdmx')p=CDMX_PROP; }
+  return p; }
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const mxn=n=>n==null?'—':'$'+Number(n).toLocaleString('es-MX',{maximumFractionDigits:0});
@@ -540,7 +552,7 @@ function home(){
 
 /* ---------- resúmenes de los cuatro accesos ---------- */
 async function comidas(){
-  const box=$('days'); if(!box)return; const prop=(D.emp.property_id===ATENEO_PROP||!D.emp.property_id)?CDMX_PROP:D.emp.property_id;
+  const box=$('days'); if(!box)return; const prop=propComida();
   const hoy=mxToday(), keys=[]; for(let i=0;i<7;i++){const d=new Date(hoy.getTime()+i*864e5); keys.push(iso(d));}
   let menu={},mine={},votos={};
   try{(await sb.from('comidas_menu').select('fecha,platillo').eq('property_id',prop).in('fecha',keys)).data?.forEach(m=>menu[m.fecha]=m.platillo||'');}catch(_){}
@@ -1021,16 +1033,29 @@ async function pgVac(){
 /* ---------- Comidas de la semana ---------- */
 async function pgComidas(){
   page('Comidas de la semana',esc(D.emp.sede||'')+' · apúntate los días que trabajas','<div class="center">Cargando el menú…</div>');
-  const prop=(D.emp.property_id===ATENEO_PROP||!D.emp.property_id)?CDMX_PROP:D.emp.property_id;
+  const prop=propComida();
   const hoy=mxToday(), keys=[]; for(let i=0;i<7;i++)keys.push(iso(new Date(hoy.getTime()+i*864e5)));
   let menu={},mine={},quien={},fama={};
   try{(await sb.from('comidas_menu').select('fecha,platillo').eq('property_id',prop).in('fecha',keys)).data?.forEach(m=>menu[m.fecha]=m.platillo||'');}catch(_){}
   try{(await sb.from('comida_inscripciones').select('fecha,employee_id,nombre_display').eq('property_id',prop).eq('apuntado',true).in('fecha',keys)).data?.forEach(x=>{(quien[x.fecha]=quien[x.fecha]||[]).push(x.nombre_display||'—'); if(x.employee_id===D.emp.id)mine[x.fecha]=true;});}catch(_){}
   try{(await sb.from('v_comida_recetario').select('nombre,coronas,mmm,votos')).data?.forEach(x=>fama[String(x.nombre||'').trim().toLowerCase()]=x);}catch(_){}
   if(!RO){try{MANDO=((await sb.rpc('puede_ver_apuntados_comida')).data===true);}catch(_){}}
+  /* SUBIR EL MENÚ. Javi, 28-nov-2026: «aún no nos deja a los jefes de cocina o
+     cocineros editar el plan de cocina semanal». El permiso nunca se perdió:
+     lo que pasó es que esta página nueva tapó la hoja donde se sube el menú y
+     aquí sólo se podía leer. Cocina y jefes (puede_ver_apuntados_comida) con
+     permiso de Comidas en «editar» (puede_gestionar_comidas) tienen el botón;
+     abre la hoja de siempre, con sus semanas, el recetario y «Crear menú». */
+  let EDITA=false;
+  if(!RO&&MANDO){try{EDITA=((await sb.rpc('puede_gestionar_comidas')).data===true);}catch(_){}}
+  const SEDE=(prop===ATENEO_PROP)?'virreyes':'cdmx';
+  const elige=(comidaElige()&&!RO)?`<div style="display:flex;gap:6px;justify-content:center;margin:0 0 10px"><button class="btn${SEDE==='cdmx'?'':' out'}" data-sede="cdmx" style="padding:6px 12px;font-size:.76rem">Cósmica · CDMX</button><button class="btn${SEDE==='virreyes'?'':' out'}" data-sede="virreyes" style="padding:6px 12px;font-size:.76rem">Cumbre · Virreyes</button></div>`:'';
+  const edita=EDITA?`<button class="btn" id="cmEdita" style="width:100%;margin:0 0 10px;padding:12px 14px;font-size:.9rem">✏️ Subir o editar el menú de la semana</button>`:'';
   const rows=keys.map((k,i)=>{const d=new Date(k+'T12:00:00'), pl=menu[k], fa=pl?fama[String(pl).trim().toLowerCase()]:null, n=(quien[k]||[]).length;
     return `<div class="dd${i===0?' hoy':''}${pl?'':' off'}"><div class="dt"><small>${DIA[d.getDay()]}</small><b>${d.getDate()}</b></div><div class="mid"><b>${pl?esc(pl):'Sin menú publicado'}</b><small>${pl?(n+' apuntado'+(n===1?'':'s')+(fa&&fa.votos?' · '+(fa.coronas||0)+' coronas · '+(fa.mmm||0)+' ricos':' · sin votos')):'cocina aún no lo carga'}</small>${pl&&MANDO?`<a href="#" data-q="${k}" style="font-size:.74rem;color:var(--accent);font-weight:700;text-decoration:none">ver quién va ›</a>`:''}</div>${pl?`<button class="btn${mine[k]?'':' out'}" style="padding:7px 12px;font-size:.78rem;flex:none" data-f="${k}">${mine[k]?'Apuntado ✓':'Apuntarme'}</button>`:''}</div>`;}).join('');
-  page('Comidas de la semana',esc(D.emp.sede||'')+' · apúntate los días que trabajas',rows+'<div class="faint" style="font-size:.74rem;text-align:center;margin-top:6px">El menú lo editan cocina y jefes desde la app de siempre.</div>');
+  page('Comidas de la semana',esc(D.emp.sede||'')+' · apúntate los días que trabajas',`<div id="cmPag">${elige}${edita}${rows}<div class="faint" style="font-size:.74rem;text-align:center;margin-top:6px">${EDITA?'Con el botón de arriba subes el menú de esta semana y de las siguientes.':'El menú lo suben cocina y jefes.'}</div></div>`);
+  document.querySelectorAll('[data-sede]').forEach(b=>b.onclick=()=>{ try{localStorage.setItem('cp_comida_sede',b.dataset.sede);}catch(_){} pgComidas(); });
+  if($('cmEdita'))$('cmEdita').onclick=()=>{ if(EMBED){ try{ parent.postMessage({type:'sp2-comidas'},location.origin); return; }catch(_){} } location.href='/soypepe/#comidas'; };
   document.querySelectorAll('[data-f]').forEach(b=>b.onclick=async()=>{ if(!noRO())return; const f=b.dataset.f, next=!mine[f]; b.disabled=true;
     try{const r=await sb.from('comida_inscripciones').upsert({property_id:prop,fecha:f,employee_id:D.emp.id,nombre_display:D.emp.nombre,apuntado:next,updated_at:new Date().toISOString()},{onConflict:'property_id,fecha,employee_id'}); if(r.error)throw r.error; pgComidas();}
     catch(_){alert('No se pudo guardar. Inténtalo de nuevo.'); b.disabled=false;}});
@@ -1398,6 +1423,10 @@ async function carga(ver){
 }
 async function cargaCamb(){ CAMB={recibidos:[],enviados:[]}; if(RO)return; try{ const d=(await sb.rpc('sp2_cambios_mios')).data; if(d)CAMB={recibidos:d.recibidos||[],enviados:d.enviados||[]}; }catch(_){} }
 window.addEventListener('message',e=>{ if(e.origin===location.origin&&e.data==='sp2-home'&&D){ home(); window.scrollTo(0,0); } });
+/* La hoja donde la cocina sube el menú vive en la app que nos contiene: al
+   guardar o al cerrarla nos avisa y se repinta lo que esté a la vista. */
+window.addEventListener('message',e=>{ if(e.origin!==location.origin||e.data!=='sp2-comidas-cambio'||!D) return;
+  try{ if($('cmPag')) pgComidas(); else if(EN_HOME) comidas(); }catch(_){} });
 (async()=>{
   const {data:{session}}=await sb.auth.getSession();
   if(!session){ $('app').innerHTML='<div class="center"><h3 style="color:var(--ink)">Entra con tu cuenta</h3><p>Esta es la versión nueva de SoyPepe, en pruebas. Inicia sesión en la app de siempre y vuelve a abrir esta liga.</p><a class="btn" style="display:inline-block;text-decoration:none" href="'+VIVA+'">Ir a SoyPepe</a></div>'; return; }
