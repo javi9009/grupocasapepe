@@ -89,6 +89,9 @@ h2{font-size:16px;margin:0 0 8px}
      que esconder a mano. Y mirando el de otro no salen los campos para subir
      piezas: subir es de quien grabo. */
   var VIENDO=null, LISTA=[];
+  /* Lo que hay en pantalla ahora mismo, para poder corregir una pieza sin
+     volver a pedirle el plan a la base. */
+  var PIEZAS=[], MAXSEM=0;
 
   function selectorHtml(){
     if(!LISTA.length) return '';
@@ -141,11 +144,24 @@ h2{font-size:16px;margin:0 0 8px}
       '</div>';
 
     var piezas=d.piezas||[], sem=null;
+    PIEZAS=piezas; MAXSEM=0;
+    piezas.forEach(function(z){ if((z.semana||0)>MAXSEM) MAXSEM=z.semana||0; });
+    /* Entregadas por semana, para decir en el encabezado como va esa semana y
+       reconocer lo que pasa de cinco. Javi, 27-nov-2026: las cinco son el
+       estandar, no el techo. */
+    var porSem={};
+    piezas.forEach(function(z){
+      if(!z.hecho) return;
+      porSem[z.semana]=(porSem[z.semana]||0)+1; });
     if(!piezas.length){
       h+='<div class="card"><p class="muted">Tu plan todavía no tiene piezas.</p></div>';
     }
     piezas.forEach(function(z){
-      if(z.semana!==sem){ sem=z.semana; h+='<div class="sem">Semana '+esc(sem)+'</div>'; }
+      if(z.semana!==sem){ sem=z.semana;
+        var n=porSem[sem]||0, extra=Math.max(n-5,0);
+        h+='<div class="sem">Semana '+esc(sem)+
+           ' <span style="font-weight:500;opacity:.75">· '+n+'/5'+
+           (extra?' <b style="color:#1d7a5c">+'+extra+' de más</b>':'')+'</span></div>'; }
       var hecho=!!z.hecho;
       h+='<div class="pz" id="pz-'+esc(z.id)+'">'+
         '<div class="top">'+
@@ -153,7 +169,9 @@ h2{font-size:16px;margin:0 0 8px}
           '<span class="tag">'+esc(z.formato||z.tipo||'pieza')+'</span>'+
           (hecho?'<span class="tag ok">entregada</span>':'')+
         '</div>'+
-        '<div class="idea">'+esc(z.idea||'(sin descripción)')+'</div>'+
+        '<div class="idea" id="idea-'+esc(z.id)+'">'+esc(z.idea||'(sin descripción)')+
+          (AJENO?'':' <a href="#" style="font-size:.85rem;font-weight:600;white-space:nowrap" '+
+            'onclick="return edita(\''+esc(z.id)+'\')">editar</a>')+'</div>'+
         (z.referencia
           ? '<a class="ref" href="'+esc(z.referencia)+'" target="_blank" rel="noopener">'+(AJENO?'La referencia que puso':'La referencia que pusiste')+' ↗</a>'
           : '')+
@@ -307,6 +325,67 @@ h2{font-size:16px;margin:0 0 8px}
     m.className='msg'; m.textContent='Guardando…';
     try{
       var r=await sb.rpc('vol_pieza_fecha',{p_pieza:id,p_fecha:i.value});
+      var d=r && r.data;
+      if(!d || d.error){ m.className='msg err'; m.textContent=(d&&d.error)||'No se pudo guardar.'; return; }
+      m.className='msg ok'; m.textContent='✓ Guardado';
+      setTimeout(carga, 500);
+    }catch(e){ m.className='msg err'; m.textContent='No se pudo guardar.'; }
+  };
+
+  /* CORREGIR LA PIEZA, NO SOLO ENTREGARLA. Javi, 27-nov-2026: «permíteles que
+     editen y añadan más posts por semana». Añadir ya se podía; corregir una
+     idea mal escrita, el formato que cambió al grabar o la cuenta equivocada,
+     no: había que pedírselo a quien armó el plan.
+     La nota del equipo no se toca desde aquí: eso lo escribe la casa. */
+  window.edita=function(id){
+    var p=document.getElementById('pz-'+id); if(!p) return false;
+    var z=(PIEZAS||[]).filter(function(x){ return String(x.id)===String(id); })[0] || {};
+    if(p.querySelector('.editor')) return false;
+    var cOpts='<option value="">¿De qué cuenta?</option>';
+    Object.keys(CUENTAS).forEach(function(c){
+      cOpts+='<option value="'+c+'"'+(c===z.cuenta?' selected':'')+'>'+CUENTAS[c]+'</option>'; });
+    var sOpts='';
+    for(var k=1;k<=Math.max(MAXSEM+2, (z.semana||1)+1); k++){
+      sOpts+='<option value="'+k+'"'+(k===z.semana?' selected':'')+'>Semana '+k+'</option>'; }
+    var caja=document.createElement('div');
+    caja.className='editor hecho';
+    caja.innerHTML='<label>Corrige lo que haga falta</label>'+
+      '<div class="fila" style="margin-bottom:8px">'+
+        '<select id="e-sem-'+id+'" style="flex:1 1 140px;min-width:0;padding:12px;'+
+          'border:1px solid var(--line);border-radius:10px;font-size:16px">'+sOpts+'</select>'+
+        '<select id="e-cta-'+id+'" style="flex:1 1 140px;min-width:0;padding:12px;'+
+          'border:1px solid var(--line);border-radius:10px;font-size:16px">'+cOpts+'</select>'+
+      '</div>'+
+      '<div class="fila" style="margin-bottom:8px">'+
+        '<input id="e-fmt-'+id+'" type="text" placeholder="Formato (reel, carrusel, foto…)" '+
+          'value="'+esc(z.formato||'')+'">'+
+      '</div>'+
+      '<div class="fila" style="margin-bottom:8px">'+
+        '<input id="e-idea-'+id+'" type="text" placeholder="Qué es" value="'+esc(z.idea||'')+'">'+
+      '</div>'+
+      '<div class="fila">'+
+        '<button class="btn" onclick="guardaEdicion(\''+id+'\')">Guardar</button>'+
+        '<button class="btn" style="background:transparent;color:inherit;border:1px solid var(--line)" '+
+          'onclick="carga()">Cancelar</button>'+
+      '</div>'+
+      '<div class="msg" id="me-'+id+'"></div>';
+    p.appendChild(caja);
+    var i=document.getElementById('e-idea-'+id); if(i) i.focus();
+    return false;
+  };
+
+  window.guardaEdicion=async function(id){
+    var m=document.getElementById('me-'+id);
+    var idea=((document.getElementById('e-idea-'+id)||{}).value||'').trim();
+    if(!idea){ m.className='msg err'; m.textContent='Dinos qué es la pieza.'; return; }
+    m.className='msg'; m.textContent='Guardando…';
+    try{
+      var r=await sb.rpc('vol_pieza_editar',{
+        p_pieza:id,
+        p_semana:+((document.getElementById('e-sem-'+id)||{}).value)||null,
+        p_cuenta:((document.getElementById('e-cta-'+id)||{}).value||'')||null,
+        p_formato:((document.getElementById('e-fmt-'+id)||{}).value||'').trim()||null,
+        p_idea:idea});
       var d=r && r.data;
       if(!d || d.error){ m.className='msg err'; m.textContent=(d&&d.error)||'No se pudo guardar.'; return; }
       m.className='msg ok'; m.textContent='✓ Guardado';
